@@ -1,0 +1,15 @@
+# Vector DB index (rebuilt from source files)
+.rag-index/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Model cache
+.model-cache/
