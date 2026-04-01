@@ -7,33 +7,40 @@ or with Gas Town (adds multi-agent coordination, persistent identity, work track
 
 If you just want the agents, knowledge bases, RAG search, and slash commands:
 
-### 1. Install Python 3.11+
+### Prerequisites
 
-Download from https://www.python.org/downloads/ and ensure it's on PATH.
+- **Python 3.11+** — https://www.python.org/downloads/ (ensure it's on PATH)
+- **Claude Code** — https://docs.anthropic.com/en/docs/claude-code (the CLI tool)
+- **Git** — https://git-scm.com/downloads
 
-### 2. Clone ClaudeBoost
+### 1. Clone ClaudeBoost
 
 ```bash
 git clone <your-repo-url> ~/OneDrive/prj/ClaudeBoost
 cd ~/OneDrive/prj/ClaudeBoost
 ```
 
-### 3. Run the Installer
+### 2. Run the Installer
 
 ```batch
 .\install.bat
 ```
 
-This does everything:
-- Installs the RAG MCP server package (`pip install -e mcp-rag-server`)
-- Registers RAG server globally in Claude Code (available in every project)
-- Copies 13 slash commands to `~/.claude/commands/`
-- Copies 21 agents + 36 knowledge bases to `~/gt/directives/` (if GT installed)
-- Builds the RAG vector index (indexes all 57 XML files into 606 searchable chunks)
+This does everything in one step:
 
-The installer output should show all 4 steps completing:
+| Step | What it does | Where it goes |
+|------|-------------|---------------|
+| 1 | Installs RAG server package | pip (editable install) |
+| 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
+| 3 | Copies global CLAUDE.md (orchestration rules + RAG usage instructions) | `~/.claude/CLAUDE.md` |
+| 4 | Copies 13 slash commands | `~/.claude/commands/` |
+| 5 | Copies agents + knowledge to GT directives (if GT installed) | `~/gt/directives/` |
+| 6 | Builds RAG vector index (57 files → 606 searchable chunks) | `mcp-rag-server/.rag-index/` |
+
+The installer output should show all steps completing:
 ```
 [1/4] Registering RAG MCP server...        MCP server registered globally.
+        CLAUDE.md copied to ~/.claude/CLAUDE.md
 [2/4] Installing slash commands...          13 commands installed.
 [3/4] Setting up GT directives...           Agents and knowledge copied.
 [4/4] Building initial RAG index...         Indexed 57 files, 606 chunks
@@ -43,20 +50,41 @@ The installer output should show all 4 steps completing:
 RAG server can find the index and XML files from any project. If you move ClaudeBoost to
 a different location, re-run `install.bat` to update the path.
 
-### 4. Verify
+### 3. Verify
 
-Open any project in Claude Code and run:
-- `rag_status` — should show the RAG server is connected with collection counts
+Open any project in Claude Code and try:
+- `rag_status` — should show collections with chunk counts (knowledge: 392, agents: 214)
+- `rag_search "SQL injection"` — should return results from security.xml
 - `/list-agents` — should list all 21 agents
 
-That's it. Every Claude Code session now has semantic search over 36 knowledge bases
-and access to 21 specialist agents.
+That's it. Every Claude Code session now has:
+- Semantic search over 36 knowledge bases and 21 agent definitions
+- Global CLAUDE.md telling Claude when and how to use RAG
+- 13 slash commands for task management
 
-### Re-indexing
+### How RAG works after install
 
-If you add or change agent/knowledge files, re-run `install.bat` or call `rag_index`
-from inside Claude Code to rebuild the vector index. Only changed files get re-indexed
-(incremental via SHA-256 hash comparison).
+The RAG MCP server starts automatically when Claude Code opens any project.
+
+- **On startup**: indexes any new or changed files in agents/, knowledge/, workspace/
+- **Auto-watcher**: monitors agents/, knowledge/, and workspace/ for file changes — re-indexes within 2 seconds
+- **No manual action needed**: just work normally, the index stays up to date
+
+### Re-indexing manually
+
+If you need to force a full re-index:
+- From Claude Code: call `rag_index` with `force: true`
+- From terminal: re-run `install.bat` (rebuilds the index from scratch)
+
+Only changed files get re-indexed normally (incremental via SHA-256 hash comparison).
+
+### What gets indexed
+
+| Scope | Source files | What's in them |
+|-------|------------|----------------|
+| knowledge | `knowledge/*.xml` (36 files) | Coding standards, security, architecture, debugging, etc. |
+| agents | `agents/*.xml` (21 files) | Agent definitions with capabilities, guidelines, output formats |
+| workspaces | `workspace/*/context.md`, `workspace/*/ticket.md` | Task history, decisions, tickets |
 
 ---
 
@@ -65,7 +93,10 @@ from inside Claude Code to rebuild the vector index. Only changed files get re-i
 Gas Town adds: multi-agent coordination, persistent identity, beads (issue tracking),
 message passing, automated supervision, and work dispatch to polecats.
 
-### Prerequisites
+### Additional Prerequisites
+
+- **Go 1.26+** (64-bit ONLY)
+- **Dolt 1.84+**
 
 ### 1. Go (64-bit ONLY)
 
@@ -212,15 +243,32 @@ This auto-fixes most issues. Expected remaining warnings on Windows:
 - daemon not running — needs tmux
 - global-state not initialized — run `gt enable` when ready
 
-## Integration Files
+## Run ClaudeBoost Installer
 
-The integration injects ClaudeMemory's quality system through Gastown's extension points:
+After GT is set up and working, run the ClaudeBoost installer:
+
+```batch
+cd ~/OneDrive/prj/ClaudeBoost
+.\install.bat
+```
+
+This registers agents, knowledge, RAG search, slash commands, and CLAUDE.md globally.
+See the Quick Setup section above for full details on what gets installed where.
+
+With GT installed, `install.bat` also copies agents and knowledge to `~/gt/directives/`
+so they're available via `gt prime`.
+
+## GT Integration Files
+
+These extend Gas Town with ClaudeBoost's quality system:
 
 ### Directives (`~/gt/directives/`)
 - `mayor.md` — 7-domain planning checklist, alternatives analysis, SOLID design review
 - `polecat.md` — Self-reflection, code critique, teaching, SOLID spot-check, confidence levels
 - `witness.md` — Output validation, MAST failure detection, escalation triggers
 - `crew.md` — Interactive quality standards
+- `agents/` — 21 specialist agent definitions (installed by `install.bat`)
+- `knowledge/` — 36 domain knowledge bases (installed by `install.bat`)
 
 ### Hooks (`~/.gt/`)
 - `hooks-base.json` — Full 3-tier permission model (180 allow / 60 ask / 50 deny)
@@ -313,34 +361,14 @@ On launch, it presents a session menu:
 The bat lives in your source project directory (e.g., `~/OneDrive/prj/MyProject/gtstart.bat`),
 but the actual workspace it creates is at `~/gt/<project-name>/crew/mikah/`.
 
-## Current Tested Versions
-
-As of 2026-03-31:
-- **Go**: 1.26.1 (windows/amd64)
-- **Dolt**: 1.84.0
-- **gt**: 0.12.1
-- **bd (beads)**: 0.62.0
-- **Claude Code**: v2.1.88
-- **Model**: Claude Opus 4.6 (1M context)
-
-## Post-Install: Run ClaudeBoost Installer
-
-After GT is set up and working, run the ClaudeBoost installer to register agents,
-knowledge, RAG search, and slash commands globally:
-
-```batch
-cd ~/OneDrive/prj/ClaudeBoost
-.\install.bat
-```
-
-This registers everything so that every GT project (and non-GT project) has access.
-
 ## Verification Checklist
 
 ```bash
 # Standalone (always works)
-python -m rag_server --help   # RAG server installed
+rag_status                    # In Claude Code — shows collection counts
+rag_search "SQL injection"    # Should return security.xml results
 ls ~/.claude/commands/        # 13 slash commands
+cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 
 # Gas Town (if installed)
 go version                    # Should show windows/amd64
@@ -350,14 +378,20 @@ gt dolt status                # Should show "running"
 ls ~/gt/directives/agents/    # 21 agent XML files
 ls ~/gt/directives/knowledge/ # 36 knowledge XML files
 
-# Integration files
-ls ~/gt/directives/           # mayor, polecat, witness, crew + agents/ + knowledge/
-ls ~/gt/.beads/formulas/mol-polecat-*.formula.toml  # 10+ formulas
-ls ~/gt/plugins/*/plugin.md   # 2 plugins
-ls ~/gt/scripts/cm-*.sh       # 3 guard scripts
-cat ~/.gt/hooks-base.json | head -5  # Should show JSON
-
 # Health
 gt doctor                     # Should be mostly green
 gt hooks sync                 # Should show targets synced
 ```
+
+## Current Tested Versions
+
+As of 2026-03-31:
+- **Python**: 3.11+
+- **Go**: 1.26.1 (windows/amd64)
+- **Dolt**: 1.84.0
+- **gt**: 0.12.1
+- **bd (beads)**: 0.62.0
+- **Claude Code**: v2.1.88
+- **Model**: Claude Opus 4.6 (1M context)
+- **sentence-transformers**: 3.0+ (all-MiniLM-L6-v2, 384 dimensions)
+- **ChromaDB**: 0.5+ (embedded SQLite mode)
