@@ -22,11 +22,11 @@ if exist "%USERPROFILE%\gt\%RIGNAME%\crew\mikah" (
     echo.
     set /p "CHOICE=Choose [1/2/3]: "
     if "%CHOICE%"=="2" (
-        claude --continue -p "gt prime"
+        claude --continue "gt prime"
     ) else if "%CHOICE%"=="3" (
         claude --resume
     ) else (
-        claude -p "gt prime"
+        claude "gt prime"
     )
     exit /b
 )
@@ -126,9 +126,9 @@ echo ========================================
 echo.
 set /p "CHOICE=Choose [1/2/3]: "
 if "%CHOICE%"=="2" (
-    claude --continue -p "gt prime"
+    claude --continue "gt prime"
 ) else if "%CHOICE%"=="3" (
     claude --resume
 ) else (
-    claude -p "gt prime"
+    claude "gt prime"
 )
