@@ -26,18 +26,37 @@ cd ~/OneDrive/prj/ClaudeBoost
 
 This does everything:
 - Installs the RAG MCP server package (`pip install -e mcp-rag-server`)
-- Registers it globally in Claude Code (available in every project)
+- Registers RAG server globally in Claude Code (available in every project)
 - Copies 13 slash commands to `~/.claude/commands/`
-- If GT is installed, copies agents + knowledge to `~/gt/directives/`
+- Copies 21 agents + 36 knowledge bases to `~/gt/directives/` (if GT installed)
+- Builds the RAG vector index (indexes all 57 XML files into 606 searchable chunks)
+
+The installer output should show all 4 steps completing:
+```
+[1/4] Registering RAG MCP server...        MCP server registered globally.
+[2/4] Installing slash commands...          13 commands installed.
+[3/4] Setting up GT directives...           Agents and knowledge copied.
+[4/4] Building initial RAG index...         Indexed 57 files, 606 chunks
+```
+
+**Important**: The installer sets `RAG_PROJECT_ROOT` to your ClaudeBoost directory so the
+RAG server can find the index and XML files from any project. If you move ClaudeBoost to
+a different location, re-run `install.bat` to update the path.
 
 ### 4. Verify
 
 Open any project in Claude Code and run:
-- `rag_status` — should show the RAG server is connected
+- `rag_status` — should show the RAG server is connected with collection counts
 - `/list-agents` — should list all 21 agents
 
 That's it. Every Claude Code session now has semantic search over 36 knowledge bases
 and access to 21 specialist agents.
+
+### Re-indexing
+
+If you add or change agent/knowledge files, re-run `install.bat` or call `rag_index`
+from inside Claude Code to rebuild the vector index. Only changed files get re-indexed
+(incremental via SHA-256 hash comparison).
 
 ---
 

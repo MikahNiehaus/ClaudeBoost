@@ -17,6 +17,7 @@ from rag_server.config import (
 )
 from rag_server.core.embedding import SentenceTransformerEmbedding
 from rag_server.core.store import ChromaStore
+from rag_server.core.watcher import FileWatcher
 from rag_server.indexing.engine import IndexingEngine
 from rag_server.indexing.markdown_chunker import estimate_tokens
 from rag_server.tools.search import rag_search
@@ -309,8 +310,28 @@ async def main():
         result["files_indexed"], result["chunks_created"],
     )
 
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    # Start file watcher for auto-indexing on changes
+    watcher = FileWatcher()
+    watch_paths = []
+    for dirname in ["agents", "knowledge", "workspace"]:
+        dirpath = PROJECT_ROOT / dirname
+        if dirpath.is_dir():
+            watch_paths.append(str(dirpath))
+    if watch_paths:
+        def _on_file_change(path: str):
+            logger.info("File changed, re-indexing: %s", path)
+            try:
+                engine.index_all()
+            except Exception:
+                logger.exception("Auto-index failed after file change: %s", path)
+        watcher.watch(watch_paths, _on_file_change)
+        logger.info("Watcher started for: %s", ", ".join(watch_paths))
+
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+    finally:
+        watcher.stop()
 
 
 if __name__ == "__main__":
