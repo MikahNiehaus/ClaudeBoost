@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm view:*)",
+      "Bash(go version:*)",
+      "Bash(export PATH=\"/c/Program Files/Go/bin:$HOME/go/bin:$PATH\")",
+      "Read(//c/Users/grayw/gt/**)",
+      "Bash(gt hooks:*)",
+      "Bash(gt dolt:*)",
+      "Bash(find ~/gt -name dolt.pid -o -name *.pid)",
+      "Bash(gt doctor:*)",
+      "Bash(gt daemon:*)",
+      "Bash(gt rig:*)",
+      "Bash(find ~/gt/claudememory -name metadata.json -path *beads*)",
+      "Bash(bd init:*)",
+      "Bash(bd list:*)",
+      "Bash(gt crew:*)",
+      "Bash(gt enable:*)",
+      "Bash(gt shell:*)",
+      "Bash(gh auth:*)",
+      "Bash(cmd.exe //c \"where gh\")",
+      "Read(//c/Program Files/GitHub CLI/**)",
+      "Read(//c/Program Files \\(x86\\)/GitHub CLI/**)",
+      "Bash(winget install:*)",
+      "Bash(export PATH=\"/c/Program Files/Go/bin:$HOME/go/bin:/c/Program Files/GitHub CLI:$PATH\")",
+      "Bash(cmd.exe //c \"gh auth status\" 2>&1)",
+      "Bash(export PATH=\"/c/Program Files/GitHub CLI:$PATH\")",
+      "Read(//c/Users/grayw/OneDrive/prj/ClaudeBoost/$APPDATA/GitHub CLI/**)",
+      "Read(//c/Users/grayw/.config/gh/**)",
+      "Bash(export PATH=\"/c/Program Files/GitHub CLI:/c/Program Files/Go/bin:$HOME/go/bin:$PATH\")",
+      "Bash(export:*)",
+      "Bash(cmd.exe //c \"cd /d C:\\\\Users\\\\grayw\\\\OneDrive\\\\prj\\\\Test && gtstart.bat\")",
+      "Bash(rm -rf ~/gt/Test)",
+      "Bash(rm -rf \"C:/Users/grayw/OneDrive/prj/Test/.git\")",
+      "Bash(tasklist)",
+      "Bash(taskkill //F //PID 26912)"
+    ]
+  }
+}
