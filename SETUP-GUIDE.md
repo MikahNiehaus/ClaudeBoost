@@ -1,0 +1,282 @@
+# Gastown + ClaudeMemory Integration — Setup Guide
+
+Complete setup instructions including Windows-specific workarounds.
+
+## Prerequisites
+
+### 1. Go (64-bit ONLY)
+
+Download the latest **`goX.Y.Z.windows-amd64.msi`** from https://go.dev/dl/ (tested with go1.26.1)
+
+**CRITICAL**: You MUST download the **amd64** version, NOT the 386 (32-bit) version.
+- Look for the **Windows** row, **x86-64** column
+- It should install to `C:\Program Files\Go\` (NOT `Program Files (x86)`)
+- Verify after install: `go version` should show `windows/amd64`
+
+If you accidentally installed 32-bit:
+1. Uninstall via Windows Settings > Apps > "Go Programming Language"
+2. Delete `C:\Program Files (x86)\Go\` if it still exists
+3. Install the amd64 version
+
+### 2. Dolt
+
+Download **`dolt-windows-amd64.msi`** from https://github.com/dolthub/dolt/releases
+
+- Get the **Latest** release (tested with 1.84.0)
+- Run the MSI installer — it adds `dolt` to PATH automatically
+- Verify: `dolt version`
+
+### 3. Git (2.25+)
+
+You likely already have this. If not: https://git-scm.com/downloads
+- Verify: `git --version`
+
+### 4. PATH Setup
+
+After installing Go and Dolt, add this to your `~/.bashrc` (Git Bash):
+
+```bash
+export PATH="/c/Program Files/Go/bin:$HOME/go/bin:$PATH"
+```
+
+**You must restart your terminal / Claude Code session** after installing Go or Dolt,
+otherwise the new PATH entries won't be picked up.
+
+## Install Gastown
+
+### 1. Clone the repo
+
+```bash
+cd ~/OneDrive/prj/ClaudeBoost  # or wherever you keep projects
+git clone https://github.com/steveyegge/gastown.git
+```
+
+### 2. Build gt
+
+```bash
+cd gastown
+go build -o gt.exe ./cmd/gt
+cp gt.exe "$HOME/go/bin/gt.exe"
+```
+
+### 3. Install beads CLI
+
+```bash
+go install github.com/steveyegge/beads/cmd/bd@latest
+```
+
+Note: `bv` is not a separate package — it may be bundled with beads or available as a `bd` subcommand.
+
+### 4. Initialize workspace
+
+```bash
+gt install ~/gt --git
+```
+
+This creates the `~/gt/` workspace directory with all the scaffolding.
+
+## Windows-Specific Fixes
+
+Gastown was designed for macOS/Linux. The following issues affect Windows:
+
+### Issue 1: `gt dolt start` fails with "not supported by windows"
+
+**Root cause**: Go's `process.Signal(syscall.Signal(0))` doesn't work on Windows.
+It's used to check if Dolt is alive during startup and in `IsRunning()`.
+
+**Fix**: Edit `internal/doltserver/doltserver.go` in three places:
+
+1. **Startup health check** (~line 1574): Replace `Signal(0)` with `os.FindProcess` on Windows
+2. **IsRunning check** (~line 514): Replace `Signal(0)` with `isDoltServerOnPort` on Windows
+3. **Stop function** (~line 1680): Replace `SIGTERM` with `process.Kill()` on Windows
+
+All changes are gated behind `runtime.GOOS == "windows"`.
+
+### Issue 2: PID file not written
+
+**Root cause**: The `daemon/` directory may not exist on first start.
+
+**Fix**: Add `os.MkdirAll(filepath.Dir(config.PidFile), 0755)` before `os.WriteFile` for the PID file.
+
+### Issue 3: YAML config path escaping
+
+**Root cause**: `writeServerConfig` writes Windows backslash paths (`C:\Users\...`)
+into YAML double-quoted strings, where `\U` is interpreted as a hex escape.
+
+**Fix**: Wrap `config.DataDir` with `filepath.ToSlash()` in `writeServerConfig`.
+
+### After all fixes, rebuild:
+
+```bash
+cd ~/OneDrive/prj/ClaudeBoost/gastown
+go build -o gt.exe ./cmd/gt
+cp gt.exe "$HOME/go/bin/gt.exe"
+```
+
+### Issue 4: tmux not available
+
+tmux doesn't run natively on Windows. This causes ~10 warnings in `gt doctor`.
+These are harmless — all tmux-related features (session management, feed dashboard)
+require WSL or a future Windows-native tmux alternative.
+
+**Workaround**: Use `--no-start` flag when running `gt doctor --fix` to skip daemon/session
+operations.
+
+## Start Dolt Server
+
+```bash
+cd ~/gt
+gt dolt start
+gt dolt status   # Should show "running" with port 3307
+```
+
+If Dolt won't start, you can run it directly as a fallback:
+
+```bash
+dolt sql-server --config ~/gt/.dolt-data/config.yaml &
+echo $DOLT_PID > ~/gt/daemon/dolt.pid
+```
+
+## Run Doctor
+
+```bash
+cd ~/gt
+gt doctor --fix --no-start
+```
+
+This auto-fixes most issues. Expected remaining warnings on Windows:
+- tmux-related (5-6 warnings) — harmless
+- daemon not running — needs tmux
+- global-state not initialized — run `gt enable` when ready
+
+## Integration Files
+
+The integration injects ClaudeMemory's quality system through Gastown's extension points:
+
+### Directives (`~/gt/directives/`)
+- `mayor.md` — 7-domain planning checklist, alternatives analysis, SOLID design review
+- `polecat.md` — Self-reflection, code critique, teaching, SOLID spot-check, confidence levels
+- `witness.md` — Output validation, MAST failure detection, escalation triggers
+- `crew.md` — Interactive quality standards
+
+### Hooks (`~/.gt/`)
+- `hooks-base.json` — Full 3-tier permission model (180 allow / 60 ask / 50 deny)
+- `hooks-overrides/polecat.json` — Restricted permissions for worker agents
+- `hooks-overrides/crew.json` — Full permissions for you
+- `hooks-overrides/witness.json` — Read-only for monitors
+
+Run `gt hooks sync` after any changes.
+
+### Formulas (`~/gt/.beads/formulas/`)
+10 specialist formulas, each extending `mol-polecat-work`:
+- `mol-polecat-test` — TDD, coverage, test quality
+- `mol-polecat-security` — OWASP, threat modeling, secure code review
+- `mol-polecat-review` — Structured code review, SOLID compliance
+- `mol-polecat-architect` — Design patterns, Clean Architecture, DDD
+- `mol-polecat-debug` — Root cause analysis, structured diagnosis
+- `mol-polecat-refactor` — Code smell detection, incremental improvement
+- `mol-polecat-perf` — Profiling, bottleneck analysis, optimization
+- `mol-polecat-browser` — Playwright MCP testing, URL safety enforcement
+- `mol-polecat-ui` — Component-first dev, accessibility, responsive
+- `mol-polecat-docs` — Technical writing, progressive disclosure
+
+Dispatch with: `gt sling <bead-id> <rig> --formula mol-polecat-<type>`
+
+### Plugins (`~/gt/plugins/`)
+- `compliance-audit/plugin.md` — 4h periodic quality section enforcement
+- `standards-check/plugin.md` — 6h periodic SOLID/metrics validation
+
+### Guard Scripts (`~/gt/scripts/`)
+- `cm-migration-guard.sh` — Blocks accidental migrations/deploys
+- `cm-browser-guard.sh` — Localhost-only browser testing
+- `cm-forbidden-libs.sh` — jQuery/banned library detection
+
+## Adding Your First Rig
+
+```bash
+cd ~/gt
+gt rig add <rig-name> <repo-url>
+```
+
+**Important**: After adding a rig, restart Dolt so it picks up the new database:
+```bash
+gt dolt stop
+gt dolt start   # Now shows the new database
+```
+
+Then init beads schema and add crew:
+```bash
+cd ~/gt/<rig-name>
+bd init --force --prefix <2-letter-prefix>
+cd ~/gt
+gt crew add <your-name> --rig <rig-name>
+gt hooks sync
+gt doctor --fix --no-start   # Fix agent beads and any other issues
+```
+
+### Dolt Goes Read-Only?
+
+If you see "SERVER IS READ-ONLY" in `gt dolt status`, run:
+```bash
+gt dolt recover
+```
+
+### Stale polecats/.claude/settings.json
+
+`gt doctor` may report 1 failure for a "stale" polecats settings.json.
+This is a false positive — the file is pre-created for when polecats launch.
+Running `gt doctor --fix` clears it, and `gt hooks sync` recreates it.
+This is harmless and expected when no polecats are running.
+
+## Quick Start with gtstart.bat
+
+For new projects, copy `gtstart.bat` into your project root. Running it will:
+
+1. Check if the project is already a registered rig — if so, jump straight to launch
+2. If not, set up everything automatically:
+   - Ensure Dolt is running
+   - Initialize git if needed
+   - Register the rig with GT
+   - Restart Dolt to pick up the new database
+   - Initialize beads with a 2-letter prefix
+   - Create the crew workspace
+   - Sync hooks and run doctor
+
+On launch, it presents a session menu:
+- **[1] New session** — fresh start, auto-primes with `gt prime`
+- **[2] Continue** — resumes the most recent session, auto-primes
+- **[3] Resume** — pick from a list of past sessions
+
+The bat lives in your source project directory (e.g., `~/OneDrive/prj/MyProject/gtstart.bat`),
+but the actual workspace it creates is at `~/gt/<project-name>/crew/mikah/`.
+
+## Current Tested Versions
+
+As of 2026-03-31:
+- **Go**: 1.26.1 (windows/amd64)
+- **Dolt**: 1.84.0
+- **gt**: 0.12.1
+- **bd (beads)**: 0.62.0
+- **Claude Code**: v2.1.88
+- **Model**: Claude Opus 4.6 (1M context)
+
+## Verification Checklist
+
+```bash
+# Infrastructure
+go version                    # Should show windows/amd64
+dolt version                  # Should show 1.84.0+
+bd list --json | head -3      # Should return JSON (even if empty)
+gt dolt status                # Should show "running"
+
+# Integration files
+ls ~/gt/directives/           # 4 files: mayor, polecat, witness, crew
+ls ~/gt/.beads/formulas/mol-polecat-*.formula.toml  # 10+ formulas
+ls ~/gt/plugins/*/plugin.md   # 2 plugins
+ls ~/gt/scripts/cm-*.sh       # 3 guard scripts
+cat ~/.gt/hooks-base.json | head -5  # Should show JSON
+
+# Health
+gt doctor                     # Should be mostly green
+gt hooks sync                 # Should show targets synced
+```
