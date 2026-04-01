@@ -1,8 +1,52 @@
-# Gastown + ClaudeMemory Integration — Setup Guide
+# ClaudeBoost Setup Guide
 
-Complete setup instructions including Windows-specific workarounds.
+Complete setup instructions. ClaudeBoost works standalone (agents + knowledge + RAG search)
+or with Gas Town (adds multi-agent coordination, persistent identity, work tracking).
 
-## Prerequisites
+## Quick Setup (Standalone — No Gas Town)
+
+If you just want the agents, knowledge bases, RAG search, and slash commands:
+
+### 1. Install Python 3.11+
+
+Download from https://www.python.org/downloads/ and ensure it's on PATH.
+
+### 2. Clone ClaudeBoost
+
+```bash
+git clone <your-repo-url> ~/OneDrive/prj/ClaudeBoost
+cd ~/OneDrive/prj/ClaudeBoost
+```
+
+### 3. Run the Installer
+
+```batch
+.\install.bat
+```
+
+This does everything:
+- Installs the RAG MCP server package (`pip install -e mcp-rag-server`)
+- Registers it globally in Claude Code (available in every project)
+- Copies 13 slash commands to `~/.claude/commands/`
+- If GT is installed, copies agents + knowledge to `~/gt/directives/`
+
+### 4. Verify
+
+Open any project in Claude Code and run:
+- `rag_status` — should show the RAG server is connected
+- `/list-agents` — should list all 21 agents
+
+That's it. Every Claude Code session now has semantic search over 36 knowledge bases
+and access to 21 specialist agents.
+
+---
+
+## Full Setup (With Gas Town)
+
+Gas Town adds: multi-agent coordination, persistent identity, beads (issue tracking),
+message passing, automated supervision, and work dispatch to polecats.
+
+### Prerequisites
 
 ### 1. Go (64-bit ONLY)
 
@@ -260,17 +304,35 @@ As of 2026-03-31:
 - **Claude Code**: v2.1.88
 - **Model**: Claude Opus 4.6 (1M context)
 
+## Post-Install: Run ClaudeBoost Installer
+
+After GT is set up and working, run the ClaudeBoost installer to register agents,
+knowledge, RAG search, and slash commands globally:
+
+```batch
+cd ~/OneDrive/prj/ClaudeBoost
+.\install.bat
+```
+
+This registers everything so that every GT project (and non-GT project) has access.
+
 ## Verification Checklist
 
 ```bash
-# Infrastructure
+# Standalone (always works)
+python -m rag_server --help   # RAG server installed
+ls ~/.claude/commands/        # 13 slash commands
+
+# Gas Town (if installed)
 go version                    # Should show windows/amd64
 dolt version                  # Should show 1.84.0+
 bd list --json | head -3      # Should return JSON (even if empty)
 gt dolt status                # Should show "running"
+ls ~/gt/directives/agents/    # 21 agent XML files
+ls ~/gt/directives/knowledge/ # 36 knowledge XML files
 
 # Integration files
-ls ~/gt/directives/           # 4 files: mayor, polecat, witness, crew
+ls ~/gt/directives/           # mayor, polecat, witness, crew + agents/ + knowledge/
 ls ~/gt/.beads/formulas/mol-polecat-*.formula.toml  # 10+ formulas
 ls ~/gt/plugins/*/plugin.md   # 2 plugins
 ls ~/gt/scripts/cm-*.sh       # 3 guard scripts
