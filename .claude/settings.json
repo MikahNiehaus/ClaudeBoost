@@ -267,5 +267,5 @@
       "Bash(reboot:*)"
     ]
   },
-  "includeCoAuthoredBy": true
+  "includeCoAuthoredBy": false
 }

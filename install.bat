@@ -53,20 +53,22 @@ if not errorlevel 1 (
 :: ============================================================
 :: 2. Copy slash commands globally
 :: ============================================================
-:: Copy CLAUDE.md globally
-copy /y "%BOOST_DIR%\CLAUDE.md" "%CLAUDE_DIR%\CLAUDE.md" >nul 2>&1
-echo         CLAUDE.md copied to %CLAUDE_DIR%\CLAUDE.md
+:: Hardlink CLAUDE.md globally (same file, auto-updates)
+if exist "%CLAUDE_DIR%\CLAUDE.md" del "%CLAUDE_DIR%\CLAUDE.md" >nul 2>&1
+mklink /h "%CLAUDE_DIR%\CLAUDE.md" "%BOOST_DIR%\CLAUDE.md" >nul 2>&1
+echo         CLAUDE.md linked to %CLAUDE_DIR%\CLAUDE.md (auto-updates).
 
 echo  [2/4] Installing slash commands...
 
-if not exist "%CLAUDE_DIR%\commands" mkdir "%CLAUDE_DIR%\commands"
-
-set "CMD_COUNT=0"
-for %%f in ("%BOOST_DIR%\.claude\commands\*.md") do (
-    copy /y "%%f" "%CLAUDE_DIR%\commands\" >nul 2>&1
-    set /a CMD_COUNT+=1
+:: Junction commands folder (reads directly from ClaudeBoost, auto-updates)
+if exist "%CLAUDE_DIR%\commands" (
+    rmdir /s /q "%CLAUDE_DIR%\commands" >nul 2>&1
+    rmdir "%CLAUDE_DIR%\commands" >nul 2>&1
 )
-echo         !CMD_COUNT! commands installed.
+if not exist "%CLAUDE_DIR%\commands" (
+    mklink /j "%CLAUDE_DIR%\commands" "%BOOST_DIR%\.claude\commands" >nul 2>&1
+)
+echo         Slash commands linked.
 
 :: ============================================================
 :: 3. Copy agents and knowledge to GT directives (if GT installed)
@@ -74,12 +76,20 @@ echo         !CMD_COUNT! commands installed.
 echo  [3/4] Setting up GT directives...
 
 if exist "%GT_DIR%" (
-    if not exist "%GT_DIR%\directives\agents" mkdir "%GT_DIR%\directives\agents"
-    if not exist "%GT_DIR%\directives\knowledge" mkdir "%GT_DIR%\directives\knowledge"
+    :: Remove old copies if they exist
+    if exist "%GT_DIR%\directives\agents" (
+        rmdir /s /q "%GT_DIR%\directives\agents" >nul 2>&1
+        rmdir "%GT_DIR%\directives\agents" >nul 2>&1
+    )
+    if exist "%GT_DIR%\directives\knowledge" (
+        rmdir /s /q "%GT_DIR%\directives\knowledge" >nul 2>&1
+        rmdir "%GT_DIR%\directives\knowledge" >nul 2>&1
+    )
 
-    xcopy /y /q "%BOOST_DIR%\agents\*" "%GT_DIR%\directives\agents\" >nul 2>&1
-    xcopy /y /q "%BOOST_DIR%\knowledge\*" "%GT_DIR%\directives\knowledge\" >nul 2>&1
-    echo         Agents and knowledge copied to GT directives.
+    :: Create junctions so GT reads directly from ClaudeBoost (auto-updates)
+    mklink /j "%GT_DIR%\directives\agents" "%BOOST_DIR%\agents" >nul 2>&1
+    mklink /j "%GT_DIR%\directives\knowledge" "%BOOST_DIR%\knowledge" >nul 2>&1
+    echo         Agents and knowledge linked to GT directives (auto-updates).
 ) else (
     echo         GT not installed. Skipping GT directives.
     echo         Agents and knowledge are still available locally in ClaudeBoost.
