@@ -109,9 +109,12 @@ powershell -Command "Start-Process powershell -Verb RunAs -ArgumentList '-Comman
 ```
 
 This opens an elevated PowerShell window that installs both packages from the official
-Chocolatey community repository (`golang` from go.dev, `dolt` from DoltHub). The window
-pauses when done so you can verify the output. No script files are created — it's a
-one-liner that runs inline.
+Chocolatey community repository. The window pauses when done so you can verify the
+output. No script files are created — it's a one-liner that runs inline.
+
+**Package verification** (independently verified April 2026):
+- **`golang`** — community-maintained, pulls installers directly from `golang.org` official distribution ([package page](https://community.chocolatey.org/packages/golang))
+- **`dolt`** — maintained by DoltHub team members (zachmu, coffeegoddd), pulls from official `github.com/dolthub/dolt` releases ([package page](https://community.chocolatey.org/packages/dolt))
 
 After the elevated window finishes, verify in a **new terminal**:
 ```bash
