@@ -97,8 +97,33 @@ message passing, automated supervision, and work dispatch to polecats.
 
 - **Go 1.26+** (64-bit ONLY)
 - **Dolt 1.84+**
+- **Chocolatey** (optional, for quick install)
 
-### 1. Go (64-bit ONLY)
+### Quick Install (Chocolatey)
+
+If you have Chocolatey, install both Go and Dolt in one step. This requires an
+**elevated (admin) PowerShell** — run this from Git Bash or any terminal:
+
+```bash
+powershell -Command "Start-Process powershell -Verb RunAs -ArgumentList '-Command choco install golang dolt -y; pause'"
+```
+
+This opens an elevated PowerShell window that installs both packages from the official
+Chocolatey community repository (`golang` from go.dev, `dolt` from DoltHub). The window
+pauses when done so you can verify the output. No script files are created — it's a
+one-liner that runs inline.
+
+After the elevated window finishes, verify in a **new terminal**:
+```bash
+go version    # Should show windows/amd64
+dolt version  # Should show 1.84.0+
+```
+
+Then skip to **4. PATH Setup** below.
+
+### Manual Install
+
+#### 1. Go (64-bit ONLY)
 
 Download the latest **`goX.Y.Z.windows-amd64.msi`** from https://go.dev/dl/ (tested with go1.26.1)
 
@@ -112,7 +137,7 @@ If you accidentally installed 32-bit:
 2. Delete `C:\Program Files (x86)\Go\` if it still exists
 3. Install the amd64 version
 
-### 2. Dolt
+#### 2. Dolt
 
 Download **`dolt-windows-amd64.msi`** from https://github.com/dolthub/dolt/releases
 
@@ -120,7 +145,7 @@ Download **`dolt-windows-amd64.msi`** from https://github.com/dolthub/dolt/relea
 - Run the MSI installer — it adds `dolt` to PATH automatically
 - Verify: `dolt version`
 
-### 3. Git (2.25+)
+#### 3. Git (2.25+)
 
 You likely already have this. If not: https://git-scm.com/downloads
 - Verify: `git --version`
@@ -130,7 +155,7 @@ You likely already have this. If not: https://git-scm.com/downloads
 After installing Go and Dolt, add this to your `~/.bashrc` (Git Bash):
 
 ```bash
-export PATH="/c/Program Files/Go/bin:$HOME/go/bin:$PATH"
+export PATH="/c/Program Files/Go/bin:/c/Program Files/Dolt/bin:$HOME/go/bin:$PATH"
 ```
 
 **You must restart your terminal / Claude Code session** after installing Go or Dolt,
