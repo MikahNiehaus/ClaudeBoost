@@ -8,8 +8,8 @@ semantic search — works standalone or with Gas Town.
 You have 21 specialist agents (`agents/*.xml`) and 36 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
-**Use RAG before doing work:**
-- Before spawning an agent: call `rag_context` with the agent name and task description to get relevant knowledge automatically
+**RAG powers agent knowledge:**
+- Spawned agents call `rag_context` as their first initialization step — they get their definition + relevant knowledge automatically
 - When unsure which knowledge file applies: call `rag_search` with a natural language query
 - When reviewing code: `rag_search` for the relevant standards (e.g., "SQL security", "logging requirements")
 - Don't guess which file to read — search for it
@@ -33,8 +33,9 @@ If you can't cite specific lines — drop the flag. "Nothing found" is always va
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one-line fix doesn't need an agent.
 
-**Before spawning**: call `rag_context` with the agent name and task summary. Pass the
-returned context to the agent so it has the right knowledge without reading every file.
+**Agent knowledge loading**: Spawned agents call `rag_context` themselves as Step 1
+of initialization. Include the agent name and task description in the spawn prompt
+so the agent knows what to query. You do NOT need to pre-fetch knowledge.
 
 ### Model Routing
 - **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent
