@@ -1,0 +1,491 @@
+<knowledge-base name="devops" version="1.0">
+<triggers>CI/CD, pipeline, Docker, container, deployment, GitHub Actions, GitLab CI, infrastructure, Terraform, Kubernetes, helm, rollback, blue-green, canary, rolling update, IaC, secrets, build, artifact, registry, staging, environment, health check, readiness probe</triggers>
+<overview>DevOps practices for reliable, automated, and secure software delivery. The goal is fast feedback loops, reproducible environments, and the ability to deploy and roll back with confidence at any time.</overview>
+
+<cicd-pipeline-design>
+  <principle>Pipelines are the deployment contract — everything that reaches production must pass through them.</principle>
+  <stages order="fail-fast first">
+    <stage order="1" name="Lint + Static Analysis">Fastest checks first: syntax, style, SAST. Block on any finding.</stage>
+    <stage order="2" name="Unit Tests">Isolated, no network/DB. Parallelized by module.</stage>
+    <stage order="3" name="Build + Package">Compile, bundle, create Docker image. Produce immutable artifact.</stage>
+    <stage order="4" name="Security Scanning">SAST, dependency audit, container scan, secret scan.</stage>
+    <stage order="5" name="Integration Tests">Tests with real dependencies (DB, cache). Use service containers.</stage>
+    <stage order="6" name="Deploy to Staging">Automated deploy to staging. Run smoke tests.</stage>
+    <stage order="7" name="Deploy to Production">Gated by staging pass. Blue-green or canary.</stage>
+  </stages>
+  <caching>
+    <rule>Cache dependency installs (node_modules, pip, Maven) keyed on lock file hash</rule>
+    <rule>Cache Docker layer builds using buildx cache-from/cache-to</rule>
+    <rule>Cache build artifacts between stages using pipeline artifacts, not re-building</rule>
+  </caching>
+  <artifact-management>
+    <rule>Every build produces one immutable artifact tagged with git SHA</rule>
+    <rule>Never rebuild the artifact for different environments — promote the same image</rule>
+    <rule>Store artifacts in a registry (Docker Hub, ECR, Artifact Registry) with retention policy</rule>
+  </artifact-management>
+  <parallelization>
+    <rule>Run independent test suites in parallel matrix jobs</rule>
+    <rule>Split slow test suites across shards using matrix strategy</rule>
+    <rule>Lint, unit test, and security scan can all run concurrently after checkout</rule>
+  </parallelization>
+</cicd-pipeline-design>
+
+<docker-containerization>
+  <multi-stage-builds>
+    <principle>Use multi-stage builds to minimize final image size and attack surface</principle>
+    <code-example lang="dockerfile"><![CDATA[
+# Stage 1: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Runtime (lean image)
+FROM node:20-alpine AS runtime
+WORKDIR /app
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+USER appuser
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:3000/health || exit 1
+CMD ["node", "dist/server.js"]
+    ]]></code-example>
+  </multi-stage-builds>
+  <layer-optimization>
+    <rule>Copy dependency manifests and install before copying source — maximizes layer cache reuse</rule>
+    <rule>Combine RUN commands with &amp;&amp; to reduce layer count</rule>
+    <rule>Use .dockerignore to exclude node_modules, .git, test files, docs</rule>
+    <rule>Pin base image versions (node:20.11-alpine3.19, not node:latest)</rule>
+  </layer-optimization>
+  <security>
+    <rule>Run as non-root user — create a dedicated service account in the image</rule>
+    <rule>Use distroless or Alpine base images to minimize CVE surface</rule>
+    <rule>Scan images with Trivy or Snyk before pushing to registry</rule>
+    <rule>Never bake secrets into image layers — inject at runtime via env or mounted secrets</rule>
+    <rule>Use read-only filesystem where possible (--read-only with tmpfs mounts)</rule>
+  </security>
+  <compose-patterns>
+    <rule>Use Docker Compose for local dev parity — mirrors production service topology</rule>
+    <rule>Use named volumes for persistent data, not bind mounts in production</rule>
+    <rule>Define health checks so dependent services wait for readiness</rule>
+    <code-example lang="yaml"><![CDATA[
+services:
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}  # injected, never hardcoded
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  db:
+    image: postgres:16-alpine
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ]]></code-example>
+  </compose-patterns>
+</docker-containerization>
+
+<github-actions>
+  <workflow-syntax>
+    <rule>Use reusable workflows (.github/workflows/reusable-*.yml) for shared logic across repos</rule>
+    <rule>Use composite actions for multi-step logic reused within a repo</rule>
+    <rule>Pin third-party actions to a full commit SHA, not a tag (security: prevents tag mutation)</rule>
+    <rule>Set minimal permissions at the workflow and job level with permissions: key</rule>
+  </workflow-syntax>
+  <secrets-management>
+    <rule>Store secrets in GitHub Secrets (repo or org level), never in workflow files</rule>
+    <rule>Use environment-scoped secrets for staging/prod separation</rule>
+    <rule>Use OIDC (openid-connect) for cloud credentials — no long-lived keys needed</rule>
+    <code-example lang="yaml"><![CDATA[
+# OIDC-based AWS credential (no long-lived keys)
+- name: Configure AWS credentials
+  uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: arn:aws:iam::123456789:role/github-actions-deploy
+    aws-region: us-east-1
+    ]]></code-example>
+  </secrets-management>
+  <matrix-builds>
+    <code-example lang="yaml"><![CDATA[
+jobs:
+  test:
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      - run: npm ci && npm test
+    ]]></code-example>
+  </matrix-builds>
+  <caching>
+    <code-example lang="yaml"><![CDATA[
+- uses: actions/cache@v4
+  with:
+    path: ~/.npm
+    key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+    restore-keys: |
+      ${{ runner.os }}-node-
+    ]]></code-example>
+  </caching>
+  <full-pipeline-example lang="yaml"><![CDATA[
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write  # for OIDC
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --coverage
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm audit --audit-level=high
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@v3
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t myapp:${{ github.sha }} .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: myapp:${{ github.sha }}
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+      - name: Push to registry
+        run: |
+          echo ${{ secrets.REGISTRY_PASSWORD }} | docker login -u ${{ secrets.REGISTRY_USER }} --password-stdin
+          docker push myapp:${{ github.sha }}
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: staging
+    steps:
+      - name: Deploy to staging
+        run: ./scripts/deploy.sh staging ${{ github.sha }}
+      - name: Smoke test
+        run: ./scripts/smoke-test.sh https://staging.example.com
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production
+    steps:
+      - name: Deploy to production (canary)
+        run: ./scripts/deploy.sh production ${{ github.sha }} --strategy=canary
+  ]]></full-pipeline-example>
+</github-actions>
+
+<deployment-strategies>
+  <strategy name="blue-green">
+    <description>Two identical environments (blue=current, green=new). Switch traffic atomically after validation.</description>
+    <when-to-use>Zero-downtime required, easy rollback is priority, stateless services</when-to-use>
+    <steps>
+      <step>Deploy new version to idle environment (green)</step>
+      <step>Run health checks and smoke tests on green</step>
+      <step>Switch load balancer to send 100% traffic to green</step>
+      <step>Monitor error rates for defined window (e.g., 15 minutes)</step>
+      <step>If healthy: decommission blue. If not: switch back to blue in seconds.</step>
+    </steps>
+    <rollback>Switch load balancer back to blue environment — seconds to complete</rollback>
+    <cost>Requires 2x infrastructure during transition</cost>
+  </strategy>
+
+  <strategy name="canary">
+    <description>Route a small percentage of traffic (1-10%) to the new version. Gradually increase if healthy.</description>
+    <when-to-use>Want to validate with real traffic before full rollout, higher-risk changes</when-to-use>
+    <steps>
+      <step>Deploy new version alongside old version</step>
+      <step>Route 1-5% of traffic to new version</step>
+      <step>Monitor error rate, latency, and business metrics</step>
+      <step>Increment traffic: 5% → 25% → 50% → 100% on schedule or auto</step>
+      <step>Rollback if metrics exceed thresholds at any increment</step>
+    </steps>
+    <rollback>Route 0% traffic to new version, scale it down</rollback>
+    <code-example lang="yaml"><![CDATA[
+# Kubernetes canary with Argo Rollouts
+spec:
+  strategy:
+    canary:
+      steps:
+        - setWeight: 5
+        - pause: {duration: 10m}
+        - setWeight: 25
+        - pause: {duration: 10m}
+        - setWeight: 50
+        - pause: {duration: 10m}
+      analysis:
+        templates:
+          - templateName: error-rate
+        args:
+          - name: service-name
+            value: my-service
+    ]]></code-example>
+  </strategy>
+
+  <strategy name="rolling">
+    <description>Replace instances of the old version one at a time (or in batches).</description>
+    <when-to-use>Kubernetes default, when blue-green cost is prohibitive, stateful services</when-to-use>
+    <considerations>
+      <item>Old and new versions run concurrently — API must be backward compatible</item>
+      <item>Rollback is slower than blue-green (must roll back each instance)</item>
+    </considerations>
+  </strategy>
+
+  <strategy name="feature-flags">
+    <description>Deploy code dark (disabled), enable for specific users or percentage without re-deploying.</description>
+    <when-to-use>Decouple deploy from release, A/B testing, gradual feature rollout</when-to-use>
+    <tools>LaunchDarkly, Unleash, Flagsmith, Flipt</tools>
+    <rule>Feature flag state is config, not code — never gate on hardcoded user IDs</rule>
+  </strategy>
+</deployment-strategies>
+
+<infrastructure-as-code>
+  <terraform>
+    <principle>Infrastructure state is truth — all resources managed in code, no console drift.</principle>
+    <state-management>
+      <rule>Store state in remote backend (S3 + DynamoDB lock, GCS, Terraform Cloud)</rule>
+      <rule>Never commit terraform.tfstate to version control</rule>
+      <rule>Use workspaces or separate state files per environment</rule>
+      <code-example lang="hcl"><![CDATA[
+terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state"
+    key            = "prod/app/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-lock"
+    encrypt        = true
+  }
+}
+      ]]></code-example>
+    </state-management>
+    <module-patterns>
+      <rule>Create reusable modules for repeated patterns (VPC, ECS service, RDS instance)</rule>
+      <rule>Pin module versions with source = "git::...?ref=v1.2.0"</rule>
+      <rule>Output values needed by dependent modules explicitly</rule>
+      <code-example lang="hcl"><![CDATA[
+module "app_service" {
+  source  = "./modules/ecs-service"
+  version = "1.2.0"
+
+  name          = "my-api"
+  image         = "${var.ecr_repo}:${var.image_tag}"
+  cpu           = 512
+  memory        = 1024
+  desired_count = var.environment == "prod" ? 3 : 1
+
+  environment_variables = {
+    APP_ENV = var.environment
+    # Secrets injected from Secrets Manager, not here
+  }
+}
+      ]]></code-example>
+    </module-patterns>
+    <workflow>
+      <step order="1">terraform fmt — format code</step>
+      <step order="2">terraform validate — syntax check</step>
+      <step order="3">terraform plan -out=tfplan — review changes</step>
+      <step order="4">terraform apply tfplan — apply only the reviewed plan</step>
+    </workflow>
+  </terraform>
+</infrastructure-as-code>
+
+<secrets-management>
+  <rules>
+    <rule priority="BLOCKER">Never hardcode secrets in source code, IaC, or pipeline files</rule>
+    <rule priority="BLOCKER">Never log secrets — mask or redact before any output</rule>
+    <rule priority="BLOCKER">Never pass secrets in URLs or query strings</rule>
+    <rule>Use different secrets per environment — no shared prod/staging credentials</rule>
+    <rule>Rotate secrets regularly; use short-lived credentials (OIDC, instance roles) where possible</rule>
+    <rule>Audit secret access — log who accessed what and when</rule>
+  </rules>
+  <injection-patterns>
+    <pattern name="Environment Variables">Standard for 12-factor apps. Injected by orchestrator (ECS task def, K8s Secret, GitHub Secrets).</pattern>
+    <pattern name="Vault Agent Sidecar">HashiCorp Vault agent injects secrets as files or env vars at runtime. Supports dynamic secrets with TTL.</pattern>
+    <pattern name="AWS Secrets Manager">Reference ARN in ECS task definition; AWS injects at container start. Rotates automatically with Lambda.</pattern>
+    <pattern name="Kubernetes Secrets">Base64-encoded, mounted as env vars or files. Use Sealed Secrets or External Secrets Operator for GitOps.</pattern>
+  </injection-patterns>
+  <tools>HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, Doppler</tools>
+</secrets-management>
+
+<environment-management>
+  <parity-principle>dev, staging, and prod use the same Docker image, same IaC modules, different config only.</parity-principle>
+  <config-separation>
+    <rule>Environment-specific config via environment variables, not code branches</rule>
+    <rule>Use a config file per environment (terraform.tfvars.staging, .env.staging) — never committed with secrets</rule>
+    <rule>Feature flags and scaling counts are the main legitimate differences between environments</rule>
+  </config-separation>
+  <promotion-flow>
+    <step>Code merged to main → auto-deploy to dev</step>
+    <step>Dev passes → auto-deploy to staging</step>
+    <step>Staging passes + manual gate → deploy to production</step>
+  </promotion-flow>
+</environment-management>
+
+<build-optimization>
+  <caching-strategies>
+    <strategy name="Dependency Cache">Key on lock file (package-lock.json, Pipfile.lock). Saves 1-3 min per build.</strategy>
+    <strategy name="Docker Layer Cache">Use --cache-from previous build or BuildKit registry cache.</strategy>
+    <strategy name="Incremental Builds">Tools like Nx, Turborepo, Bazel detect changed packages and only rebuild affected.</strategy>
+    <strategy name="Test Result Cache">Cache test results when source files haven't changed (Nx, Bazel).</strategy>
+  </caching-strategies>
+  <parallel-builds>
+    <rule>Lint, unit tests, and security scans can all run in parallel after checkout</rule>
+    <rule>Split test suite by module or file count across matrix shards</rule>
+    <rule>Docker multi-platform builds (amd64, arm64) should run in parallel</rule>
+  </parallel-builds>
+  <targets>
+    <target>PR pipeline: under 5 minutes</target>
+    <target>Main branch full pipeline: under 15 minutes</target>
+    <target>Any step over 10 minutes: investigate for parallelization or caching opportunity</target>
+  </targets>
+</build-optimization>
+
+<health-checks-readiness>
+  <liveness-probe>
+    <description>Is the process alive? If this fails, Kubernetes restarts the container.</description>
+    <rule>Should be cheap — just check if the process can respond, not full dependency chain</rule>
+    <example>GET /health → 200 OK with {"status": "ok"}</example>
+  </liveness-probe>
+  <readiness-probe>
+    <description>Is the service ready to accept traffic? If this fails, remove from load balancer rotation.</description>
+    <rule>Check actual dependencies (DB connection, cache, external APIs) — if any are down, return 503</rule>
+    <example>GET /ready → 200 if all dependencies healthy, 503 with {"status": "degraded", "checks": {...}} if not</example>
+    <code-example lang="js"><![CDATA[
+app.get('/ready', async (req, res) => {
+  const checks = {
+    database: await checkDb(),
+    cache: await checkCache(),
+  };
+  const healthy = Object.values(checks).every(c => c.ok);
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ready' : 'degraded', checks });
+});
+    ]]></code-example>
+  </readiness-probe>
+  <graceful-shutdown>
+    <rule>Listen for SIGTERM — stop accepting new requests, finish in-flight requests, then exit</rule>
+    <rule>Set terminationGracePeriodSeconds in Kubernetes to allow drain window (default 30s, tune to p99 request latency)</rule>
+    <code-example lang="js"><![CDATA[
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, starting graceful shutdown');
+  server.close(async () => {
+    await db.disconnect();
+    logger.info('Graceful shutdown complete');
+    process.exit(0);
+  });
+  // Force exit if drain takes too long
+  setTimeout(() => process.exit(1), 25000);
+});
+    ]]></code-example>
+  </graceful-shutdown>
+  <kubernetes-config-example lang="yaml"><![CDATA[
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]  # allow LB to drain before SIGTERM
+  ]]></kubernetes-config-example>
+</health-checks-readiness>
+
+<monitoring-integration>
+  <deployment-markers>
+    <rule>Emit a deploy event to your monitoring platform on every production deployment</rule>
+    <rule>Include: service name, version/SHA, environment, deployer, timestamp</rule>
+    <tools>Datadog deploy tracking, New Relic deployments, Grafana annotations, PagerDuty change events</tools>
+    <code-example lang="bash"><![CDATA[
+# Post deployment marker to Datadog
+curl -X POST "https://api.datadoghq.com/api/v1/events" \
+  -H "DD-API-KEY: ${DD_API_KEY}" \
+  -d '{
+    "title": "Deployed my-api v'"${VERSION}"'",
+    "text": "SHA: '"${GIT_SHA}"' by '"${DEPLOYER}"'",
+    "tags": ["env:production", "service:my-api", "version:'"${VERSION}"'"]
+  }'
+    ]]></code-example>
+  </deployment-markers>
+  <post-deploy-monitoring>
+    <rule>Watch error rate for 15 minutes post-deploy before marking deploy complete</rule>
+    <rule>Compare p99 latency against pre-deploy baseline — alert if >20% regression</rule>
+    <rule>Canary deployments should have automated rollback triggers based on SLO breach</rule>
+  </post-deploy-monitoring>
+  <slo-awareness>
+    <rule>Define SLOs before deploying: error budget, latency targets, availability target</rule>
+    <rule>Burn rate alerts should fire before the deploy window is fully rolled out</rule>
+    <rule>Track deployment frequency and mean time to recovery (MTTR) as DORA metrics</rule>
+  </slo-awareness>
+</monitoring-integration>
+
+<devops-checklist summary="Apply before every pipeline or infra change">
+  <check priority="BLOCKER">No secrets in code, pipeline YAML, logs, or image layers</check>
+  <check priority="BLOCKER">Rollback procedure documented and tested</check>
+  <check priority="high">Health checks and readiness probes configured</check>
+  <check priority="high">Security scanning gates (SAST, deps, container) in pipeline</check>
+  <check priority="high">Staging validated before production deploy</check>
+  <check priority="medium">Build times within targets (PR &lt; 5m, main &lt; 15m)</check>
+  <check priority="medium">Dependency and image versions pinned (no :latest in prod)</check>
+  <check priority="medium">Deploy event emitted to monitoring platform</check>
+  <check priority="low">IaC formatted and validated (terraform fmt &amp;&amp; validate)</check>
+</devops-checklist>
+
+</knowledge-base>

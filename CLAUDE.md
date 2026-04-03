@@ -5,7 +5,7 @@ semantic search — works standalone or with Gas Town.
 
 ## How It Works
 
-You have 21 specialist agents (`agents/*.xml`) and 36 knowledge bases (`knowledge/*.xml`).
+You have 24 specialist agents (`agents/*.xml`) and 38 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge:**
@@ -146,6 +146,9 @@ Tools: `rag_search`, `rag_index`, `rag_context`, `rag_status`.
 | standards-validator-agent | Standards validation | Sonnet |
 | estimator-agent | Story pointing | Sonnet |
 | teacher-agent | Teaching, explanation | Sonnet |
+| devops-agent | CI/CD, Docker, deployment | Sonnet |
+| database-agent | Schema design, queries, migrations | Sonnet |
+| observability-agent | Logging, metrics, alerting | Sonnet |
 
 ## Browser Testing Safety
 
