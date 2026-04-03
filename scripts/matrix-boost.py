@@ -10,56 +10,11 @@ if os.name == 'nt':
 # Use tempfile to get the canonical temp dir — avoids Git Bash /tmp vs Windows path mismatches
 import tempfile
 STATUS_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_status.txt')
-WINDOW_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_window.txt')
-WINDOW_FINAL_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_window_final.txt')
 
-# Windows window management — position animation at Claude Code's location
-_own_hwnd = None
-if os.name == 'nt':
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-
-        _GetConsoleWindow = kernel32.GetConsoleWindow
-        _GetConsoleWindow.restype = wintypes.HWND
-
-        _MoveWindow = user32.MoveWindow
-        _MoveWindow.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                                ctypes.c_int, ctypes.c_int, wintypes.BOOL]
-
-        class RECT(ctypes.Structure):
-            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                         ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-        _GetWindowRect = user32.GetWindowRect
-        _GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
-
-        _own_hwnd = _GetConsoleWindow()
-
-        # Read Claude Code's position and move ourselves there
-        if os.path.exists(WINDOW_FILE):
-            with open(WINDOW_FILE, 'r') as f:
-                parts = f.read().strip().split(',')
-            if len(parts) == 5:
-                _, x, y, w, h = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
-                _MoveWindow(_own_hwnd, x, y, w, h, True)
-    except Exception:
-        _own_hwnd = None
-
-
-def _save_final_position():
-    """Save this window's final position so the launcher can restore Claude Code there."""
-    if _own_hwnd and os.name == 'nt':
-        try:
-            rect = RECT()
-            _GetWindowRect(_own_hwnd, ctypes.byref(rect))
-            with open(WINDOW_FINAL_FILE, 'w') as f:
-                f.write(f'{rect.left},{rect.top},{rect.right - rect.left},{rect.bottom - rect.top}')
-        except Exception:
-            pass
+# Wait for the launcher to position this window before querying terminal size.
+# The launcher (boost-launcher.ps1) finds this window by title and moves it to
+# Claude Code's position. We need the terminal dimensions AFTER the move.
+time.sleep(1.0)
 
 cols, rows = shutil.get_terminal_size()
 # Safety clamp
@@ -260,7 +215,6 @@ except Exception:
     with open(STATUS_FILE + '.error', 'w') as f:
         traceback.print_exc(file=f)
 finally:
-    _save_final_position()
     sys.stdout.write(SHOW + RESET + CLEAR)
     sys.stdout.flush()
     try:

@@ -11,10 +11,11 @@ allowed-tools: Bash, Read, Glob
 
 Run this bash command FIRST, alone:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File C:/Development/ClaudeBoost/scripts/boost-launcher.ps1' -WindowStyle Hidden"
+BOOST_TMP="$LOCALAPPDATA/Temp" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && powershell -NoProfile -ExecutionPolicy Bypass -File "C:/Development/ClaudeBoost/scripts/boost-capture.ps1" && powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:/Development/ClaudeBoost/scripts/boost-launcher.ps1' -WindowStyle Hidden"
 ```
 
-The launcher captures the Claude Code terminal position, minimizes it, opens the Matrix animation at the same spot, and seamlessly restores Claude Code when done — even if you move/resize the animation window.
+Phase 1 (inline): captures the Claude Code terminal position and minimizes it.
+Phase 2 (detached): launches the Matrix animation at the same position, tracks it, and restores Claude Code when done — even if you move/resize the animation window.
 
 Do NOT run any other tool calls until this completes.
 
