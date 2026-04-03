@@ -11,7 +11,7 @@ allowed-tools: Bash, Read, Glob
 
 Run this bash command FIRST, alone:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt -w 0 new-tab --title "CLAUDE BOOST" python "C:/Development/ClaudeBoost/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt -w last new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
 ```
 
 Opens the Matrix animation in a new tab in the same terminal window. The tab closes automatically when the animation finishes, returning focus to Claude Code.
@@ -23,12 +23,12 @@ Do NOT run any other tool calls until this completes.
 Mark checking, then verify telemetry and training protections:
 
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 Check privacy environment variables:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && PRIVACY_OK=true && if [ -z "$DISABLE_TELEMETRY" ]; then echo "⚠ DISABLE_TELEMETRY not set"; PRIVACY_OK=false; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then echo "⚠ DISABLE_ERROR_REPORTING not set"; PRIVACY_OK=false; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && PRIVACY_OK=true && if [ -z "$DISABLE_TELEMETRY" ]; then echo "⚠ DISABLE_TELEMETRY not set"; PRIVACY_OK=false; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then echo "⚠ DISABLE_ERROR_REPORTING not set"; PRIVACY_OK=false; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 If any privacy var is missing, still mark ready but **warn the user**:
@@ -39,14 +39,14 @@ If any privacy var is missing, still mark ready but **warn the user**:
 ## Step 2: Check RAG
 
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 Call `rag_status` (MCP tool).
 
 After rag_status returns, write result:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "RAG:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "GT:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && echo "RAG:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "GT:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 (Use "RAG:failed" if it didn't work.)
@@ -55,7 +55,7 @@ BOOST_TMP="$LOCALAPPDATA/Temp" && echo "RAG:ready" >> "$BOOST_TMP/claudeboost_st
 
 GT is already marked "checking" from Step 2. Now check:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 GT is "ready" if installed (even if not in a GT workspace). Use "GT:failed" only if `gt` command not found.
@@ -64,7 +64,7 @@ GT is "ready" if installed (even if not in a GT workspace). Use "GT:failed" only
 
 RULES is already marked "checking". Verify CLAUDE.md exists:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "AGENTS:ready" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "AGENTS:ready" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
@@ -73,7 +73,7 @@ If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
 If all checks passed, create the activation marker so the status line lights up:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && touch "$BOOST_TMP/claudeboost_active"
+BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 ```
 
 Output a single line:
