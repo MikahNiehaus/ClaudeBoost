@@ -33,7 +33,8 @@
       "Bash(rm -rf ~/gt/Test)",
       "Bash(rm -rf \"C:/Users/grayw/OneDrive/prj/Test/.git\")",
       "Bash(tasklist)",
-      "Bash(taskkill //F //PID 26912)"
+      "Bash(taskkill //F //PID 26912)",
+      "mcp__rag-server__rag_status"
     ]
   }
 }

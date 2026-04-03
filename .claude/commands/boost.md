@@ -5,51 +5,58 @@ allowed-tools: Bash, Read, Glob
 
 # ClaudeBoost Activation
 
-## Step 1: Verify RAG Server
+## Step 0: Launch Animation and Show Banner
 
-Call `rag_status` to confirm the RAG MCP server is running and indexed.
+**This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
 
-If it shows collections with chunks (knowledge, agents), RAG is ready.
-If it fails, the RAG server may not be registered. Tell the user to run:
+Run this bash command FIRST, alone:
+```bash
+echo "" > "$TEMP/claudeboost_status.txt" && powershell -Command "Start-Process python -ArgumentList 'C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/matrix-boost.py'"
 ```
-install.bat from their ClaudeBoost directory
+
+The Matrix animation window IS the banner — no need to duplicate it in Claude Code.
+
+Do NOT run any other tool calls until this completes.
+
+## Step 1: Check RAG
+
+Mark checking, then call rag_status, then mark result. Combine the status writes:
+
+```bash
+echo "RAG:checking" >> "$TEMP/claudeboost_status.txt"
 ```
+
+Call `rag_status` (MCP tool).
+
+After rag_status returns, write result:
+```bash
+echo "RAG:ready" >> "$TEMP/claudeboost_status.txt" && echo "GT:checking" >> "$TEMP/claudeboost_status.txt"
+```
+
+(Use "RAG:failed" if it didn't work.)
 
 ## Step 2: Check Gas Town
 
-Run this to check if GT is available:
+GT is already marked "checking" from Step 1. Now check:
 ```bash
-gt prime 2>&1 | head -3
+gt prime 2>&1 | head -3; echo "GT:ready" >> "$TEMP/claudeboost_status.txt" && echo "RULES:checking" >> "$TEMP/claudeboost_status.txt"
 ```
 
-If GT is installed and Dolt is running, report GT status.
-If GT is not installed or Dolt is down, that's fine — ClaudeBoost works standalone.
+GT is "ready" if installed (even if not in a GT workspace). Use "GT:failed" only if `gt` command not found.
 
-If Dolt is not running but GT is installed:
+## Step 3: Check Rules
+
+RULES is already marked "checking". Verify CLAUDE.md exists:
 ```bash
-gt dolt start
+head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:ready" >> "$TEMP/claudeboost_status.txt" && echo "AGENTS:ready" >> "$TEMP/claudeboost_status.txt"
 ```
 
-## Step 3: Load CLAUDE.md Rules
+If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
-Read the global CLAUDE.md for orchestration rules:
-```bash
-cat ~/.claude/CLAUDE.md 2>/dev/null | head -5
-```
+## Step 4: Report
 
-If it exists, confirm ClaudeBoost rules are active (agent roster, RAG instructions, verify gate, hard rules).
+Output a single line:
 
-## Step 4: Report Status
+"ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."
 
-Output a status summary:
-
-```
-ClaudeBoost Active
-  RAG:      [ready / not available] — [X] knowledge, [Y] agents chunks
-  GT:       [running / not installed / Dolt down]
-  Rules:    [loaded / missing CLAUDE.md]
-  Agents:   21 specialists available (use /spawn-agent or /list-agents)
-  Commands: /list-agents, /spawn-agent, /plan-task, /review, /gate
-```
-
-If everything is ready, say: "ClaudeBoost is live. RAG is searching across [X] knowledge chunks. Ask me anything or use /spawn-agent to delegate."
+If any check failed, mention what failed.

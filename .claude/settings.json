@@ -267,5 +267,9 @@
       "Bash(reboot:*)"
     ]
   },
-  "includeCoAuthoredBy": false
+  "includeCoAuthoredBy": false,
+  "statusLine": {
+    "type": "command",
+    "command": "echo '⚡ ClaudeBoost'"
+  }
 }
