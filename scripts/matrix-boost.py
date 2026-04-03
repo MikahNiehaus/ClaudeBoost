@@ -7,7 +7,9 @@ if os.name == 'nt':
     os.system('')
     os.system('title CLAUDE BOOST')
 
-STATUS_FILE = os.path.join(os.environ.get('TEMP', '/tmp'), 'claudeboost_status.txt')
+# Use tempfile to get the canonical temp dir — avoids Git Bash /tmp vs Windows path mismatches
+import tempfile
+STATUS_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_status.txt')
 
 cols, rows = shutil.get_terminal_size()
 # Safety clamp
@@ -94,6 +96,10 @@ class Drop:
 
 
 drops = [Drop(x, rows) for x in range(0, cols)]
+
+# DO NOT clear the status file here — boost.md already creates it fresh.
+# Clearing here causes a race condition where we overwrite statuses that
+# Claude has already written.
 
 sys.stdout.write(BLACK_BG + HIDE + CLEAR)
 sys.stdout.flush()

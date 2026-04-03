@@ -270,6 +270,6 @@
   "includeCoAuthoredBy": false,
   "statusLine": {
     "type": "command",
-    "command": "echo '⚡ ClaudeBoost'"
+    "command": "if [ -f /tmp/claudeboost_active ]; then printf '\\033[32;1m⚡ ClaudeBoost\\033[0m \\033[2m│ 21 agents │ RAG active\\033[0m'; else printf '\\033[2m⚡ ClaudeBoost (run /boost to activate)\\033[0m'; fi"
   }
 }
