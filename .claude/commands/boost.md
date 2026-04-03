@@ -11,11 +11,10 @@ allowed-tools: Bash, Read, Glob
 
 Run this bash command FIRST, alone:
 ```bash
-BOOST_TMP="$LOCALAPPDATA/Temp" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && powershell -NoProfile -ExecutionPolicy Bypass -File "C:/Development/ClaudeBoost/scripts/boost-capture.ps1" && powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:/Development/ClaudeBoost/scripts/boost-launcher.ps1' -WindowStyle Hidden"
+BOOST_TMP="$LOCALAPPDATA/Temp" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt -w 0 new-tab --title "CLAUDE BOOST" python "C:/Development/ClaudeBoost/scripts/matrix-boost.py"
 ```
 
-Phase 1 (inline): captures the Claude Code terminal position and minimizes it.
-Phase 2 (detached): launches the Matrix animation at the same position, tracks it, and restores Claude Code when done — even if you move/resize the animation window.
+Opens the Matrix animation in a new tab in the same terminal window. The tab closes automatically when the animation finishes, returning focus to Claude Code.
 
 Do NOT run any other tool calls until this completes.
 
