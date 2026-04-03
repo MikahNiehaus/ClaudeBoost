@@ -11,10 +11,10 @@ if os.name == 'nt':
 import tempfile
 STATUS_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_status.txt')
 
-# Wait for the launcher to position this window before querying terminal size.
-# The launcher (boost-launcher.ps1) finds this window by title and moves it to
-# Claude Code's position. We need the terminal dimensions AFTER the move.
-time.sleep(1.0)
+# Wait for the launcher to position and restore this window.
+# The launcher starts us minimized, moves us to Claude Code's position,
+# then restores us. We need terminal dimensions AFTER the restore.
+time.sleep(1.5)
 
 cols, rows = shutil.get_terminal_size()
 # Safety clamp
