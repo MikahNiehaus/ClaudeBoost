@@ -250,6 +250,7 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
         "knowledge/security.xml",
         "knowledge/observability.xml",
         "knowledge/coding-standards.xml",
+        "knowledge/scope-governance.xml",
     ]
 
     tier1_chunks = []

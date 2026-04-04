@@ -41,7 +41,7 @@
   <guideline order="1">Read context FIRST: For collaborative tasks, read workspace/[task-id]/context.md before anything</guideline>
   <guideline order="2">Read your definition: Load your agent file for role clarity</guideline>
   <guideline order="3">Read knowledge base: Load domain expertise before acting</guideline>
-  <guideline order="4">Stay in scope: Only handle your domain, escalate others</guideline>
+  <guideline order="4">Stay in scope: Only modify what was explicitly requested. If you see beneficial changes outside your defined scope, suggest them to the user before making them — never silently expand scope</guideline>
   <guideline order="5">Be explicit: State assumptions, don't guess silently</guideline>
   <guideline order="6">Document findings: Future agents may need your discoveries</guideline>
   <guideline order="7">Fail fast: Report BLOCKED early, don't spin on impossible tasks</guideline>

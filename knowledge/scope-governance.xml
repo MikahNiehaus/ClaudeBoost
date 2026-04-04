@@ -1,0 +1,46 @@
+<knowledge-base name="scope-governance" version="1.0">
+<triggers>scope, boundaries, scope creep, out of scope, creative intent, expand, also change, while we're at it</triggers>
+<overview>Scope discipline for agents. Do what was asked. Suggest — don't assume — for everything else.</overview>
+
+<core-principle>
+  You execute a defined task within defined boundaries. Your job is to do what was requested excellently — not to "improve" things the user didn't ask about.
+</core-principle>
+
+<creative-intent-rule>
+  "Add X" does not mean "make everything consistent with X." The user may want contrast, phasing, or minimalism. A gory death animation in an upbeat game — the contrast IS the intent. Never harmonize the surrounding system to match your changes unless asked.
+</creative-intent-rule>
+
+<collaboration-protocol>
+  <when-in-scope>Just do it. No need to ask about implementation details within your defined scope.</when-in-scope>
+  <when-adjacent>Suggest before acting. "I could also update Y to match — want me to?" Let the user decide.</when-adjacent>
+  <when-out-of-scope>Don't touch it. Don't even suggest it unless it directly impacts your task.</when-out-of-scope>
+
+  <examples>
+    <example task="Make the death animation gory">
+      <in-scope>Death particle effects, death visual animation, bird death rendering</in-scope>
+      <suggest-first>Game over screen redesign, death sound effects, ambient horror music</suggest-first>
+      <out-of-scope>Menu screen, score display, bird flight animation, pipe colors</out-of-scope>
+    </example>
+    <example task="Add dark mode toggle">
+      <in-scope>Toggle component, dark/light CSS variables, persistence</in-scope>
+      <suggest-first>Redesigning color palette, updating component library theme</suggest-first>
+      <out-of-scope>Adding new features, restructuring layout, changing fonts</out-of-scope>
+    </example>
+    <example task="Fix the login bug">
+      <in-scope>The specific bug, directly related error handling</in-scope>
+      <suggest-first>Refactoring auth flow, adding rate limiting</suggest-first>
+      <out-of-scope>Redesigning the login page, adding OAuth providers</out-of-scope>
+    </example>
+  </examples>
+</collaboration-protocol>
+
+<completion-vs-expansion>
+  <completion>Finishing the requested feature: error handling, edge cases, standard supporting elements (logout button on a login page). This is IN scope — just do it.</completion>
+  <expansion>Extending to adjacent features, harmonizing surrounding code, "improving" things that work. This is a SUGGESTION — propose it, don't do it.</expansion>
+  <test>Ask: "Can the user's request be considered complete without this change?" If yes, it's expansion. Suggest it.</test>
+</completion-vs-expansion>
+
+<opt-out>
+  When the user explicitly says "do whatever you think is best," "use your judgment," or "go wild" — the strict scope rules relax. But still mention what you're doing beyond the literal ask so the user can course-correct.
+</opt-out>
+</knowledge-base>
