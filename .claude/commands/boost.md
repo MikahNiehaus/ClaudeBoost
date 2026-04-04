@@ -9,12 +9,14 @@ allowed-tools: Bash, Read, Glob
 
 **This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
 
-Run this bash command FIRST, alone:
+Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt -w last new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt.exe -w last new-tab --title "CLAUDE BOOST" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/matrix-boost.py"
 ```
 
-Opens the Matrix animation in a new tab in the same terminal window. The tab closes automatically when the animation finishes, returning focus to Claude Code.
+This opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window (not a new window). The tab closes automatically when done.
+
+**NEVER use `powershell Start-Process` or `cmd start` — those open separate windows.**
 
 Do NOT run any other tool calls until this completes.
 
@@ -26,15 +28,12 @@ Mark checking, then verify telemetry and training protections:
 BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-Check privacy environment variables:
+Check and AUTO-FIX privacy environment variables:
 ```bash
-BOOST_TMP="$TEMP" && PRIVACY_OK=true && if [ -z "$DISABLE_TELEMETRY" ]; then echo "⚠ DISABLE_TELEMETRY not set"; PRIVACY_OK=false; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then echo "⚠ DISABLE_ERROR_REPORTING not set"; PRIVACY_OK=false; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && FIXED="" && if [ -z "$DISABLE_TELEMETRY" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_TELEMETRY', '1', 'User')"; export DISABLE_TELEMETRY=1; FIXED="$FIXED DISABLE_TELEMETRY"; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_ERROR_REPORTING', '1', 'User')"; export DISABLE_ERROR_REPORTING=1; FIXED="$FIXED DISABLE_ERROR_REPORTING"; fi && if [ -n "$FIXED" ]; then echo "Auto-set:$FIXED"; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-If any privacy var is missing, still mark ready but **warn the user**:
-- "Set `DISABLE_TELEMETRY=1` and `DISABLE_ERROR_REPORTING=1` in your environment for full privacy."
-- "If on a consumer plan (Free/Pro/Max), also opt out of training at claude.ai/settings/data-privacy-controls"
-- API/Team/Enterprise users are already protected from training by default.
+If any vars were missing, they are automatically set permanently (User scope). Mention what was fixed in the output.
 
 ## Step 2: Check RAG
 
