@@ -64,3 +64,8 @@ class StorePort(ABC):
     def create_collection(self, collection: str) -> None:
         """Create a collection if it doesn't exist."""
         ...
+
+    @abstractmethod
+    def get_by_source(self, collection: str, source_file: str) -> list[SearchResult]:
+        """Get all chunks from a specific source file."""
+        ...

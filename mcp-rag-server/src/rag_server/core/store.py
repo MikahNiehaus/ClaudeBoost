@@ -96,6 +96,17 @@ class ChromaStore(StorePort):
         except Exception:
             return 0
 
+    def get_by_source(self, collection: str, source_file: str) -> list[SearchResult]:
+        try:
+            col = self._get_collection(collection)
+        except Exception:
+            return []
+        results = col.get(where={"source_file": source_file}, include=["documents", "metadatas"])
+        return [
+            SearchResult(content=doc, metadata=meta, score=1.0)
+            for doc, meta in zip(results["documents"], results["metadatas"])
+        ]
+
     def list_sources(self, collection: str) -> list[str]:
         col = self._get_collection(collection)
         results = col.get(include=["metadatas"])

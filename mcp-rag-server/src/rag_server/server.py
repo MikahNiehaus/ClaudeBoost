@@ -214,56 +214,127 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
-    """Build a curated context package for an agent."""
-    # Always include the agent's own definition
+    """Build a tiered context package for an agent.
+
+    Tier 0: Agent definition (always included, full text)
+    Tier 1: Universal guardrails (security, coding-standards, observability)
+    Tier 2: Agent-declared knowledge bases (from <knowledge-base> tags)
+    Tier 3: Semantic search fills remaining budget (knowledge only, not agents)
+    """
+    import re as _re
+
+    # --- Tier 0: Agent definition ---
     agent_file = f"agents/{agent}.md"
     agent_def = ""
     agent_path = PROJECT_ROOT / agent_file
     if agent_path.exists():
         agent_def = agent_path.read_text(encoding="utf-8")
     else:
-        # Try .xml
         agent_path_xml = PROJECT_ROOT / f"agents/{agent}.xml"
         if agent_path_xml.exists():
             agent_def = agent_path_xml.read_text(encoding="utf-8")
             agent_file = f"agents/{agent}.xml"
 
-    # Budget: reserve ~30% for agent def, rest for knowledge + history
     agent_tokens = estimate_tokens(agent_def)
     remaining_budget = max_tokens - agent_tokens
-    knowledge_budget = int(remaining_budget * 0.7)
-    history_budget = remaining_budget - knowledge_budget
 
-    # Search knowledge for relevant chunks
-    query_embedding = embedder.embed_query(task_description)
-    knowledge_results = []
-    for scope_name in ["knowledge", "agents"]:
-        col = SCOPES[scope_name]["collection"]
-        if store.collection_exists(col):
-            results = store.search(col, query_embedding, limit=10, min_score=0.3)
-            knowledge_results.extend(results)
+    # --- Parse agent's declared knowledge bases ---
+    declared_files = []
+    if agent_def:
+        # Match <primary file="knowledge/foo.xml"> and <secondary file="knowledge/bar.xml">
+        for match in _re.finditer(r'<(?:primary|secondary)\s+file="([^"]+)"', agent_def):
+            declared_files.append(match.group(1))
 
-    knowledge_results.sort(key=lambda r: r.score, reverse=True)
+    # --- Tier 1: Universal guardrails (always included for code-writing agents) ---
+    GUARDRAIL_FILES = [
+        "knowledge/security.xml",
+        "knowledge/observability.xml",
+        "knowledge/coding-standards.xml",
+    ]
 
-    # Fill knowledge budget
-    relevant_knowledge = []
-    tokens_used = 0
-    for r in knowledge_results:
-        chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
-        if tokens_used + chunk_tokens > knowledge_budget:
-            break
-        relevant_knowledge.append({
-            "source": r.metadata.get("source_file", "unknown"),
-            "section": r.metadata.get("section", ""),
-            "content": r.content,
-            "score": r.score,
-        })
-        tokens_used += chunk_tokens
+    tier1_chunks = []
+    tier1_tokens = 0
+    tier1_sources_seen = set()
+    for guardrail_file in GUARDRAIL_FILES:
+        if tier1_tokens >= remaining_budget * 0.3:
+            break  # Don't let guardrails eat more than 30% of remaining budget
+        chunks = store.get_by_source("knowledge", guardrail_file)
+        for chunk in chunks:
+            chunk_tokens = chunk.metadata.get("token_count", estimate_tokens(chunk.content))
+            if tier1_tokens + chunk_tokens > remaining_budget * 0.3:
+                break
+            tier1_chunks.append({
+                "source": chunk.metadata.get("source_file", guardrail_file),
+                "section": chunk.metadata.get("section", ""),
+                "content": chunk.content,
+                "score": 1.0,
+                "tier": "guardrail",
+            })
+            tier1_tokens += chunk_tokens
+            tier1_sources_seen.add(guardrail_file)
 
-    # Search workspace history
+    remaining_budget -= tier1_tokens
+
+    # --- Tier 2: Agent-declared knowledge bases ---
+    tier2_chunks = []
+    tier2_tokens = 0
+    tier2_sources_seen = set()
+    for declared_file in declared_files:
+        if declared_file in tier1_sources_seen:
+            continue  # Already included as guardrail
+        if tier2_tokens >= remaining_budget * 0.5:
+            break  # Don't let declared KBs eat more than 50% of what's left
+        chunks = store.get_by_source("knowledge", declared_file)
+        for chunk in chunks:
+            chunk_tokens = chunk.metadata.get("token_count", estimate_tokens(chunk.content))
+            if tier2_tokens + chunk_tokens > remaining_budget * 0.5:
+                break
+            tier2_chunks.append({
+                "source": chunk.metadata.get("source_file", declared_file),
+                "section": chunk.metadata.get("section", ""),
+                "content": chunk.content,
+                "score": 1.0,
+                "tier": "declared",
+            })
+            tier2_tokens += chunk_tokens
+            tier2_sources_seen.add(declared_file)
+
+    remaining_budget -= tier2_tokens
+
+    # --- Tier 3: Semantic search for task-relevant knowledge ---
+    # Only search knowledge collection (not agents — don't leak other agent definitions)
+    all_included_sources = tier1_sources_seen | tier2_sources_seen
+    tier3_chunks = []
+    tier3_tokens = 0
+
+    if remaining_budget > 200 and store.collection_exists("knowledge"):
+        query_embedding = embedder.embed_query(task_description)
+        search_results = store.search(
+            "knowledge", query_embedding, limit=15, min_score=0.4,
+        )
+        for r in search_results:
+            source = r.metadata.get("source_file", "")
+            # Skip chunks from files already included in Tier 1/2
+            if source in all_included_sources:
+                continue
+            chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
+            if tier3_tokens + chunk_tokens > remaining_budget:
+                break
+            tier3_chunks.append({
+                "source": source,
+                "section": r.metadata.get("section", ""),
+                "content": r.content,
+                "score": r.score,
+                "tier": "search",
+            })
+            tier3_tokens += chunk_tokens
+
+    # --- Workspace history (small budget from any remaining) ---
     history_results = []
-    if store.collection_exists("workspaces"):
-        ws_results = store.search("workspaces", query_embedding, limit=5, min_score=0.3)
+    history_budget = max(0, remaining_budget - tier3_tokens)
+    if history_budget > 100 and store.collection_exists("workspaces"):
+        query_embedding = embedder.embed_query(task_description)
+        ws_results = store.search("workspaces", query_embedding, limit=3, min_score=0.4)
         ws_tokens = 0
         for r in ws_results:
             chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
@@ -277,17 +348,24 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
             })
             ws_tokens += chunk_tokens
 
-    total_tokens = agent_tokens + tokens_used + sum(
+    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks
+    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + sum(
         estimate_tokens(h["content"]) for h in history_results
     )
 
     return {
         "agent_definition": agent_def,
         "agent_file": agent_file,
-        "relevant_knowledge": relevant_knowledge,
+        "relevant_knowledge": all_knowledge,
         "relevant_history": history_results,
         "total_tokens_approx": total_tokens,
-        "sources_used": len(relevant_knowledge) + len(history_results) + (1 if agent_def else 0),
+        "sources_used": len(all_knowledge) + len(history_results) + (1 if agent_def else 0),
+        "tier_summary": {
+            "guardrails": len(tier1_chunks),
+            "declared": len(tier2_chunks),
+            "search": len(tier3_chunks),
+            "history": len(history_results),
+        },
     }
 
 
