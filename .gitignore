@@ -1,4 +1,5 @@
 workspace/
+references/
 mcp-rag-server/.rag-index/
 __pycache__/
 *.pyc
