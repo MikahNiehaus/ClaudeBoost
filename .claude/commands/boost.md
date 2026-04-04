@@ -29,11 +29,11 @@ BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.t
 
 This auto-sets missing privacy env vars permanently. If any were fixed, mention it briefly in your output.
 
-## Step 2: Check RAG (verify tiered context works)
+## Step 2: Check RAG (verify and auto-fix)
 
-Mark RAG as checking:
+Mark RAG as checking, then verify the module loads from the right path:
 ```bash
-BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python -c "import rag_server; print(rag_server.__file__)" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; cd C:/Users/grayw/OneDrive/prj/ClaudeBoost/mcp-rag-server && pip install -e . 2>&1 | tail -1; fi
 ```
 
 Call `rag_status` (MCP tool) to verify the server is running and has indexed content.
@@ -43,7 +43,10 @@ Then call `rag_context` with a quick test to verify tiered context is working:
 rag_context(agent="debug-agent", task_description="test", max_tokens=2000)
 ```
 
-Check the response for `tier_summary`. If it exists and shows `guardrails > 0` AND `declared > 0`, the tiered RAG is working. If `tier_summary` is missing or guardrails/declared are 0, report "RAG: running but tiered context not loaded — restart Claude Code to fix."
+Check the response for `tier_summary`:
+- If `tier_summary` exists with `guardrails > 0` AND `declared > 0`: tiered RAG is working, mark ready
+- If `tier_summary` is missing or all zeros: auto-fix attempt — clear `__pycache__` and report "RAG needs restart to load tiered context"
+- If rag_status fails entirely: mark failed, tell user to run `setup.ps1`
 
 After checks, write result:
 ```bash
