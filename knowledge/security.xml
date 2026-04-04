@@ -129,28 +129,6 @@
   </output-encoding>
 </input-validation>
 
-<data-safety>
-  <principle name="Reversibility">Every data mutation must be reversible. Prefer soft deletes over hard deletes. Never DROP tables or DELETE without WHERE in production code.</principle>
-  <principle name="Transactions">Multi-step database operations MUST use transactions. If step 3 fails, steps 1-2 must roll back. No partial state.</principle>
-  <principle name="Parameterized Queries">Always use parameterized queries or prepared statements. Never concatenate user input into SQL strings.</principle>
-  <principle name="Migration Safety">
-    <rule>Schema migrations must be reversible — include both UP and DOWN</rule>
-    <rule>Never drop columns/tables in the same deploy that removes the code using them</rule>
-    <rule>Add columns as nullable first, backfill, then add constraints</rule>
-  </principle>
-  <principle name="Destructive Operation Guards">
-    <rule>DELETE/UPDATE without WHERE clause = BLOCKER</rule>
-    <rule>TRUNCATE/DROP in application code = BLOCKER</rule>
-    <rule>Bulk operations must have limits and confirmation</rule>
-    <rule>Seed/reset scripts must check environment — never run against production</rule>
-  </principle>
-  <principle name="Data Integrity">
-    <rule>Use foreign key constraints — don't rely on application code alone</rule>
-    <rule>Use unique constraints where business rules require uniqueness</rule>
-    <rule>Validate at both application AND database layer</rule>
-  </principle>
-</data-safety>
-
 <authentication>
   <passwords>
     <rule>Minimum 12 characters (length over complexity)</rule>
