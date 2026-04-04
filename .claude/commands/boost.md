@@ -5,59 +5,61 @@ allowed-tools: Bash, Read, Glob
 
 # ClaudeBoost Activation
 
-## Step 0: Launch Animation and Show Banner
+## Step 0: Launch Animation and Clear Caches
 
 **This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
 
 Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && wt.exe -w last new-tab --title "CLAUDE BOOST" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find C:/Users/grayw/OneDrive/prj/ClaudeBoost/mcp-rag-server -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w last new-tab --title "CLAUDE BOOST" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/matrix-boost.py"
 ```
 
-This opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window (not a new window). The tab closes automatically when done.
+This clears Python bytecode caches (so RAG server loads fresh code on next restart) and opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window. The tab closes automatically when done.
 
 **NEVER use `powershell Start-Process` or `cmd start` — those open separate windows.**
 
 Do NOT run any other tool calls until this completes.
 
-## Step 1: Verify Privacy
+## Step 1: Verify Privacy (auto-fix)
 
-Mark checking, then verify telemetry and training protections:
-
+Mark checking, then auto-fix if needed:
 ```bash
-BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.txt" && FIXED="" && if [ -z "$DISABLE_TELEMETRY" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_TELEMETRY', '1', 'User')"; export DISABLE_TELEMETRY=1; FIXED="$FIXED DISABLE_TELEMETRY"; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_ERROR_REPORTING', '1', 'User')"; export DISABLE_ERROR_REPORTING=1; FIXED="$FIXED DISABLE_ERROR_REPORTING"; fi && if [ -n "$FIXED" ]; then echo "Auto-fixed:$FIXED"; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-Check and AUTO-FIX privacy environment variables:
-```bash
-BOOST_TMP="$TEMP" && FIXED="" && if [ -z "$DISABLE_TELEMETRY" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_TELEMETRY', '1', 'User')"; export DISABLE_TELEMETRY=1; FIXED="$FIXED DISABLE_TELEMETRY"; fi && if [ -z "$DISABLE_ERROR_REPORTING" ]; then powershell -Command "[System.Environment]::SetEnvironmentVariable('DISABLE_ERROR_REPORTING', '1', 'User')"; export DISABLE_ERROR_REPORTING=1; FIXED="$FIXED DISABLE_ERROR_REPORTING"; fi && if [ -n "$FIXED" ]; then echo "Auto-set:$FIXED"; fi && echo "PRIVACY:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
-```
+This auto-sets missing privacy env vars permanently. If any were fixed, mention it briefly in your output.
 
-If any vars were missing, they are automatically set permanently (User scope). Mention what was fixed in the output.
+## Step 2: Check RAG (verify tiered context works)
 
-## Step 2: Check RAG
-
+Mark RAG as checking:
 ```bash
 BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-Call `rag_status` (MCP tool).
+Call `rag_status` (MCP tool) to verify the server is running and has indexed content.
 
-After rag_status returns, write result:
+Then call `rag_context` with a quick test to verify tiered context is working:
+```
+rag_context(agent="debug-agent", task_description="test", max_tokens=2000)
+```
+
+Check the response for `tier_summary`. If it exists and shows `guardrails > 0` AND `declared > 0`, the tiered RAG is working. If `tier_summary` is missing or guardrails/declared are 0, report "RAG: running but tiered context not loaded — restart Claude Code to fix."
+
+After checks, write result:
 ```bash
 BOOST_TMP="$TEMP" && echo "RAG:ready" >> "$BOOST_TMP/claudeboost_status.txt" && echo "GT:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-(Use "RAG:failed" if it didn't work.)
+Use "RAG:failed" if rag_status fails entirely. Use "RAG:ready" if it works even if tiered context isn't loaded yet (but warn the user).
 
 ## Step 3: Check Gas Town
 
-GT is already marked "checking" from Step 2. Now check:
+GT is already marked "checking". Check if `gt` command exists:
 ```bash
 BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-GT is "ready" if installed (even if not in a GT workspace). Use "GT:failed" only if `gt` command not found.
+GT is "ready" if installed (even if not in a GT workspace). "failed" only if `gt` command not found.
 
 ## Step 4: Check Rules
 
@@ -70,13 +72,15 @@ If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
 ## Step 5: Activate and Report
 
-If all checks passed, create the activation marker so the status line lights up:
+If all checks passed, create the activation marker:
 ```bash
 BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 ```
 
-Output a single line:
+Report what happened — be honest about what's working and what needs attention:
+- If everything passed: "ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."
+- If tiered RAG isn't loaded: mention it needs a restart
+- If privacy was auto-fixed: mention what was set
+- If anything failed: explain what and how to fix it
 
-"ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."
-
-If any check failed, mention what failed and do NOT create the marker file.
+Do NOT create the marker file if critical checks (RAG, Rules) failed.
