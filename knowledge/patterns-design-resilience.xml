@@ -1,0 +1,267 @@
+<knowledge-base name="patterns-design-resilience" version="1.0">
+<triggers>resilience, circuit breaker, retry, bulkhead, rate limiting, resource management, caching, pooling, performance</triggers>
+<overview>Resilience and performance patterns: fault tolerance, resource management, caching, and optimization strategies.</overview>
+<source license="MIT">iluwatar/java-design-patterns (language-agnostic extracts)</source>
+
+<pattern id="resilience-01" slug="caching">
+  <name>Caching</name>
+  <category>Performance optimization</category>
+  <tags>Caching, Data access, Performance, Resource management</tags>
+  <also-known-as>* Cache
+* Temporary Storage</also-known-as>
+  <intent>The Java Caching Design Pattern is crucial for performance optimization and resource management. It involves various caching strategies such as write-through, read-through, and LRU cache to ensure efficient data access. The caching pattern avoids expensive re-acquisition of resources by not releasing them immediately after use. The resources retain their identity, are kept in some fast-access storage, and are re-used to avoid having to acquire them again.</intent>
+  <explanation>Caching pattern keeps frequently needed data in fast-access storage to improve performance.</explanation>
+  <applicability>Use the Caching pattern when
+
+* Repetitious acquisition, initialization, and release of the same resource cause unnecessary performance overhead
+* In scenarios where the cost of recomputing or re-fetching data is significantly higher than storing and retrieving it from cache
+* For read-heavy applications with relatively static data or data that changes infrequently</applicability>
+  <tradeoffs>Benefits:
+
+* Improved Performance: Significantly reduces data access latency, leading to faster application performance
+* Reduced Load: Decreases the load on the underlying data source, which can lead to cost savings and increased longevity of the resource
+* Scalability: Enhances the scalability of applications by efficiently handling increases in load without proportional increases in resource utilization
+
+Trade-Offs:
+
+* Complexity: Introduces complexity in terms of cache invalidation, consistency, and synchronization
+* Resource Utilization: Requires additional memory or storage resources to maintain the cache
+* Stale Data: There's a risk of serving outdated data if the cache is not properly invalidated or updated when the underlying data changes</tradeoffs>
+</pattern>
+
+<pattern id="resilience-02" slug="circuit-breaker">
+  <name>Circuit Breaker</name>
+  <category>Resilience</category>
+  <tags>Cloud distributed, Fault tolerance, Microservices, Retry</tags>
+  <also-known-as>* Fault Tolerance Switch</also-known-as>
+  <intent>The Circuit Breaker pattern is a critical Java design pattern that helps ensure fault tolerance and resilience in microservices and distributed systems. Using Circuit Breaker, it is possible to prevent a system from repeatedly trying to execute an operation likely to fail, allowing it to recover from faults and prevent cascading failures.</intent>
+  <explanation>Circuit Breaker allows graceful handling of failed remote services. It's especially useful when all parts of our application are highly decoupled from each other, and failure of one component doesn't mean the other parts will stop working.</explanation>
+  <applicability>The Circuit Breaker pattern is applicable:
+
+* In distributed systems where individual service failures can lead to cascading system-wide failures
+* For applications that interact with third-party services or databases that might become unresponsive or slow
+* In microservices architectures where the failure of one service can affect the availability of others</applicability>
+  <tradeoffs>Benefits:
+
+* Prevents the system from performing futile operations that are likely to fail, thus saving resources
+* Helps in maintaining the system stability and performance of the application during partial system failures
+* Facilitates faster system recovery by avoiding the overwhelming of failing services with repeated requests
+
+Trade-Offs:
+
+* The complexity of the system increases as the pattern requires additional logic to detect failures and manage the state of the circuit breaker
+* May lead to system degradation if not properly configured, as legitimate requests might be blocked if the circuit is open
+* Requires careful tuning of thresholds and timeout periods to balance between responsiveness and protection</tradeoffs>
+</pattern>
+
+<pattern id="resilience-03" slug="data-locality">
+  <name>Data Locality</name>
+  <category>Performance optimization</category>
+  <tags>Caching, Data access, Game programming, Memory management, Performance</tags>
+  <also-known-as>* Cache-Friendly Design
+* Data-Oriented Design</also-known-as>
+  <intent>The Data Locality design pattern aims to minimize data access times and improve cache utilization by arranging data in memory to take advantage of spatial locality. This pattern is particularly useful in high-performance computing, real-time data processing, and game development where access speed is crucial.</intent>
+  <explanation>The Data Locality pattern organizes data in memory to reduce access times and improve performance by ensuring that data frequently accessed together is stored close together. This is crucial for high-performance applications like game engines and real-time data processing systems.</explanation>
+  <applicability>This pattern is applicable in scenarios where large datasets are processed and performance is critical. It's particularly useful in:
+
+* Game development for efficient rendering and physics calculations.
+* High-performance computing tasks that require rapid access to large data sets.
+* Real-time data processing systems where latency is a critical factor.
+* Scientific computing applications needing optimized matrix operations.
+* Data-intensive applications requiring enhanced memory access patterns.</applicability>
+  <tradeoffs>Benefits:
+
+* Improved Cache Utilization: By enhancing spatial locality, data frequently accessed together is stored close together in memory, improving cache hit rates.
+* Reduced Access Latency: Minimizes the time taken to fetch data from memory, leading to performance improvements.
+* Enhanced Performance: Overall system performance is improved due to reduced memory access times and increased efficiency in data processing.
+
+Trade-offs:
+
+* Complexity in Implementation: Managing data layout can add complexity to the system design and implementation.
+* Maintenance Overhead: As data access patterns evolve, the layout may need to be re-evaluated, adding to the maintenance overhead....</tradeoffs>
+</pattern>
+
+<pattern id="resilience-04" slug="lazy-loading">
+  <name>Lazy Loading</name>
+  <category>Performance optimization</category>
+  <tags>Instantiation, Memory management, Optimization, Performance, Persistence, Resource management</tags>
+  <also-known-as>* Lazy Initialization</also-known-as>
+  <intent>The Lazy Loading design pattern in Java defers object initialization until the object is actually needed, minimizing memory usage and reducing startup times. This technique is crucial for optimizing Java application performance.</intent>
+  <explanation>The Lazy Loading pattern defers the creation of an object or resource until it's actually needed, optimizing memory usage and improving performance.</explanation>
+  <applicability>Use Lazy Loading when:
+
+* An object is resource-intensive to create and might not always be used.
+* You need to delay object creation to optimize memory usage or improve startup times.
+* Loading data or resources should happen just-in-time rather than at application startup.</applicability>
+  <tradeoffs>Benefits:
+
+* Reduces memory usage by initializing objects only when required.
+* Improves application startup performance by postponing expensive object creation.
+
+Trade-offs:
+
+* Complexity in implementation if objects are interdependent.
+* Risk of latency spikes if initialization occurs at an unexpected point.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-05" slug="queue-based-load-leveling">
+  <name>Queue-Based Load Leveling</name>
+  <category>Resilience</category>
+  <tags>Asynchronous, Buffering, Decoupling, Fault tolerance, Messaging, Scalability, Synchronization, Thread management</tags>
+  <also-known-as>* Load Leveling
+* Message Queuing</also-known-as>
+  <intent>The Queue-Based Load Leveling pattern expertly manages system load balancing in Java by utilizing a queue to efficiently distribute the workload among producers and consumers, enhancing system performance and scalability.</intent>
+  <explanation>Queue-Based Load Leveling is a design pattern that uses a queue to manage and balance the workload between producers and consumers, preventing system overload and ensuring smooth processing.</explanation>
+  <applicability>* When there are variable workloads, and you need to ensure that peak loads do not overwhelm the system
+* In distributed systems where tasks are produced at a different rate than they are consumed
+* For decoupling producers and consumers in an asynchronous messaging system</applicability>
+  <tradeoffs>Benefits:
+
+* Decouples the producers and consumers, allowing each to operate at its own pace
+* Increases system resilience and fault tolerance by preventing overload conditions
+* Enhances scalability by allowing more consumers to be added to handle increased load
+
+Trade-offs:
+
+* Adds complexity to the system architecture
+* May introduce latency as messages need to be queued and dequeued
+* Requires additional components (queues) to be managed and monitored</tradeoffs>
+</pattern>
+
+<pattern id="resilience-06" slug="resource-acquisition-is-initialization">
+  <name>Resource Acquisition Is Initialization (RAII)</name>
+  <category>Resource management</category>
+  <tags>Encapsulation, Memory management, Resource management</tags>
+  <also-known-as>* RAII
+* Scope-based Resource Management</also-known-as>
+  <intent>Ensure efficient Java resource management by tying the resource lifecycle to object lifetime, utilizing the RAII pattern.</intent>
+  <explanation>The RAII pattern in Java allows for exception-safe resource management, ensuring robust handling of critical resources.</explanation>
+  <applicability>* Implement RAII in Java applications to manage essential resources such as file handles, network connections, and memory seamlessly.
+* Suitable in environments where deterministic resource management is crucial, such as real-time systems or applications with strict resource constraints.</applicability>
+  <tradeoffs>Benefits:
+
+* Automatic and deterministic resource management.
+* Reduces the likelihood of resource leaks.
+* Enhances code readability and maintainability by clearly defining the scope of resource usage.
+
+Trade-offs:
+
+* May introduce complexity in understanding object lifetimes.
+* Requires careful design to ensure all resources are correctly encapsulated.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-07" slug="retry">
+  <name>Retry</name>
+  <category>Resilience</category>
+  <tags>Fault tolerance, Performance, Retry, Resilience</tags>
+  <also-known-as>* Retry Logic
+* Retry Mechanism</also-known-as>
+  <intent>The Retry pattern in Java transparently retries certain operations that involve communication with external resources, particularly over the network, isolating calling code from the retry implementation details. It is crucial for developing resilient software systems that handle transient failures gracefully.</intent>
+  <explanation>Retry pattern transparently retries failed operations over network.</explanation>
+  <applicability>Applying the Retry pattern is particularly effective
+
+* When operations can fail transiently, such as network calls, database connections, or external service integrations.
+* In scenarios where the likelihood of transient failure is high but the cost of retries is low.</applicability>
+  <tradeoffs>Benefits:
+
+* Increases the robustness and fault tolerance of applications.
+* Can significantly reduce the impact of transient failures.
+
+Trade-offs:
+
+* May introduce latency due to retries.
+* Can lead to resource exhaustion if not managed properly.
+* Requires careful configuration of retry parameters to avoid exacerbating the problem.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-08" slug="saga">
+  <name>Saga</name>
+  <category>Resilience</category>
+  <tags>Asynchronous, Decoupling, Fault tolerance, Integration, Microservices, Transactions</tags>
+  <intent>To manage and coordinate distributed transactions across multiple services in a fault-tolerant and reliable manner.</intent>
+  <explanation>The Saga pattern in Java coordinates distributed transactions across microservices using a sequence of events and compensating actions to ensure data consistency and fault tolerance.</explanation>
+  <applicability>* When you have a complex transaction that spans multiple microservices.
+* When you need to ensure data consistency across services without using a traditional two-phase commit.
+* When you need to handle long-running transactions in an asynchronous manner.</applicability>
+  <tradeoffs>Benefits:
+
+* Improved fault tolerance and reliability.
+* Scalability due to decoupled services.
+* Flexibility in handling long-running transactions.
+
+Trade-offs:
+
+* Increased complexity in handling compensating transactions.
+* Requires careful design to handle partial failures and rollback scenarios.
+* Potential latency due to asynchronous nature.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-09" slug="server-session">
+  <name>Server Session</name>
+  <category>Resource management</category>
+  <tags>Client-server, Cookies, Session management, State tracking, Web development</tags>
+  <also-known-as>* Server-Side Session Management</also-known-as>
+  <intent>Effectively manage user session data on the server-side with Java's Server Session pattern to maintain consistent state across multiple client interactions, enhancing both security and user experience.</intent>
+  <explanation>The Server Session design pattern manages and stores user session data on the server to maintain state across multiple client requests in web applications.</explanation>
+  <applicability>* Use when building web applications that require maintaining user state information across multiple requests.
+* Suitable for applications needing to track user interactions, preferences, or authentication state.
+* Ideal for scenarios where client-side storage is insecure or insufficient.</applicability>
+  <tradeoffs>Benefits:
+
+* Simplifies client-side logic by offloading state management to the server.
+* Enhances security by storing sensitive information server-side.
+* Supports complex state management scenarios like multistep forms or shopping carts.
+
+Trade-offs:
+
+* Increases server memory usage due to storage of session data.
+* Requires session management logic to handle session timeouts and data persistence.
+* Potential scalability issues with high user concurrency.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-10" slug="throttling">
+  <name>Throttling</name>
+  <category>Resource management</category>
+  <tags>API design, Fault tolerance, Performance, Resilience, Scalability</tags>
+  <also-known-as>* Rate Limiting</also-known-as>
+  <intent>The Throttling Pattern, also known as Rate Limiting, limits the number of requests a system can process within a given time frame to prevent overload and ensure stability. It is crucial for resource management in Java applications.</intent>
+  <explanation>Throttling pattern is used to rate-limit access to a resource.</explanation>
+  <applicability>* You need to protect resources from being overwhelmed by too many requests.
+* You want to ensure fair usage of a service among multiple users.
+* You need to maintain the quality of service under high load conditions.</applicability>
+  <tradeoffs>Benefits:
+
+* Prevents resource exhaustion, ensuring system stability.
+* Helps in maintaining consistent performance and quality of service.
+* Improves fault tolerance by avoiding system crashes under high load.
+
+Trade-offs:
+
+* May cause increased latency or delay in request processing.
+* Requires careful tuning to balance between resource protection and user experience.
+* Could lead to denial of service to legitimate users if not configured correctly.</tradeoffs>
+</pattern>
+
+<pattern id="resilience-11" slug="tolerant-reader">
+  <name>Tolerant Reader</name>
+  <category>Resilience</category>
+  <tags>API design, Decoupling, Fault tolerance, Integration</tags>
+  <also-known-as>* Lenient Consumer</also-known-as>
+  <intent>The Tolerant Reader pattern enhances system resilience to changes in data structures by strategically ignoring unrecognized elements, promoting robust API design.</intent>
+  <explanation>Utilize the Tolerant Reader pattern to establish robust and resilient communication between services, ensuring data compatibility and integration.</explanation>
+  <applicability>* Apply the Tolerant Reader pattern when your system consumes data from evolving external sources, maintaining efficiency and data integrity.
+* Applicable when backward compatibility is required in API design.
+* Suitable for integration scenarios where different systems exchange data and evolve independently.</applicability>
+  <tradeoffs>Benefits:
+
+* Increases the robustness and flexibility of the system.
+* Allows independent evolution of producers and consumers in a distributed system.
+* Simplifies versioning by enabling backward compatibility.
+
+Trade-offs:
+
+* May result in silent failures if important data is ignored.
+* Can complicate debugging and tracing of issues due to missing or unrecognized data.</tradeoffs>
+</pattern>
+
+</knowledge-base>

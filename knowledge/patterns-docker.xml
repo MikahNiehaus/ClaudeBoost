@@ -1,0 +1,77 @@
+<knowledge-base name="patterns-docker" version="1.0">
+<triggers>docker, container, dockerfile, multi-stage build, image security, container orchestration</triggers>
+<overview>Docker and containerization best practices: secure images, multi-stage builds, graceful shutdown, caching, and production-ready container patterns.</overview>
+<source license="CC-BY-SA-4.0">goldbergyoni/nodebestpractices</source>
+
+<practice id="docker-01">
+  <title>Clean build-time secrets, avoid secrets as args</title>
+  <explainer>A Docker image isn't just a bunch of files but rather multiple layers revealing what happened during build-time. In a very common scenario, developers need the npm token during build time (mostly for private registries) - this is falsely achieved by passing the token as a build time args. It might seem innocent and safe, however this token can now be fetched from the developer's machine Docker history, from the Docker registry and the CI. An attacker who gets access to that token is now capable of writing into the organization private npm registry. There are two more secured alternatives: The flawless one is using Docker --secret feature (experimental as of July 2020) which allows mounting a file during build time only. The second approach is using multi-stage build with args, building and then copying only the necessary files to production. The last technique will not ship the secrets with the images but will appear in the local Docker history - This is typically considered as secured enough for most organizations.</explainer>
+</practice>
+
+<practice id="docker-02">
+  <title>Bootstrap container using node command instead of npm</title>
+  <explainer>We are used to see code examples where folks start their app using `CMD 'npm start'`. This is a bad practice. The `npm` binary will not forward signals to your app which prevents graceful shutdown see. If you are using child-processes they won’t be cleaned up correctly in case of unexpected shutdown, leaving zombie processes on your host. `npm start` also results in having an extra process for no benefit. To start you app use `CMD ['node','server.js']`. If your app spawns child-processes also use `TINI` as an entrypoint.</explainer>
+</practice>
+
+<practice id="docker-03">
+  <title>Clean NODE_MODULE cache</title>
+  <explainer>Node package managers, npm &amp; Yarn, cache the installed packages locally so that future projects which need the same libraries won't need to fetch from a remote repository. Although this duplicates the packages and consumes more storage - it pays off in a local development environment that typically keeps installing the same packages. In a Docker container this storage increase is worthless since it installs the dependency only once. By removing this cache, using a single line of code, tens of MB are shaved from the image. While doing so, ensure that it doesn't exit with non-zero code and fail the CI build because of caching issues - This can be avoided by including the --force flag.
+
+*Please note that this is not relevant if you are using a multi-stage build as long as you don't install new packages in the last stage*</explainer>
+</practice>
+
+<practice id="docker-04">
+  <title>Use .dockerignore to prevent leaking secrets</title>
+  <explainer>The Docker build command copies the local files into the build context environment over a virtual network. Be careful - development and CI folders contain secrets like .npmrc, .aws, .env files and other sensitive files. Consequently, Docker images might hold secrets and expose them in unsafe territories (e.g. Docker repository, partners servers). In a better world the Dockerfile should be explicit about what is being copied. On top of this include a .dockerignore file that acts as the last safety net that filters out unnecessary folders and potential secrets. Doing so also boosts the build speed - By leaving out common development folders that have no use in production (e.g. .git, test results, IDE configuration), the builder can better utilize the cache and achieve better performance</explainer>
+</practice>
+
+<practice id="docker-05">
+  <title>Shutdown gracefully</title>
+  <explainer>In a Dockerized runtime like Kubernetes, containers are born and die frequently. This happens not only when errors are thrown but also for good reasons like relocating containers, replacing them with a newer version and more. It's achieved by sending a notice (SIGTERM signal) to the process with a 30 second grace period. This puts a challenge on the developer to ensure the app is handling the ongoing requests and clean-up resources in a timely fashion. Otherwise thousands of sad users will not get a response. Implementation-wise, the shutdown code should wait until all ongoing requests are flushed out and then clean-up resources. Easier said than done, practically it demands orchestrating several parts: Tell the LoadBalancer that the app is not ready to serve more requests (via health-check), wait for existing requests to be done, avoid handling new requests, clean-up resources and finally log some useful information before dying. If Keep-Alive connections are being used, the clients must also be notified that a new connection should be established - A library like Stoppable can greatly help achieving this.</explainer>
+</practice>
+
+<practice id="docker-06">
+  <title>Understand image tags vs digests and use the `:latest` tag with caution</title>
+  <explainer>If this is a production situation and security and stability are important then just "convenience" is likely not the best deciding factor. In addition the `:latest` tag is Docker's default tag. This means that a developer who forgets to add an explicit tag will accidentally push a new version of an image as `latest`, which might end in very unintended results if the `latest` tag is being relied upon as the latest production image.</explainer>
+</practice>
+
+<practice id="docker-07">
+  <title>Remove development dependencies</title>
+  <explainer>Dev dependencies greatly increase the container attack surface (i.e. potential security weakness) and the container size. As an example, some of the most impactful npm security breaches were originated from devDependencies like eslint-scope or affected dev packages like event-stream that was used by nodemon. For those reasons the image that is finally shipped to production should be safe and minimal. Running npm install with a `--production` is a great start, however it gets even safer to run `npm ci` that ensures a fresh install and the existence of a lock file. Removing the local cache can shave additional tens of MB. Often there is a need to test or debug within a container using devDependencies - In that case, multi stage builds can help in having different sets of dependencies and finally only those for production.</explainer>
+</practice>
+
+<practice id="docker-08">
+  <title>Lint your Dockerfile</title>
+  <explainer>As our core application code is linted to conform to best practices and eliminate issues and bugs before it could become a problem, so too should our Dockerfiles. Linting the Dockerfile means increasing the chances of catching production issues on time with very light effort. For example, it can ensure that there aren’t any structural problems with the logic and instructions specified in your Dockerfiles like trying to copy from non-existing stage, copying from unknown online repository, running the app with power user (SUDO) and many more. The Open Source Dockerfile linter Hadolint can be used manually or as part of a CI process to lint your Dockerfile/s. Hadolint is a specialized Dockerfile linter that aims to embrace the Docker best practices.</explainer>
+</practice>
+
+<practice id="docker-09">
+  <title>Set memory limits using both Docker and v8</title>
+  <explainer>A memory limit tells the process/container the maximum allowed memory usage - a request or usage beyond this number will kill the process (OOMKill). Applying this is a great practice to ensure one citizen doesn't drink all the juice alone and leaves other components to starve. Memory limits also allow the runtime to place a container in the right instance - placing a container that consumes 500MB in an instance with 300MB memory available will lead to failures. Two different options allow configuring this limit: V8 flags (--max-old-space-size) and the Docker runtime, both are absolutely needed. Ensure to always configure the Docker runtime limits as it has a much wider perspective for making the right health decisions: Given this limit, the runtime knows how to scale and create more resources. It can also make a thoughtful decision on when to crash - if a container has a short burst in memory request and the hosting instance is capable of supporting this, Docker will let the container stay alive. Last, with Docker the Ops experts can set various production memory configurations that can be taken into account like memory swap. This by itself won't be enough - Without setting v8's --max-old-space-size, the JavaScript runtime won't push the garbage collection when getting close to the limits and will also crash when utilizing only 50-60% of the host environment. Consequently, set v8's limit to be 75-100% of Docker's memory limit.</explainer>
+</practice>
+
+<practice id="docker-10">
+  <title>Use multi-stage builds</title>
+  <explainer>Multi-stage builds allow to separate build- and runtime-specific environment details, such as available binaries, exposed environment variables, and even the underlying operating system. Splitting up your Dockerfiles into multiple stages will help to reduce final image and container size as you'll only ship what you really need to run your application. Sometimes you'll need to include tools that are only needed during the build phase, for example development dependencies such as the TypeScript CLI. You can install it during the build stage and only use the final output in the run stage. This also means your image will shrink as some dependencies won't get copied over. You might also have to expose environment variables during build that should not be present at runtime (see avoid build time secrets), such as API Keys and secrets used for communicating with specific services. In the final stage, you can copy in pre-built resources such as your build folder, or production-only dependencies (which you can also fetch in a subsequent step).</explainer>
+</practice>
+
+<practice id="docker-11">
+  <title>Let the Docker orchestrator restart and replicate processes</title>
+  <explainer>Docker runtime orchestrators like Kubernetes are really good at making containers health and placement decisions: They will take care to maximize the number of containers, balance them across zones, and take into account many cluster factors while making these decisions. Goes without words, they identify failing processes (i.e., containers) and restart them in the right place. Despite that some may be tempted to use custom code or tools to replicate the Node process for CPU utilization or restart the process upon failure (e.g., Cluster module, PM2). These local tools don't have the perspective and the data that is available on the cluster level. For example, when the instances resources can host 3 containers and given 2 regions or zones, Kubernetes will take care to spread the containers across zones. This way, in case of a zonal or regional failure, the app will stay alive. On the contrary side when using local tools for restarting the process the Docker orchestrator is not aware of the errors and can not make thoughtful decisions like relocating the container to a new instance or zone.</explainer>
+</practice>
+
+<practice id="docker-12">
+  <title>Scan the entire image before production</title>
+  <explainer>Scanning the code for vulnerabilities is a valuable act but it doesn't cover all the potential threats. Why? Because vulnerabilities also exist on the OS level and the app  might execute those binaries like Shell, Tarball,  OpenSSL. Also, vulnerable dependencies might be injected after the code scan (i.e. supply chain attacks) - hence scanning the final image just before production is in order. This idea resembles E2E tests - after testing the various pieces in-isolation, it's valuable to finally check the assembled deliverable. There are 3 main scanner families: Local/CI binaries with a cached vulnerabilities DB, scanners as a service in the cloud and a niche of tools which scan during the docker build itself. The first group is the most popular and usually the fastest - Tools like Trivvy, Anchore and Snyk are worth exploring. Most CI vendors provide a local plugin that facilitates the interaction with these scanners. It should be noted that these scanners cover a lot of ground and therefore will show findings in almost every scan - consider setting a high threshold bar to avoid getting overwhelmed</explainer>
+</practice>
+
+<practice id="docker-13">
+  <title>Leverage caching to reduce build times</title>
+  <explainer>Docker images are a combination of layers, each instruction in your Dockerfile creates a layer. The docker daemon can reuse those layers between builds if the instructions are identical or in the case of a `COPY` or `ADD` files used are identical. ⚠️ If the cache can't be used for a particular layer all the subsequent layers will be invalidated too. That's why order is important. It is crucial to layout your Dockerfile correctly to reduce the number of moving parts in your build; the less updated instructions should be at the top and the ones constantly changing (like app code) should be at the bottom. It's also important to think that instructions that trigger long operation should be close to the top to ensure they happen only when really necessary (unless it changes every time you build your docker image). Rebuilding a whole docker image from cache can be nearly instantaneous if done correctly.
+
+!Docker layers
+
+* Image taken from Digging into Docker layers by jessgreb01*</explainer>
+</practice>
+
+</knowledge-base>

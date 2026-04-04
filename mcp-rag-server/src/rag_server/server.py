@@ -257,12 +257,12 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
     tier1_tokens = 0
     tier1_sources_seen = set()
     for guardrail_file in GUARDRAIL_FILES:
-        if tier1_tokens >= remaining_budget * 0.3:
-            break  # Don't let guardrails eat more than 30% of remaining budget
+        if tier1_tokens >= remaining_budget * 0.4:
+            break  # Don't let guardrails eat more than 40% of remaining budget
         chunks = store.get_by_source("knowledge", guardrail_file)
         for chunk in chunks:
             chunk_tokens = chunk.metadata.get("token_count", estimate_tokens(chunk.content))
-            if tier1_tokens + chunk_tokens > remaining_budget * 0.3:
+            if tier1_tokens + chunk_tokens > remaining_budget * 0.4:
                 break
             tier1_chunks.append({
                 "source": chunk.metadata.get("source_file", guardrail_file),

@@ -1,0 +1,564 @@
+<knowledge-base name="patterns-design-architectural" version="1.0">
+<triggers>architectural patterns, MVC, CQRS, event sourcing, hexagonal, layered, microservices, clean architecture</triggers>
+<overview>Architectural design patterns: high-level structural decisions for applications and systems.</overview>
+<source license="MIT">iluwatar/java-design-patterns (language-agnostic extracts)</source>
+
+<pattern id="architectural-01" slug="bloc">
+  <name>Bloc</name>
+  <category>Architectural</category>
+  <tags>Abstraction, Data binding, Decoupling, Event-driven, Presentation, Reactive, Reusability, State tracking</tags>
+  <also-known-as>* Business Logic Component
+* Business Logic Controller</also-known-as>
+  <intent>The Bloc pattern manages the state of an object and allows for dynamically notifying interested listeners about state changes. It separates state management logic from the rest of the application, improving code organization and flexibility.</intent>
+  <explanation>The Bloc pattern manages a single state object and dynamically notifies registered listeners whenever the state changes.</explanation>
+  <applicability>Use the Bloc pattern when:
+
+* When you want a clean separation of business logic and UI in Java applications
+* When you need a reactive approach to updating UI based on state changes
+* When you want to avoid coupling controllers or presenters directly to data manipulation
+* When multiple UI elements need access to the same business logic</applicability>
+  <tradeoffs>Benefits:
+
+* Simplifies UI components by removing direct business logic
+* Improves testability by isolating state and behavior
+* Encourages code reuse by centralizing data flows
+* Enhances maintainability through clear separation of concerns
+
+Trade-offs:
+
+* May introduce additional boilerplate code for managing streams or observers
+* Requires careful design to avoid a monolithic “god” component
+* Demands consistent reactive programming practices to be effective</tradeoffs>
+</pattern>
+
+<pattern id="architectural-02" slug="clean-architecture">
+  <name>Clean Architecture</name>
+  <category>Architectural</category>
+  <tags>Architecture, Decoupling, Domain, Inversion of control, Layered architecture, Modularity, Testing</tags>
+  <intent>To organize the system so that the core business logic remains independent from external concerns and frameworks.</intent>
+  <explanation>Clean Architecture is a software design approach that isolates the core business logic from external concerns (like databases, frameworks, or UI) through strict layering and clear boundaries, ensuring that changes in one layer don't ripple through the entire system.</explanation>
+  <applicability>* When you want to keep business rules independent of UI, database, or any other external agency
+* When you need a high level of maintainability and testability in large Java applications
+* When you aim to enforce clear boundaries among application layers</applicability>
+  <tradeoffs>Benefits: 
+
+* High maintainability by isolating core logic from infrastructure details
+* Enhanced testability through clear boundaries around the domain model
+* Flexibility in replacing or upgrading external components without affecting core logic
+
+Trade-Offs:
+
+* Initial complexity from enforcing strict layers and boundaries
+* Potential overhead in smaller projects not requiring such rigid separation
+* Requires disciplined team adherence to architecture rules</tradeoffs>
+</pattern>
+
+<pattern id="architectural-03" slug="command-query-responsibility-segregation">
+  <name>Command Query Responsibility Segregation (CQRS)</name>
+  <category>Architectural</category>
+  <tags>Event-driven, Performance, Scalability</tags>
+  <also-known-as>* CQRS</also-known-as>
+  <intent>Command Query Responsibility Segregation (CQRS) aims to segregate the operations that modify the state of an application (commands) from the operations that read the state (queries). This separation enhances scalability, performance, and maintainability in complex software systems.</intent>
+  <explanation>The CQRS design pattern separates the actions of modifying data (commands) from the actions of retrieving data (queries) to enhance performance, scalability, and maintainability in software systems. By implementing CQRS, you can optimize your system's read and write operations independently, allowing for more efficient data handling and improved overall system performance.</explanation>
+  <applicability>* Systems requiring distinct models for read and write operations for scalability and maintainability, such as e-commerce platforms and high-traffic websites.
+* Complex domain models, like financial services or healthcare applications, where the task of updating objects differs significantly from the task of reading object data.
+* Scenarios where performance optimization for read operations is crucial, and the system can benefit from different data models or databases for reads and writes, enhancing data retrieval speed and accuracy.</applicability>
+  <tradeoffs>Benefits:
+
+* Scalability: By separating read and write models, each can be scaled independently according to their specific demands.
+* Optimization: Allows for the optimization of read models for query efficiency and write models for transactional integrity.
+* Maintainability: Reduces complexity by separating the concerns, leading to cleaner, more maintainable code.
+* Flexibility: Offers the flexibility to choose different technologies for the read and write sides according to their requirements.
+
+Trade-Offs:
+
+* Complexity: Introduces complexity due to synchronization between read and write models, especially in consistency maintenance.
+* Overhead: Might be an overkill for simple systems where the benefits do not outweigh the additional complexity....</tradeoffs>
+</pattern>
+
+<pattern id="architectural-04" slug="event-driven-architecture">
+  <name>Event-Driven Architecture</name>
+  <category>Architectural</category>
+  <tags>Asynchronous, Decoupling, Enterprise patterns, Event-driven, Messaging, Publish/subscribe, Reactive, Scalability</tags>
+  <also-known-as>* Event-Driven System
+* Event-Based Architecture</also-known-as>
+  <intent>Event-Driven Architecture (EDA) is designed to orchestrate behavior around the production, detection, consumption of, and reaction to events. This architecture enables highly decoupled, scalable, and dynamic interconnections between event producers and consumers.</intent>
+  <explanation>Event-Driven Architecture is a design pattern where system behavior is dictated by the occurrence of specific events, allowing for dynamic, efficient, and decoupled responses.</explanation>
+  <applicability>Use an Event-driven architecture when
+
+* Systems where change detection is crucial.
+* Applications that require real-time features and reactive systems.
+* Systems needing to efficiently handle high throughput and sporadic loads.
+* When integrating with microservices to enhance agility and scalability.</applicability>
+  <tradeoffs>Benefits:
+
+* Scalability: Efficiently processes fluctuating loads with asynchronous processing.
+* Flexibility and Agility: New event types and event consumers can be added with minimal impact on existing components.
+* Responsiveness: Improves responsiveness by decoupling event processing and state management.
+
+Trade-offs:
+
+* Complexity in Tracking: Can be challenging to debug and track due to loose coupling and asynchronous behaviors.
+* Dependency on Messaging Systems: Heavily relies on robust messaging infrastructures.
+* Event Consistency: Requires careful design to handle event ordering and consistency.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-05" slug="event-sourcing">
+  <name>Event Sourcing</name>
+  <category>Architectural</category>
+  <tags>Decoupling, Event-driven, Fault tolerance, Messaging, Persistence, Scalability, Transactions</tags>
+  <also-known-as>* Event Logging
+* Event Streaming</also-known-as>
+  <intent>Event Sourcing is a design pattern that advocates for the storage of state changes as a sequence of events. Instead of updating a record in a database, all changes are stored as individual events which, when replayed, can recreate the state of an application at any point in time.</intent>
+  <explanation>Event Sourcing records all state changes as a sequence of immutable events to ensure reliable state reconstruction and auditability.</explanation>
+  <applicability>* In systems where complete audit trails and historical changes are crucial.
+* In complex domains where the state of an application is derived from a series of changes.
+* For systems that benefit from high availability and scalability as Event Sourcing naturally lends itself to distributed systems.</applicability>
+  <tradeoffs>Benefits:
+
+* Auditability: Each change to the state is recorded, allowing for comprehensive auditing.
+* Replayability: Events can be reprocessed to recreate historical states or move to new states.
+* Scalability: Events can be processed asynchronously and in parallel.
+
+Trade-offs
+
+* Complexity: Implementing and maintaining an event-sourced system can introduce additional complexity.
+* Event store size: Storing every state change can lead to large data volumes.
+* Event versioning: Changes in event structure over time require careful handling to ensure system integrity.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-06" slug="flux">
+  <name>Flux</name>
+  <category>Architectural</category>
+  <tags>Client-server, Decoupling, Event-driven, Publish/subscribe, Reactive</tags>
+  <intent>The Flux design pattern is intended to manage the flow of data in Java applications, particularly client-side web applications, by enforcing a unidirectional data flow. It aims to simplify the management of complex data interactions and promote a more predictable state behavior across components.</intent>
+  <explanation>The Flux design pattern manages data flow in applications through a unidirectional architecture, coordinating actions, dispatchers, stores, and views to ensure stable and predictable state management. This pattern is particularly useful in Java design patterns for developing responsive client-side web applications.</explanation>
+  <applicability>Flux is applicable in developing client-side Java applications, where maintaining consistent data across various components and managing complex state interactions are critical. It is especially suited for applications with dynamic user interfaces that react to frequent data updates.</applicability>
+  <tradeoffs>Benefits:
+
+* Ensures a unidirectional data flow that simplifies debugging and testing.
+* Enhances consistency across the application by centralizing the application state.
+* Improves the predictability of data flow and interaction in large applications.
+
+Trade-offs:
+
+* Can introduce boilerplate and complexity in smaller applications.
+* May require a learning curve to understand the pattern's architecture and its implementation nuances.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-07" slug="front-controller">
+  <name>Front Controller</name>
+  <category>Architectural</category>
+  <tags>Architecture, Decoupling, Enterprise patterns, Layered architecture, Web development</tags>
+  <also-known-as>* Centralized Request Handling</also-known-as>
+  <intent>The Front Controller design pattern aims to provide a centralized entry point for handling all incoming web requests. This pattern ensures consistent and efficient request routing and management across a Java web application.</intent>
+  <explanation>The Front Controller design pattern centralizes incoming web requests into a single handling point, allowing consistent processing and delegation across an application.</explanation>
+  <applicability>* The Front Controller design pattern is particularly useful for Java web applications that require a centralized mechanism for request handling.
+* Systems that need a common processing point for all requests to perform tasks such as authentication, logging, and routing.</applicability>
+  <tradeoffs>Benefits:
+
+* The main benefit of the Front Controller design pattern is the centralization of request handling, which simplifies maintenance and ensures consistent behavior across the application.
+* Eases the integration of services like security and user session management.
+* Facilitates common behavior like routing, logging, and authentication across requests.
+
+Trade-offs:
+
+* Can become a bottleneck if not properly managed.
+* Increases complexity in the dispatcher controller, requiring careful design to avoid tight coupling.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-08" slug="hexagonal-architecture">
+  <name>Hexagonal Architecture</name>
+  <category>Architectural</category>
+  <tags>Decoupling, Layered architecture</tags>
+  <also-known-as>* Ports and Adapters</also-known-as>
+  <intent>Hexagonal Architecture, also known as Ports and Adapters, is a design pattern in Java that promotes decoupling of core business logic from external interfaces like databases and user interfaces. This architectural approach enhances maintainability and testability of software systems.</intent>
+  <explanation>Hexagonal Architecture organizes an application into a central core of business logic surrounded by ports and adapters that manage interactions with external systems like user interfaces and databases, allowing the core to remain independent of external concerns.</explanation>
+  <applicability>Hexagonal Architecture is particularly beneficial in scenarios:
+
+* The application needs to interact with multiple external systems.
+* There is a requirement for high testability and maintainability.
+* The application should remain unaffected by changes in external interfaces.</applicability>
+  <tradeoffs>Benefits:
+
+* Improved Testability: Allows the core functionality to be tested independently of external components.
+* Flexibility: Facilitates the addition or replacement of components that interact with the application without modifying the core business logic.
+* Maintainability: Reduces dependencies on external interfaces, simplifying upgrades and maintenance.
+
+Trade-offs:
+
+* Complexity: Introduces more abstractions and layers, which can complicate the system design and understanding.
+* Overhead: Might be an over-engineering for simple applications, where simpler architectural patterns could suffice.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-09" slug="intercepting-filter">
+  <name>Intercepting Filter</name>
+  <category>Architectural</category>
+  <tags>API design, Decoupling, Layered architecture, Performance, Security, Web development</tags>
+  <intent>The Intercepting Filter Pattern in Java is a powerful design pattern that allows for efficient web request handling. This pattern enables the application of multiple filters in a filter chain to process and modify requests and responses.</intent>
+  <explanation>The Intercepting Filter design pattern allows you to define processing steps (filters) that execute sequentially to handle and modify web requests and responses before they reach the application or are sent to the client.</explanation>
+  <applicability>Use the Intercepting Filter pattern when
+
+* In Java web applications to manage cross-cutting concerns.
+* When you need to apply pre-processing and post-processing steps to requests and responses, typically in web applications.
+* Suitable for handling cross-cutting concerns such as logging, authentication, data compression, and encryption transparently.</applicability>
+  <tradeoffs>Benefits:
+
+* Promotes separation of concerns by allowing filters to be independently developed, tested, and reused.
+* Enhances flexibility through configurable filter chains.
+* Simplifies application maintenance by centralizing control in filter management.
+
+Trade-offs:
+
+* Introducing many filters can lead to performance overhead due to the processing of each request and response through multiple filters.
+* Debugging and tracing the request flow through multiple filters can be complex.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-10" slug="layered-architecture">
+  <name>Layered Architecture</name>
+  <category>Architectural</category>
+  <tags>Abstraction, Decoupling, Enterprise patterns, Layered architecture, Scalability</tags>
+  <also-known-as>* N-Tier Architecture</also-known-as>
+  <intent>The Layered Architecture design pattern helps organize applications into groups of subtasks at different levels of abstraction, facilitating independent development and maintenance of each layer.</intent>
+  <explanation>The Layered Architecture pattern organizes software into hierarchical groups of tasks, each encapsulated in distinct layers that interact with each other, facilitating ease of maintenance, scalability, and clear separation of concerns.</explanation>
+  <applicability>This pattern is suitable for structuring applications that can be divided into groups where each group has a specific role or responsibility. Common in enterprise applications, it simplifies dependencies, enhances maintainability, and supports scaling and technology stack segregation.
+
+Use the Layers architecture when
+
+* You want clearly divide software responsibilities into different parts of the program.
+* You want to prevent a change from propagating throughout the application.
+* You want to make your application more maintainable and testable.</applicability>
+  <tradeoffs>Benefits
+
+* Improved manageability with separation of concerns
+* Easier to update or modify one layer without affecting others
+* Promotes reuse of functionalities.
+
+Trade-offs
+
+* Potential performance overhead due to layer interaction
+* Complexity in layer management
+* Challenges in designing an effective layer distribution.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-11" slug="microservices-aggregrator">
+  <name>Microservices Aggregator</name>
+  <category>Architectural</category>
+  <tags>API design, Client-server, Data processing, Decoupling, Integration, Microservices, Scalability</tags>
+  <also-known-as>* API Composition</also-known-as>
+  <intent>The Microservices Aggregator pattern helps aggregate responses from multiple microservices into a single unified response, optimizing client-server interactions in scalable systems.</intent>
+  <explanation>Microservices Aggregator collects pieces of data from various microservices and returns an aggregate for processing.</explanation>
+  <applicability>The Microservices Aggregator pattern is ideal for scenarios requiring composite responses from multiple microservices, such as in e-commerce and dashboard applications where aggregated data enhances user experience and system efficiency.</applicability>
+  <tradeoffs>Benefits:
+
+* Simplified Client: Clients interact with just one service rather than managing calls to multiple microservices, which simplifies client-side logic.
+* Reduced Latency: By aggregating responses, the number of network calls is reduced, which can improve the application's overall latency.
+* Decoupling: Clients are decoupled from the individual microservices, allowing for more flexibility in changing the microservices landscape without impacting clients.
+* Centralized Logic: Aggregation allows for centralized transformation and logic application on the data collected from various services, which can be more efficient than handling it in the client or spreading it across multiple services.
+
+Trade-offs:
+...</tradeoffs>
+</pattern>
+
+<pattern id="architectural-12" slug="microservices-client-side-ui-composition">
+  <name>Microservices Client-Side UI Composition</name>
+  <category>Architectural</category>
+  <tags>Client-server, Cloud distributed, Composition, Decoupling, Integration, Microservices, Modularity, Scalability, Web development</tags>
+  <also-known-as>* UI Aggregator
+* Frontend-Driven Composition</also-known-as>
+  <intent>Compose user interface from independently deployable microservices on the client side for greater flexibility and decoupling.</intent>
+  <explanation>Real-world Example
+
+&gt; In a SaaS dashboard, a client-side composition pattern enables various independent modules like “Billing,” “Reports,” and “Account Settings” to be developed and deployed by separate teams. These modules are composed into a unified interface for the user, with each module independently fetching data from its respective microservice.
+
+In Plain Words
+
+&gt; The Client-Side UI Composition pattern breaks down the user interface into smaller, independent parts that can be developed, maintained, and scaled separately by different teams.
+
+Wikipedia says
+
+&gt; UI composition refers to the practice of building a user interface from modular components, each responsible for fetching its own data and rendering its own content. This approach enables faster development cycles, easier maintenance, and better scalability in large systems.
+
+Sequence diagram</explanation>
+  <applicability>* When each microservice must present its own UI components
+* When frequent independent deployments of UI features are required
+* When teams own end-to-end functionality, including front-end modules
+* When Java-based backends provide separate APIs for direct UI consumption</applicability>
+  <tradeoffs>Benefits:
+
+* Facilitates independent deployment cycles for UI features
+* Reduces overall coupling and fosters autonomy among teams
+* Enables polyglot front-end development
+
+Trade-offs:
+
+* Increases client complexity for rendering and data aggregation
+* Can cause performance challenges with multiple service calls
+* Demands consistent UX guidelines across diverse microservices</tradeoffs>
+</pattern>
+
+<pattern id="architectural-13" slug="microservices-distributed-tracing">
+  <name>Microservices Distributed Tracing</name>
+  <category>Architectural</category>
+  <tags>Cloud distributed, Microservices, Resilience, Observability, Scalability, System health</tags>
+  <also-known-as>* Distributed Request Tracing
+* End-to-End Microservice Tracing</also-known-as>
+  <intent>Provide a mechanism to trace and correlate requests as they traverse multiple microservices in a distributed system, enabling end-to-end visibility and easier troubleshooting.</intent>
+  <explanation>Distributed tracing allows you to follow a request's journey through all the services it interacts with, providing insights into system performance and aiding in debugging.</explanation>
+  <applicability>* When multiple services form a single user request path and debugging failures requires visibility across service boundaries.
+* When monitoring or diagnosing performance bottlenecks is critical in a multi-service environment.
+* When correlation of logs and metrics from independent services is needed to understand overall system health.</applicability>
+  <tradeoffs>Benefits:
+
+* Centralized insight into request paths across services, reducing time to diagnose issues.
+* Improved observability enables proactive identification of system bottlenecks.
+* Aids in debugging and troubleshooting complex systems.
+
+Trade-offs:
+
+* Adds overhead to each request due to tracing data.
+* Requires additional infrastructure (e.g., Zipkin, Jaeger) for collecting and visualizing traces.
+* Can become complex to manage in large-scale systems.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-14" slug="model-view-controller">
+  <name>Model-View-Controller (MVC)</name>
+  <category>Architectural</category>
+  <tags>Architecture, Client-server, Decoupling, Layered architecture, Presentation</tags>
+  <also-known-as>* MVC</also-known-as>
+  <intent>To separate an application into three interconnected components (Model, View, Controller), enabling modular development of each part independently, enhancing maintainability and scalability. Model-View-Controller (MVC) design pattern is widely used in Java applications for web development and user interface separation.</intent>
+  <explanation>MVC separates the business logic from user interface by mediating Controller between Model &amp; View.</explanation>
+  <applicability>* Used in web applications to separate data model, user interface, and user input processing.
+* Suitable for applications requiring a clear separation of concerns, ensuring that the business logic, user interface, and user input are loosely coupled and independently managed, following the MVC pattern.</applicability>
+  <tradeoffs>Benefits:
+
+* Promotes organized code structure by separating concerns.
+* Facilitates parallel development of components.
+* Enhances testability due to decoupled nature.
+* Easier to manage and update individual parts without affecting others.
+
+Trade-offs:
+
+* Increased complexity in initially setting up the architecture.
+* Can lead to excessive boilerplate if not implemented correctly or for very small projects.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-15" slug="model-view-intent">
+  <name>Model-View-Intent (MVI)</name>
+  <category>Architectural</category>
+  <also-known-as>* MVI</also-known-as>
+  <intent>The Model-View-Intent (MVI) pattern for Java applications creates a unidirectional and cyclical data flow between the Model, View, and Intent components, enhancing UI predictability and state management.</intent>
+  <explanation>The Model-View-Intent (MVI) pattern is a reactive architectural approach where user actions (Intent) modify the application state (Model), and the updated state is then reflected back in the user interface (View) in a unidirectional and cyclical data flow.</explanation>
+  <applicability>* The MVI pattern is useful in Java applications with complex user interfaces that require a clear separation of concerns, predictable state management, and enhanced maintainability.
+* Often applied in reactive programming environments to ensure a smooth data flow and state consistency.</applicability>
+  <tradeoffs>Benefits:
+
+* Enhances the predictability of the UI by establishing a clear and cyclical data flow.
+* Improves testability due to well-defined separation between components.
+* Supports better state management by centralizing the state within the Model.
+
+Trade-offs:
+
+* Increases complexity for simple UIs due to the structured and cyclical flow.
+* Requires familiarity with reactive programming paradigms.
+* Can lead to boilerplate code if not managed properly.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-16" slug="model-view-presenter">
+  <name>Model-View-Presenter (MVP)</name>
+  <category>Architectural</category>
+  <tags>Architecture, Client-server, Decoupling, Enterprise patterns, Interface, Presentation</tags>
+  <also-known-as>* MVP</also-known-as>
+  <intent>MVP aims to separate the user interface (UI) logic from the business logic and model in a software application, enabling easier testing and maintenance.</intent>
+  <explanation>The Model-View-Presenter (MVP) pattern separates the user interface, business logic, and data interaction in an application, with the presenter mediating between the view and the model to facilitate clear communication and updates. Java developers use MVP to improve application structure.</explanation>
+  <applicability>Use MVP in applications where a clear separation of concerns is needed between the presentation layer and the underlying business logic. It's particularly useful in client-server applications and enterprise-level applications.</applicability>
+  <tradeoffs>Benefits:
+
+* Enhances testability of UI logic by allowing the presenter to be tested separately from the view.
+* Promotes a clean separation of concerns, making the application easier to manage and extend.
+* Facilitates easier UI updates without affecting the business logic.
+
+Trade-offs:
+
+* Increases complexity with more classes and interfaces.
+* Requires careful design to avoid over-coupling between the presenter and the view.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-17" slug="model-view-viewmodel">
+  <name>Model-View-ViewModel</name>
+  <category>Architectural</category>
+  <tags>Architecture, Data binding, Decoupling, Presentation, Scalability</tags>
+  <also-known-as>* MVVM</also-known-as>
+  <intent>The intent of the Model-View-ViewModel (MVVM) pattern in Java is to provide a clear separation of concerns between the UI logic, the presentation logic, and the business logic by dividing the application into three interconnected components: Model, View, and ViewModel.</intent>
+  <explanation>The MVVM design pattern separates an application into three distinct components: the Model, which holds the data and business logic; the View, which displays the user interface; and the ViewModel, which acts as an intermediary to bind data from the Model to the View.</explanation>
+  <applicability>MVVM is applicable in applications requiring a clear separation between the user interface and the underlying business logic, especially in large-scale, data-driven applications where UI and business logic change independently. This makes the Model-View-ViewModel pattern ideal for Java applications.</applicability>
+  <tradeoffs>Benefits:
+
+* Improved testability due to decoupling of business and presentation logic.
+* Easier maintenance and modification of the user interface without affecting the underlying data model.
+* Enhanced reusability of the ViewModel across different views if designed generically.
+
+Trade-offs:
+
+* Increased complexity in small applications where simpler patterns might suffice.
+* Learning curve associated with understanding and applying the pattern correctly.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-18" slug="monolithic-architecture">
+  <name>Monolithic Architecture</name>
+  <category>Architectural</category>
+  <tags>Architecture, Cohesion, Encapsulation, Layered architecture, Modularity</tags>
+  <also-known-as>* Single-tier architecture
+* Monolith</also-known-as>
+  <intent>Encapsulate all the functionality of an application within a single, cohesive codebase.</intent>
+  <explanation>The monolithic design pattern structures an application as a single unified unit, where all components are tightly coupled and run within a single process.</explanation>
+  <applicability>* Suitable for small to medium-sized applications where simplicity, cohesive development, and ease of deployment outweigh scalability and flexibility requirements.
+* Applicable in contexts where initial rapid development and ease of testing are prioritized.</applicability>
+  <tradeoffs>Benefits:
+
+* Simpler to develop, test, and deploy as the application is a single unit.
+* Easier debugging and performance monitoring due to the single unified runtime.
+* Typically faster initial development and straightforward management of dependencies.
+
+Trade-offs:
+
+* Poor scalability and potential performance bottlenecks as the application grows.
+* Limited modularity, leading to increased complexity and harder maintainability over time.
+* Slow deployments and updates due to a single large codebase.
+* Difficult to scale individual functionalities independently.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-19" slug="naked-objects">
+  <name>Naked Objects</name>
+  <category>Architectural</category>
+  <tags>Architecture, Business, Decoupling, Domain, Enterprise patterns, Instantiation, Object composition, Persistence</tags>
+  <also-known-as>* Transparent Objects</also-known-as>
+  <intent>To enable the rapid development of maintainable systems by representing all business objects directly and automatically creating the user interface from these definitions. Naked Objects design pattern is essential for developers aiming to align user interfaces with domain models seamlessly.</intent>
+  <explanation>The Naked Objects design pattern automatically generates a user interface from domain objects, allowing for rapid development and easy maintenance by ensuring the UI directly reflects the underlying business model.</explanation>
+  <applicability>* When aiming to create a system where the domain objects can be easily understood and manipulated without an explicit user interface design.
+* For applications requiring a dynamic, adaptable UI that reflects the underlying domain model with minimal developer intervention.</applicability>
+  <tradeoffs>Benefits: 
+
+* Rapid development
+* Improved maintainability
+* Easy domain understanding
+* Alignment between the UI and business model
+
+Trade-offs: 
+
+* Reduced UI flexibility
+* Potential over-exposure of the domain model
+* Reliance on framework capabilities</tradeoffs>
+</pattern>
+
+<pattern id="architectural-20" slug="page-controller">
+  <name>Page Controller</name>
+  <category>Architectural</category>
+  <intent>The Page Controller pattern is intended to handle requests for a specific page or action within a web application, processing input, and determining the appropriate view for rendering the response.</intent>
+  <explanation>The Page Controller pattern handles requests for specific pages or actions within a Java web application, processing input, executing business logic, and determining the appropriate view for rendering the response, enhancing response handling and system architecture.</explanation>
+  <applicability>* When developing a web application where each page or action needs specific processing.
+* When aiming to separate the request handling logic from the view rendering logic.
+* In scenarios where a clear separation of concerns between different layers (controller, view) is required.</applicability>
+  <tradeoffs>Benefits:
+
+* Separation of Concerns: Clearly separates the controller logic from the view, making the application easier to manage and maintain.
+* Reusability: Common logic can be reused across multiple controllers, reducing code duplication.
+* Testability: Controllers can be tested independently of the view, improving unit test coverage.
+
+Trade-offs:
+
+* Complexity: Can add complexity to the application structure, requiring careful organization and documentation.
+* Overhead: May introduce performance overhead due to additional layers of abstraction and processing.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-21" slug="presentation-model">
+  <name>Presentation Model</name>
+  <category>Architectural</category>
+  <tags>Decoupling, Encapsulation, Presentation, Testing</tags>
+  <also-known-as>* Application Model</also-known-as>
+  <intent>The Presentation Model pattern separates the logic of the user interface (UI) from the business logic by creating a model that represents the data and behavior of the UI independently.</intent>
+  <explanation>The Presentation Model design pattern separates the UI logic from the business logic by creating an intermediate model that represents the data and behavior of the UI independently, enhancing testability, maintainability, and flexibility.</explanation>
+  <applicability>Use the Presentation Model Pattern when
+
+* Use when you want to decouple the UI from the underlying business logic to allow for easier testing, maintenance, and the ability to support multiple views or platforms.
+* Ideal for applications where the UI changes frequently or needs to be different across various platforms while keeping the core logic intact.</applicability>
+  <tradeoffs>Benefits:
+
+* Decoupling: Enhances separation of concerns, making the system more modular and testable.
+* Testability: Facilitates unit testing of UI logic without the need for actual UI components.
+* Maintainability: Simplifies maintenance by isolating changes to the UI or business logic.
+* Flexibility: Supports multiple views for the same model, making it easier to adapt the UI for different platforms.
+
+Trade-offs:
+
+* Complexity: Can introduce additional layers and complexity in the application architecture.
+* Learning Curve: May require a deeper understanding of binding mechanisms and state management.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-22" slug="service-layer">
+  <name>Service Layer</name>
+  <category>Architectural</category>
+  <tags>API design, Business, Decoupling, Enterprise patterns, Layered architecture</tags>
+  <also-known-as>* Application Facade</also-known-as>
+  <intent>The Service Layer pattern is crucial for Java developers focusing on building robust application architectures that separate business processes from user interface concerns.
+
+The pattern encapsulate business logic in a distinct layer to promote separation of concerns and to provide a well-defined API for the presentation layer.</intent>
+  <explanation>A pattern that encapsulates business logic into a distinct layer to promote separation of concerns and provide a clear API for the presentation layer.</explanation>
+  <applicability>* Use when you need to separate business logic from presentation logic.
+* Ideal for applications with complex business rules and workflows.
+* Suitable for projects requiring a clear API for the presentation layer.</applicability>
+  <tradeoffs>Benefits:
+
+Implementing a Service Layer in Java
+
+* Promotes code reuse by encapsulating business logic in one place.
+* Enhances testability by isolating business logic.
+* Improves maintainability and flexibility of enterprise applications.
+
+Trade-offs:
+
+* May introduce additional complexity by adding another layer to the application.
+* Can result in performance overhead due to the extra layer of abstraction.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-23" slug="service-to-worker">
+  <name>Service to Worker</name>
+  <category>Architectural</category>
+  <tags>Business, Decoupling, Layered architecture, Presentation, Web development</tags>
+  <intent>The Service to Worker design pattern in Java combines the Dispatcher View and Service Locator patterns to facilitate the separation of processing, control flow, and view management in web applications.</intent>
+  <explanation>Separates the processing logic from the view in web applications to improve maintainability and scalability.</explanation>
+  <applicability>* Use when you need to separate the controller logic from the view to improve code maintainability and enable team members to work on different parts of the application independently.
+* Suitable for Java web applications that utilize MVC architecture.
+* Appropriate for scenarios requiring complex request processing before displaying a view.</applicability>
+  <tradeoffs>Benefits:
+
+* Enhances code maintainability by separating concerns.
+* Facilitates team collaboration by decoupling the controller and view components.
+* Simplifies the addition of new views and modifications to existing ones.
+
+Trade-offs:
+
+* Increases the complexity of the application structure.
+* May introduce additional overhead due to the layered architecture.</tradeoffs>
+</pattern>
+
+<pattern id="architectural-24" slug="view-helper">
+  <name>View Helper</name>
+  <category>Architectural</category>
+  <tags>Architecture, Presentation, Decoupling, Code reuse</tags>
+  <intent>The View Helper Design Pattern separates presentation logic from the view by delegating complex UI tasks — like formatting or conditional display — to reusable helper components. This keeps views clean, promotes reuse, and aligns with the MVC principle of separating concerns between the view and the business logic.</intent>
+  <explanation>The View Helper pattern is about keeping your UI code clean by moving any logic—like formatting, calculations, or decision-making—into separate helper classes. Instead of stuffing all the logic into the HTML or template files, you delegate it to helpers, so the view just focuses on showing the final result.</explanation>
+  <applicability>Use the View Helper pattern when your view layer starts containing logic such as formatting data, applying conditional styles, or transforming domain objects for display. It's especially useful in MVC architectures where you want to keep views clean and focused on rendering, while delegating non-trivial presentation logic to reusable helper classes. This pattern helps improve maintainability, testability, and separation of concerns in your application's UI layer.</applicability>
+  <tradeoffs>Benefits:
+* Separation of concerns: Keeps view templates clean by moving logic into dedicated helpers.
+* Reusability: Common formatting and display logic can be reused across multiple views.
+* Improved maintainability: Easier to update presentation logic without touching the view.
+* Testability: Helpers can be unit tested independently from the UI layer.
+
+Trade‑offs:
+* Added complexity: Introduces extra classes, which may feel unnecessary for very simple views.
+* Overuse risk: Excessive use of helpers can spread logic thinly across many files, making it harder to trace behavior.
+* Tight coupling risk: If not designed carefully, helpers can become tightly coupled to specific views or data formats.</tradeoffs>
+</pattern>
+
+</knowledge-base>
