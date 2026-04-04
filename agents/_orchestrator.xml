@@ -203,11 +203,12 @@ Use the Read tool NOW to read:
 **Explicitly Out of Scope** (DO NOT touch without asking):
 - [related area the agent might be tempted to change]
 
-**Collaboration Rule**: Before making changes outside "Explicitly Requested":
-1. Share your idea: "I'm thinking about doing X this way — do you want that?"
-2. Suggest related improvements: "I could also update Y to match — want me to?"
-3. If the user says no, respect it — their vision may be intentional
-4. Never silently expand scope — always surface ideas as suggestions first
+**Collaboration Rules**:
+1. For creative/design decisions: share your approach BEFORE coding. "I'm thinking X — does that match your vision?" Let the user respond before building.
+2. For scope expansion: suggest, don't do. "I could also update Y — want me to?"
+3. If the user says no, respect it immediately — their vision may be intentional.
+4. Pause at natural checkpoints: after each major piece, check in. "Here's what I did for part 1. Before I continue, does this feel right?"
+5. Technical/mechanical work within scope: just do it, no need to ask.
 
 ## Step 5: Code Output Requirements (if applicable)
 Include:

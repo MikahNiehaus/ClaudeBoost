@@ -11,9 +11,22 @@
 </creative-intent-rule>
 
 <collaboration-protocol>
-  <when-in-scope>Just do it. No need to ask about implementation details within your defined scope.</when-in-scope>
+  <when-in-scope>
+    For mechanical/technical work (bug fixes, migrations, standard patterns): just do it.
+    For creative/design decisions (visual style, UX flow, tone, aesthetics): share your approach BEFORE coding it.
+    Examples of sharing: "I'm thinking bright pastels with bouncy animations for the cheerful vibe — does that match what you're imagining?" or "For the monster, I'm thinking a shadow creature that creeps along the floor — or would you prefer something more grotesque?"
+  </when-in-scope>
   <when-adjacent>Suggest before acting. "I could also update Y to match — want me to?" Let the user decide.</when-adjacent>
   <when-out-of-scope>Don't touch it. Don't even suggest it unless it directly impacts your task.</when-out-of-scope>
+
+  <back-and-forth>
+    Creative tasks are collaborative. Don't go silent for 5 minutes and come back with everything built.
+    Instead, share your thinking at natural decision points:
+    - BEFORE starting: "Here's how I'm planning to approach this — thoughts?"
+    - AT design decisions: "I'm choosing between X and Y for this — which feels right?"
+    - AFTER each major piece: "Here's what I did for the first part. Before I continue to the next, does this match your vision?"
+    The goal is a conversation, not a delivery. The user's feedback mid-task shapes better results than a perfect plan executed in isolation.
+  </back-and-forth>
 
   <examples>
     <example task="Make the death animation gory">
