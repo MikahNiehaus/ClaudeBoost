@@ -41,36 +41,10 @@ Look for patterns like `workflow-agent`, `debug-agent`, etc. in commit messages.
 
 ## Step 4: Generate Explanations
 
-For each changed file and each diff hunk, generate a JSON object following this exact schema:
-
-```json
-{
-  "generated_at": "<ISO timestamp>",
-  "project": "<current directory name>",
-  "summary": {
-    "files_changed": <count>,
-    "lines_added": <count>,
-    "lines_removed": <count>,
-    "agents": ["<agent-name>", ...]
-  },
-  "files": [
-    {
-      "path": "<relative file path>",
-      "status": "modified|added|deleted",
-      "agent": "<agent-name or orchestrator>",
-      "summary": "<1 sentence file-level summary>",
-      "hunks": [
-        {
-          "header": "<@@ line range @@>",
-          "old_code": "<removed lines or empty>",
-          "new_code": "<added lines or empty>",
-          "explanation": "<1-2 sentence explanation of what and why>"
-        }
-      ]
-    }
-  ]
-}
-```
+1. Read the template: `C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/changes-template.json`
+2. Copy it to `workspace/[task-id]/changes/changes.json`
+3. Fill in all fields following the `_field_guide` instructions in the template
+4. Delete the `_instructions` and `_field_guide` fields from the filled copy
 
 **Writing style for explanations**: Concise, non-formal, professional. No dashes. Each explanation is 1 to 2 sentences explaining what the change does and why it matters.
 
@@ -78,13 +52,14 @@ For each changed file and each diff hunk, generate a JSON object following this 
 
 ## Step 5: Save Outputs
 
-Determine save location:
-- If any `workspace/*/` directory exists (check most recently modified), save there
-- Otherwise, create and use `$TEMP/claudeboost/`
+Save location is ALWAYS the project's workspace:
+1. If a `workspace/[task-id]/` directory exists for the current task, save to `workspace/[task-id]/changes/`
+2. If no workspace exists yet, create `workspace/changes-YYYY-MM-DD/changes/`
+3. NEVER use `$TEMP` — changes documentation belongs with the project
 
-Write two files:
-1. `changes.json` at the save location (for the TUI to read)
-2. `changes.md` at the save location (human-readable documentation)
+Write two files to `workspace/[task-id]/changes/`:
+1. `changes.json` (for the TUI viewer to read)
+2. `changes.md` (human-readable documentation that persists in the workspace)
 
 The markdown file format:
 ```
@@ -107,7 +82,7 @@ The markdown file format:
 
 Open the interactive viewer in a new terminal tab:
 ```bash
-wt.exe -w last new-tab --title "CHANGES" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/changes-viewer.py" "<save-path>/changes.json"
+wt.exe -w last new-tab --title "CHANGES" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
 ```
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.

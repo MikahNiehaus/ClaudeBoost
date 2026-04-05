@@ -1,0 +1,45 @@
+{
+  "_instructions": "Copy this file to workspace/[task-id]/changes/changes.json and fill in the values. Delete this _instructions field when done.",
+  "_field_guide": {
+    "generated_at": "ISO timestamp (e.g., 2026-04-04T16:00:00)",
+    "project": "Current project directory name",
+    "goal": "One sentence: what was the overall goal of these changes",
+    "summary.files_changed": "Total number of files changed",
+    "summary.lines_added": "Total lines added across all files",
+    "summary.lines_removed": "Total lines removed across all files",
+    "summary.agents": "List of agent names that contributed (e.g., workflow-agent). Use 'orchestrator' if no agent was spawned",
+    "files[].path": "Relative file path from project root",
+    "files[].status": "modified | added | deleted",
+    "files[].agent": "Which agent changed this file",
+    "files[].summary": "One sentence: what changed in this file and why",
+    "files[].hunks[].header": "The @@ line range @@ from the diff",
+    "files[].hunks[].old_code": "Removed lines (without the - prefix). Empty string if addition only",
+    "files[].hunks[].new_code": "Added lines (without the + prefix). Empty string if deletion only",
+    "files[].hunks[].explanation": "1 to 2 sentences: what this change does and why it matters. Concise, non-formal, professional, no dashes"
+  },
+  "generated_at": "",
+  "project": "",
+  "goal": "",
+  "summary": {
+    "files_changed": 0,
+    "lines_added": 0,
+    "lines_removed": 0,
+    "agents": []
+  },
+  "files": [
+    {
+      "path": "",
+      "status": "modified",
+      "agent": "",
+      "summary": "",
+      "hunks": [
+        {
+          "header": "",
+          "old_code": "",
+          "new_code": "",
+          "explanation": ""
+        }
+      ]
+    }
+  ]
+}
