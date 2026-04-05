@@ -1,8 +1,8 @@
-/* ClaudeBoost Changes Viewer - Dark green-accent theme */
+/* ClaudeBoost Changes HUD - Sci-fi HUD theme */
 
 Screen {
     background: #0a0a0a;
-    color: #cccccc;
+    color: #00ff41;
 }
 
 Header {
@@ -11,36 +11,44 @@ Header {
 }
 
 Footer {
-    background: #111111;
-    color: #888888;
+    background: #0d0d0d;
+    color: #005500;
 }
 
 #summary {
     height: auto;
     max-height: 5;
-    border: solid #00ff41;
+    border: double #00ff41;
     padding: 0 1;
     margin: 0 0 1 0;
-    background: #111111;
+    background: #0d0d0d;
+}
+
+#scan-screen {
+    width: 100%;
+    height: 100%;
+    background: #0a0a0a;
+    color: #00ff41;
 }
 
 #file-tree {
     height: 1fr;
     margin: 0 1;
     background: #0a0a0a;
+    color: #00cc33;
 }
 
 #file-tree > .tree--cursor {
-    background: #003300;
+    background: #002200;
     color: #00ff41;
 }
 
 #file-tree > .tree--highlight {
-    background: #002200;
+    background: #001a00;
 }
 
 #file-tree > .tree--guides {
-    color: #333333;
+    color: #003300;
 }
 
 #diff-view {
@@ -49,34 +57,19 @@ Footer {
     background: #0a0a0a;
 }
 
-#breadcrumb {
-    height: 1;
-    padding: 0 1;
-    background: #111111;
-    color: #666666;
-}
-
-#hunk-indicator {
-    height: 1;
-    padding: 0 1;
-    background: #111111;
-    color: #00ff41;
-    text-align: right;
-}
-
 #diff-scroll {
     height: 1fr;
     background: #0a0a0a;
 }
 
 #diff-log {
-    background: #0d0d0d;
+    background: #0a0a0a;
     padding: 1 2;
 }
 
 Scrollbar {
-    background: #111111;
-    color: #333333;
+    background: #0d0d0d;
+    color: #003300;
 }
 
 ScrollbarSlider {
