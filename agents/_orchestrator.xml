@@ -227,6 +227,7 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
   <sequence type="Research + implement">research → architect → workflow</sequence>
   <sequence type="Security audit + fix">security → refactor</sequence>
   <sequence type="Explore + implement">explore → architect → workflow</sequence>
+  <sequence type="Review + verify">reviewer → evaluator (always verify BLOCKER/HIGH findings before reporting)</sequence>
 </collaboration-sequences>
 
 <parallel-combinations>
@@ -242,6 +243,7 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
   <path from="workflow-agent" to="architect-agent" when="Implementation hits design questions"/>
   <path from="security-agent" to="architect-agent" when="Security requires architectural redesign"/>
   <path from="performance-agent" to="architect-agent" when="Performance requires architectural changes"/>
+  <path from="reviewer-agent" to="evaluator-agent" when="Reviewer reports BLOCKER or HIGH findings — evaluator verifies each before reporting to user"/>
 </escalation-paths>
 
 <quality-gate-pattern><![CDATA[

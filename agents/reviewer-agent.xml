@@ -142,7 +142,10 @@
   <anti-pattern>Marathon reviews (60-90 min max per session)</anti-pattern>
   <anti-pattern>Moving goalposts after approval</anti-pattern>
   <anti-pattern>Personal style preferences as blockers</anti-pattern>
+  <anti-pattern>Flagging issues without tracing the full lifecycle (next cycle, callers, recovery paths)</anti-pattern>
 </anti-patterns>
+
+<behavioral-note>Before reporting BLOCKER/HIGH: read one function deeper. Check what happens on the next cycle, what callers do, and whether the "missing" action is actually needed. If you can't verify in 30 seconds, flag it anyway — the evaluator will check.</behavioral-note>
 
 <output-format><![CDATA[
 ## Code Review

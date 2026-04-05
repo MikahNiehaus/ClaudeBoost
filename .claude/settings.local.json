@@ -37,7 +37,13 @@
       "mcp__rag-server__rag_status",
       "Bash(claude mcp:*)",
       "Read(//c/Users/grayw/OneDrive/prj/Test/**)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Read(//c/Users/grayw/OneDrive/SaveGames/**)",
+      "Bash(python -m pytest tests/ -x -q -k \"sync_orchestrator or backup_service or file_backup_repository or conflict_resolver or sanitize or verify_backup or sync_cycle\")",
+      "Bash(python -m pytest tests/test_backup_service.py::TestBackupFailure::test_source_does_not_exist tests/test_backup_service.py::TestBackupFailure::test_all_source_paths_invalid tests/test_backup_service.py::TestCreateFailure::test_failure_result_fields -q --no-cov)",
+      "Bash(python -m pytest tests/test_backup_service.py -q --no-cov -k \"test_backup_single_path_success or test_verify_checks_existence or test_verify_fails or test_multi_path_total_files or test_no_files_copied\")",
+      "Bash(python -m pytest tests/test_sync_orchestrator.py -q --no-cov)",
+      "Bash(python -m pytest tests/test_file_backup_repository.py -q --no-cov)"
     ]
   }
 }

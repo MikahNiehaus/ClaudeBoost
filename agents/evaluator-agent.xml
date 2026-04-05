@@ -21,6 +21,7 @@
   <trigger>Before marking any multi-step task COMPLETE</trigger>
   <trigger>After workflow-agent completes implementation</trigger>
   <trigger>After refactor-agent makes changes</trigger>
+  <trigger>After reviewer-agent reports BLOCKER or HIGH findings (verify findings are real, not false positives)</trigger>
   <trigger>When multiple agents collaborated (verify integration)</trigger>
   <trigger>When user explicitly requests verification</trigger>
 </when-to-spawn>
@@ -68,6 +69,14 @@
     <check>Root cause identified</check>
     <check>Fix addresses root cause</check>
     <check>No regressions introduced</check>
+  </category>
+  <category name="Review Verification">
+    <description>When verifying reviewer-agent findings, your goal is to DISPROVE each claim. You succeed by confirming real issues and catching false positives.</description>
+    <check>Read the exact file:line cited by the reviewer</check>
+    <check>Trace the full lifecycle: what happens before, after, and on the NEXT cycle/retry/call</check>
+    <check>Check all callers for guards, retries, or recovery paths that mitigate the issue</check>
+    <check>If finding flags a "missing action": verify the action is actually needed — is the existing state already correct?</check>
+    <check>Verdict each finding: CONFIRMED (with evidence) or FALSE POSITIVE (with the code path that disproves it)</check>
   </category>
 </evaluation-criteria>
 
