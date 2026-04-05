@@ -15,8 +15,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import ScrollableContainer, Vertical
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, RichLog, Static, Tree
+from textual.widgets import Footer, Header, Input, RichLog, Static, Tree
 from textual.widgets.tree import TreeNode
+import tempfile
+import threading
+import time
 
 
 STATUS_ICONS = {
@@ -373,6 +376,68 @@ class HunkIndicator(Static):
             self.update("")
 
 
+CHAT_FILE = Path(tempfile.gettempdir()) / "claudeboost" / "changes_chat.json"
+
+
+def get_chat_file() -> Path:
+    """Get the chat file path, ensuring parent directory exists."""
+    CHAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    return CHAT_FILE
+
+
+def write_chat_question(question: str, context_file: str = "", context_code: str = "") -> None:
+    """Write a question to the chat file for Claude to pick up."""
+    chat = {
+        "question": question,
+        "context_file": context_file,
+        "context_code": context_code,
+        "asked_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "answer": "",
+        "answered_at": "",
+    }
+    get_chat_file().write_text(json.dumps(chat, indent=2), encoding="utf-8")
+
+
+def read_chat_answer() -> str:
+    """Read the answer from the chat file, if one has been written."""
+    path = get_chat_file()
+    if not path.exists():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("answer", "")
+    except (json.JSONDecodeError, KeyError):
+        return ""
+
+
+class ChatPanel(Static):
+    """Inline chat panel for asking questions about code."""
+
+    DEFAULT_CSS = """
+    ChatPanel {
+        height: auto;
+        max-height: 12;
+        border-top: solid #00ff41;
+        background: #0d0d0d;
+        padding: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="chat-response")
+        yield Input(placeholder="Ask about this code...", id="chat-input")
+
+    def show_response(self, text: str) -> None:
+        resp = self.query_one("#chat-response", Static)
+        if text:
+            resp.update(f"[#00ff41]◉ CLAUDE:[/#00ff41] {text}")
+        else:
+            resp.update("[dim]Waiting for response...[/dim]")
+
+    def clear_response(self) -> None:
+        self.query_one("#chat-response", Static).update("")
+
+
 class BaseChangesViewer(App):
     """Base TUI application for viewing ClaudeBoost code changes.
 
@@ -463,6 +528,7 @@ class BaseChangesViewer(App):
                 RichLog(id="diff-log", highlight=True, markup=False),
                 id="diff-scroll",
             ),
+            ChatPanel(id="chat-panel"),
             id="diff-view",
         )
         yield Footer()
@@ -620,3 +686,41 @@ class BaseChangesViewer(App):
         else:
             self._collapsed_hunks.add(idx)
         self._render_diff()
+
+    @on(Input.Submitted, "#chat-input")
+    def on_chat_submit(self, event: Input.Submitted) -> None:
+        """Handle chat question submission."""
+        question = event.value.strip()
+        if not question:
+            return
+
+        # Get context from current file and hunk
+        context_file = self._current_file["path"] if self._current_file else ""
+        context_code = ""
+        if self._current_file and self._current_file.get("hunks"):
+            idx = min(self._current_hunk_index, len(self._current_file["hunks"]) - 1)
+            hunk = self._current_file["hunks"][idx]
+            context_code = hunk.get("new_code", "") or hunk.get("old_code", "")
+
+        # Write question to chat file
+        write_chat_question(question, context_file, context_code)
+
+        # Show waiting state
+        chat_panel: ChatPanel = self.query_one("#chat-panel", ChatPanel)
+        chat_panel.show_response("")  # Shows "Waiting for response..."
+
+        # Clear input
+        event.input.value = ""
+
+        # Start polling for answer
+        self._poll_chat_answer()
+
+    def _poll_chat_answer(self) -> None:
+        """Poll the chat file for Claude's answer."""
+        answer = read_chat_answer()
+        if answer:
+            chat_panel: ChatPanel = self.query_one("#chat-panel", ChatPanel)
+            chat_panel.show_response(answer)
+        else:
+            # Check again in 1 second
+            self.set_timer(1.0, self._poll_chat_answer)

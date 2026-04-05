@@ -93,3 +93,34 @@ Tell the user:
 - How many files and explanations were generated
 - Where the documentation was saved
 - That the TUI is open in the adjacent tab
+- That they can ask questions about code in the chat box at the bottom of the diff view
+
+## Step 8: Monitor Chat (IMPORTANT)
+
+The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. You must monitor this file and respond.
+
+Start a polling loop:
+```bash
+cat "$TEMP/claudeboost/changes_chat.json" 2>/dev/null
+```
+
+Run this every few seconds (use `sleep 1` between checks). When you see a question with an empty "answer" field:
+1. Read the `question`, `context_file`, and `context_code` fields
+2. Generate a concise answer about that code
+3. Write the answer back using the Write tool to `$TEMP/claudeboost/changes_chat.json` — update only the `answer` and `answered_at` fields, keep everything else
+4. The TUI will pick up the answer and display it inline
+
+Keep monitoring until the user tells you to stop or the TUI is closed. The chat file is at:
+`<TEMP>/claudeboost/changes_chat.json`
+
+Format:
+```json
+{
+  "question": "What does this lock do?",
+  "context_file": "src/services/sync_orchestrator.py",
+  "context_code": "self._sync_lock = threading.Lock()",
+  "asked_at": "2026-04-05T02:30:00",
+  "answer": "",
+  "answered_at": ""
+}
+```
