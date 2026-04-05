@@ -1,0 +1,67 @@
+/* ClaudeBoost Changes Viewer - Dark green-accent theme */
+
+Screen {
+    background: #0a0a0a;
+    color: #cccccc;
+}
+
+Header {
+    background: #0a0a0a;
+    color: #00ff41;
+}
+
+Footer {
+    background: #111111;
+    color: #888888;
+}
+
+#summary {
+    height: 4;
+    border: solid #00ff41;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    background: #111111;
+}
+
+#file-tree {
+    height: 1fr;
+    margin: 0 1;
+    background: #0a0a0a;
+}
+
+#file-tree > .tree--cursor {
+    background: #003300;
+    color: #00ff41;
+}
+
+#file-tree > .tree--highlight {
+    background: #002200;
+}
+
+#file-tree > .tree--guides {
+    color: #333333;
+}
+
+#diff-view {
+    height: 1fr;
+    margin: 0 1;
+    background: #0a0a0a;
+}
+
+#diff-log {
+    background: #0d0d0d;
+    padding: 1 2;
+}
+
+Scrollbar {
+    background: #111111;
+    color: #333333;
+}
+
+ScrollbarSlider {
+    color: #00ff41 30%;
+}
+
+ScrollbarSlider:hover {
+    color: #00ff41 60%;
+}
