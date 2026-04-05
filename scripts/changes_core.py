@@ -411,7 +411,11 @@ def read_chat_answer() -> str:
 
 
 class ChatPanel(Static):
-    """Inline chat panel for asking questions about code."""
+    """Inline chat panel for asking questions about code.
+
+    Automatically polls the chat file every 3 seconds for answers
+    from Claude. No external polling loop needed.
+    """
 
     DEFAULT_CSS = """
     ChatPanel {
@@ -423,9 +427,29 @@ class ChatPanel(Static):
     }
     """
 
+    _waiting_for_answer: bool = False
+
     def compose(self) -> ComposeResult:
         yield Static("", id="chat-response")
         yield Input(placeholder="Ask about this code...", id="chat-input")
+
+    def on_mount(self) -> None:
+        """Start the 3-second answer poll timer."""
+        self.set_interval(3, self._check_for_answer)
+
+    def _check_for_answer(self) -> None:
+        """Poll the chat file for an answer from Claude."""
+        if not self._waiting_for_answer:
+            return
+        answer = read_chat_answer()
+        if answer:
+            self._waiting_for_answer = False
+            self.show_response(answer)
+
+    def mark_waiting(self) -> None:
+        """Mark that we're waiting for an answer."""
+        self._waiting_for_answer = True
+        self.show_response("")
 
     def show_response(self, text: str) -> None:
         resp = self.query_one("#chat-response", Static)
@@ -435,6 +459,7 @@ class ChatPanel(Static):
             resp.update("[dim]Waiting for response...[/dim]")
 
     def clear_response(self) -> None:
+        self._waiting_for_answer = False
         self.query_one("#chat-response", Static).update("")
 
 
@@ -567,7 +592,7 @@ class BaseChangesViewer(App):
             filename = path.rsplit("/", 1)[-1]
             label = self._format_file_label(file_data, filename)
             if path in self._reviewed_files:
-                label = f"[dim green]✓[/dim green] {label}"
+                label = f"[bold cyan]✓[/bold cyan] {label}"
             node.set_label(label)
 
     def _render_diff(self) -> None:
@@ -633,6 +658,7 @@ class BaseChangesViewer(App):
             diff_view.display = False
             file_tree.display = True
             file_tree.focus()
+            self._update_tree_labels()
             self._current_file = None
 
     def action_next_hunk(self) -> None:
@@ -712,9 +738,9 @@ class BaseChangesViewer(App):
         # Write question to chat file
         write_chat_question(question, context_file, context_code)
 
-        # Show waiting state
+        # Show waiting state and start auto-polling for answer
         chat_panel: ChatPanel = self.query_one("#chat-panel", ChatPanel)
-        chat_panel.show_response("")  # Shows "Waiting for response..."
+        chat_panel.mark_waiting()
 
         # Clear input
         event.input.value = ""
