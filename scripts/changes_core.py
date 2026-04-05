@@ -603,6 +603,13 @@ class BaseChangesViewer(App):
         breadcrumb: Breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         breadcrumb.set_path(file_data["path"])
 
+        # Clear chat from previous file
+        try:
+            chat_panel: ChatPanel = self.query_one("#chat-panel", ChatPanel)
+            chat_panel.clear_response()
+        except Exception:
+            pass
+
         self._render_diff()
 
         self.query_one("#file-tree").display = False

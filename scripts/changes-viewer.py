@@ -16,6 +16,7 @@ from changes_core import (
     STATUS_COLORS,
     BaseChangesViewer,
     Breadcrumb,
+    ChatPanel,
     HunkIndicator,
     build_summary_markup,
     count_file_changes,
@@ -232,6 +233,7 @@ class HudChangesViewer(BaseChangesViewer):
                 RichLog(id="diff-log", highlight=True, markup=False),
                 id="diff-scroll",
             ),
+            ChatPanel(id="chat-panel"),
             id="diff-view",
         )
         yield Footer()
