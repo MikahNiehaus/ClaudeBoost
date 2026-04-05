@@ -95,25 +95,24 @@ Tell the user:
 - That the TUI is open in the adjacent tab
 - That they can ask questions about code in the chat box at the bottom of the diff view
 
-## Step 8: Monitor Chat (IMPORTANT)
+## Step 8: Start Chat Monitor (IMPORTANT)
 
-The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. You must monitor this file and respond.
+The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. You must start the `/loop` skill to automatically monitor and respond.
 
-Start a polling loop:
-```bash
-cat "$TEMP/claudeboost/changes_chat.json" 2>/dev/null
+Run this command:
+```
+/loop 3s check-chat
 ```
 
-Run this every few seconds (use `sleep 1` between checks). When you see a question with an empty "answer" field:
+This polls the chat file every 3 seconds. When a question with an empty "answer" field is found:
 1. Read the `question`, `context_file`, and `context_code` fields
 2. Generate a concise answer about that code
-3. Write the answer back using the Write tool to `$TEMP/claudeboost/changes_chat.json` — update only the `answer` and `answered_at` fields, keep everything else
-4. The TUI will pick up the answer and display it inline
+3. Write the answer back using the Write tool — update the `answer` and `answered_at` fields
+4. The TUI picks up the answer and displays it inline
 
-Keep monitoring until the user tells you to stop or the TUI is closed. The chat file is at:
-`<TEMP>/claudeboost/changes_chat.json`
+If `/loop` is not available, manually poll using the Read tool on `C:/Users/<user>/AppData/Local/Temp/claudeboost/changes_chat.json` every few seconds.
 
-Format:
+Chat file format:
 ```json
 {
   "question": "What does this lock do?",
