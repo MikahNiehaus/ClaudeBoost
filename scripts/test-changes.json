@@ -1,6 +1,7 @@
 {
   "generated_at": "2026-04-04T16:00:00",
   "project": "SaveGames",
+  "goal": "Fix sync conflict resolution and safety issues found during code review",
   "summary": {
     "files_changed": 4,
     "lines_added": 58,

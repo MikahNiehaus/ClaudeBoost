@@ -16,7 +16,8 @@ Footer {
 }
 
 #summary {
-    height: 4;
+    height: auto;
+    max-height: 5;
     border: solid #00ff41;
     padding: 0 1;
     margin: 0 0 1 0;
@@ -45,6 +46,26 @@ Footer {
 #diff-view {
     height: 1fr;
     margin: 0 1;
+    background: #0a0a0a;
+}
+
+#breadcrumb {
+    height: 1;
+    padding: 0 1;
+    background: #111111;
+    color: #666666;
+}
+
+#hunk-indicator {
+    height: 1;
+    padding: 0 1;
+    background: #111111;
+    color: #00ff41;
+    text-align: right;
+}
+
+#diff-scroll {
+    height: 1fr;
     background: #0a0a0a;
 }
 
