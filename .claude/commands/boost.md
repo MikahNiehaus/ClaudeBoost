@@ -83,14 +83,47 @@ BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:read
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
-## Step 6: Activate and Report
+## Step 6: Workspace Discovery
+
+Scan for active workspaces and reconnect to in-progress work:
+```bash
+if [ -d "workspace" ]; then for d in workspace/*/; do if [ -f "${d}context.md" ]; then echo "WORKSPACE: $d"; head -5 "${d}context.md"; echo "---"; fi; done; else echo "No workspace/ directory found"; fi
+```
+
+If workspaces are found:
+- List each task ID and its current status (read from context.md)
+- Note which ones have recent activity (check git log for last modified)
+- If exactly one workspace exists, read its full `context.md` to restore session state
+
+If no workspaces found, that's fine — this may be a fresh session.
+
+## Step 7: Activate and Report
 
 If all checks passed, create the activation marker:
 ```bash
 BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 ```
 
-Report what happened — be honest about what's working and what needs attention:
+**Report format — include ALL of these sections:**
+
+### Systems Status
+- RAG: ready/failed (chunk counts)
+- GT: ready/failed (version)
+- Hooks: PreToolUse + PreCompact present/missing
+- Rules: CLAUDE.md loaded/missing
+
+### Active Workspaces
+- List any discovered workspaces with task IDs and status
+- If resuming work: "Resuming task [id] — last status was [X]"
+- If fresh session: "No active workspaces"
+
+### Session Directives
+**Always include these reminders in your report:**
+- "RAG is active. I will call `rag_context` as Step 1 when spawning agents, and `rag_search` when I need knowledge."
+- If GT is ready: "Gas Town is available. I will use `gt prime` for workspace init, `gt sling` for cross-session delegation, and `gt handoff` for session transitions."
+- If GT is not ready: "Gas Town is not installed. Working in standalone mode."
+
+### Ready
 - If everything passed: "ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."
 - If tiered RAG isn't loaded: mention it needs a restart
 - If privacy was auto-fixed: mention what was set
