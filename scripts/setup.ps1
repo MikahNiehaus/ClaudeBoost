@@ -32,7 +32,7 @@ $mcpConfig = @{
 }
 
 $mcpJson = $mcpConfig | ConvertTo-Json -Depth 4
-Set-Content -Path $mcpPath -Value $mcpJson -Encoding UTF8
+[System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] mcp.json - RAG server registered globally" -ForegroundColor Green
 
 # --- 2. Update ~/.claude/settings.json - add CLAUDEBOOST_HOME env ---
@@ -89,7 +89,7 @@ if (-not $settings.hooks.PSObject.Properties["SessionStart"]) {
 }
 
 $settingsJson = $settings | ConvertTo-Json -Depth 10
-Set-Content -Path $settingsPath -Value $settingsJson -Encoding UTF8
+[System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] settings.json - CLAUDEBOOST_HOME env added" -ForegroundColor Green
 
 # --- 3. Verify RAG server ---
