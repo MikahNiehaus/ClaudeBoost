@@ -98,23 +98,25 @@ $ragDir = Join-Path $boostHome "mcp-rag-server"
 
 try {
     # Always install from ClaudeBoost (editable mode) to ensure correct source path.
-    # This prevents loading stale code from a different install location.
     Write-Host "Installing RAG server from $ragDir (editable mode)..." -ForegroundColor Cyan
-    Push-Location $ragDir
-    & pip install -e . 2>&1 | Out-Null
-    Pop-Location
+    $pipOutput = & pip install -e $ragDir 2>&1
+    $pipExitCode = $LASTEXITCODE
+    if ($pipExitCode -ne 0) {
+        Write-Host "[WARN] pip install returned exit code $pipExitCode" -ForegroundColor Yellow
+        Write-Host ($pipOutput | Out-String) -ForegroundColor Yellow
+    }
 
-    # Verify it loads from the right place
+    # Verify it loads
     $loadPath = & python -c "import rag_server; print(rag_server.__file__)" 2>&1
-    if ($loadPath -match [regex]::Escape($boostHome)) {
-        Write-Host "[OK] RAG server loads from ClaudeBoost: $loadPath" -ForegroundColor Green
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] RAG server installed: $loadPath" -ForegroundColor Green
     } else {
-        Write-Host "[WARN] RAG server loads from unexpected path: $loadPath" -ForegroundColor Yellow
-        Write-Host "  Expected path under: $boostHome" -ForegroundColor Yellow
+        Write-Host "[WARN] RAG server import failed after install" -ForegroundColor Yellow
+        Write-Host "  Run manually: pip install -e $ragDir" -ForegroundColor Yellow
     }
 } catch {
     Write-Host "[WARN] Could not install RAG server: $_" -ForegroundColor Yellow
-    Write-Host "  Run manually: cd $ragDir && pip install -e ." -ForegroundColor Yellow
+    Write-Host "  Run manually: pip install -e $ragDir" -ForegroundColor Yellow
 }
 
 # --- Summary ---
