@@ -82,7 +82,7 @@ The markdown file format:
 
 Open the interactive viewer in a new terminal tab:
 ```bash
-wt.exe -w last new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
+wt.exe -w 0 new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
 ```
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.
