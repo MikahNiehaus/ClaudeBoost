@@ -41,7 +41,7 @@ Look for patterns like `workflow-agent`, `debug-agent`, etc. in commit messages.
 
 ## Step 4: Generate Explanations
 
-1. Read the template: `C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/changes-template.json`
+1. Read the template: `$CLAUDEBOOST_HOME/scripts/changes-template.json`
 2. Copy it to `workspace/[task-id]/changes/changes.json`
 3. Fill in all fields following the `_field_guide` instructions in the template
 4. Delete the `_instructions` and `_field_guide` fields from the filled copy
@@ -82,7 +82,7 @@ The markdown file format:
 
 Open the interactive viewer in a new terminal tab:
 ```bash
-wt.exe -w last new-tab --title "CHANGES" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
+wt.exe -w last new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
 ```
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.

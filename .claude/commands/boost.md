@@ -11,7 +11,7 @@ allowed-tools: Bash, Read, Glob
 
 Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find C:/Users/grayw/OneDrive/prj/ClaudeBoost/mcp-rag-server -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w last new-tab --title "CLAUDE BOOST" python "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w last new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
 ```
 
 This clears Python bytecode caches (so RAG server loads fresh code on next restart) and opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window. The tab closes automatically when done.
@@ -33,7 +33,7 @@ This auto-sets missing privacy env vars permanently. If any were fixed, mention 
 
 Mark RAG as checking, then verify the module loads from the right path:
 ```bash
-BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python -c "import rag_server; print(rag_server.__file__)" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; cd C:/Users/grayw/OneDrive/prj/ClaudeBoost/mcp-rag-server && pip install -e . 2>&1 | tail -1; fi
+BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python -c "import rag_server; print(rag_server.__file__)" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; cd "$CLAUDEBOOST_HOME/mcp-rag-server" && pip install -e . 2>&1 | tail -1; fi
 ```
 
 Call `rag_status` (MCP tool) to verify the server is running and has indexed content.

@@ -3,3 +3,4 @@ references/
 mcp-rag-server/.rag-index/
 __pycache__/
 *.pyc
+.claude/settings.local.json
