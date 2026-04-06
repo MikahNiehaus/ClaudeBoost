@@ -8,11 +8,12 @@ semantic search — works standalone or with Gas Town.
 You have 24 specialist agents (`agents/*.xml`) and 38 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
-**RAG powers agent knowledge:**
-- Spawned agents call `rag_context` as their first initialization step — they get their definition + relevant knowledge automatically
-- When unsure which knowledge file applies: call `rag_search` with a natural language query
-- When reviewing code: `rag_search` for the relevant standards (e.g., "SQL security", "logging requirements")
-- Don't guess which file to read — search for it
+**RAG powers agent knowledge (MANDATORY):**
+- Spawned agents MUST call `rag_context` as their FIRST action — no exceptions, no skipping
+- When unsure which knowledge file applies: MUST call `rag_search` with a natural language query
+- When reviewing code: MUST `rag_search` for the relevant standards (e.g., "SQL security", "logging requirements")
+- NEVER guess which file to read — search for it
+- A PreToolUse hook enforces `rag_context` on every agent spawn — if you skip it, the hook will catch you
 
 ## Decision Flow
 
@@ -33,9 +34,10 @@ If you can't cite specific lines — drop the flag. "Nothing found" is always va
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one-line fix doesn't need an agent.
 
-**Agent knowledge loading**: Spawned agents call `rag_context` themselves as Step 1
-of initialization. Include the agent name and task description in the spawn prompt
+**Agent knowledge loading (ENFORCED BY HOOK)**: Spawned agents MUST call `rag_context` as
+their FIRST action. Include the agent name and task description in the spawn prompt
 so the agent knows what to query. You do NOT need to pre-fetch knowledge.
+A PreToolUse hook on `Task` verifies every spawn includes `rag_context` instructions.
 
 ### Model Routing
 - **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent

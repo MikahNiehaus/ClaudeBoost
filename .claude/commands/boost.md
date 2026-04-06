@@ -64,7 +64,16 @@ BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then gt prime 2>&1 | head -3;
 
 GT is "ready" if installed (even if not in a GT workspace). "failed" only if `gt` command not found.
 
-## Step 4: Check Rules
+## Step 4: Check Enforcement Hooks
+
+Verify that PreToolUse and PreCompact hooks are configured in settings.json:
+```bash
+BOOST_TMP="$TEMP" && HOOKS_OK=true && if python -c "import json; s=json.load(open('$HOME/.claude/settings.json')); assert 'PreToolUse' in s.get('hooks',{})" 2>/dev/null; then echo "PreToolUse hooks: OK"; else echo "PreToolUse hooks: MISSING"; HOOKS_OK=false; fi && if python -c "import json; s=json.load(open('$HOME/.claude/settings.json')); assert 'PreCompact' in s.get('hooks',{})" 2>/dev/null; then echo "PreCompact hooks: OK"; else echo "PreCompact hooks: MISSING"; HOOKS_OK=false; fi && if [ "$HOOKS_OK" = false ]; then echo "[WARN] Enforcement hooks missing - run setup.ps1 to install"; fi
+```
+
+If hooks are missing, warn the user to run `setup.ps1`. This is not a blocking failure — boost continues.
+
+## Step 5: Check Rules
 
 RULES is already marked "checking". Verify CLAUDE.md exists:
 ```bash
@@ -73,7 +82,7 @@ BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:read
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
-## Step 5: Activate and Report
+## Step 6: Activate and Report
 
 If all checks passed, create the activation marker:
 ```bash

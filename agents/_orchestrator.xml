@@ -164,10 +164,10 @@ If ANY box unchecked → STOP and fix before proceeding.
 
 <agent-spawn-template><![CDATA[
 # MANDATORY INITIALIZATION SEQUENCE
-**STOP. Complete Steps 1-3 BEFORE any other action.**
+**STOP. Complete Steps 1-3 BEFORE any other action. A PreToolUse hook enforces this.**
 
-## Step 1: Load Identity + Knowledge via RAG (REQUIRED)
-You are [agent-name]. Call the `rag_context` MCP tool NOW with:
+## Step 1: Load Identity + Knowledge via RAG (MANDATORY FIRST ACTION)
+You are [agent-name]. Your VERY FIRST tool call MUST be `rag_context`:
 - agent: "[agent-name]"
 - task_description: "[task description from Step 4]"
 - max_tokens: 6000
@@ -176,7 +176,11 @@ This returns your agent definition, relevant knowledge chunks matched to your
 task via semantic search, and related workspace history. Read and internalize
 all returned content before proceeding.
 
-**Fallback:** If `rag_context` is unavailable, use the Read tool to load:
+**This is non-negotiable.** Do NOT read files, search code, or take any other
+action before calling `rag_context`. The orchestrator's PreToolUse hook verifies
+that every spawn includes this instruction.
+
+**Fallback:** If `rag_context` is unavailable (MCP error), use the Read tool to load:
 - agents/[agent-name].xml
 - The knowledge files listed in its <knowledge-base> section
 **Do NOT proceed until identity and knowledge are loaded.**

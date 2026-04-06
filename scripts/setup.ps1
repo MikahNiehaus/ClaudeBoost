@@ -65,7 +65,12 @@ if ($settings.PSObject.Properties["statusLine"]) {
     }
 }
 
-# Add SessionStart hook if not present or replace orchestrator hook
+# Ensure hooks block exists
+if (-not $settings.PSObject.Properties["hooks"]) {
+    $settings | Add-Member -NotePropertyName "hooks" -NotePropertyValue ([PSCustomObject]@{})
+}
+
+# Add SessionStart hook if not present
 $sessionHook = [PSCustomObject]@{
     matcher = "Always"
     hooks = @(
@@ -77,15 +82,59 @@ $sessionHook = [PSCustomObject]@{
         }
     )
 }
-
-if (-not $settings.PSObject.Properties["hooks"]) {
-    $settings | Add-Member -NotePropertyName "hooks" -NotePropertyValue ([PSCustomObject]@{})
-}
 if (-not $settings.hooks.PSObject.Properties["SessionStart"]) {
     $settings.hooks | Add-Member -NotePropertyName "SessionStart" -NotePropertyValue @($sessionHook)
-    Write-Host "[OK] hooks.SessionStart - added lightweight workflow hook" -ForegroundColor Green
+    Write-Host "[OK] hooks.SessionStart - added workflow hook" -ForegroundColor Green
 } else {
-    Write-Host "[SKIP] hooks.SessionStart - already exists (review manually if needed)" -ForegroundColor Yellow
+    Write-Host "[SKIP] hooks.SessionStart - already exists" -ForegroundColor Yellow
+}
+
+# Add PreToolUse hooks (agent spawn + workspace creation enforcement)
+$preToolUseHooks = @(
+    [PSCustomObject]@{
+        matcher = "Task"
+        hooks = @(
+            [PSCustomObject]@{
+                type = "prompt"
+                prompt = "AGENT SPAWN CHECK: You are about to spawn an agent. Verify:`n1. Your agent prompt MUST include the instruction to call ``rag_context`` as Step 1 (agent name + task description)`n2. If a workspace exists for this task, the agent prompt MUST reference it`n3. If Gas Town is available (``gt`` command exists), consider using ``gt sling`` for cross-session work`nDo NOT proceed with the spawn unless the prompt includes rag_context instructions."
+                statusMessage = "Enforcing RAG context in agent spawn..."
+            }
+        )
+    },
+    [PSCustomObject]@{
+        matcher = "Bash(mkdir*workspace*)"
+        hooks = @(
+            [PSCustomObject]@{
+                type = "prompt"
+                prompt = "WORKSPACE CREATION CHECK: You are creating a workspace directory. Before proceeding:`n1. Call ``rag_search`` with the task description to find relevant knowledge`n2. If Gas Town is available, consider ``gt prime`` to initialize the workspace`n3. Ensure you have a task ID and will create context.md after this`nThis is the start of complex work - RAG and GT should be active."
+                statusMessage = "Enforcing RAG lookup on workspace creation..."
+            }
+        )
+    }
+)
+if (-not $settings.hooks.PSObject.Properties["PreToolUse"]) {
+    $settings.hooks | Add-Member -NotePropertyName "PreToolUse" -NotePropertyValue $preToolUseHooks
+    Write-Host "[OK] hooks.PreToolUse - added agent spawn + workspace enforcement" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] hooks.PreToolUse - already exists (review manually if needed)" -ForegroundColor Yellow
+}
+
+# Add PreCompact hook (context preservation)
+$preCompactHook = [PSCustomObject]@{
+    matcher = "Always"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "CONTEXT PRESERVATION: Before compaction, remember these critical workflows:`n1. EVERY agent spawn MUST include ``rag_context`` as Step 1 in the agent prompt`n2. Use ``rag_search`` when unsure which knowledge applies to a task`n3. Gas Town commands (``gt prime``, ``gt sling``, ``gt handoff``) are available for cross-session work`n4. Check CLAUDE.md decision flow for simple vs complex task routing`nThese are enforced by PreToolUse hooks and MUST be followed after compaction."
+            statusMessage = "Preserving RAG/GT awareness before compaction..."
+        }
+    )
+}
+if (-not $settings.hooks.PSObject.Properties["PreCompact"]) {
+    $settings.hooks | Add-Member -NotePropertyName "PreCompact" -NotePropertyValue @($preCompactHook)
+    Write-Host "[OK] hooks.PreCompact - added context preservation hook" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] hooks.PreCompact - already exists" -ForegroundColor Yellow
 }
 
 $settingsJson = $settings | ConvertTo-Json -Depth 10
@@ -123,7 +172,7 @@ try {
 Write-Host "`n=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host "  CLAUDEBOOST_HOME = $boostHomePosix"
 Write-Host "  RAG server registered in $mcpPath"
-Write-Host "  SessionStart hook configured"
+Write-Host "  Hooks configured (SessionStart, PreToolUse, PreCompact)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Restart Claude Code for MCP changes to take effect"

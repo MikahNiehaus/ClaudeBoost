@@ -27,6 +27,16 @@ The agent calls `rag_context(agent="$1-agent", task_description="...")` itself.
 This returns its definition + semantically matched knowledge chunks.
 You do NOT need to pre-fetch or embed knowledge in the spawn prompt.
 
+## Hook Enforcement
+
+A `PreToolUse` hook on `Task` fires before every agent spawn to verify:
+1. The agent prompt includes `rag_context` as Step 1
+2. Workspace reference is included if one exists
+3. Gas Town (`gt sling`) is considered for cross-session work
+
+This hook cannot be bypassed. If your spawn prompt is missing `rag_context`
+instructions, the hook will remind you before the spawn proceeds.
+
 If the agent file doesn't exist, list available agents from the `agents/` directory.
 
 ## Task Context (if exists)
