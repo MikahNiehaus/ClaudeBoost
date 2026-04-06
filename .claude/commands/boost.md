@@ -59,10 +59,11 @@ Use "RAG:failed" if rag_status fails entirely. Use "RAG:ready" if it works even 
 
 GT is already marked "checking". Check if `gt` command exists:
 ```bash
-BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then echo "GT INSTALLED: $(gt --version 2>&1 | head -1)"; gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT NOT FOUND in PATH"; echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-GT is "ready" if installed (even if not in a GT workspace). "failed" only if `gt` command not found.
+GT is "ready" if `command -v gt` succeeds (even if not in a GT workspace). "failed" ONLY if `gt` is not on PATH.
+**Read the bash output carefully** — if it prints "GT INSTALLED:" then GT is available. Do NOT report "GT not installed" when the check passed.
 
 ## Step 4: Check Enforcement Hooks
 
