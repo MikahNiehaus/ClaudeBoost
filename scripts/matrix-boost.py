@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Matrix rain with live system status — reads checks from a status file."""
-import sys, time, random, shutil, os, traceback
+import sys, time, random, shutil, os, traceback, argparse
 
 # Enable ANSI on Windows
 if os.name == 'nt':
@@ -10,6 +10,11 @@ if os.name == 'nt':
 # Use tempfile to get the canonical temp dir — avoids Git Bash /tmp vs Windows path mismatches
 import tempfile
 STATUS_FILE = os.path.join(tempfile.gettempdir(), 'claudeboost_status.txt')
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--quick', action='store_true',
+                    help='Fast 3-second reveal using pre-written status file')
+args = parser.parse_args()
 
 cols, rows = shutil.get_terminal_size()
 # Safety clamp
@@ -103,6 +108,104 @@ drops = [Drop(x, rows) for x in range(0, cols)]
 
 sys.stdout.write(BLACK_BG + HIDE + CLEAR)
 sys.stdout.flush()
+
+if args.quick:
+    # Quick mode: status already written, do a fast 3-second reveal
+    try:
+        status = read_status()
+        # Phase 1: Matrix rain for ~1.5 seconds
+        quick_drops = [Drop(x, rows) for x in range(0, cols)]
+        for frame in range(30):  # 30 frames * 0.05s = 1.5s
+            grid = {}
+            for d in quick_drops:
+                for i in range(d.length):
+                    ry = d.y - i
+                    if 0 <= ry < rows and 0 <= d.x < cols:
+                        if i == 0:
+                            grid[(ry, d.x)] = (BG, random.choice('01'))
+                        elif i < 3:
+                            grid[(ry, d.x)] = (G, random.choice('01'))
+                        else:
+                            grid[(ry, d.x)] = (DG, random.choice('01'))
+                d.update(rows)
+            output = [HOME]
+            for r in range(rows - 1):
+                row_buf = []
+                for c in range(cols):
+                    if (r, c) in grid:
+                        color, ch = grid[(r, c)]
+                        row_buf.append(f'{color}{ch}')
+                    else:
+                        row_buf.append(' ')
+                output.append(f'{BLACK_BG}{"".join(row_buf)}{RESET}{BLACK_BG}')
+            sys.stdout.write('\n'.join(output))
+            sys.stdout.flush()
+            time.sleep(0.05)
+
+        # Phase 2: Reveal title + status for ~1.5 seconds
+        for frame in range(30):  # 30 frames * 0.05s = 1.5s
+            grid = {}
+            for d in quick_drops:
+                for i in range(d.length):
+                    ry = d.y - i
+                    if 0 <= ry < rows and 0 <= d.x < cols:
+                        if i == 0:
+                            grid[(ry, d.x)] = (BG, random.choice('01'))
+                        elif i < 3:
+                            grid[(ry, d.x)] = (G, random.choice('01'))
+                        else:
+                            grid[(ry, d.x)] = (DG, random.choice('01'))
+                d.update(rows)
+
+            protected = {tr, sr}
+            for i in range(len(systems)):
+                protected.add(status_start_row + i)
+            protected.add(status_start_row + len(systems) + 1)
+
+            output = [HOME]
+            for r in range(rows - 1):
+                if r in protected:
+                    if r == tr:
+                        pad = ' ' * tc
+                        output.append(f'{BLACK_BG}{pad}{BG}{title}{" " * max(0, cols - tc - len(title))}{RESET}{BLACK_BG}')
+                        continue
+                    if r == sr:
+                        pad = ' ' * sc
+                        output.append(f'{BLACK_BG}{pad}{DG}{sub}{" " * max(0, cols - sc - len(sub))}{RESET}{BLACK_BG}')
+                        continue
+                    idx = r - status_start_row
+                    if 0 <= idx < len(systems):
+                        name = systems[idx]
+                        line = format_status_line(name, status[name], min(cols - 4, 50))
+                        remaining = max(0, cols - 54)
+                        output.append(f'{BLACK_BG}{line}{" " * remaining}{RESET}{BLACK_BG}')
+                        continue
+                    if r == status_start_row + len(systems) + 1:
+                        banner = '[ ALL SYSTEMS ONLINE ]'
+                        pad = max(0, (cols - len(banner)) // 2)
+                        output.append(f'{BLACK_BG}{" " * pad}{BG}{banner}{" " * max(0, cols - pad - len(banner))}{RESET}{BLACK_BG}')
+                        continue
+                row_buf = []
+                for c in range(cols):
+                    if (r, c) in grid:
+                        color, ch = grid[(r, c)]
+                        row_buf.append(f'{color}{ch}')
+                    else:
+                        row_buf.append(' ')
+                output.append(f'{BLACK_BG}{"".join(row_buf)}{RESET}{BLACK_BG}')
+            sys.stdout.write('\n'.join(output))
+            sys.stdout.flush()
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write(SHOW + RESET + CLEAR)
+        sys.stdout.flush()
+        try:
+            os.remove(STATUS_FILE)
+        except Exception:
+            pass
+    sys.exit(0)
 
 try:
     frame = 0

@@ -5,18 +5,16 @@ allowed-tools: Bash, Read, Glob
 
 # ClaudeBoost Activation
 
-## Step 0: Launch Animation and Clear Caches
+## Step 0: Clear Caches and Initialize Status File
 
 **This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
 
-Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
+Run this EXACT bash command FIRST, alone:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w 0 new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; echo "Status file initialized"
 ```
 
-This clears Python bytecode caches (so RAG server loads fresh code on next restart) and opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window. The tab closes automatically when done.
-
-**NEVER use `powershell Start-Process` or `cmd start` — those open separate windows.**
+This clears Python bytecode caches (so RAG server loads fresh code on next restart) and creates a fresh status file for the animation.
 
 Do NOT run any other tool calls until this completes.
 
@@ -82,6 +80,15 @@ BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:read
 ```
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
+
+## Step 5.5: Launch Animation (Inline)
+
+All health checks are done. Now run the Matrix animation inline with `--quick` flag. This does a fast ~3 second reveal using the statuses already written to the status file. It runs in the foreground — no new tab needed:
+```bash
+python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py" --quick
+```
+
+The animation reads the status file, shows matrix rain for ~1.5s, reveals the title and system statuses for ~1.5s, then exits and clears the screen. Do NOT run this in the background — let it complete before proceeding.
 
 ## Step 6: Workspace Discovery
 

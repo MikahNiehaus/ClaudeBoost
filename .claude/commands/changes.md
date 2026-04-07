@@ -80,12 +80,15 @@ The markdown file format:
 
 ## Step 6: Launch TUI
 
-Open the interactive viewer in a new terminal tab:
+Ensure the `textual` dependency is installed, then open the interactive viewer in a new terminal tab:
 ```bash
+python -c "import textual" 2>/dev/null || pip install textual
 wt.exe -w 0 new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
 ```
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.
+
+**Note**: `wt.exe -w 0` targets the currently focused Windows Terminal window. If the user has multiple WT windows and focuses a different one, the tab may land there. This is a known WT limitation — no flag reliably targets the originating window.
 
 ## Step 7: Report
 
@@ -95,22 +98,15 @@ Tell the user:
 - That the TUI is open in the adjacent tab
 - That they can ask questions about code in the chat box at the bottom of the diff view
 
-## Step 8: Start Chat Monitor (IMPORTANT)
+## Step 8: Chat Monitor
 
-The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. You must start the `/loop` skill to automatically monitor and respond.
+The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. The TUI auto-polls for answers every 3 seconds.
 
-Run this command:
-```
-/loop 3s check-chat
-```
-
-This polls the chat file every 3 seconds. When a question with an empty "answer" field is found:
+**How to monitor**: Use the `Read` tool to check `$TEMP/claudeboost/changes_chat.json` periodically (when user interaction pauses or when they mention asking a question in the viewer). When a question with an empty `answer` field is found:
 1. Read the `question`, `context_file`, and `context_code` fields
 2. Generate a concise answer about that code
 3. Write the answer back using the Write tool — update the `answer` and `answered_at` fields
-4. The TUI picks up the answer and displays it inline
-
-If `/loop` is not available, manually poll using the Read tool on `C:/Users/<user>/AppData/Local/Temp/claudeboost/changes_chat.json` every few seconds.
+4. The TUI picks up the answer automatically and displays it inline
 
 Chat file format:
 ```json

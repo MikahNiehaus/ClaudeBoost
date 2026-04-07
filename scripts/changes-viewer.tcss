@@ -67,6 +67,12 @@ Footer {
     padding: 1 2;
 }
 
+#chat-scroll {
+    height: auto;
+    max-height: 8;
+    background: #0d0d0d;
+}
+
 Scrollbar {
     background: #0d0d0d;
     color: #003300;

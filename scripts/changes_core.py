@@ -420,7 +420,7 @@ class ChatPanel(Static):
     DEFAULT_CSS = """
     ChatPanel {
         height: auto;
-        max-height: 12;
+        max-height: 14;
         border-top: solid #00ff41;
         background: #0d0d0d;
         padding: 0 1;
@@ -430,7 +430,10 @@ class ChatPanel(Static):
     _waiting_for_answer: bool = False
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="chat-response")
+        yield ScrollableContainer(
+            Static("", id="chat-response"),
+            id="chat-scroll",
+        )
         yield Input(placeholder="Ask about this code...", id="chat-input")
 
     def on_mount(self) -> None:
@@ -594,6 +597,11 @@ class BaseChangesViewer(App):
             if path in self._reviewed_files:
                 label = f"[bold cyan]✓[/bold cyan] {label}"
             node.set_label(label)
+        # Force tree widget to re-render after label changes
+        try:
+            self.query_one("#file-tree", Tree).refresh()
+        except Exception:
+            pass
 
     def _render_diff(self) -> None:
         if self._current_file is None:
