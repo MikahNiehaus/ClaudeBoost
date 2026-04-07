@@ -232,6 +232,43 @@ Include:
 End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
 ]]></agent-spawn-template>
 
+<lightweight-spawn-template><![CDATA[
+Use for: explore-agent, research-agent, docs-agent, estimator-agent, teacher-agent
+These agents gather info or produce docs — they don't produce findings that need verification.
+
+## Step 1: Load Identity + Knowledge via RAG (MANDATORY)
+You are [agent-name]. Call `rag_context` first:
+- agent: "[agent-name]"
+- task_description: "[description]"
+- max_tokens: 4000
+
+## Step 2: Context Loading
+If workspace/[task-id]/context.md exists, read it.
+
+## Step 3: Your Task
+[task description]
+
+## Step 4: Status Report
+End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
+]]></lightweight-spawn-template>
+
+<spawn-routing><![CDATA[
+QUALITY-FIRST ROUTING — pick the right weight:
+
+FULL TEMPLATE (verify gate + evaluator after):
+  reviewer-agent, security-agent, performance-agent
+  WHY: These produce findings that can be hallucinated. Full ceremony + evaluator verification.
+
+STANDARD TEMPLATE (no verify gate, no evaluator):
+  workflow-agent, refactor-agent, debug-agent, test-agent, ui-agent, database-agent,
+  devops-agent, observability-agent, architect-agent, ticket-analyst-agent, browser-agent
+  WHY: These produce code or analysis, not severity-rated findings.
+
+LIGHTWEIGHT TEMPLATE (minimal ceremony):
+  explore-agent, research-agent, docs-agent, estimator-agent, teacher-agent
+  WHY: These gather info or produce docs. Minimal overhead, maximum speed.
+]]></spawn-routing>
+
 <collaboration-sequences>
   <sequence type="Bug fix + tests">debug → test</sequence>
   <sequence type="Design + implement">architect → workflow</sequence>
@@ -260,15 +297,21 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
 
 <verify-gate-enforcement><![CDATA[
 STRUCTURAL ENFORCEMENT (hooks back this up):
-- PreToolUse on Task: injects verify gate instructions into every spawn prompt
-- PostToolUse on Task: intercepts output, blocks unverified findings
+- PreToolUse on Task: routes to full/standard/lightweight based on agent type
+- PostToolUse on Task: triggers evaluator-agent for any agent with findings
 
-If ANY agent reports Status: NEEDS_VERIFICATION:
-1. You MUST spawn evaluator-agent to verify BLOCKER/HIGH findings
-2. You MUST NOT present findings until evaluator confirms or denies them
-3. FALSE POSITIVE findings get dropped from the final report
-4. CONFIRMED findings include the evaluator's evidence
-This is NOT optional.
+WHY EVALUATOR, NOT SELF-VERIFY:
+- A fresh agent context has NO confirmation bias
+- The agent that produced a hallucinated finding will "confirm" it if asked to self-verify
+- Evaluator-agent is CHEAP (~1000-2000 tokens) vs rework from false findings (~5000-10000 tokens)
+- Evaluator only needs to: read cited file:line, check if code matches claim, verdict each finding
+
+If ANY finding-producing agent completes with BLOCKER/HIGH/MEDIUM findings:
+1. Spawn evaluator-agent with the specific findings to verify
+2. Evaluator reads actual code at each cited location
+3. FALSE POSITIVE findings get dropped
+4. CONFIRMED findings include evaluator's evidence
+5. Present only verified findings to user
 ]]></verify-gate-enforcement>
 
 <quality-gate-pattern><![CDATA[

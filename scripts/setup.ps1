@@ -76,7 +76,7 @@ $sessionHook = [PSCustomObject]@{
     hooks = @(
         [PSCustomObject]@{
             type = "prompt"
-            prompt = "Check ~/.claude/CLAUDE.md decision flow: Is this a simple task (just do it) or complex (workspace + agents + RAG)? If complex: create workspace, call rag_search for relevant knowledge, spawn agents with rag_context."
+            prompt = "Quality-first routing: Check CLAUDE.md decision flow. For each action, pick the RIGHT approach — not the cheapest, not the most ceremonial. Full ceremony where quality demands it (reviews, security, architecture). Lightweight where it doesn't (explore, research, docs). Always use evaluator-agent for finding verification — never self-verify findings (confirmation bias). Rework costs more than doing it right."
             statusMessage = "Loading ClaudeBoost workflow..."
             timeout = 15
         }
@@ -96,7 +96,7 @@ $preToolUseHooks = @(
         hooks = @(
             [PSCustomObject]@{
                 type = "prompt"
-                prompt = "AGENT SPAWN CHECK: You are about to spawn an agent. Verify:`n1. Your agent prompt MUST include the instruction to call ``rag_context`` as Step 1 (agent name + task description)`n2. If a workspace exists for this task, the agent prompt MUST reference it`n3. If Gas Town is available (``gt`` command exists), consider using ``gt sling`` for cross-session work`n4. VERIFY GATE: Your agent prompt MUST include: ``Every BLOCKER/HIGH/MEDIUM finding MUST include file:line citation verified by reading actual code. Mark unverified findings as UNVERIFIED. Set status to NEEDS_VERIFICATION if any BLOCKER/HIGH is unverified.```nDo NOT proceed unless the prompt includes rag_context instructions AND verify gate instructions."
+                prompt = "AGENT SPAWN — QUALITY ROUTING:`n1. ``rag_context`` as Step 1 (ALWAYS — agent name + task description)`n2. Workspace reference (if exists)`n3. ROUTE by agent type:`n   - Finding-producers (reviewer, security, performance): FULL spawn template with verify gate. Findings MUST cite file:line. Evaluator-agent WILL verify after.`n   - Research/support (explore, research, docs, estimator, teacher): LIGHTWEIGHT template — rag_context + task + status report. Skip verify gate.`n   - Implementation (workflow, refactor, debug, test, ui, database, devops, observability, architect, ticket-analyst, browser): STANDARD template. No verify gate unless auditing.`n4. GT context if available`nDo NOT proceed without rag_context."
                 statusMessage = "Enforcing RAG context in agent spawn..."
             }
         )
@@ -126,7 +126,7 @@ $postToolUseHooks = @(
         hooks = @(
             [PSCustomObject]@{
                 type = "prompt"
-                prompt = "VERIFY GATE - POST-AGENT CHECK: An agent just completed. Before presenting ANY findings to the user, you MUST:`n1. Scan the agent output for BLOCKER/HIGH/MEDIUM findings`n2. For each finding, check: does it cite a specific file:line (e.g., src/auth.ts:42)?`n3. If ANY BLOCKER/HIGH finding lacks a file:line citation, you MUST either:`n   a. Verify it yourself NOW using Read/Grep, OR`n   b. Drop the finding and note it was removed as unverified`n4. NEVER present an unverified BLOCKER/HIGH finding to the user`n5. If the agent reported Status: NEEDS_VERIFICATION, spawn evaluator-agent before presenting`nUnverified findings are worse than no findings."
+                prompt = "VERIFY GATE: Scan agent output for BLOCKER/HIGH/MEDIUM findings.`n- If findings exist: spawn evaluator-agent to verify (fresh context prevents confirmation bias). Do NOT self-verify — same context that hallucinated will ``confirm`` the hallucination.`n- Evaluator checks: does each finding cite file:line? Does the code actually show the issue? Drop false positives.`n- No findings? No evaluator needed. Present results directly.`nRework from false findings costs more than one lightweight evaluator spawn."
                 statusMessage = "Enforcing verify gate on agent output..."
             }
         )
@@ -145,7 +145,7 @@ $preCompactHook = [PSCustomObject]@{
     hooks = @(
         [PSCustomObject]@{
             type = "prompt"
-            prompt = "CONTEXT PRESERVATION: Before compaction, remember these critical workflows:`n1. EVERY agent spawn MUST include ``rag_context`` as Step 1 in the agent prompt`n2. Use ``rag_search`` when unsure which knowledge applies to a task`n3. Gas Town commands (``gt prime``, ``gt sling``, ``gt handoff``) are available for cross-session work`n4. Check CLAUDE.md decision flow for simple vs complex task routing`n5. VERIFY GATE: Every BLOCKER/HIGH/MEDIUM finding MUST have file:line evidence. PostToolUse hook on Task enforces this. If agent reports NEEDS_VERIFICATION, spawn evaluator-agent.`nThese are enforced by PreToolUse and PostToolUse hooks and MUST be followed after compaction."
+            prompt = "CONTEXT PRESERVATION — quality-first routing:`n1. Agent spawns: ``rag_context`` Step 1, route by type (full/standard/lightweight)`n2. Finding verification: ALWAYS evaluator-agent, never self-verify (confirmation bias)`n3. GT commands: ``gt prime``, ``gt sling``, ``gt handoff```n4. Decision flow: simple (just do it) vs complex (workspace + agents)`n5. Rework costs more than ceremony. Do it right the first time."
             statusMessage = "Preserving RAG/GT awareness before compaction..."
         }
     )

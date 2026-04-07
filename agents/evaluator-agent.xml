@@ -136,4 +136,25 @@
 [Summary for orchestrator]
 ]]></output-format>
 
+<lightweight-verification>
+  <description>When spawned just to verify findings (not full task evaluation), use this minimal approach</description>
+  <steps>
+    <step>Receive list of findings with file:line citations</step>
+    <step>For each finding: Read the exact file:line cited</step>
+    <step>Check: does the actual code match the claim?</step>
+    <step>Verdict: CONFIRMED (with code quote) or FALSE_POSITIVE (with why)</step>
+  </steps>
+  <output-format><![CDATA[
+## Finding Verification
+
+| # | Finding | File:Line | Verdict | Evidence |
+|---|---------|-----------|---------|----------|
+| 1 | [claim] | [location] | CONFIRMED/FALSE_POSITIVE | [code quote or disproof] |
+
+Verified: [count] | Dropped: [count]
+Status: COMPLETE
+]]></output-format>
+  <token-budget>Target 1000-2000 tokens. Read only the cited lines, not entire files.</token-budget>
+</lightweight-verification>
+
 </agent-definition>

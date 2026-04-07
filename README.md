@@ -1,22 +1,21 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 21 specialist agents, 36 knowledge
+Multi-agent orchestration toolkit for Claude Code. 22 specialist agents, 40 knowledge
 bases, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside
 
 ```
 ClaudeBoost/
-├── agents/              21 specialist agent definitions (XML)
-├── knowledge/           36 domain knowledge bases (XML)
+├── agents/              22 specialist agent definitions (XML)
+├── knowledge/           40 domain knowledge bases (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    13 slash commands
+├── .claude/commands/    15 slash commands
+├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
-├── CLAUDE.md            Orchestration rules (slim v2)
-├── install.bat          One-time global installer
-├── gtstart.bat          GT project launcher
-├── SETUP-GUIDE.md       Windows installation guide
-└── HOW-IT-WORKS.md      Architecture documentation
+├── CLAUDE.md            Orchestration rules
+├── HOW-IT-WORKS.md      Architecture documentation
+└── SETUP-GUIDE.md       Windows installation guide
 ```
 
 ## Quick Start
@@ -27,14 +26,15 @@ See [SETUP-GUIDE.md](SETUP-GUIDE.md) for full Windows installation including Go,
 
 ### 2. Install ClaudeBoost Extensions
 
-```batch
-cd C:\Users\grayw\OneDrive\prj\ClaudeBoost
-.\install.bat
+```powershell
+cd <path-to-ClaudeBoost>
+powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 ```
 
 This registers everything globally:
 - RAG MCP server (semantic search in every project)
-- Slash commands (global)
+- Hooks (SessionStart, PreToolUse, PostToolUse, PreCompact)
+- CLAUDEBOOST_HOME environment variable
 - Agent/knowledge files in GT directives (if GT installed)
 
 ### 3. Use It
@@ -44,7 +44,35 @@ Open any project in Claude Code. You now have:
 - `rag_context` — curated context packages for agent tasks
 - `rag_index` — index new content
 - `rag_status` — check server health
-- 13 slash commands for task management
+- `/boost` — activate ClaudeBoost (RAG + GT primed)
+- 15 slash commands for task management
+
+## Features
+
+### Quality-First Token Routing
+
+Every agent spawn is routed to the right weight — full ceremony where quality demands
+it, lightweight where it doesn't:
+
+- **Full** (reviewer, security, performance): verify gate + evaluator-agent verification
+- **Standard** (workflow, refactor, debug, test, ui, etc.): no verify gate overhead
+- **Lightweight** (explore, research, docs, estimator, teacher): minimal ceremony
+
+### Verify Gate (Anti-Hallucination)
+
+Every finding must be proven from actual code. Structural enforcement via 4 hooks:
+
+- **PreToolUse on Task**: Routes agents to full/standard/lightweight templates
+- **PostToolUse on Task**: Triggers evaluator-agent for finding verification
+- **SessionStart**: Loads quality-first routing mindset
+- **PreCompact**: Preserves routing rules across context compaction
+
+Evaluator-agent always runs in a fresh context to prevent confirmation bias.
+
+### RAG-Powered Knowledge
+
+Agents load their identity and relevant knowledge via `rag_context` on every spawn.
+A PreToolUse hook enforces this — no agent can skip it.
 
 ## Agents
 
@@ -69,12 +97,15 @@ Open any project in Claude Code. You now have:
 | standards-validator-agent | Standards validation | Sonnet |
 | estimator-agent | Story pointing | Sonnet |
 | teacher-agent | Teaching, explanation | Sonnet |
+| devops-agent | CI/CD, Docker, deployment | Sonnet |
+| database-agent | Schema design, queries, migrations | Sonnet |
+| observability-agent | Logging, metrics, alerting | Sonnet |
 
 ## Knowledge Bases
 
-36 domain expertise files covering: coding standards, security, architecture, debugging,
+40 domain expertise files covering: coding standards, security, architecture, debugging,
 testing, observability, performance, refactoring, UI implementation, API design,
-context engineering, and more.
+context engineering, verify gate, scope governance, rule enforcement, and more.
 
 ## How It Works
 

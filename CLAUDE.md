@@ -63,6 +63,22 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - **Output format**: Evidence column and Verification Status make gaps structurally visible
 - **Evaluator escalation**: NEEDS_VERIFICATION status triggers mandatory evaluator-agent spawn
 
+## Token Efficiency
+
+Do it right the first time. Rework costs more than ceremony.
+
+**Quality-first routing** — pick the right weight per agent:
+- **Full** (reviewer, security, performance): verify gate + evaluator-agent after
+- **Standard** (workflow, refactor, debug, test, ui, etc.): no verify gate needed
+- **Lightweight** (explore, research, docs, estimator, teacher): minimal ceremony
+
+**Always evaluator, never self-verify findings**: A fresh context catches hallucinations
+that same-context self-verification confirms. Evaluator is cheap (~1000-2000 tokens)
+vs rework from false findings (~5000-10000 tokens).
+
+**Lightweight evaluator**: Only reads cited file:lines, verdicts each finding. No full
+ceremony needed — just targeted verification.
+
 ## Hard Rules (Non-Negotiable)
 
 ### jQuery Ban

@@ -10,6 +10,17 @@
   <principle>Finding something is NOT the goal. Finding REAL things is.</principle>
 </principles>
 
+<fresh-context-principle>
+  <insight>An agent that hallucinated a finding will "confirm" it when asked to self-verify — same reasoning, same bias</insight>
+  <rule>ALWAYS use evaluator-agent (fresh context) for finding verification</rule>
+  <rule>NEVER self-verify findings from the same agent context</rule>
+  <cost-justification>
+    <item>Evaluator spawn: ~1000-2000 tokens (lightweight mode)</item>
+    <item>False finding presented to user + rework: ~5000-10000 tokens</item>
+    <item>ROI: 3-5x cheaper to verify than to fix mistakes</item>
+  </cost-justification>
+</fresh-context-principle>
+
 <enforcement-layers>
   <layer name="PreToolUse on Task" when="Agent spawn">
     <description>Injects verify gate instructions into every agent spawn prompt. The agent receives explicit instructions to verify findings and mark unverified ones.</description>
