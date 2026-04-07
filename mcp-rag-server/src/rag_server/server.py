@@ -389,6 +389,14 @@ async def main():
         result["files_indexed"], result["chunks_created"],
     )
 
+    # Pre-warm embedding model so first rag_context doesn't block
+    if not embedder.is_loaded:
+        logger.info("Pre-warming embedding model...")
+        embedder.embed_query("warmup")
+        logger.info("Embedding model ready.")
+    else:
+        logger.info("Embedding model already loaded from indexing.")
+
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()
     watch_paths = []

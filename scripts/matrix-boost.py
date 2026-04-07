@@ -122,7 +122,7 @@ try:
 
         if all_online and all_online_since is None:
             all_online_since = frame
-        if all_online_since and (frame - all_online_since) > 50:
+        if all_online_since and (frame - all_online_since) > 200:
             break
         if frame > 1200:  # 60 second timeout
             break

@@ -33,7 +33,7 @@ This auto-sets missing privacy env vars permanently. If any were fixed, mention 
 
 Mark RAG as checking, then verify the module loads from the right path:
 ```bash
-BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python -c "import rag_server; print(rag_server.__file__)" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; cd "$CLAUDEBOOST_HOME/mcp-rag-server" && pip install -e . 2>&1 | tail -1; fi
+BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python "$CLAUDEBOOST_HOME/scripts/check-rag-path.py" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; python "$CLAUDEBOOST_HOME/scripts/reinstall-rag.py" 2>&1 | tail -1; fi
 ```
 
 Call `rag_status` (MCP tool) to verify the server is running and has indexed content.
@@ -69,7 +69,7 @@ GT is "ready" if `command -v gt` succeeds (even if not in a GT workspace). "fail
 
 Verify that PreToolUse and PreCompact hooks are configured in settings.json:
 ```bash
-BOOST_TMP="$TEMP" && HOOKS_OK=true && if python -c "import json; s=json.load(open('$HOME/.claude/settings.json')); assert 'PreToolUse' in s.get('hooks',{})" 2>/dev/null; then echo "PreToolUse hooks: OK"; else echo "PreToolUse hooks: MISSING"; HOOKS_OK=false; fi && if python -c "import json; s=json.load(open('$HOME/.claude/settings.json')); assert 'PreCompact' in s.get('hooks',{})" 2>/dev/null; then echo "PreCompact hooks: OK"; else echo "PreCompact hooks: MISSING"; HOOKS_OK=false; fi && if [ "$HOOKS_OK" = false ]; then echo "[WARN] Enforcement hooks missing - run setup.ps1 to install"; fi
+BOOST_TMP="$TEMP" && HOOKS_OK=true && if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" PreToolUse 2>/dev/null; then true; else echo "PreToolUse hooks: MISSING"; HOOKS_OK=false; fi && if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" PreCompact 2>/dev/null; then true; else echo "PreCompact hooks: MISSING"; HOOKS_OK=false; fi && if [ "$HOOKS_OK" = false ]; then echo "[WARN] Enforcement hooks missing - run setup.ps1 to install"; fi
 ```
 
 If hooks are missing, warn the user to run `setup.ps1`. This is not a blocking failure — boost continues.
