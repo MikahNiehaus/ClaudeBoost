@@ -128,6 +128,13 @@ For this action: [description]
     <verification>Prompt says "READ" instead of pasting? Definitions not duplicated?</verification>
     <if-violated>Log inefficiency → Rewrite prompt → Continue</if-violated>
   </rule>
+
+  <rule id="RULE-009" name="Verify Gate - Evidence Required" severity="BLOCK">
+    <check-after>Any agent reports findings with BLOCKER/HIGH/MEDIUM severity</check-after>
+    <verification>Every finding has file:line citation AND code evidence?</verification>
+    <if-violated>STOP → Mark UNVERIFIED → If BLOCKER/HIGH: spawn evaluator-agent → Do NOT present to user</if-violated>
+    <enforcement>PreToolUse injects instructions, PostToolUse intercepts output</enforcement>
+  </rule>
 </rule-specific-enforcement>
 
 <best-practices>

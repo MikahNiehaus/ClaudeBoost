@@ -1,0 +1,66 @@
+<knowledge-base name="verify-gate" version="1.0">
+<triggers>verify, evidence, finding, blocker, citation, hallucination, false positive, unverified</triggers>
+<overview>Verify Gate protocol — every finding must be proven from actual code before presentation. Structural enforcement via hooks prevents hallucinated or unverified findings from reaching the user.</overview>
+
+<principles>
+  <principle>Every BLOCKER/HIGH/MEDIUM finding MUST cite a specific file:line</principle>
+  <principle>Every citation MUST be verified by reading the actual code</principle>
+  <principle>Unverified findings are worse than no findings — they erode trust</principle>
+  <principle>"No issues found" is always a valid and respected outcome</principle>
+  <principle>Finding something is NOT the goal. Finding REAL things is.</principle>
+</principles>
+
+<enforcement-layers>
+  <layer name="PreToolUse on Task" when="Agent spawn">
+    <description>Injects verify gate instructions into every agent spawn prompt. The agent receives explicit instructions to verify findings and mark unverified ones.</description>
+  </layer>
+  <layer name="PostToolUse on Task" when="Agent completion">
+    <description>Fires after every agent completes. Parent agent must scan output for unverified BLOCKER/HIGH findings. Unverified findings are either verified on the spot or dropped.</description>
+  </layer>
+  <layer name="Output Format" when="Agent produces findings">
+    <description>Evidence column in tables and Evidence field in blockers make verification status structurally visible. NEEDS_VERIFICATION status triggers evaluator escalation.</description>
+  </layer>
+  <layer name="Evaluator Escalation" when="Status is NEEDS_VERIFICATION">
+    <description>When any agent reports NEEDS_VERIFICATION, evaluator-agent MUST be spawned to independently verify BLOCKER/HIGH findings before they reach the user.</description>
+  </layer>
+</enforcement-layers>
+
+<evidence-format>
+  <good-examples>
+    <example>
+      <location>src/auth.ts:42</location>
+      <evidence>VERIFIED: `const token = req.headers.authorization` — no validation before use</evidence>
+    </example>
+    <example>
+      <location>lib/db.js:118</location>
+      <evidence>VERIFIED: `db.query("SELECT * FROM users WHERE id=" + userId)` — SQL injection via string concatenation</evidence>
+    </example>
+  </good-examples>
+  <bad-examples>
+    <example>
+      <location>somewhere in auth module</location>
+      <evidence>UNVERIFIED — "likely missing input validation"</evidence>
+      <why-bad>No specific file:line, no code quote, speculative language</why-bad>
+    </example>
+    <example>
+      <location>src/api.ts</location>
+      <evidence>UNVERIFIED — "the endpoint probably lacks auth checks"</evidence>
+      <why-bad>No line number, no code quote, "probably" indicates not verified</why-bad>
+    </example>
+  </bad-examples>
+</evidence-format>
+
+<status-values>
+  <status name="VERIFIED">All BLOCKER/HIGH/MEDIUM findings have file:line citations with code quotes</status>
+  <status name="NEEDS_VERIFICATION">One or more BLOCKER/HIGH findings lack verification — evaluator-agent MUST be spawned</status>
+  <status name="UNVERIFIED">Applied to individual findings that lack file:line evidence</status>
+</status-values>
+
+<rationale>
+  <point>The rag_context enforcement pattern works because a hook fires at every spawn — no exceptions. The verify gate replicates this at TWO hook points: PreToolUse (construction-time) and PostToolUse (completion-time).</point>
+  <point>Output format changes make verification status structurally visible — you can't fill in the Evidence column without actually verifying.</point>
+  <point>The evaluator escalation path becomes mandatory rather than optional when NEEDS_VERIFICATION is reported.</point>
+  <point>False positives erode trust faster than missed issues. It is better to report 3 verified findings than 10 where half are wrong.</point>
+</rationale>
+
+</knowledge-base>

@@ -96,7 +96,7 @@ $preToolUseHooks = @(
         hooks = @(
             [PSCustomObject]@{
                 type = "prompt"
-                prompt = "AGENT SPAWN CHECK: You are about to spawn an agent. Verify:`n1. Your agent prompt MUST include the instruction to call ``rag_context`` as Step 1 (agent name + task description)`n2. If a workspace exists for this task, the agent prompt MUST reference it`n3. If Gas Town is available (``gt`` command exists), consider using ``gt sling`` for cross-session work`nDo NOT proceed with the spawn unless the prompt includes rag_context instructions."
+                prompt = "AGENT SPAWN CHECK: You are about to spawn an agent. Verify:`n1. Your agent prompt MUST include the instruction to call ``rag_context`` as Step 1 (agent name + task description)`n2. If a workspace exists for this task, the agent prompt MUST reference it`n3. If Gas Town is available (``gt`` command exists), consider using ``gt sling`` for cross-session work`n4. VERIFY GATE: Your agent prompt MUST include: ``Every BLOCKER/HIGH/MEDIUM finding MUST include file:line citation verified by reading actual code. Mark unverified findings as UNVERIFIED. Set status to NEEDS_VERIFICATION if any BLOCKER/HIGH is unverified.```nDo NOT proceed unless the prompt includes rag_context instructions AND verify gate instructions."
                 statusMessage = "Enforcing RAG context in agent spawn..."
             }
         )
@@ -119,13 +119,33 @@ if (-not $settings.hooks.PSObject.Properties["PreToolUse"]) {
     Write-Host "[SKIP] hooks.PreToolUse - already exists (review manually if needed)" -ForegroundColor Yellow
 }
 
+# Add PostToolUse hook (verify gate enforcement on agent output)
+$postToolUseHooks = @(
+    [PSCustomObject]@{
+        matcher = "Task"
+        hooks = @(
+            [PSCustomObject]@{
+                type = "prompt"
+                prompt = "VERIFY GATE - POST-AGENT CHECK: An agent just completed. Before presenting ANY findings to the user, you MUST:`n1. Scan the agent output for BLOCKER/HIGH/MEDIUM findings`n2. For each finding, check: does it cite a specific file:line (e.g., src/auth.ts:42)?`n3. If ANY BLOCKER/HIGH finding lacks a file:line citation, you MUST either:`n   a. Verify it yourself NOW using Read/Grep, OR`n   b. Drop the finding and note it was removed as unverified`n4. NEVER present an unverified BLOCKER/HIGH finding to the user`n5. If the agent reported Status: NEEDS_VERIFICATION, spawn evaluator-agent before presenting`nUnverified findings are worse than no findings."
+                statusMessage = "Enforcing verify gate on agent output..."
+            }
+        )
+    }
+)
+if (-not $settings.hooks.PSObject.Properties["PostToolUse"]) {
+    $settings.hooks | Add-Member -NotePropertyName "PostToolUse" -NotePropertyValue $postToolUseHooks
+    Write-Host "[OK] hooks.PostToolUse - added verify gate enforcement" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] hooks.PostToolUse - already exists" -ForegroundColor Yellow
+}
+
 # Add PreCompact hook (context preservation)
 $preCompactHook = [PSCustomObject]@{
     matcher = "Always"
     hooks = @(
         [PSCustomObject]@{
             type = "prompt"
-            prompt = "CONTEXT PRESERVATION: Before compaction, remember these critical workflows:`n1. EVERY agent spawn MUST include ``rag_context`` as Step 1 in the agent prompt`n2. Use ``rag_search`` when unsure which knowledge applies to a task`n3. Gas Town commands (``gt prime``, ``gt sling``, ``gt handoff``) are available for cross-session work`n4. Check CLAUDE.md decision flow for simple vs complex task routing`nThese are enforced by PreToolUse hooks and MUST be followed after compaction."
+            prompt = "CONTEXT PRESERVATION: Before compaction, remember these critical workflows:`n1. EVERY agent spawn MUST include ``rag_context`` as Step 1 in the agent prompt`n2. Use ``rag_search`` when unsure which knowledge applies to a task`n3. Gas Town commands (``gt prime``, ``gt sling``, ``gt handoff``) are available for cross-session work`n4. Check CLAUDE.md decision flow for simple vs complex task routing`n5. VERIFY GATE: Every BLOCKER/HIGH/MEDIUM finding MUST have file:line evidence. PostToolUse hook on Task enforces this. If agent reports NEEDS_VERIFICATION, spawn evaluator-agent.`nThese are enforced by PreToolUse and PostToolUse hooks and MUST be followed after compaction."
             statusMessage = "Preserving RAG/GT awareness before compaction..."
         }
     )
@@ -172,7 +192,7 @@ try {
 Write-Host "`n=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host "  CLAUDEBOOST_HOME = $boostHomePosix"
 Write-Host "  RAG server registered in $mcpPath"
-Write-Host "  Hooks configured (SessionStart, PreToolUse, PreCompact)"
+Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Restart Claude Code for MCP changes to take effect"

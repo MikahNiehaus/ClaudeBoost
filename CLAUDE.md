@@ -57,6 +57,12 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - "No issues found" is always a valid outcome
 - Reviewers: finding something is NOT the goal. Finding REAL things is.
 
+**Structural Enforcement** (hooks, not just instructions):
+- **PreToolUse on Task**: Injects verify gate instructions into every agent spawn prompt
+- **PostToolUse on Task**: Intercepts agent output — unverified BLOCKER/HIGH findings are dropped or verified
+- **Output format**: Evidence column and Verification Status make gaps structurally visible
+- **Evaluator escalation**: NEEDS_VERIFICATION status triggers mandatory evaluator-agent spawn
+
 ## Hard Rules (Non-Negotiable)
 
 ### jQuery Ban

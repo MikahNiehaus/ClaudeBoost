@@ -200,6 +200,14 @@ Use the Read tool NOW to read:
 [task description here]
 
 ## Step 4a: Scope Boundaries (MANDATORY)
+
+## Step 4b: Verify Gate Protocol
+If your output includes BLOCKER/HIGH/MEDIUM findings:
+1. Read the actual code at every file:line you cite
+2. Include the code snippet in your Evidence field
+3. Mark unverified findings as UNVERIFIED
+4. Set status to NEEDS_VERIFICATION if any BLOCKER/HIGH is UNVERIFIED
+
 **Explicitly Requested** (DO these):
 - [item 1 from user's request]
 - [item 2 from user's request]
@@ -231,7 +239,7 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
   <sequence type="Research + implement">research → architect → workflow</sequence>
   <sequence type="Security audit + fix">security → refactor</sequence>
   <sequence type="Explore + implement">explore → architect → workflow</sequence>
-  <sequence type="Review + verify">reviewer → evaluator (always verify BLOCKER/HIGH findings before reporting)</sequence>
+  <sequence type="Review + verify">reviewer → evaluator (MANDATORY when reviewer status is NEEDS_VERIFICATION — PostToolUse hook enforces this)</sequence>
 </collaboration-sequences>
 
 <parallel-combinations>
@@ -249,6 +257,19 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
   <path from="performance-agent" to="architect-agent" when="Performance requires architectural changes"/>
   <path from="reviewer-agent" to="evaluator-agent" when="Reviewer reports BLOCKER or HIGH findings — evaluator verifies each before reporting to user"/>
 </escalation-paths>
+
+<verify-gate-enforcement><![CDATA[
+STRUCTURAL ENFORCEMENT (hooks back this up):
+- PreToolUse on Task: injects verify gate instructions into every spawn prompt
+- PostToolUse on Task: intercepts output, blocks unverified findings
+
+If ANY agent reports Status: NEEDS_VERIFICATION:
+1. You MUST spawn evaluator-agent to verify BLOCKER/HIGH findings
+2. You MUST NOT present findings until evaluator confirms or denies them
+3. FALSE POSITIVE findings get dropped from the final report
+4. CONFIRMED findings include the evaluator's evidence
+This is NOT optional.
+]]></verify-gate-enforcement>
 
 <quality-gate-pattern><![CDATA[
 Standard Flow:              With Evaluation:

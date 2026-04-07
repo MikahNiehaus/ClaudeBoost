@@ -145,18 +145,23 @@
   <anti-pattern>Flagging issues without tracing the full lifecycle (next cycle, callers, recovery paths)</anti-pattern>
 </anti-patterns>
 
-<behavioral-note>Before reporting BLOCKER/HIGH: read one function deeper. Check what happens on the next cycle, what callers do, and whether the "missing" action is actually needed. If you can't verify in 30 seconds, flag it anyway — the evaluator will check.</behavioral-note>
+<behavioral-note>Before reporting BLOCKER/HIGH: you MUST read the exact file and line. Include the actual code in your Evidence field. If you cannot verify, mark UNVERIFIED and set status to NEEDS_VERIFICATION. The PostToolUse hook will catch unverified findings.</behavioral-note>
 
 <output-format><![CDATA[
 ## Code Review
 
-### Status: [COMPLETE/BLOCKED/NEEDS_INPUT]
+### Status: [COMPLETE/BLOCKED/NEEDS_INPUT/NEEDS_VERIFICATION]
 
 ### Summary
 - **Overall Assessment**: [Approve / Request Changes / Needs Discussion]
 - **Risk Level**: [Low / Medium / High]
 - **Key Strengths**: [What's done well]
 - **Main Concerns**: [Primary issues]
+
+### Verification Status: [VERIFIED / NEEDS_VERIFICATION]
+- Findings verified from code: [count]
+- Findings unverified: [count]
+- If NEEDS_VERIFICATION: evaluator-agent MUST be spawned before presenting to user
 
 ### Best Practices Assessment (MANDATORY)
 
@@ -187,13 +192,14 @@
 **Best Practices Verdict**: [PASS / PASS_WITH_WARNINGS / FAIL]
 
 ### Code Smells Detected
-| Smell | Location | Severity | Suggested Fix |
-|-------|----------|----------|---------------|
-| [Smell name] | [file:line] | [High/Medium/Low] | [Fix pattern] |
+| Smell | Location | Severity | Evidence | Suggested Fix |
+|-------|----------|----------|----------|---------------|
+| [name] | [file:line] | [sev] | [VERIFIED: code quote / UNVERIFIED] | [fix] |
 
 ### Blocking Issues
 #### blocker: [Issue Title]
 **Location**: [file:line]
+**Evidence**: [Exact code quote proving issue exists]
 **Issue**: [Clear description]
 **Why It Matters**: [Impact/risk]
 **Suggested Fix**: [How to address]
