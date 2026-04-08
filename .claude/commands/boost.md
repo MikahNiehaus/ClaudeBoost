@@ -1,20 +1,22 @@
 ---
-description: Activate ClaudeBoost - load RAG, verify GT, and prime the session
+description: Activate ClaudeBoost - always load RAG + GT and prime the session
 allowed-tools: Bash, Read, Glob
 ---
 
 # ClaudeBoost Activation
 
-## Step 0: Clear Caches and Initialize Status File
+## Step 0: Launch Animation and Clear Caches
 
 **This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
 
-Run this EXACT bash command FIRST, alone:
+Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; echo "Status file initialized"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w 0 new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
 ```
 
-This clears Python bytecode caches (so RAG server loads fresh code on next restart) and creates a fresh status file for the animation.
+This clears Python bytecode caches (so RAG server loads fresh code on next restart) and opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window. The animation reads the status file live and shows each system coming online as checks complete. The tab closes automatically when all systems are online.
+
+**NEVER use `powershell Start-Process` or `cmd start` — those open separate windows.**
 
 Do NOT run any other tool calls until this completes.
 
@@ -27,7 +29,7 @@ BOOST_TMP="$TEMP" && echo "PRIVACY:checking" >> "$BOOST_TMP/claudeboost_status.t
 
 This auto-sets missing privacy env vars permanently. If any were fixed, mention it briefly in your output.
 
-## Step 2: Check RAG (verify and auto-fix)
+## Step 2: Activate RAG (MANDATORY — verify, auto-fix, and load)
 
 Mark RAG as checking, then verify the module loads from the right path:
 ```bash
@@ -36,7 +38,7 @@ BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" 
 
 Call `rag_status` (MCP tool) to verify the server is running and has indexed content.
 
-Then call `rag_context` with a quick test to verify tiered context is working:
+Then **actively load RAG context** — this is not just a check, it primes the session:
 ```
 rag_context(agent="debug-agent", task_description="test", max_tokens=2000)
 ```
@@ -53,15 +55,19 @@ BOOST_TMP="$TEMP" && echo "RAG:ready" >> "$BOOST_TMP/claudeboost_status.txt" && 
 
 Use "RAG:failed" if rag_status fails entirely. Use "RAG:ready" if it works even if tiered context isn't loaded yet (but warn the user).
 
-## Step 3: Check Gas Town
+**RAG is non-negotiable.** If RAG fails, boost activation is incomplete — tell the user to fix it.
 
-GT is already marked "checking". Check if `gt` command exists:
+## Step 3: Activate Gas Town (MANDATORY — always prime)
+
+GT is already marked "checking". Check if `gt` exists and **always run `gt prime`**:
 ```bash
-BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then echo "GT INSTALLED: $(gt --version 2>&1 | head -1)"; gt prime 2>&1 | head -3; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT NOT FOUND in PATH"; echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then echo "GT INSTALLED: $(gt --version 2>&1 | head -1)"; echo "--- Running gt prime ---"; gt prime 2>&1; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT NOT FOUND in PATH"; echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
-GT is "ready" if `command -v gt` succeeds (even if not in a GT workspace). "failed" ONLY if `gt` is not on PATH.
+GT is "ready" if `command -v gt` succeeds. "failed" ONLY if `gt` is not on PATH.
 **Read the bash output carefully** — if it prints "GT INSTALLED:" then GT is available. Do NOT report "GT not installed" when the check passed.
+
+**GT is mandatory.** If GT is not on PATH, warn the user to install it — do NOT silently skip it. Both RAG and GT must be active for a fully boosted session.
 
 ## Step 4: Check Enforcement Hooks
 
@@ -80,15 +86,6 @@ BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:read
 ```
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
-
-## Step 5.5: Launch Animation (Inline)
-
-All health checks are done. Now run the Matrix animation inline with `--quick` flag. This does a fast ~3 second reveal using the statuses already written to the status file. It runs in the foreground — no new tab needed:
-```bash
-python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py" --quick
-```
-
-The animation reads the status file, shows matrix rain for ~1.5s, reveals the title and system statuses for ~1.5s, then exits and clears the screen. Do NOT run this in the background — let it complete before proceeding.
 
 ## Step 6: Workspace Discovery
 
@@ -125,10 +122,10 @@ BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 - If fresh session: "No active workspaces"
 
 ### Session Directives
-**Always include these reminders in your report:**
+**Always include ALL of these reminders in your report — both RAG and GT are mandatory:**
 - "RAG is active. I will call `rag_context` as Step 1 when spawning agents, and `rag_search` when I need knowledge."
-- If GT is ready: "Gas Town is available. I will use `gt prime` for workspace init, `gt sling` for cross-session delegation, and `gt handoff` for session transitions."
-- If GT is not ready: "Gas Town is not installed. Working in standalone mode."
+- "Gas Town is active. I will use `gt prime` for workspace init, `gt sling` for cross-session delegation, and `gt handoff` for session transitions."
+- If GT check failed: append "(GT not found on PATH — install or add to PATH to enable)" but still include the GT directive above.
 
 ### Ready
 - If everything passed: "ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."
@@ -136,4 +133,4 @@ BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 - If privacy was auto-fixed: mention what was set
 - If anything failed: explain what and how to fix it
 
-Do NOT create the marker file if critical checks (RAG, Rules) failed.
+Do NOT create the marker file if critical checks (RAG, GT, Rules) failed. Both RAG and GT must be active for full boost.
