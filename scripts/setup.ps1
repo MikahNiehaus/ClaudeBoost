@@ -154,7 +154,7 @@ $consultSessionHook = [PSCustomObject]@{
     )
 }
 Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $consultSessionHook `
-    -Sentinel "CLAUDEBOOST MODE — CONSULT vs AUTO" -Label "CONSULT protocol"
+    -Sentinel "CONSULT vs AUTO" -Label "CONSULT protocol"
 
 # --- PreToolUse: agent spawn RAG enforcement (original) ---
 $taskSpawnHook = [PSCustomObject]@{
@@ -168,7 +168,7 @@ $taskSpawnHook = [PSCustomObject]@{
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $taskSpawnHook `
-    -Sentinel "AGENT SPAWN — QUALITY ROUTING" -Label "Task RAG enforcement"
+    -Sentinel "AGENT SPAWN" -Label "Task RAG enforcement"
 
 # --- PreToolUse: workspace creation (original) ---
 $workspaceHook = [PSCustomObject]@{
@@ -212,6 +212,20 @@ $architectProposalHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $architectProposalHook `
     -Sentinel "architect-agent PROPOSAL_ONLY contract" -Label "architect-agent proposal contract"
 
+# --- PreToolUse: process-kill safety (persistent rule) ---
+$killSafetyHook = [PSCustomObject]@{
+    matcher = "Bash(pkill*)|Bash(killall*)|Bash(*Stop-Process*)|Bash(*taskkill*/IM*)"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "PROCESS KILL SAFETY — STOP and check:`n`nYou are about to run a process-killing command. Broad name-pattern kills (pkill NAME, killall NAME, Stop-Process -Name NAME, taskkill /IM NAME) can kill the user's unrelated processes. This has burned the user before.`n`nREQUIRED:`n- If you have a specific PID, use it: kill PID, Stop-Process -Id PID, taskkill /PID pid.`n- If targeting a container, use the explicit container name: docker stop NAME.`n- If you have only a name pattern and no PID, STOP and ask the user first. Never assume it is safe to broad-match.`n`nReason: prior incidents where broad kills hit unrelated processes. Specific PIDs or explicit container names only; never broad name patterns without explicit user approval."
+            statusMessage = "Process kill safety check..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $killSafetyHook `
+    -Sentinel "PROCESS KILL SAFETY" -Label "process kill safety"
+
 # --- PostToolUse: verify gate (original) ---
 $verifyGateHook = [PSCustomObject]@{
     matcher = "Task"
@@ -238,7 +252,7 @@ $preCompactHook = [PSCustomObject]@{
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
-    -Sentinel "CONTEXT PRESERVATION — quality-first routing" -Label "context preservation"
+    -Sentinel "CONTEXT PRESERVATION" -Label "context preservation"
 
 $settingsJson = $settings | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
