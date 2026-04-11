@@ -56,4 +56,8 @@
 <opt-out>
   When the user explicitly says "do whatever you think is best," "use your judgment," or "go wild" — the strict scope rules relax. But still mention what you're doing beyond the literal ask so the user can course-correct.
 </opt-out>
+
+<consult-mode-integration>
+  The soft collaborative guidance above is now backed by hook-enforced CONSULT mode. See knowledge/consult-mode.xml for the full protocol. In CONSULT mode (default), architectural decisions trigger a mandatory research-propose-approve loop; in AUTO mode, Claude proceeds autonomously. The "share your approach BEFORE coding it" guidance here is structurally enforced by PreToolUse hooks on Edit/Write/Task when the change qualifies as architectural.
+</consult-mode-integration>
 </knowledge-base>

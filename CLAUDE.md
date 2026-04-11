@@ -63,6 +63,26 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - **Output format**: Evidence column and Verification Status make gaps structurally visible
 - **Evaluator escalation**: NEEDS_VERIFICATION status triggers mandatory evaluator-agent spawn
 
+## Collaborative Mode (CONSULT / AUTO)
+
+Default is **CONSULT**. Before making any architectural decision, you must research the project, spawn `architect-agent` (Opus) for a grounded proposal, and present options to the user via `AskUserQuestion`. The user adds constraints on top; you implement.
+
+**Architectural triggers** (fires consultation): new endpoint, new DB table/migration, new dependency, new module/stateful class, new middleware, auth/validation/error/logging strategy, new public API, new config surface, new concurrency model.
+
+**Not triggers** (proceed silently): typos, single-line bugfixes, tests, docs, value-only config tweaks, renames in one file, edits under `workspace/`, `.claude/`, `knowledge/`, `plans/`, `docs/`.
+
+**Consultation is additive, not gatekeeping.** RAG-required standards (parameterized queries, `logger.error` in catch, input validation, auth checks) are applied automatically — they are never up for debate. The user's role is to *add* constraints (size caps, charset allowlists, rate limits).
+
+**Research-first contract**: `architect-agent` refuses to produce a proposal unless the spawn prompt contains ≥2 `file:line` citations. No guessing — cite existing code.
+
+**Session-scoped approval memory**: approved decisions are logged to `state/session-approvals.json`. You do not re-consult on an already-decided axis within the same session.
+
+**Mode state file**: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. Missing file ⇒ CONSULT (safe default).
+
+**Bypass**: `/auto [reason]` switches to AUTO mode (autonomous). `/consult` restores CONSULT. AUTO is for prototyping, exploration, and trivial work where rework cost is low.
+
+Full protocol: `knowledge/consult-mode.xml`.
+
 ## Token Efficiency
 
 Do it right the first time. Rework costs more than ceremony.

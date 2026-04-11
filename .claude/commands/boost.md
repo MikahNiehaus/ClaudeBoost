@@ -87,6 +87,18 @@ BOOST_TMP="$TEMP" && head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "RULES:read
 
 If CLAUDE.md doesn't exist, write "RULES:failed" and still write "AGENTS:ready".
 
+## Step 5b: Read CONSULT/AUTO Mode
+
+Read the current collaborative mode so you can report it to the user:
+```bash
+if [ -f "$CLAUDEBOOST_HOME/state/claudeboost-mode.json" ]; then cat "$CLAUDEBOOST_HOME/state/claudeboost-mode.json"; else echo "mode file missing — defaulting to CONSULT"; fi
+```
+
+Also clear the session-approvals scratchpad (approvals do not carry across sessions):
+```bash
+if [ -f "$CLAUDEBOOST_HOME/state/session-approvals.json" ]; then echo '{"sessionId":"","approvals":[]}' > "$CLAUDEBOOST_HOME/state/session-approvals.json"; fi
+```
+
 ## Step 6: Workspace Discovery
 
 Scan for active workspaces and reconnect to in-progress work:
@@ -126,6 +138,11 @@ BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
 - "RAG is active. I will call `rag_context` as Step 1 when spawning agents, and `rag_search` when I need knowledge."
 - "Gas Town is active. I will use `gt prime` for workspace init, `gt sling` for cross-session delegation, and `gt handoff` for session transitions."
 - If GT check failed: append "(GT not found on PATH — install or add to PATH to enable)" but still include the GT directive above.
+
+### Collaborative Mode
+Report the current CONSULT/AUTO mode from state/claudeboost-mode.json:
+- **CONSULT (default)**: "I will research, propose via architect-agent (Opus), and ask before any architectural decision. Use `/auto` to bypass for trivial work."
+- **AUTO**: "I am in autonomous mode — I will proceed on architectural decisions without consulting. Use `/consult` to re-enable consultation."
 
 ### Ready
 - If everything passed: "ClaudeBoost is live. Ask me anything or use /spawn-agent to delegate."

@@ -1,4 +1,4 @@
-# scripts/setup.ps1 - ClaudeBoost portable setup
+﻿# scripts/setup.ps1 - ClaudeBoost portable setup
 # Run once after cloning: powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 
 $ErrorActionPreference = "Stop"
@@ -65,12 +65,69 @@ if ($settings.PSObject.Properties["statusLine"]) {
     }
 }
 
+# --- 2a. Seed state directory (CONSULT mode + session approvals) ---
+$stateDir = Join-Path $boostHome "state"
+if (-not (Test-Path $stateDir)) {
+    New-Item -ItemType Directory -Path $stateDir | Out-Null
+    Write-Host "[OK] state/ directory created" -ForegroundColor Green
+}
+$modePath = Join-Path $stateDir "claudeboost-mode.json"
+if (-not (Test-Path $modePath)) {
+    $modeDefault = @{
+        mode = "CONSULT"
+        setAt = (Get-Date).ToString("o")
+        setBy = "default"
+        reason = "ClaudeBoost default"
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText($modePath, $modeDefault, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] state/claudeboost-mode.json - seeded CONSULT default" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] state/claudeboost-mode.json - preserving existing user setting" -ForegroundColor Yellow
+}
+$approvalsPath = Join-Path $stateDir "session-approvals.json"
+if (-not (Test-Path $approvalsPath)) {
+    [System.IO.File]::WriteAllText($approvalsPath, '{"sessionId":"","approvals":[]}', [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] state/session-approvals.json - seeded empty" -ForegroundColor Green
+}
+
 # Ensure hooks block exists
 if (-not $settings.PSObject.Properties["hooks"]) {
     $settings | Add-Member -NotePropertyName "hooks" -NotePropertyValue ([PSCustomObject]@{})
 }
 
-# Add SessionStart hook if not present
+# Helper: install a hook entry if its sentinel string isn't already present.
+# - If the hook type doesn't exist, create it with the new entry.
+# - If it exists and no prompt contains the sentinel, append the new entry.
+# - If the sentinel is already present, skip (idempotent on upgrade).
+function Install-HookEntry {
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $HookType,
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] [string] $Sentinel,
+        [Parameter(Mandatory)] [string] $Label
+    )
+    if (-not $Settings.hooks.PSObject.Properties[$HookType]) {
+        $Settings.hooks | Add-Member -NotePropertyName $HookType -NotePropertyValue @($Entry)
+        Write-Host "[OK] hooks.$HookType - added $Label" -ForegroundColor Green
+        return
+    }
+    $existing = @($Settings.hooks.$HookType)
+    foreach ($e in $existing) {
+        if ($e.hooks) {
+            foreach ($h in $e.hooks) {
+                if ($h.prompt -and $h.prompt.Contains($Sentinel)) {
+                    Write-Host "[SKIP] hooks.$HookType - $Label already installed" -ForegroundColor Yellow
+                    return
+                }
+            }
+        }
+    }
+    $Settings.hooks.$HookType = @($existing) + @($Entry)
+    Write-Host "[OK] hooks.$HookType - appended $Label" -ForegroundColor Green
+}
+
+# --- SessionStart: workflow routing (original) ---
 $sessionHook = [PSCustomObject]@{
     matcher = "Always"
     hooks = @(
@@ -82,80 +139,106 @@ $sessionHook = [PSCustomObject]@{
         }
     )
 }
-if (-not $settings.hooks.PSObject.Properties["SessionStart"]) {
-    $settings.hooks | Add-Member -NotePropertyName "SessionStart" -NotePropertyValue @($sessionHook)
-    Write-Host "[OK] hooks.SessionStart - added workflow hook" -ForegroundColor Green
-} else {
-    Write-Host "[SKIP] hooks.SessionStart - already exists" -ForegroundColor Yellow
-}
+Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $sessionHook `
+    -Sentinel "Quality-first routing" -Label "workflow routing"
 
-# Add PreToolUse hooks (agent spawn + workspace creation enforcement)
-$preToolUseHooks = @(
-    [PSCustomObject]@{
-        matcher = "Task"
-        hooks = @(
-            [PSCustomObject]@{
-                type = "prompt"
-                prompt = "AGENT SPAWN — QUALITY ROUTING:`n1. ``rag_context`` as Step 1 (ALWAYS — agent name + task description)`n2. Workspace reference (if exists)`n3. ROUTE by agent type:`n   - Finding-producers (reviewer, security, performance): FULL spawn template with verify gate. Findings MUST cite file:line. Evaluator-agent WILL verify after.`n   - Research/support (explore, research, docs, estimator, teacher): LIGHTWEIGHT template — rag_context + task + status report. Skip verify gate.`n   - Implementation (workflow, refactor, debug, test, ui, database, devops, observability, architect, ticket-analyst, browser): STANDARD template. No verify gate unless auditing.`n4. GT context if available`nDo NOT proceed without rag_context."
-                statusMessage = "Enforcing RAG context in agent spawn..."
-            }
-        )
-    },
-    [PSCustomObject]@{
-        matcher = "Bash(mkdir*workspace*)"
-        hooks = @(
-            [PSCustomObject]@{
-                type = "prompt"
-                prompt = "WORKSPACE CREATION CHECK: You are creating a workspace directory. Before proceeding:`n1. Call ``rag_search`` with the task description to find relevant knowledge`n2. If Gas Town is available, consider ``gt prime`` to initialize the workspace`n3. Ensure you have a task ID and will create context.md after this`nThis is the start of complex work - RAG and GT should be active."
-                statusMessage = "Enforcing RAG lookup on workspace creation..."
-            }
-        )
-    }
-)
-if (-not $settings.hooks.PSObject.Properties["PreToolUse"]) {
-    $settings.hooks | Add-Member -NotePropertyName "PreToolUse" -NotePropertyValue $preToolUseHooks
-    Write-Host "[OK] hooks.PreToolUse - added agent spawn + workspace enforcement" -ForegroundColor Green
-} else {
-    Write-Host "[SKIP] hooks.PreToolUse - already exists (review manually if needed)" -ForegroundColor Yellow
+# --- SessionStart: CONSULT mode protocol (new) ---
+$consultSessionHook = [PSCustomObject]@{
+    matcher = "Always"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "CLAUDEBOOST MODE — CONSULT vs AUTO:`n`nRead `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. Field: ``mode``. Default CONSULT.`n`nIf mode=CONSULT, for any architectural decision you MUST:`n  1. rag_search(feature keywords) + read 2-3 project files. Cite file:line.`n  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.`n  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.`n  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.`n  5. Implement. RAG-required standards apply automatically.`n`nArchitectural = new endpoint, new class/module, new DB table, new dep, new middleware, auth/validation/error/logging strategy, new public API, new config surface, new concurrency model.`n`nNOT architectural = typo, 1-line fix, test, doc, value-only config tweak, rename in one file, edits under workspace/ .claude/ knowledge/ plans/ docs/.`n`nConsultation is ADDITIVE, not gatekeeping. Present what RAG requires as already-handled; invite the user to ADD constraints (size caps, character allowlists, rate limits). Do not debate whether to validate.`n`nCheck session-approvals.json before spawning architect-agent — if this axis was already decided, proceed with the approved choice.`n`nIf mode=AUTO: proceed autonomously, still cite sources."
+            statusMessage = "Loading CONSULT mode protocol..."
+        }
+    )
 }
+Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $consultSessionHook `
+    -Sentinel "CLAUDEBOOST MODE — CONSULT vs AUTO" -Label "CONSULT protocol"
 
-# Add PostToolUse hook (verify gate enforcement on agent output)
-$postToolUseHooks = @(
-    [PSCustomObject]@{
-        matcher = "Task"
-        hooks = @(
-            [PSCustomObject]@{
-                type = "prompt"
-                prompt = "VERIFY GATE: Scan agent output for BLOCKER/HIGH/MEDIUM findings.`n- If findings exist: spawn evaluator-agent to verify (fresh context prevents confirmation bias). Do NOT self-verify — same context that hallucinated will ``confirm`` the hallucination.`n- Evaluator checks: does each finding cite file:line? Does the code actually show the issue? Drop false positives.`n- No findings? No evaluator needed. Present results directly.`nRework from false findings costs more than one lightweight evaluator spawn."
-                statusMessage = "Enforcing verify gate on agent output..."
-            }
-        )
-    }
-)
-if (-not $settings.hooks.PSObject.Properties["PostToolUse"]) {
-    $settings.hooks | Add-Member -NotePropertyName "PostToolUse" -NotePropertyValue $postToolUseHooks
-    Write-Host "[OK] hooks.PostToolUse - added verify gate enforcement" -ForegroundColor Green
-} else {
-    Write-Host "[SKIP] hooks.PostToolUse - already exists" -ForegroundColor Yellow
+# --- PreToolUse: agent spawn RAG enforcement (original) ---
+$taskSpawnHook = [PSCustomObject]@{
+    matcher = "Task"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "AGENT SPAWN — QUALITY ROUTING:`n1. ``rag_context`` as Step 1 (ALWAYS — agent name + task description)`n2. Workspace reference (if exists)`n3. ROUTE by agent type:`n   - Finding-producers (reviewer, security, performance): FULL spawn template with verify gate. Findings MUST cite file:line. Evaluator-agent WILL verify after.`n   - Research/support (explore, research, docs, estimator, teacher): LIGHTWEIGHT template — rag_context + task + status report. Skip verify gate.`n   - Implementation (workflow, refactor, debug, test, ui, database, devops, observability, architect, ticket-analyst, browser): STANDARD template. No verify gate unless auditing.`n4. GT context if available`nDo NOT proceed without rag_context."
+            statusMessage = "Enforcing RAG context in agent spawn..."
+        }
+    )
 }
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $taskSpawnHook `
+    -Sentinel "AGENT SPAWN — QUALITY ROUTING" -Label "Task RAG enforcement"
 
-# Add PreCompact hook (context preservation)
+# --- PreToolUse: workspace creation (original) ---
+$workspaceHook = [PSCustomObject]@{
+    matcher = "Bash(mkdir*workspace*)"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "WORKSPACE CREATION CHECK: You are creating a workspace directory. Before proceeding:`n1. Call ``rag_search`` with the task description to find relevant knowledge`n2. If Gas Town is available, consider ``gt prime`` to initialize the workspace`n3. Ensure you have a task ID and will create context.md after this`nThis is the start of complex work - RAG and GT should be active."
+            statusMessage = "Enforcing RAG lookup on workspace creation..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $workspaceHook `
+    -Sentinel "WORKSPACE CREATION CHECK" -Label "workspace creation"
+
+# --- PreToolUse: CONSULT gate on Edit/Write (new) ---
+$consultEditHook = [PSCustomObject]@{
+    matcher = "Edit|Write|MultiEdit"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "CONSULT GATE — quick check before this Edit/Write:`n`nIs this an architectural change? (new file others import, new dep, new endpoint, new table, new middleware, new validation/auth/error strategy, new config surface, new module)`n`n- NO → proceed.`n- YES → STOP. Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json. If mode=CONSULT and you have NOT yet: (a) called rag_search, (b) spawned architect-agent with PROPOSAL_ONLY + file:line citations, (c) logged user approval to state/session-approvals.json — do those now in order. No code yet. If mode=AUTO, proceed and cite the pattern you're following.`n`nCheck session-approvals.json first — if this axis was already approved this session, proceed with the approved choice.`n`nExempt: edits under workspace/, .claude/, knowledge/, plans/, docs/."
+            statusMessage = "CONSULT gate check..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $consultEditHook `
+    -Sentinel "CONSULT GATE" -Label "CONSULT gate on Edit/Write"
+
+# --- PreToolUse: architect-agent PROPOSAL_ONLY contract (new) ---
+$architectProposalHook = [PSCustomObject]@{
+    matcher = "Task"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "architect-agent PROPOSAL_ONLY contract:`nIf spawning architect-agent in CONSULT mode for an architectural proposal, the spawn prompt MUST include:`n  1. The literal string ``PROPOSAL_ONLY``.`n  2. At least 2 file:line citations from the target project (format: ``path/file.ext:line-range — what it shows``).`narchitect-agent (Opus) will refuse and return BLOCKED if citations are missing. After architect-agent returns, the MAIN agent (not architect) presents options via AskUserQuestion and logs the user's approval to state/session-approvals.json before implementing."
+            statusMessage = "Enforcing architect-agent proposal contract..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $architectProposalHook `
+    -Sentinel "architect-agent PROPOSAL_ONLY contract" -Label "architect-agent proposal contract"
+
+# --- PostToolUse: verify gate (original) ---
+$verifyGateHook = [PSCustomObject]@{
+    matcher = "Task"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "VERIFY GATE: Scan agent output for BLOCKER/HIGH/MEDIUM findings.`n- If findings exist: spawn evaluator-agent to verify (fresh context prevents confirmation bias). Do NOT self-verify — same context that hallucinated will ``confirm`` the hallucination.`n- Evaluator checks: does each finding cite file:line? Does the code actually show the issue? Drop false positives.`n- No findings? No evaluator needed. Present results directly.`nRework from false findings costs more than one lightweight evaluator spawn."
+            statusMessage = "Enforcing verify gate on agent output..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PostToolUse" -Entry $verifyGateHook `
+    -Sentinel "VERIFY GATE: Scan agent output" -Label "verify gate"
+
+# --- PreCompact: context preservation (original) ---
 $preCompactHook = [PSCustomObject]@{
     matcher = "Always"
     hooks = @(
         [PSCustomObject]@{
             type = "prompt"
-            prompt = "CONTEXT PRESERVATION — quality-first routing:`n1. Agent spawns: ``rag_context`` Step 1, route by type (full/standard/lightweight)`n2. Finding verification: ALWAYS evaluator-agent, never self-verify (confirmation bias)`n3. GT commands: ``gt prime``, ``gt sling``, ``gt handoff```n4. Decision flow: simple (just do it) vs complex (workspace + agents)`n5. Rework costs more than ceremony. Do it right the first time."
-            statusMessage = "Preserving RAG/GT awareness before compaction..."
+            prompt = "CONTEXT PRESERVATION — quality-first routing:`n1. Agent spawns: ``rag_context`` Step 1, route by type (full/standard/lightweight)`n2. Finding verification: ALWAYS evaluator-agent, never self-verify (confirmation bias)`n3. GT commands: ``gt prime``, ``gt sling``, ``gt handoff```n4. Decision flow: simple (just do it) vs complex (workspace + agents)`n5. Rework costs more than ceremony. Do it right the first time.`n6. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json — re-check after compact. Default CONSULT: research + propose + ask before architectural decisions."
+            statusMessage = "Preserving RAG/GT/CONSULT awareness before compaction..."
         }
     )
 }
-if (-not $settings.hooks.PSObject.Properties["PreCompact"]) {
-    $settings.hooks | Add-Member -NotePropertyName "PreCompact" -NotePropertyValue @($preCompactHook)
-    Write-Host "[OK] hooks.PreCompact - added context preservation hook" -ForegroundColor Green
-} else {
-    Write-Host "[SKIP] hooks.PreCompact - already exists" -ForegroundColor Yellow
-}
+Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
+    -Sentinel "CONTEXT PRESERVATION — quality-first routing" -Label "context preservation"
 
 $settingsJson = $settings | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))

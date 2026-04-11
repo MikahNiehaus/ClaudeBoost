@@ -1,0 +1,108 @@
+<knowledge-base name="consult-mode" version="1.0">
+<triggers>consult mode, auto mode, architectural decision, collaborative, propose before coding, ask before implementing, free roam</triggers>
+<overview>ClaudeBoost CONSULT/AUTO mode protocol. CONSULT is the default — Claude researches, proposes, and asks before any architectural decision. AUTO is a bypass for prototyping and trivial work.</overview>
+
+<mode-state>
+  <location>$CLAUDEBOOST_HOME/state/claudeboost-mode.json</location>
+  <default>CONSULT</default>
+  <values>CONSULT | AUTO</values>
+  <missing-file-behavior>Treat as CONSULT (safe default)</missing-file-behavior>
+</mode-state>
+
+<session-approvals>
+  <location>$CLAUDEBOOST_HOME/state/session-approvals.json</location>
+  <purpose>Remember architectural choices the user approved earlier in this session so Claude does not re-consult on the same axis</purpose>
+  <structure>
+    {
+      "sessionId": "...",
+      "approvals": [
+        {"axis": "input-validation", "choice": "Zod + size cap 1MB + ASCII-only", "at": "..."},
+        {"axis": "error-handling", "choice": "Result&lt;T,E&gt; discriminated union", "at": "..."}
+      ]
+    }
+  </structure>
+  <lifecycle>Cleared at SessionStart. Written by main agent after each AskUserQuestion approval. Read before every architectural-decision classification.</lifecycle>
+</session-approvals>
+
+<architectural-triggers>
+  <overview>A change fires CONSULT protocol if it introduces or alters any of these:</overview>
+  <trigger id="1">New public API surface: HTTP endpoint, RPC handler, CLI command, exported library function</trigger>
+  <trigger id="2">New persistence: table, migration, collection, cache namespace, queue/topic, schema change</trigger>
+  <trigger id="3">New module/package boundary or new stateful class</trigger>
+  <trigger id="4">New dependency in package.json, requirements.txt, Cargo.toml, go.mod, pyproject.toml, pom.xml</trigger>
+  <trigger id="5">Cross-cutting concern: auth/authz, validation strategy, error handling, logging shape, rate limiting, caching, retry/backoff, serialization</trigger>
+  <trigger id="6">New middleware, interceptor, or pipeline stage</trigger>
+  <trigger id="7">New config surface: env var, config key, feature flag</trigger>
+  <trigger id="8">New concurrency primitive: worker, thread, queue, event loop</trigger>
+</architectural-triggers>
+
+<not-triggers>
+  <overview>Claude proceeds silently on these (no consultation):</overview>
+  <item>Typo / copy / comment / doc change</item>
+  <item>Single-file bugfix with no signature change</item>
+  <item>Test-only additions or refactors</item>
+  <item>Formatting, lint fix, import reorder</item>
+  <item>Value-only config tweak on existing keys</item>
+  <item>Rename within a single file</item>
+  <item>Edits under workspace/, .claude/, knowledge/, plans/, docs/</item>
+</not-triggers>
+
+<consultation-protocol>
+  <step number="1" name="Research first">
+    Call rag_search(feature keywords). Call rag_context(architect-agent + task). Read 2-3 relevant project files. Draft the architect-agent spawn prompt with file:line citations. NO GUESSING — if you cannot cite existing code, you did not research enough.
+  </step>
+  <step number="2" name="Spawn architect-agent">
+    Task(architect-agent, "PROPOSAL_ONLY — citations: file:line, file:line, ...")
+    Opus model is required (architect-agent is always Opus).
+    architect-agent returns 2-3 grounded options plus a "Required by standards" section listing non-negotiable RAG-sourced constraints.
+  </step>
+  <step number="3" name="Present to user">
+    Use AskUserQuestion with 2-4 options (A, B, C, each with a 1-sentence tradeoff). User picks, edits, or writes in a new option (e.g., "do D — also enforce size cap and ASCII-only"). DO NOT write any code yet.
+  </step>
+  <step number="4" name="Log approval">
+    Append to state/session-approvals.json: {axis, choice, at}. This prevents re-consulting on the same axis later in the session.
+  </step>
+  <step number="5" name="Implement">
+    Implement the approved option plus any user add-on constraints. RAG-required standards (parameterized queries, logger.error in catch, etc.) are applied automatically throughout — they were never up for debate.
+  </step>
+</consultation-protocol>
+
+<additive-not-gatekeeping>
+  <principle>CONSULT mode is NOT asking "may I do this?" — it is announcing "here is what I am about to do, so you can add constraints I should layer on."</principle>
+  <rag-required>
+    RAG-sourced standards are applied without consultation: SQL parameterization, logger.error in catch blocks, input validation at boundaries, auth checks on endpoints, no secrets in logs. These are not options — they always happen.
+  </rag-required>
+  <user-layer>
+    User's role in consultation is to ADD constraints: size caps, character allowlists, rate limits, retry budgets, timeout values, acceptable input formats, error message wording, observability hooks. Claude's proposal names the defaults; user refines.
+  </user-layer>
+  <example>
+    Feature: "add file upload endpoint"
+    Claude proposal: "Using multer middleware, streaming to S3 via signed URL. Required by standards: parameterized DB insert for metadata, logger.error in catch, auth-token check on endpoint, no filename in logs."
+    User adds: "also: 10MB size cap, only .png/.jpg/.pdf extensions, reject filenames with non-ASCII characters, rate-limit to 5/min/user."
+    Claude implements both layers.
+  </example>
+</additive-not-gatekeeping>
+
+<research-first-contract>
+  <enforcement>architect-agent refuses to produce a proposal if the spawn prompt contains "PROPOSAL_ONLY" but no file:line citations. Returns status=BLOCKED with message "Main agent did not research first. Call rag_search, read 2-3 relevant files, respawn with citations."</enforcement>
+  <rationale>Research-first is a contract, not a suggestion. Prevents generic architecture advice disconnected from this project's conventions.</rationale>
+</research-first-contract>
+
+<auto-mode>
+  <behavior>Claude proceeds autonomously on architectural decisions but still cites patterns it follows. No architect-agent spawn. No AskUserQuestion.</behavior>
+  <when-to-use>Prototyping, exploration, trivial work where the user has said "just do it". Rework cost is low.</when-to-use>
+  <when-not-to-use>Production code, security-sensitive areas, cross-cutting concerns, anything the user might want to see first.</when-not-to-use>
+</auto-mode>
+
+<slash-commands>
+  <command name="/consult">Switch to CONSULT mode. Default.</command>
+  <command name="/auto">Switch to AUTO mode. Bypass consultation.</command>
+</slash-commands>
+
+<hook-enforcement>
+  <hook location="SessionStart" purpose="Load full CONSULT protocol into every session's context"/>
+  <hook location="PreToolUse Edit|Write|MultiEdit" purpose="Fire at the moment of violation — classification check and protocol reminder"/>
+  <hook location="PreToolUse Task" purpose="Reinforce PROPOSAL_ONLY contract when spawning architect-agent"/>
+  <hook location="PreCompact" purpose="Re-inject CONSULT/AUTO rule after context compaction"/>
+</hook-enforcement>
+</knowledge-base>

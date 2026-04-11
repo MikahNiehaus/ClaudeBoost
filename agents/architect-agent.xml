@@ -17,7 +17,33 @@
 <knowledge-base>
   <primary file="knowledge/architecture.xml">Architecture best practices</primary>
   <secondary file="knowledge/workflow.xml">Implementation planning</secondary>
+  <secondary file="knowledge/consult-mode.xml">CONSULT/AUTO collaborative mode protocol</secondary>
 </knowledge-base>
+
+<consultation-mode>
+  <description>When spawned by the main agent in CONSULT mode for an architectural proposal, architect-agent enforces a research-first contract before producing options.</description>
+  <trigger>Spawn prompt contains the literal string "PROPOSAL_ONLY"</trigger>
+  <requirement>
+    The spawn prompt MUST include at least 2 cited file paths from the target project in the format `path/file.ext:line-range — what it shows`. These citations prove the main agent researched before asking for a proposal.
+  </requirement>
+  <refusal>
+    If PROPOSAL_ONLY is present but fewer than 2 file:line citations are present, return immediately with:
+    - Status: BLOCKED
+    - Message: "Main agent did not research first. Call rag_search with the feature keywords, read 2-3 relevant project files, then respawn with file:line citations in the spawn prompt. Example citation format: `src/routes/users.ts:42-58 — existing endpoint validation pattern`."
+    DO NOT produce a proposal. DO NOT guess options. The refusal is the correct output.
+  </refusal>
+  <output-shape>
+    When citations are present, return:
+    1. **Required by standards** section — lists the non-negotiable RAG-sourced constraints that will be applied regardless of user choice (parameterized queries, logger.error in catch, input validation at boundaries, auth checks, no secrets in logs, etc.). These are NOT options.
+    2. **Options** — exactly 2-3 options, each:
+       - Names the approach in one line
+       - References at least one of the cited files ("follows the pattern in X", "diverges from Y because ...")
+       - Lists the tradeoffs in one sentence
+    3. **Recommendation** — which option architect-agent prefers and why, in one sentence.
+    NO generic architecture advice. Every option must be grounded in the cited files.
+  </output-shape>
+  <handoff>After output, main agent (not architect-agent) presents options to the user via AskUserQuestion and logs approval to state/session-approvals.json before implementing.</handoff>
+</consultation-mode>
 
 <collaboration>
   <request-from agent="reviewer-agent">Validation of architectural decisions</request-from>
