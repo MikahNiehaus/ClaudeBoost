@@ -1,0 +1,94 @@
+# Interactive Architecture Board
+
+Generate an interactive visual board of the project's architecture — boxes for components, lines showing connections, click to drill into details. Opens in a browser tab.
+
+## Step 1: Detect Mode
+
+Check if the current working directory has both `agents/` and `knowledge/` directories:
+
+```bash
+ls agents/ knowledge/ 2>/dev/null | head -5
+```
+
+- If both exist → **self-map mode** (ClaudeBoost itself). Use the automated extractor.
+- If not → **project-map mode**. Claude analyzes the repo and builds the graph manually.
+
+User can override with args: `--self` forces self-map, `--project` forces project-map.
+
+## Step 2a: Self-Map (automated extractor)
+
+Run the extractor to build graph.json from the repo's own structure:
+
+```bash
+python "$CLAUDEBOOST_HOME/scripts/visualize-extract.py" "." "graph.json"
+```
+
+Then skip to Step 3.
+
+## Step 2b: Project-Map (Claude-driven)
+
+For non-ClaudeBoost repos, analyze the project architecture manually:
+
+1. Read the template: `$CLAUDEBOOST_HOME/scripts/visualize-template.json`
+2. Explore the repo structure: entry points, modules, services, data stores, external deps
+3. Use `rag_search` if RAG is available, or read top-level files directly
+4. Build `graph.json` following the template structure
+
+Node kinds for project-map: `service`, `module`, `datastore`, `external`, `middleware`, `config`.
+
+Edge kinds: `calls`, `reads`, `writes`, `depends`, `triggers`, `composes`.
+
+Write style: one clear sentence per node purpose. Responsibilities are optional — use for complex nodes only.
+
+## Step 3: Save Outputs
+
+Save to the workspace:
+1. If `workspace/[task-id]/` exists, save to `workspace/[task-id]/visualize/`
+2. Otherwise create `workspace/visualize-YYYY-MM-DD/visualize/`
+
+Write:
+- `graph.json` — the raw graph data
+- `visualize.html` — rendered self-contained HTML
+
+Render the HTML:
+```bash
+python "$CLAUDEBOOST_HOME/scripts/visualize-viewer/render.py" "graph.json" "visualize.html"
+```
+
+## Step 4: Launch
+
+Open the board in a new Windows Terminal tab:
+```bash
+wt.exe -w 0 new-tab --title "VISUALIZE" cmd /c "start $(pwd)/workspace/[output-dir]/visualize/visualize.html"
+```
+
+**NEVER use `powershell Start-Process` or `cmd start` directly** — use `wt.exe -w 0 new-tab` to open as a sibling tab.
+
+## Step 5: Report
+
+Tell the user:
+- How many nodes and edges were extracted/generated
+- Where the files were saved
+- That the board is open in their browser
+- Keyboard shortcuts: `esc` close drawer, `/` search, `r` reset zoom, `1-4` switch layout, `dblclick` focus mode
+
+## Step 6: Chat Monitor
+
+The board has a chat input in the details drawer. When the user asks a question, it posts to a local endpoint. Monitor `$TEMP/claudeboost/visualize_chat.json` for questions:
+
+```json
+{
+  "question": "What does this hook enforce?",
+  "context_node": "hook-3-consult-gate",
+  "context_label": "CONSULT Gate",
+  "asked_at": "2026-04-11T...",
+  "answer": "",
+  "answered_at": ""
+}
+```
+
+When a question appears with an empty answer:
+1. Read the question and context
+2. Look up the relevant node in graph.json and read the cited files
+3. Write a concise answer back
+4. The board auto-polls and displays the answer

@@ -130,6 +130,7 @@ Use instead: React hooks, vanilla JS, native fetch.
 | Complex feature | Workspace + sweep-then-verify + agents |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
 | New architecture | Spawn architect-agent (Opus) with SOLID review |
+| Visualize architecture | `/visualize` — interactive board in browser (self-map for ClaudeBoost, project-map for others) |
 
 ### SOLID Review
 Only when designing new classes, modules, interfaces, or systems.

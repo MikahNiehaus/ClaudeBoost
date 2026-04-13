@@ -1,0 +1,29 @@
+{
+  "_instructions": "This is the template for /visualize graph data. Claude fills this in based on project analysis. Delete _instructions and _field_guide before saving the final version.",
+  "_field_guide": {
+    "project": "Project name string",
+    "generated_at": "ISO 8601 timestamp",
+    "mode": "self (ClaudeBoost self-map) or project (target repo analysis)",
+    "layout_hint": "dagre-lr | dagre-tb | cose | circle",
+    "groups": "Array of {id, label, color} defining node categories",
+    "nodes": "Array of node objects — see node_field_guide below",
+    "edges": "Array of {source, target, kind, label} — kinds: calls, spawns, reads, writes, depends, triggers, composes",
+    "node_field_guide": {
+      "id": "Unique string identifier",
+      "label": "Display name shown in the box",
+      "group": "Must match a group id",
+      "kind": "agent | knowledge | hook | state | command | service | module | datastore | external",
+      "purpose": "One sentence explaining what this does",
+      "responsibilities": "Optional array of responsibility strings",
+      "citations": "Optional array of {file, lines, shows}",
+      "details_md": "Optional long-form markdown for the drawer (pre-rendered to HTML by render.py)"
+    }
+  },
+  "project": "",
+  "generated_at": "",
+  "mode": "",
+  "layout_hint": "dagre-lr",
+  "groups": [],
+  "nodes": [],
+  "edges": []
+}

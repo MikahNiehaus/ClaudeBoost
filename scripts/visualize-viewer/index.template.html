@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__TITLE_PLACEHOLDER__</title>
+<style>__CSS_PLACEHOLDER__</style>
+</head>
+<body>
+
+<!-- Scan animation -->
+<div id="scan" class="scan">
+  <div id="scan-lines"></div>
+</div>
+
+<!-- Main content (hidden during scan) -->
+<div id="page" class="page hidden">
+
+  <header class="header">
+    <h1 id="page-title"></h1>
+    <p id="page-subtitle" class="subtitle"></p>
+  </header>
+
+  <div class="layout-wrapper">
+    <!-- Side rails (cross-cutting concerns) -->
+    <aside id="left-rail" class="side-rail left"></aside>
+
+    <!-- Main layers -->
+    <main id="layers" class="layers"></main>
+
+    <!-- Side rails (cross-cutting concerns) -->
+    <aside id="right-rail" class="side-rail right"></aside>
+  </div>
+
+</div>
+
+<script>
+var DATA = "__DATA_PLACEHOLDER__";
+</script>
+<script>
+(function() {
+  'use strict';
+
+  // ── Scan animation ──
+  (function() {
+    var el = document.getElementById('scan-lines');
+    var allCards = [];
+    (DATA.layers || []).forEach(function(layer) {
+      (layer.cards || []).forEach(function(card) { allCards.push(card.title); });
+      (layer.columns || []).forEach(function(col) {
+        (col.cards || []).forEach(function(card) { allCards.push(card.title); });
+      });
+    });
+    (DATA.side_rails || []).forEach(function(rail) {
+      allCards.push(rail.title);
+    });
+
+    var lines = [
+      { text: '\u25C9 CLAUDEBOOST ARCHITECTURE ANALYZER', cls: 'bright' },
+      { text: '', cls: '' },
+      { text: '\u25B8 Initializing...', cls: 'dim' },
+    ];
+    allCards.slice(0, 6).forEach(function(n) {
+      lines.push({ text: '\u25B8 Scanning ' + n, cls: 'dim' });
+    });
+    lines.push({ text: '', cls: '' });
+    lines.push({ text: '\u25B8 Mapping architecture...', cls: 'dim' });
+    lines.push({ text: '', cls: '' });
+    lines.push({ text: '\u25C9 READY', cls: 'bright' });
+
+    var i = 0;
+    var iv = setInterval(function() {
+      if (i >= lines.length) {
+        clearInterval(iv);
+        setTimeout(function() {
+          document.getElementById('scan').classList.add('fade');
+          document.getElementById('page').classList.remove('hidden');
+          setTimeout(function() {
+            document.getElementById('scan').style.display = 'none';
+          }, 600);
+        }, 500);
+        return;
+      }
+      var div = document.createElement('div');
+      div.className = 'scan-line ' + (lines[i].cls || '');
+      div.textContent = lines[i].text;
+      el.appendChild(div);
+      i++;
+    }, 200);
+  })();
+
+  // ── Helpers ──
+  var expandedCard = null;
+
+  function buildCard(card) {
+    var el = document.createElement('div');
+    el.className = 'card';
+    if (card.accent) el.style.borderLeftColor = card.accent;
+    if (card.badge) el.classList.add('has-badge');
+    el.dataset.id = card.id;
+
+    // Badge
+    if (card.badge) {
+      var badge = document.createElement('span');
+      badge.className = 'card-badge';
+      if (card.badge_color) badge.style.background = card.badge_color;
+      badge.textContent = card.badge;
+      el.appendChild(badge);
+    }
+
+    // Icon
+    if (card.icon) {
+      var icon = document.createElement('span');
+      icon.className = 'card-icon';
+      icon.textContent = card.icon;
+      el.appendChild(icon);
+    }
+
+    var title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = card.title;
+    el.appendChild(title);
+
+    if (card.subtitle) {
+      var sub = document.createElement('div');
+      sub.className = 'card-subtitle';
+      sub.textContent = card.subtitle;
+      el.appendChild(sub);
+    }
+
+    // Detail panel
+    var detail = document.createElement('div');
+    detail.className = 'card-detail';
+
+    if (card.detail) {
+      var p = document.createElement('p');
+      p.className = 'detail-text';
+      p.textContent = card.detail;
+      detail.appendChild(p);
+    }
+
+    if (card.responsibilities && card.responsibilities.length) {
+      var ul = document.createElement('ul');
+      ul.className = 'detail-list';
+      card.responsibilities.forEach(function(r) {
+        var li = document.createElement('li');
+        li.textContent = r;
+        ul.appendChild(li);
+      });
+      detail.appendChild(ul);
+    }
+
+    if (card.citations && card.citations.length) {
+      var cits = document.createElement('div');
+      cits.className = 'detail-citations';
+      card.citations.forEach(function(c) {
+        var span = document.createElement('span');
+        span.className = 'citation';
+        span.textContent = c.file + ':' + c.lines;
+        if (c.shows) span.textContent += ' \u2014 ' + c.shows;
+        span.onclick = function(e) {
+          e.stopPropagation();
+          navigator.clipboard.writeText(c.file + ':' + c.lines);
+          span.classList.add('copied');
+          setTimeout(function() { span.classList.remove('copied'); }, 1500);
+        };
+        cits.appendChild(span);
+      });
+      detail.appendChild(cits);
+    }
+
+    el.appendChild(detail);
+
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (el.classList.contains('expanded')) {
+        el.classList.remove('expanded');
+        expandedCard = null;
+      } else {
+        if (expandedCard) expandedCard.classList.remove('expanded');
+        el.classList.add('expanded');
+        expandedCard = el;
+      }
+    });
+
+    return el;
+  }
+
+  function buildFlowArrow(layer) {
+    var arrow = document.createElement('div');
+    arrow.className = 'flow-arrow';
+    var label = layer.flow_label || '';
+    arrow.innerHTML = '<div class="flow-line"></div>' +
+      (label ? '<span class="flow-label">' + label + '</span>' : '') +
+      '<div class="flow-chevron">\u25BC</div>';
+    return arrow;
+  }
+
+  function buildExchange(exchange) {
+    var el = document.createElement('div');
+    el.className = 'exchange';
+
+    var left = buildCard(exchange.left);
+    left.classList.add('exchange-card');
+    var right = buildCard(exchange.right);
+    right.classList.add('exchange-card');
+
+    var arrows = document.createElement('div');
+    arrows.className = 'exchange-arrows';
+    arrows.innerHTML =
+      '<div class="exchange-arrow-row">' +
+        '<span class="exchange-label">' + (exchange.request_label || '\u2192') + '</span>' +
+        '<span class="exchange-line">\u2192</span>' +
+      '</div>' +
+      '<div class="exchange-arrow-row reverse">' +
+        '<span class="exchange-line">\u2190</span>' +
+        '<span class="exchange-label">' + (exchange.response_label || '\u2190') + '</span>' +
+      '</div>';
+
+    el.appendChild(left);
+    el.appendChild(arrows);
+    el.appendChild(right);
+    return el;
+  }
+
+  function buildDecision(decision) {
+    var el = document.createElement('div');
+    el.className = 'decision';
+
+    // The question card
+    var questionCard = buildCard(decision.question);
+    questionCard.classList.add('decision-question');
+    el.appendChild(questionCard);
+
+    // Outcomes
+    var outcomes = document.createElement('div');
+    outcomes.className = 'decision-outcomes';
+
+    (decision.outcomes || []).forEach(function(outcome) {
+      var branch = document.createElement('div');
+      branch.className = 'decision-branch';
+      if (outcome.style === 'success') branch.classList.add('branch-success');
+      if (outcome.style === 'failure') branch.classList.add('branch-failure');
+
+      var label = document.createElement('div');
+      label.className = 'branch-label';
+      label.textContent = outcome.label || '';
+      branch.appendChild(label);
+
+      var branchCard = buildCard(outcome);
+      branch.appendChild(branchCard);
+      outcomes.appendChild(branch);
+    });
+
+    el.appendChild(outcomes);
+    return el;
+  }
+
+  function buildNote(note) {
+    var el = document.createElement('div');
+    el.className = 'inline-note';
+    if (note.style === 'warning') el.classList.add('note-warning');
+    if (note.style === 'info') el.classList.add('note-info');
+    if (note.style === 'success') el.classList.add('note-success');
+    el.innerHTML = (note.icon ? '<span class="note-icon">' + note.icon + '</span>' : '') +
+      '<span class="note-text">' + note.text + '</span>';
+    return el;
+  }
+
+  // ── Build page ──
+  document.getElementById('page-title').textContent = DATA.title || DATA.project || 'Architecture';
+  document.getElementById('page-subtitle').textContent = DATA.subtitle || '';
+
+  // ── Side rails ──
+  (DATA.side_rails || []).forEach(function(rail) {
+    var side = rail.side === 'left' ? 'left-rail' : 'right-rail';
+    var railEl = document.getElementById(side);
+
+    var card = buildCard(rail);
+    card.classList.add('rail-card');
+    railEl.appendChild(card);
+
+    // Show the rail
+    railEl.classList.add('visible');
+  });
+
+  // ── Main layers ──
+  var layersEl = document.getElementById('layers');
+
+  (DATA.layers || []).forEach(function(layer, idx) {
+    // Flow arrow between layers
+    if (idx > 0 && layer.flow_label) {
+      layersEl.appendChild(buildFlowArrow(layer));
+    } else if (idx > 0) {
+      // Small spacer
+      var spacer = document.createElement('div');
+      spacer.className = 'flow-arrow';
+      spacer.innerHTML = '<div class="flow-chevron">\u25BC</div>';
+      layersEl.appendChild(spacer);
+    }
+
+    var section = document.createElement('section');
+    section.className = 'layer';
+    if (layer.style === 'highlight') section.classList.add('layer-highlight');
+
+    // Layer header
+    var header = document.createElement('div');
+    header.className = 'layer-header';
+    header.textContent = layer.label || '';
+    if (layer.description) {
+      var desc = document.createElement('span');
+      desc.className = 'layer-desc';
+      desc.textContent = ' \u2014 ' + layer.description;
+      header.appendChild(desc);
+    }
+    section.appendChild(header);
+
+    // Check for columns layout
+    if (layer.columns && layer.columns.length) {
+      var columnsRow = document.createElement('div');
+      columnsRow.className = 'columns-row';
+
+      layer.columns.forEach(function(col, colIdx) {
+        if (colIdx > 0) {
+          // Column separator
+          var sep = document.createElement('div');
+          sep.className = 'column-separator';
+          columnsRow.appendChild(sep);
+        }
+
+        var colEl = document.createElement('div');
+        colEl.className = 'column';
+
+        if (col.label) {
+          var colLabel = document.createElement('div');
+          colLabel.className = 'column-label';
+          colLabel.textContent = col.label;
+          colEl.appendChild(colLabel);
+        }
+
+        var colCards = document.createElement('div');
+        colCards.className = 'column-cards';
+        (col.cards || []).forEach(function(card) {
+          colCards.appendChild(buildCard(card));
+        });
+        colEl.appendChild(colCards);
+
+        columnsRow.appendChild(colEl);
+      });
+
+      section.appendChild(columnsRow);
+    }
+
+    // Regular cards (flat row)
+    if (layer.cards && layer.cards.length) {
+      var cardsRow = document.createElement('div');
+      cardsRow.className = 'cards-row';
+      layer.cards.forEach(function(card) {
+        cardsRow.appendChild(buildCard(card));
+      });
+      section.appendChild(cardsRow);
+    }
+
+    // Exchanges (back-and-forth)
+    if (layer.exchanges) {
+      layer.exchanges.forEach(function(ex) {
+        section.appendChild(buildExchange(ex));
+      });
+    }
+
+    // Decisions (branching)
+    if (layer.decisions) {
+      layer.decisions.forEach(function(dec) {
+        section.appendChild(buildDecision(dec));
+      });
+    }
+
+    // Notes (inline callouts)
+    if (layer.notes) {
+      layer.notes.forEach(function(note) {
+        section.appendChild(buildNote(note));
+      });
+    }
+
+    layersEl.appendChild(section);
+  });
+
+  // Click outside to collapse
+  document.addEventListener('click', function() {
+    if (expandedCard) {
+      expandedCard.classList.remove('expanded');
+      expandedCard = null;
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
