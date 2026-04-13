@@ -27,6 +27,9 @@ $mcpConfig = @{
             command = "python"
             args = @("-m", "rag_server")
             cwd = $ragCwd
+            env = @{
+                RAG_PROJECT_ROOT = $boostHomePosix
+            }
         }
     }
 }
@@ -34,6 +37,32 @@ $mcpConfig = @{
 $mcpJson = $mcpConfig | ConvertTo-Json -Depth 4
 [System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] mcp.json - RAG server registered globally" -ForegroundColor Green
+
+# --- 1b. Ensure ~/.claude.json also has rag-server with cwd ---
+$claudeJsonPath = Join-Path $env:USERPROFILE ".claude.json"
+if (Test-Path $claudeJsonPath) {
+    $claudeJson = Get-Content $claudeJsonPath -Raw | ConvertFrom-Json
+    if (-not $claudeJson.PSObject.Properties["mcpServers"]) {
+        $claudeJson | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{})
+    }
+    $ragEntry = [PSCustomObject]@{
+        type = "stdio"
+        command = "python"
+        args = @("-m", "rag_server")
+        env = [PSCustomObject]@{ RAG_PROJECT_ROOT = $boostHome.Replace("\", "/") }
+        cwd = $ragCwd
+    }
+    if ($claudeJson.mcpServers.PSObject.Properties["rag-server"]) {
+        $claudeJson.mcpServers."rag-server" = $ragEntry
+    } else {
+        $claudeJson.mcpServers | Add-Member -NotePropertyName "rag-server" -NotePropertyValue $ragEntry
+    }
+    $claudeJsonOut = $claudeJson | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($claudeJsonPath, $claudeJsonOut, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] .claude.json - RAG server registered with cwd" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] .claude.json - not found (will use mcp.json)" -ForegroundColor Yellow
+}
 
 # --- 2. Update ~/.claude/settings.json - add CLAUDEBOOST_HOME env ---
 $settingsPath = Join-Path $claudeDir "settings.json"

@@ -115,9 +115,9 @@ If no workspaces found, that's fine — this may be a fresh session.
 
 ## Step 7: Activate and Report
 
-If all checks passed, create the activation marker:
+If all checks passed, create the activation marker and signal the animation to close:
 ```bash
-BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active"
+BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active" && echo "BOOST:done" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 **Report format — include ALL of these sections:**

@@ -45,6 +45,8 @@ sc = max(0, (cols - len(sub)) // 2)
 status_start_row = sr + 2
 
 systems = ['PRIVACY', 'RAG', 'GT', 'RULES', 'AGENTS']
+# BOOST is a control signal, not displayed — tracked separately
+control_keys = {'BOOST'}
 
 
 def read_status():
@@ -59,7 +61,7 @@ def read_status():
                 if ':' in line:
                     key, val = line.split(':', 1)
                     key = key.strip().upper()
-                    if key in result:
+                    if key in result or key in control_keys:
                         result[key] = val.strip()
     except Exception:
         pass
@@ -225,9 +227,14 @@ try:
 
         if all_online and all_online_since is None:
             all_online_since = frame
-        if all_online_since and (frame - all_online_since) > 200:
-            break
-        if frame > 1200:  # 60 second timeout
+        # Wait for explicit BOOST:done signal from /boost command
+        if status.get('BOOST') == 'done':
+            # Show final state for 2 seconds then exit
+            if all_online_since and (frame - all_online_since) > 40:
+                break
+            elif not all_online_since:
+                all_online_since = frame
+        if frame > 2400:  # 120 second timeout
             break
 
         # Build rain grid

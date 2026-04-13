@@ -3,8 +3,23 @@
 import os
 from pathlib import Path
 
-# Project root — set via env var, or defaults to current working directory
-PROJECT_ROOT = Path(os.environ.get("RAG_PROJECT_ROOT", Path.cwd()))
+# Project root — set via env var, or derive from module location
+# Module lives at ClaudeBoost/mcp-rag-server/src/rag_server/config.py
+# so parent x4 = ClaudeBoost/mcp-rag-server, parent x5 would overshoot.
+# We want ClaudeBoost (the repo root that contains agents/ and knowledge/).
+_MODULE_DIR = Path(__file__).resolve().parent  # .../mcp-rag-server/src/rag_server
+_INFERRED_ROOT = _MODULE_DIR.parent.parent.parent  # .../ClaudeBoost
+
+def _resolve_project_root() -> Path:
+    env_val = os.environ.get("RAG_PROJECT_ROOT")
+    if env_val:
+        return Path(env_val)
+    # Verify inferred root has expected dirs
+    if (_INFERRED_ROOT / "agents").is_dir() and (_INFERRED_ROOT / "knowledge").is_dir():
+        return _INFERRED_ROOT
+    return Path.cwd()
+
+PROJECT_ROOT = _resolve_project_root()
 
 # Persistence
 RAG_INDEX_DIR = Path(os.environ.get(
