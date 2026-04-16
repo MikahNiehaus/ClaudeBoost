@@ -301,13 +301,26 @@ try {
         Write-Host ($pipOutput | Out-String) -ForegroundColor Yellow
     }
 
-    # Verify it loads
-    $loadPath = & python -c "import rag_server; print(rag_server.__file__)" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] RAG server installed: $loadPath" -ForegroundColor Green
+    # Eagerly upgrade the ML stack so transformers/tokenizers stay in sync.
+    # Another project installing a newer tokenizers can leave an older
+    # transformers in an incompatible state, producing ImportError at startup.
+    Write-Host "Upgrading ML deps (sentence-transformers + transformers + tokenizers)..." -ForegroundColor Cyan
+    & pip install --upgrade --upgrade-strategy eager sentence-transformers transformers tokenizers 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] ML-deps upgrade returned exit code $LASTEXITCODE" -ForegroundColor Yellow
     } else {
-        Write-Host "[WARN] RAG server import failed after install" -ForegroundColor Yellow
-        Write-Host "  Run manually: pip install -e $ragDir" -ForegroundColor Yellow
+        Write-Host "[OK] ML deps upgraded" -ForegroundColor Green
+    }
+
+    # Full health check — catches version drift a path-only check would miss.
+    $healthScript = Join-Path $boostHome "scripts\check-rag-health.py"
+    $healthOutput = & python $healthScript 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] RAG server healthy: $healthOutput" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] RAG server health check failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
+        Write-Host ($healthOutput | Out-String) -ForegroundColor Yellow
+        Write-Host "  Run manually: python scripts\reinstall-rag.py" -ForegroundColor Yellow
     }
 } catch {
     Write-Host "[WARN] Could not install RAG server: $_" -ForegroundColor Yellow

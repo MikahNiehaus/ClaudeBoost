@@ -31,9 +31,12 @@ This auto-sets missing privacy env vars permanently. If any were fixed, mention 
 
 ## Step 2: Activate RAG (MANDATORY — verify, auto-fix, and load)
 
-Mark RAG as checking, then verify the module loads from the right path:
+Mark RAG as checking, then run the full health check. This verifies BOTH that
+`rag_server` installs from the right path AND that `sentence-transformers`
+actually loads — catching the tokenizers/transformers version-drift crash
+that the path-only check misses. Exit code 2 or 3 triggers auto-repair:
 ```bash
-BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && RAG_PATH=$(python "$CLAUDEBOOST_HOME/scripts/check-rag-path.py" 2>/dev/null) && if echo "$RAG_PATH" | grep -q "ClaudeBoost"; then echo "RAG path OK: $RAG_PATH"; else echo "RAG path wrong: $RAG_PATH — reinstalling..."; python "$CLAUDEBOOST_HOME/scripts/reinstall-rag.py" 2>&1 | tail -1; fi
+BOOST_TMP="$TEMP" && echo "RAG:checking" >> "$BOOST_TMP/claudeboost_status.txt" && python "$CLAUDEBOOST_HOME/scripts/check-rag-health.py"; RC=$?; if [ $RC -eq 0 ]; then echo "RAG: healthy"; elif [ $RC -eq 2 ] || [ $RC -eq 3 ]; then echo "RAG: needs repair (exit $RC) — running reinstall..."; python "$CLAUDEBOOST_HOME/scripts/reinstall-rag.py" && python "$CLAUDEBOOST_HOME/scripts/check-rag-health.py" && echo "RAG: repaired" || echo "RAG: repair failed — run setup.ps1"; else echo "RAG: unknown failure (exit $RC) — run setup.ps1"; fi
 ```
 
 Call `rag_status` (MCP tool) to verify the server is running and has indexed content.
