@@ -34,7 +34,7 @@ $mcpConfig = @{
     }
 }
 
-$mcpJson = $mcpConfig | ConvertTo-Json -Depth 4
+$mcpJson = ($mcpConfig | ConvertTo-Json -Depth 4).TrimStart([char]0xFEFF)
 [System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] mcp.json - RAG server registered globally" -ForegroundColor Green
 
@@ -57,7 +57,7 @@ if (Test-Path $claudeJsonPath) {
     } else {
         $claudeJson.mcpServers | Add-Member -NotePropertyName "rag-server" -NotePropertyValue $ragEntry
     }
-    $claudeJsonOut = $claudeJson | ConvertTo-Json -Depth 10
+    $claudeJsonOut = ($claudeJson | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
     [System.IO.File]::WriteAllText($claudeJsonPath, $claudeJsonOut, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] .claude.json - RAG server registered with cwd" -ForegroundColor Green
 } else {
@@ -102,12 +102,12 @@ if (-not (Test-Path $stateDir)) {
 }
 $modePath = Join-Path $stateDir "claudeboost-mode.json"
 if (-not (Test-Path $modePath)) {
-    $modeDefault = @{
+    $modeDefault = (@{
         mode = "CONSULT"
         setAt = (Get-Date).ToString("o")
         setBy = "default"
         reason = "ClaudeBoost default"
-    } | ConvertTo-Json
+    } | ConvertTo-Json).TrimStart([char]0xFEFF)
     [System.IO.File]::WriteAllText($modePath, $modeDefault, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/claudeboost-mode.json - seeded CONSULT default" -ForegroundColor Green
 } else {
@@ -283,7 +283,7 @@ $preCompactHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
     -Sentinel "CONTEXT PRESERVATION" -Label "context preservation"
 
-$settingsJson = $settings | ConvertTo-Json -Depth 10
+$settingsJson = ($settings | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] settings.json - CLAUDEBOOST_HOME env added" -ForegroundColor Green
 

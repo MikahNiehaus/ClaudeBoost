@@ -1,0 +1,189 @@
+<knowledge-base name="branching-strategy" version="1.0">
+<triggers>git, branch, branching, pull request, PR, merge, commit, cherry-pick, rebase, feature branch, sprint-release, patch-release, hotfix, conventional commits, Jira ticket, workflow, backport, release branch, team branch</triggers>
+<overview>Team-specific three-tier branching strategy: trunk (main/master) receives PR merges only from release branches (sprint-release-##, patch-release-##, hotfix-yyyymmdd), which receive PR merges only from short-lived feature branches ([type]/TICKET-short-desc). Direct commits to team branches are forbidden, even for already-approved cherry-picks.</overview>
+
+<branch-hierarchy>
+  <tier name="trunk" level="1">
+    <names>main, master</names>
+    <protection>protected</protection>
+    <accepts>PR merges from sprint-release-##, patch-release-##, hotfix-yyyymmdd only</accepts>
+    <forbidden>Direct commits, force pushes, feature branches merging directly</forbidden>
+  </tier>
+  <tier name="release" level="2">
+    <names>sprint-release-##, patch-release-##, hotfix-yyyymmdd</names>
+    <protection>protected team branches</protection>
+    <accepts>PR merges from feature branches only</accepts>
+    <forbidden>Direct commits (even for cherry-picks of approved code)</forbidden>
+    <purpose>
+      sprint-release-## accumulates the current sprint's work before release to main.
+      patch-release-## accumulates bug fixes for a patch release on top of a prior main.
+      hotfix-yyyymmdd handles urgent production fixes dated by the hotfix day.
+    </purpose>
+  </tier>
+  <tier name="feature" level="3">
+    <names>[type]/TICKET-ID-short-description</names>
+    <protection>none, short-lived, owned by one developer</protection>
+    <accepts>direct commits from the owning developer</accepts>
+    <lifetime>ideally under 3 days, delete immediately after PR merge</lifetime>
+  </tier>
+</branch-hierarchy>
+
+<naming-convention>
+  <format>[type]/[PROJECT-TICKET]-[short-description]</format>
+  <rule priority="BLOCKER">Jira ticket ID must be uppercase with correct project key (e.g. PROJ-456, not proj-456)</rule>
+  <rule priority="high">Description is lowercase, hyphen-separated, 3 to 5 words</rule>
+  <rule priority="high">Type prefix must match a conventional commit type: feat, fix, docs, style, refactor, test, chore, perf, ci</rule>
+  <examples>
+    <good>feat/PROJ-456-add-user-auth</good>
+    <good>fix/PROJ-789-payment-validation</good>
+    <good>chore/PROJ-321-bump-dependencies</good>
+    <good>refactor/PROJ-555-extract-order-service</good>
+    <bad reason="lowercase project key">fix/proj-789-payment</bad>
+    <bad reason="no ticket ID">feat/add-user-auth</bad>
+    <bad reason="description too long">feat/PROJ-456-add-a-user-authentication-system-with-multi-factor</bad>
+    <bad reason="wrong separator">feat/PROJ-456_add_user_auth</bad>
+  </examples>
+</naming-convention>
+
+<conventional-commits>
+  <format>[type]([scope]): [description]\n\n[body]\n\n[TICKET-ID]</format>
+  <types>feat, fix, docs, style, refactor, test, chore, perf, ci</types>
+  <subject-rules>
+    <rule>Present tense imperative ("add" not "added" or "adds")</rule>
+    <rule>No capital letter at the start of description</rule>
+    <rule>No trailing period</rule>
+    <rule>Under 72 characters total</rule>
+  </subject-rules>
+  <body-rules>
+    <rule priority="BLOCKER">Jira ticket ID goes on its own line in the body, not in the subject</rule>
+    <rule>Wrap body at 72 characters</rule>
+    <rule>Explain the why, not the what</rule>
+  </body-rules>
+  <code-example type="good" lang="text">
+feat(auth): add multi-factor authentication flow
+
+Implements TOTP-based MFA for neighbor sign-in. Users can enroll
+a device during registration or from account settings.
+
+PROJ-456
+  </code-example>
+  <code-example type="bad" lang="text">
+PROJ-456: Added MFA.
+  </code-example>
+  <bad-reason>Ticket ID in subject, past tense, capital letter, trailing period, no body explanation.</bad-reason>
+</conventional-commits>
+
+<pull-request-governance>
+  <check>Target branch is correct: feature targets sprint-release-##; cherry-pick targets patch-release-## or hotfix-yyyymmdd</check>
+  <check>Source branch follows [type]/TICKET-description naming with uppercase project key</check>
+  <check>PR description follows team template (Description, Jira Ticket, Type, Tests, Checklist)</check>
+  <check>Minimum 1 team review plus Tech Lead approval before merge (exception: self-merge of pre-approved cherry-pick)</check>
+  <check>Branch is rebased on latest target, conflicts resolved locally</check>
+  <check>Tests pass locally and in CI</check>
+  <rule priority="BLOCKER">Never commit directly to main, master, sprint-release-*, patch-release-*, or hotfix-* — even for already-approved cherry-picks. Every change to a team branch must arrive via a visible PR.</rule>
+  <rule priority="BLOCKER">Never force-push to a shared or protected branch.</rule>
+  <rule priority="high">A cherry-pick PR targets the release branch it is backporting into, NOT main/master.</rule>
+</pull-request-governance>
+
+<pr-template>
+  <section name="Description">Brief summary of what changed and why.</section>
+  <section name="Jira Ticket">Link to the ticket (e.g. PROJ-456).</section>
+  <section name="Type">feat / fix / docs / refactor / chore / perf / ci / test / style</section>
+  <section name="Tests">What was tested and how (locally, in staging, regression suite).</section>
+  <section name="Checklist">
+    <item>Branch name follows convention</item>
+    <item>Commits follow conventional commit format</item>
+    <item>Tests pass locally</item>
+    <item>Targets the correct branch</item>
+    <item>Jira ticket updated</item>
+  </section>
+</pr-template>
+
+<cherry-pick-workflow>
+  <scenario name="cherry-pick-into-patch-branch">
+    <when>A bug fix already approved and merged on sprint-release-## needs to ship via an earlier patch-release-##</when>
+    <steps>
+      <step order="1">git fetch origin</step>
+      <step order="2">git checkout patch-release-##</step>
+      <step order="3">git pull --ff-only</step>
+      <step order="4">git checkout -b fix/TICKET-patch-cherrypick</step>
+      <step order="5">git cherry-pick [approved-commit-sha]</step>
+      <step order="6">Resolve conflicts if any, run tests locally</step>
+      <step order="7">git push -u origin fix/TICKET-patch-cherrypick</step>
+      <step order="8">Open PR targeting patch-release-## (NOT main/master)</step>
+      <step order="9">Self-merge: no second review required since the code was already approved on sprint-release-##, but the PR itself must still exist as a visible record</step>
+      <step order="10">Delete the feature branch after merge</step>
+    </steps>
+    <anti-pattern>
+      Committing the cherry-pick directly to patch-release-## to "save time".
+      Shane's exact correction on PE PR #437: "You shouldn't really commit directly to any of our
+      team branches, even if you know you're going to merge something that was already approved."
+      The rule is about visibility and audit trail, not about re-review.
+    </anti-pattern>
+    <anti-pattern>
+      Opening the cherry-pick PR against main/master instead of patch-release-##. The patch
+      release branch is the ship vehicle; main only sees the patch contents after patch-release-##
+      itself merges to main.
+    </anti-pattern>
+  </scenario>
+  <scenario name="hotfix-from-production">
+    <when>A critical bug is in production and needs to ship before the next sprint release</when>
+    <steps>
+      <step order="1">Create hotfix-yyyymmdd branch off main/master</step>
+      <step order="2">Create feature branch fix/TICKET-description off hotfix-yyyymmdd</step>
+      <step order="3">Implement fix, PR into hotfix-yyyymmdd, review, merge</step>
+      <step order="4">PR hotfix-yyyymmdd into main/master once tested</step>
+      <step order="5">Mirror the fix into sprint-release-## and any active patch-release-## so it isn't lost in the next release</step>
+    </steps>
+  </scenario>
+</cherry-pick-workflow>
+
+<cross-repo-coordination>
+  <note>PantryEasy (PE) and Nectar are often on different release schedules. Changes that cross both repos require mirroring.</note>
+  <rule>If a Nectar change depends on a PE change, the PE change must land on PE's patch-release-## so PE can ship independently when Nectar deploys.</rule>
+  <rule>Mirror the same change into PE's sprint-release-## too, so the next full release carries the fix and it gets exercised in all environments.</rule>
+  <rule>When opening the PR in PE, double-check the target branch — it's easy to land on master by default when the intended target is patch-release-##.</rule>
+</cross-repo-coordination>
+
+<branch-retention>
+  <row name="main / master" retention="permanent" deletion="never"/>
+  <row name="sprint-release-##" retention="7 days post-merge" deletion="after production verification"/>
+  <row name="patch-release-##" retention="7 days post-merge" deletion="after production verification"/>
+  <row name="hotfix-yyyymmdd" retention="7 days post-merge" deletion="after production verification"/>
+  <row name="[type]/TICKET-*" retention="immediate" deletion="as soon as the PR merges"/>
+</branch-retention>
+
+<anti-patterns>
+  <anti-pattern>Direct commits to main, master, sprint-release-*, patch-release-*, hotfix-*</anti-pattern>
+  <anti-pattern>Cherry-pick PR targeting main when it should target patch-release-##</anti-pattern>
+  <anti-pattern>Force push to a shared or protected branch</anti-pattern>
+  <anti-pattern>Merging without a PR (even a pre-approved cherry-pick still needs a visible PR)</anti-pattern>
+  <anti-pattern>Long-lived feature branches (over 3 days) that drift from the target branch</anti-pattern>
+  <anti-pattern>Multiple unrelated features or tickets in a single branch or PR</anti-pattern>
+  <anti-pattern>Lowercase project key in branch or commit (fix/proj-456 instead of fix/PROJ-456)</anti-pattern>
+  <anti-pattern>Jira ticket ID in commit subject line instead of body</anti-pattern>
+  <anti-pattern>Past-tense or capitalized commit subjects ("Added feature." instead of "add feature")</anti-pattern>
+  <anti-pattern>Skipping the PE mirror for a Nectar-PE cross-repo change</anti-pattern>
+</anti-patterns>
+
+<checklist name="before-opening-pr">
+  <item>Correct target branch (feature -> sprint-release-##, cherry-pick -> patch-release-##, hotfix -> hotfix-yyyymmdd)</item>
+  <item>Branch name follows [type]/TICKET-description format with uppercase project key</item>
+  <item>Commit messages follow conventional commits with Jira ticket in body</item>
+  <item>Rebased on latest target branch, conflicts resolved locally</item>
+  <item>Tests pass locally</item>
+  <item>PR description follows the team template</item>
+  <item>Jira ticket status updated</item>
+  <item>If cross-repo: PE mirror PR identified or opened</item>
+</checklist>
+
+<decision-guide name="where-does-this-change-go">
+  <question>Is this an urgent production bug that can't wait for the next sprint release?</question>
+  <yes>hotfix-yyyymmdd path, then mirror into active sprint-release and patch-release branches.</yes>
+  <no>
+    <question>Is this a fix that needs to ship via a patch release (between sprints)?</question>
+    <yes>Feature branch off patch-release-##, PR into patch-release-##. If the fix is already merged on sprint-release-##, cherry-pick via a feature branch + PR.</yes>
+    <no>Normal sprint work: feature branch off sprint-release-##, PR into sprint-release-##.</no>
+  </no>
+</decision-guide>
+</knowledge-base>
