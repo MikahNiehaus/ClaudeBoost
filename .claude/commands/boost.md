@@ -60,15 +60,20 @@ Use "RAG:failed" if rag_status fails entirely. Use "RAG:ready" if it works even 
 
 **RAG is non-negotiable.** If RAG fails, boost activation is incomplete — tell the user to fix it.
 
-## Step 3: Activate Gas Town (MANDATORY — always prime)
+## Step 3: Activate Gas Town (MANDATORY — always prime, auto-init if needed)
 
-GT is already marked "checking". Check if `gt` exists and **always run `gt prime`**:
+GT is already marked "checking". Check if `gt` exists, try `gt prime`, and
+**auto-init the rig if the current directory is a git repo but not yet a GT
+workspace**. Without auto-init, every new repo has to be `gt init`'d by hand
+before `gt prime`/`gt status`/`gt sling` will work:
 ```bash
-BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then echo "GT INSTALLED: $(gt --version 2>&1 | head -1)"; echo "--- Running gt prime ---"; gt prime 2>&1; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT NOT FOUND in PATH"; echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
+BOOST_TMP="$TEMP" && if command -v gt &>/dev/null; then echo "GT INSTALLED: $(gt --version 2>&1 | head -1)"; echo "--- Running gt prime ---"; GT_OUT=$(gt prime 2>&1); GT_RC=$?; echo "$GT_OUT"; if [ $GT_RC -ne 0 ] && echo "$GT_OUT" | grep -q "not in a Gas Town workspace"; then if [ -d .git ] || git rev-parse --git-dir >/dev/null 2>&1; then echo "--- Not a GT workspace; running gt init ---"; gt init 2>&1 | tail -5; echo "--- Re-running gt prime ---"; gt prime 2>&1 | head -5; fi; fi; echo "GT:ready" >> "$BOOST_TMP/claudeboost_status.txt"; else echo "GT NOT FOUND in PATH"; echo "GT:failed" >> "$BOOST_TMP/claudeboost_status.txt"; fi && echo "RULES:checking" >> "$BOOST_TMP/claudeboost_status.txt"
 ```
 
 GT is "ready" if `command -v gt` succeeds. "failed" ONLY if `gt` is not on PATH.
 **Read the bash output carefully** — if it prints "GT INSTALLED:" then GT is available. Do NOT report "GT not installed" when the check passed.
+
+`gt init` is idempotent and only runs when `gt prime` explicitly reports the cwd is not a workspace AND the cwd is a git repo. It creates `polecats/`, `witness/`, `refinery/`, `mayor/`, `crew/` — all auto-added to `.git/info/exclude`, so nothing is committed.
 
 **GT is mandatory.** If GT is not on PATH, warn the user to install it — do NOT silently skip it. Both RAG and GT must be active for a fully boosted session.
 
