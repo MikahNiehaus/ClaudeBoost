@@ -43,8 +43,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="rag_search",
             description=(
-                "Search the ClaudeMemory knowledge base, agent definitions, workspace "
-                "history, and optionally a target codebase using semantic similarity. "
+                "Search ClaudeBoost knowledge bases, agent definitions, and workspace "
+                "history using semantic similarity. "
                 "Returns the most relevant text chunks with source attribution."
             ),
             inputSchema={
@@ -56,7 +56,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "knowledge", "agents", "workspaces", "codebase"],
+                        "enum": ["all", "knowledge", "agents", "workspaces"],
                         "description": "Which collection to search.",
                         "default": "all",
                     },
@@ -81,19 +81,15 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="rag_index",
             description=(
-                "Index or re-index files for RAG search. Use 'path' to index a "
-                "codebase directory. Omit to re-index default collections."
+                "Index or re-index ClaudeBoost files for RAG search. "
+                "Re-indexes knowledge bases, agent definitions, and workspaces."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to a directory to index as codebase.",
-                    },
                     "scope": {
                         "type": "string",
-                        "enum": ["knowledge", "agents", "workspaces", "codebase", "all"],
+                        "enum": ["knowledge", "agents", "workspaces", "all"],
                         "description": "Which collection to re-index.",
                         "default": "all",
                     },
@@ -159,15 +155,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
 
         elif name == "rag_index":
-            path = arguments.get("path")
             force = arguments.get("force", False)
             scope = arguments.get("scope", "all")
 
-            if path:
-                result = engine.index_codebase(path, force=force)
-                result["scope"] = "codebase"
-                result["path"] = path
-            elif scope == "all":
+            if scope == "all":
                 result = engine.index_all(force=force)
                 result["scope"] = "all"
             else:
@@ -182,12 +173,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "chunks": store.count(col),
                     "files": len(store.list_sources(col)) if store.collection_exists(col) else 0,
                 }
-            # Codebase collection
-            collections_status["codebase"] = {
-                "chunks": store.count("codebase"),
-                "files": len(store.list_sources("codebase")) if store.collection_exists("codebase") else 0,
-            }
-
             result = {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),

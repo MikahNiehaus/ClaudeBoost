@@ -9,7 +9,7 @@ from rag_server.ports.store_port import StorePort
 
 logger = logging.getLogger(__name__)
 
-VALID_SCOPES = ["all", "knowledge", "agents", "workspaces", "codebase"]
+VALID_SCOPES = ["all", "knowledge", "agents", "workspaces"]
 
 
 def rag_search(
@@ -30,7 +30,7 @@ def rag_search(
 
     # Determine which collections to search
     if scope == "all":
-        collections = [s["collection"] for s in SCOPES.values()] + ["codebase"]
+        collections = [s["collection"] for s in SCOPES.values()]
     else:
         collections = [scope]
 

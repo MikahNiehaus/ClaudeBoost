@@ -49,9 +49,6 @@ SCOPES = {
     },
 }
 
-# Codebase scope is configured dynamically via rag_index tool
-CODEBASE_COLLECTION = "codebase"
-
 # Chunking
 MAX_CHUNK_TOKENS = 500
 MIN_CHUNK_TOKENS = 50
@@ -59,18 +56,3 @@ MIN_CHUNK_TOKENS = 50
 # Search defaults
 DEFAULT_SEARCH_LIMIT = 5
 DEFAULT_MIN_SCORE = 0.3
-
-# File extensions to index for codebase scope
-CODE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java",
-    ".cs", ".rb", ".php", ".c", ".cpp", ".h", ".hpp",
-    ".css", ".scss", ".html", ".sql", ".sh", ".bash",
-    ".yaml", ".yml", ".json", ".toml", ".md", ".xml",
-}
-
-# Paths to skip when indexing codebase
-SKIP_PATTERNS = {
-    "node_modules", ".git", "__pycache__", ".venv", "venv",
-    "dist", "build", ".rag-index", ".next", "target",
-    ".tox", ".mypy_cache", ".pytest_cache", "egg-info",
-}

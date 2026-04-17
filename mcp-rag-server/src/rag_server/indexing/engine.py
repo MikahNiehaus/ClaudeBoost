@@ -6,13 +6,11 @@ from glob import glob
 from pathlib import Path
 
 from rag_server.config import (
-    CODE_EXTENSIONS,
     MANIFEST_PATH,
     MAX_CHUNK_TOKENS,
     MIN_CHUNK_TOKENS,
     PROJECT_ROOT,
     SCOPES,
-    SKIP_PATTERNS,
 )
 from rag_server.core.metadata import build_metadata, chunk_id, file_hash
 from rag_server.indexing.markdown_chunker import chunk_markdown
@@ -61,29 +59,6 @@ class IndexingEngine:
             files.extend(matched)
 
         return self._index_files(files, collection, scope, force)
-
-    def index_codebase(self, path: str, force: bool = False) -> dict:
-        """Index a codebase directory.
-
-        Returns dict with files_indexed, chunks_created, files_skipped.
-        """
-        codebase_path = Path(path)
-        if not codebase_path.is_dir():
-            raise ValueError(f"Not a directory: {path}")
-
-        self._store.create_collection("codebase")
-
-        files = []
-        for file_path in codebase_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if any(skip in file_path.parts for skip in SKIP_PATTERNS):
-                continue
-            if file_path.suffix not in CODE_EXTENSIONS:
-                continue
-            files.append(str(file_path))
-
-        return self._index_files(files, "codebase", "codebase", force)
 
     def index_all(self, force: bool = False) -> dict:
         """Index all predefined scopes."""
@@ -187,46 +162,8 @@ class IndexingEngine:
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
             )
-        # Code files: fall back to simple fixed-size chunking for now
-        return self._chunk_code(content, rel_path)
-
-    def _chunk_code(self, content: str, rel_path: str):
-        """Simple fixed-size chunking for code files."""
-        from rag_server.indexing.markdown_chunker import RawChunk, estimate_tokens
-
-        lines = content.split("\n")
-        chunks = []
-        current_lines = []
-        current_start = 1
-        current_tokens = 0
-
-        for i, line in enumerate(lines, 1):
-            line_tokens = estimate_tokens(line)
-            if current_tokens + line_tokens > MAX_CHUNK_TOKENS and current_lines:
-                chunks.append(RawChunk(
-                    content="\n".join(current_lines),
-                    section=Path(rel_path).name,
-                    line_start=current_start,
-                    line_end=i - 1,
-                    token_count_approx=current_tokens,
-                ))
-                current_start = i
-                current_lines = [line]
-                current_tokens = line_tokens
-            else:
-                current_lines.append(line)
-                current_tokens += line_tokens
-
-        if current_lines:
-            chunks.append(RawChunk(
-                content="\n".join(current_lines),
-                section=Path(rel_path).name,
-                line_start=current_start,
-                line_end=len(lines),
-                token_count_approx=current_tokens,
-            ))
-
-        return chunks
+        # Unsupported file type — skip
+        return []
 
     def _relative_path(self, file_path: str) -> str:
         """Convert absolute path to relative (forward slashes)."""
