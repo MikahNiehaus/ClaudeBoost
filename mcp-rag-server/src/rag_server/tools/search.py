@@ -9,7 +9,7 @@ from rag_server.ports.store_port import StorePort
 
 logger = logging.getLogger(__name__)
 
-VALID_SCOPES = ["all", "knowledge", "agents", "workspaces"]
+VALID_SCOPES = ["all", "knowledge", "agents"]
 
 
 def rag_search(

@@ -43,8 +43,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="rag_search",
             description=(
-                "Search ClaudeBoost knowledge bases, agent definitions, and workspace "
-                "history using semantic similarity. "
+                "Search ClaudeBoost knowledge bases and agent definitions using "
+                "semantic similarity. "
                 "Returns the most relevant text chunks with source attribution."
             ),
             inputSchema={
@@ -56,7 +56,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "knowledge", "agents", "workspaces"],
+                        "enum": ["all", "knowledge", "agents"],
                         "description": "Which collection to search.",
                         "default": "all",
                     },
@@ -82,14 +82,14 @@ async def list_tools() -> list[Tool]:
             name="rag_index",
             description=(
                 "Index or re-index ClaudeBoost files for RAG search. "
-                "Re-indexes knowledge bases, agent definitions, and workspaces."
+                "Re-indexes knowledge bases and agent definitions."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "scope": {
                         "type": "string",
-                        "enum": ["knowledge", "agents", "workspaces", "all"],
+                        "enum": ["knowledge", "agents", "all"],
                         "description": "Which collection to re-index.",
                         "default": "all",
                     },
@@ -113,8 +113,8 @@ async def list_tools() -> list[Tool]:
             name="rag_context",
             description=(
                 "Build a curated context package for an agent. Given an agent name and "
-                "task description, returns relevant knowledge chunks and past workspace "
-                "decisions. Use when spawning an agent."
+                "task description, returns relevant knowledge chunks. "
+                "Use when spawning an agent."
             ),
             inputSchema={
                 "type": "object",
@@ -315,42 +315,19 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
             })
             tier3_tokens += chunk_tokens
 
-    # --- Workspace history (small budget from any remaining) ---
-    history_results = []
-    history_budget = max(0, remaining_budget - tier3_tokens)
-    if history_budget > 100 and store.collection_exists("workspaces"):
-        query_embedding = embedder.embed_query(task_description)
-        ws_results = store.search("workspaces", query_embedding, limit=3, min_score=0.4)
-        ws_tokens = 0
-        for r in ws_results:
-            chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
-            if ws_tokens + chunk_tokens > history_budget:
-                break
-            history_results.append({
-                "source": r.metadata.get("source_file", "unknown"),
-                "section": r.metadata.get("section", ""),
-                "content": r.content,
-                "score": r.score,
-            })
-            ws_tokens += chunk_tokens
-
     all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks
-    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + sum(
-        estimate_tokens(h["content"]) for h in history_results
-    )
+    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens
 
     return {
         "agent_definition": agent_def,
         "agent_file": agent_file,
         "relevant_knowledge": all_knowledge,
-        "relevant_history": history_results,
         "total_tokens_approx": total_tokens,
-        "sources_used": len(all_knowledge) + len(history_results) + (1 if agent_def else 0),
+        "sources_used": len(all_knowledge) + (1 if agent_def else 0),
         "tier_summary": {
             "guardrails": len(tier1_chunks),
             "declared": len(tier2_chunks),
             "search": len(tier3_chunks),
-            "history": len(history_results),
         },
     }
 
@@ -385,7 +362,7 @@ async def main():
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()
     watch_paths = []
-    for dirname in ["agents", "knowledge", "workspace"]:
+    for dirname in ["agents", "knowledge"]:
         dirpath = PROJECT_ROOT / dirname
         if dirpath.is_dir():
             watch_paths.append(str(dirpath))

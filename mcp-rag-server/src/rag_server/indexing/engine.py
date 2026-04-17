@@ -42,7 +42,7 @@ class IndexingEngine:
         )
 
     def index_scope(self, scope: str, force: bool = False) -> dict:
-        """Index a predefined scope (knowledge, agents, workspaces).
+        """Index a predefined scope (knowledge, agents).
 
         Returns dict with files_indexed, chunks_created, files_skipped.
         """

@@ -43,10 +43,6 @@ SCOPES = {
         "patterns": ["agents/*.md", "agents/*.xml"],
         "collection": "agents",
     },
-    "workspaces": {
-        "patterns": ["workspace/*/context.md", "workspace/*/ticket.md"],
-        "collection": "workspaces",
-    },
 }
 
 # Chunking
