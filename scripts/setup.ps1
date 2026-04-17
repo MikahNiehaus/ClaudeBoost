@@ -213,19 +213,26 @@ $workspaceHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $workspaceHook `
     -Sentinel "WORKSPACE CREATION CHECK" -Label "workspace creation"
 
-# --- PreToolUse: CONSULT gate on Edit/Write (new) ---
+# --- PreToolUse: CONSULT gate on Edit/Write ---
+# Command-type hook (not prompt). Prompt-type hooks are pure LLM judgment and
+# cannot read files, so they can't actually check mode.json or session-approvals
+# even though prior prompt text told the LLM to. This over-fired and blocked
+# legitimate edits. consult-gate.py reads both state files and decides:
+#   AUTO              -> exit 0, silent
+#   CONSULT + exempt  -> exit 0, silent
+#   CONSULT + other   -> exit 0, stderr nudge (non-blocking reminder)
+$consultGatePath = "$CLAUDEBOOST_HOME\scripts\consult-gate.py".Replace("\", "/")
 $consultEditHook = [PSCustomObject]@{
     matcher = "Edit|Write|MultiEdit"
     hooks = @(
         [PSCustomObject]@{
-            type = "prompt"
-            prompt = "CONSULT GATE — quick check before this Edit/Write:`n`nIs this an architectural change? (new file others import, new dep, new endpoint, new table, new middleware, new validation/auth/error strategy, new config surface, new module)`n`n- NO → proceed.`n- YES → STOP. Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json. If mode=CONSULT and you have NOT yet: (a) called rag_search, (b) spawned architect-agent with PROPOSAL_ONLY + file:line citations, (c) logged user approval to state/session-approvals.json — do those now in order. No code yet. If mode=AUTO, proceed and cite the pattern you're following.`n`nCheck session-approvals.json first — if this axis was already approved this session, proceed with the approved choice.`n`nExempt: edits under workspace/, .claude/, knowledge/, plans/, docs/."
-            statusMessage = "CONSULT gate check..."
+            type = "command"
+            command = "python `"$consultGatePath`""
         }
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $consultEditHook `
-    -Sentinel "CONSULT GATE" -Label "CONSULT gate on Edit/Write"
+    -Sentinel "consult-gate.py" -Label "CONSULT gate on Edit/Write (command-type)"
 
 # --- PreToolUse: architect-agent PROPOSAL_ONLY contract (new) ---
 $architectProposalHook = [PSCustomObject]@{
