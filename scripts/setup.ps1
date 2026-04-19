@@ -185,19 +185,26 @@ $consultSessionHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $consultSessionHook `
     -Sentinel "CONSULT vs AUTO" -Label "CONSULT protocol"
 
-# --- PreToolUse: agent spawn RAG enforcement (original) ---
+# --- PreToolUse: agent-spawn gate on Task (command-type) ---
+# Command-type hook (not prompt). The old prompt-type hook instructed the
+# judging LLM to "evaluate" whether rag_context was called, but prompt hooks
+# have no tool access so the LLM just had to guess, and the em-dashes in the
+# hook text got re-encoded to mojibake across setup runs (sentinel didn't
+# match, duplicates piled up). agent-spawn-gate.py reads the Task tool_input
+# directly and emits a non-blocking stderr nudge if rag_context or the
+# architect-agent PROPOSAL_ONLY contract is missing. Never blocks.
+$agentGatePath = "$CLAUDEBOOST_HOME\scripts\agent-spawn-gate.py".Replace("\", "/")
 $taskSpawnHook = [PSCustomObject]@{
     matcher = "Task"
     hooks = @(
         [PSCustomObject]@{
-            type = "prompt"
-            prompt = "AGENT SPAWN — QUALITY ROUTING:`n1. ``rag_context`` as Step 1 (ALWAYS — agent name + task description)`n2. Workspace reference (if exists)`n3. ROUTE by agent type:`n   - Finding-producers (reviewer, security, performance): FULL spawn template with verify gate. Findings MUST cite file:line. Evaluator-agent WILL verify after.`n   - Research/support (explore, research, docs, estimator, teacher): LIGHTWEIGHT template — rag_context + task + status report. Skip verify gate.`n   - Implementation (workflow, refactor, debug, test, ui, database, devops, observability, architect, ticket-analyst, browser): STANDARD template. No verify gate unless auditing.`n4. GT context if available`nDo NOT proceed without rag_context."
-            statusMessage = "Enforcing RAG context in agent spawn..."
+            type = "command"
+            command = "python `"$agentGatePath`""
         }
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $taskSpawnHook `
-    -Sentinel "AGENT SPAWN" -Label "Task RAG enforcement"
+    -Sentinel "agent-spawn-gate.py" -Label "Task RAG/proposal gate (command-type)"
 
 # --- PreToolUse: workspace creation (original) ---
 $workspaceHook = [PSCustomObject]@{
@@ -234,19 +241,9 @@ $consultEditHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $consultEditHook `
     -Sentinel "consult-gate.py" -Label "CONSULT gate on Edit/Write (command-type)"
 
-# --- PreToolUse: architect-agent PROPOSAL_ONLY contract (new) ---
-$architectProposalHook = [PSCustomObject]@{
-    matcher = "Task"
-    hooks = @(
-        [PSCustomObject]@{
-            type = "prompt"
-            prompt = "architect-agent PROPOSAL_ONLY contract:`nIf spawning architect-agent in CONSULT mode for an architectural proposal, the spawn prompt MUST include:`n  1. The literal string ``PROPOSAL_ONLY``.`n  2. At least 2 file:line citations from the target project (format: ``path/file.ext:line-range — what it shows``).`narchitect-agent (Opus) will refuse and return BLOCKED if citations are missing. After architect-agent returns, the MAIN agent (not architect) presents options via AskUserQuestion and logs the user's approval to state/session-approvals.json before implementing."
-            statusMessage = "Enforcing architect-agent proposal contract..."
-        }
-    )
-}
-Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $architectProposalHook `
-    -Sentinel "architect-agent PROPOSAL_ONLY contract" -Label "architect-agent proposal contract"
+# --- architect-agent PROPOSAL_ONLY contract is handled by agent-spawn-gate.py
+# above (command-type hook). No separate prompt-type hook needed; the old one
+# over-fired the same way as the AGENT SPAWN hook and is no longer installed.
 
 # --- PreToolUse: process-kill safety (persistent rule) ---
 $killSafetyHook = [PSCustomObject]@{
