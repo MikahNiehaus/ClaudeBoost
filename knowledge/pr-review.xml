@@ -132,18 +132,94 @@
 </review-process>
 
 <self-review-checklist>
-  <description>Before submitting a PR, the author should complete these 11 passes. Reviewers verify these were done.</description>
-  <pass order="1" name="Simplicity pass">Can this be deleted, inlined, or simplified?</pass>
-  <pass order="2" name="Already-exists pass">Does the codebase or a dependency already provide this? But verify the existing thing actually meets the requirement — reusing a single-select widget for a multi-select requirement is worse than creating a new one.</pass>
-  <pass order="3" name="Dead code pass">Is every variable/param/function actually referenced?</pass>
-  <pass order="4" name="Debug cleanup pass">Any temporary logs, flags, commented blocks left?</pass>
-  <pass order="5" name="Project patterns pass">How does this repo usually solve this problem?</pass>
-  <pass order="6" name="Common-pattern breaker pass">Am I breaking a shared convention?</pass>
-  <pass order="7" name="Fresh eyes pass">Read every line like you didn't write it</pass>
-  <pass order="8" name="Ticket alignment pass">Exactly what the ticket asks, no more, no less</pass>
-  <pass order="9" name="Spec precision pass">Word-for-word match on UI copy, field names, behaviors</pass>
-  <pass order="10" name="Manual smoke test pass">Did I actually use this feature in a browser? For each AC scenario, physically perform the described action. Don't trust code reading alone — JS widgets can behave differently than the HTML suggests. If you can't run it locally, flag it in the PR.</pass>
-  <pass order="11" name="Migration/Schema pass">Every model property add/remove MUST have a matching migration. Verify the generated migration does what you expect.</pass>
+  <description>Trigger-conditional review passes. Read the diff FIRST, evaluate each trigger, then run only the passes whose triggers fire. Skipped passes must appear in output as "N/A: [reason]" — proving they were considered, not forgotten.</description>
+
+  <pass order="1" name="Simplicity" always="true">
+    <trigger>Always runs — applies to every PR.</trigger>
+    <check>Can this be deleted, inlined, or simplified? What's the smallest version that still works?</check>
+    <check>Question any regex, string manipulation, or multi-step encoding.</check>
+    <check>Is there a simpler way in this framework?</check>
+  </pass>
+
+  <pass order="2" name="Already-Exists">
+    <trigger>Fires when: new utility, helper, component, or abstraction is introduced.</trigger>
+    <skip-when>Only modified existing code — no new abstractions added.</skip-when>
+    <check>Does the codebase or a dependency already provide this?</check>
+    <check>Search for similar utilities/components/hooks/services before keeping your version.</check>
+    <check>But verify the existing thing actually meets the requirement — reusing a single-select widget for a multi-select requirement is worse than creating a new one.</check>
+  </pass>
+
+  <pass order="3" name="Dead Code">
+    <trigger>Fires when: code is deleted, parameters are added, or functions are introduced.</trigger>
+    <skip-when>Pure additions with no removals or new params.</skip-when>
+    <check>For every variable/param/function: is this actually referenced? Trace it end-to-end.</check>
+    <check>For every CSS class: is this used in the HTML?</check>
+    <check>For every param: does the caller ever pass anything other than the default?</check>
+  </pass>
+
+  <pass order="4" name="Debug Cleanup" always="true">
+    <trigger>Always runs — debug artifacts can appear in any change.</trigger>
+    <check>Search for: console.log, alert(), commented-out code, hardcoded test data.</check>
+    <check>Check click handlers: is this for real functionality or was it for testing?</check>
+    <check>Any temporary logs, toasts, flags, debug UI left behind?</check>
+  </pass>
+
+  <pass order="5" name="Convention Compliance">
+    <trigger>Fires when: new elements are added to an existing page, file, or module.</trigger>
+    <skip-when>Greenfield new file with no sibling elements to compare against.</skip-when>
+    <check>For EACH new element: identify the nearest sibling elements that existed before this PR.</check>
+    <check>List every attribute/pattern those siblings use (e.g., disabled, readonly, CSS classes, data attributes, event handlers, guard conditions).</check>
+    <check>Verify the new element follows ALL of them — not just the ones that affect functionality.</check>
+    <check>Specific to Profile.cshtml: enableProfileEditing, isCRMControlledField, validation spans, CSS classes, .Enable() on Kendo widgets, disabled/readonly on HTML elements.</check>
+    <check>Specific to any page with permission guards: every new interactive element must respect the page's edit/read-only contract.</check>
+    <incident-reference>ASC-1171: Four Kendo MultiSelects correctly used .Enable(enableProfileEditing) but two plain HTML elements (select, input) were missing disabled/readonly guards. The pattern was on every other field on the page. Caught by bot reviewer, not by human or agent review.</incident-reference>
+  </pass>
+
+  <pass order="6" name="Common-Pattern Breaker">
+    <trigger>Fires when: a new pattern is introduced that differs from how the codebase usually solves this problem.</trigger>
+    <skip-when>Following an existing pattern exactly — no deviation.</skip-when>
+    <check>Am I breaking a shared convention or introducing a one-off pattern?</check>
+    <check>If deviating: add a short comment in the PR description explaining why, what alternatives were considered, and what to watch for.</check>
+  </pass>
+
+  <pass order="7" name="Fresh Eyes" always="true">
+    <trigger>Always runs — applies to every PR.</trigger>
+    <check>Read every line like you didn't write it: why does this exist? What would I delete first?</check>
+    <check>Would a senior reviewer question this? If yes, simplify it now.</check>
+  </pass>
+
+  <pass order="8" name="Ticket Alignment" always="true">
+    <trigger>Always runs — every PR should implement exactly what was asked.</trigger>
+    <check>Re-read the ticket after coding.</check>
+    <check>Check acceptance criteria one by one.</check>
+    <check>Remove scope creep, "while I'm here" improvements, and speculative features.</check>
+  </pass>
+
+  <pass order="9" name="Spec Precision">
+    <trigger>Fires when: UI copy, labels, field names, statuses, or error messages are added or changed.</trigger>
+    <skip-when>Backend-only changes with no user-facing text.</skip-when>
+    <check>UI copy matches spec exactly (e.g., "ticket saved" != "Ticket Saved").</check>
+    <check>Field names, labels, statuses, and error messages match the spec.</check>
+    <check>Behavior matches described states and edge cases precisely.</check>
+    <check>If the ticket says "multi select" — verify the widget actually allows selecting multiple values.</check>
+    <check>If the ticket says "alphabetical" — read the list top to bottom and confirm A-Z order.</check>
+  </pass>
+
+  <pass order="10" name="Manual Smoke Test">
+    <trigger>Fires when: UI changes, JS widget changes, or user-facing interactions are modified.</trigger>
+    <skip-when>Backend-only changes with no UI impact.</skip-when>
+    <check>For each AC scenario, physically perform the described action — don't trust code reading alone.</check>
+    <check>Kendo/JS widgets can behave differently than the HTML suggests — click it to verify.</check>
+    <check>If you can't run it locally, flag that explicitly.</check>
+  </pass>
+
+  <pass order="11" name="Migration/Schema">
+    <trigger>Fires when: model properties are added, removed, or changed.</trigger>
+    <skip-when>No model/entity changes in the diff.</skip-when>
+    <check>Every model property add/remove MUST have a matching migration.</check>
+    <check>Run dotnet ef migrations add and verify the generated migration does what you expect.</check>
+    <check>Check the snapshot file matches your model.</check>
+  </pass>
 </self-review-checklist>
 
 <approval-criteria>

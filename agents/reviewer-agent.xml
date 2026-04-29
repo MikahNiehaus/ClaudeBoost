@@ -106,19 +106,19 @@
     <check>No sensitive data in log statements</check>
     <check>Pure functions/utilities correctly exempt</check>
   </pass>
-  <pass name="Self-Review Verification">
-    <description>Verify the code author completed the 11-step self-review checklist (see knowledge/pr-review.xml)</description>
-    <check>Simplicity pass: No unnecessary code that could be deleted, inlined, or simplified</check>
-    <check>Already-exists pass: No reinvented functionality that the codebase or a dependency already provides — but verify the existing thing actually meets the requirement (reusing a single-select widget for a multi-select requirement is worse than creating a new one)</check>
-    <check>Dead code pass: Every variable, param, and function is actually referenced</check>
-    <check>Debug cleanup pass: No temporary logs, flags, or commented blocks left behind</check>
-    <check>Project patterns pass: Solution follows how this repo usually solves this problem</check>
-    <check>Common-pattern breaker pass: No shared conventions broken without justification</check>
-    <check>Fresh eyes pass: Code reads clearly to someone who didn't write it</check>
-    <check>Ticket alignment pass: Implements exactly what the ticket asks, no more, no less</check>
-    <check>Spec precision pass: Word-for-word match on UI copy, field names, behaviors</check>
-    <check>Manual smoke test pass: Author actually used the feature in a browser for each AC scenario — code reading alone is insufficient for JS widget behavior</check>
-    <check>Migration/Schema pass: Every model property add/remove has a matching migration that does what's expected</check>
+  <pass name="Self-Review Verification (Trigger-Conditional)">
+    <description>Run the 11-pass checklist from knowledge/pr-review.xml. Each pass has a trigger condition — evaluate the diff FIRST, then run only the passes whose triggers fire. Skipped passes MUST appear in output as "N/A: [reason]". This proves they were considered, not forgotten.</description>
+    <check>Simplicity (always): Can code be deleted, inlined, or simplified?</check>
+    <check>Already-Exists (trigger: new utility/helper/component): Does codebase already provide this?</check>
+    <check>Dead Code (trigger: deletions or new params): Every var/param/function actually referenced?</check>
+    <check>Debug Cleanup (always): Any temporary logs, flags, commented blocks left?</check>
+    <check>Convention Compliance (trigger: new elements on existing page/file): Do new elements follow ALL patterns their siblings use? List sibling attributes explicitly, verify each one.</check>
+    <check>Common-Pattern Breaker (trigger: new pattern differs from codebase norm): Breaking shared convention?</check>
+    <check>Fresh Eyes (always): Read every line like you didn't write it</check>
+    <check>Ticket Alignment (always): Exactly what the ticket asks, no more, no less</check>
+    <check>Spec Precision (trigger: UI copy/labels/field names): Word-for-word match on user-facing text</check>
+    <check>Manual Smoke Test (trigger: UI/JS widget changes): Actually used feature in browser per AC scenario</check>
+    <check>Migration/Schema (trigger: model property changes): Every add/remove has matching migration</check>
   </pass>
   <pass name="Code Smells">
     <description>Detect structural indicators of deeper design problems (see knowledge/coding-standards.xml)</description>
@@ -162,6 +162,30 @@
 - Findings verified from code: [count]
 - Findings unverified: [count]
 - If NEEDS_VERIFICATION: evaluator-agent MUST be spawned before presenting to user
+
+### Self-Review Passes (MANDATORY — trigger-conditional)
+Evaluate each pass trigger against the diff. Run passes whose triggers fire. Mark others N/A.
+
+| # | Pass | Trigger Fired? | Result | Evidence |
+|---|------|---------------|--------|----------|
+| 1 | Simplicity | Always | PASS/FAIL | [finding or "clean"] |
+| 2 | Already-Exists | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 3 | Dead Code | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 4 | Debug Cleanup | Always | PASS/FAIL | [finding or "clean"] |
+| 5 | Convention Compliance | YES/N/A: [reason] | PASS/FAIL/SKIP | [sibling patterns checked + result] |
+| 6 | Common-Pattern Breaker | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 7 | Fresh Eyes | Always | PASS/FAIL | [finding or "clean"] |
+| 8 | Ticket Alignment | Always | PASS/FAIL | [finding or "aligned"] |
+| 9 | Spec Precision | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 10 | Manual Smoke Test | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 11 | Migration/Schema | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+
+#### Convention Compliance Detail (when trigger fires)
+- **Existing page/file**: [name]
+- **Sibling elements inspected**: [list the nearest pre-existing elements]
+- **Patterns found on siblings**: [list every attribute/guard/class/convention]
+- **New elements checked against each pattern**: [element → pattern → MATCH/MISMATCH]
+- **Verdict**: PASS (all match) / FAIL (list mismatches with file:line)
 
 ### Best Practices Assessment (MANDATORY)
 
