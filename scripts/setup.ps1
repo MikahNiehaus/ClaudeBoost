@@ -118,6 +118,20 @@ if (-not (Test-Path $approvalsPath)) {
     [System.IO.File]::WriteAllText($approvalsPath, '{"sessionId":"","approvals":[]}', [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/session-approvals.json - seeded empty" -ForegroundColor Green
 }
+$speakPath = Join-Path $stateDir "speak-state.json"
+if (-not (Test-Path $speakPath)) {
+    $speakDefault = (@{
+        enabled = $false
+        voice = "en-US-AndrewNeural"
+        maxChars = 2000
+        setAt = (Get-Date).ToString("o")
+        setBy = "default"
+    } | ConvertTo-Json).TrimStart([char]0xFEFF)
+    [System.IO.File]::WriteAllText($speakPath, $speakDefault, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] state/speak-state.json - seeded TTS disabled default" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] state/speak-state.json - preserving existing setting" -ForegroundColor Yellow
+}
 
 # Ensure hooks block exists
 if (-not $settings.PSObject.Properties["hooks"]) {
@@ -193,7 +207,7 @@ Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $consultSe
 # match, duplicates piled up). agent-spawn-gate.py reads the Task tool_input
 # directly and emits a non-blocking stderr nudge if rag_context or the
 # architect-agent PROPOSAL_ONLY contract is missing. Never blocks.
-$agentGatePath = "$CLAUDEBOOST_HOME\scripts\agent-spawn-gate.py".Replace("\", "/")
+$agentGatePath = "$boostHome\scripts\agent-spawn-gate.py".Replace("\", "/")
 $taskSpawnHook = [PSCustomObject]@{
     matcher = "Task"
     hooks = @(
@@ -228,7 +242,7 @@ Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $workspaceHo
 #   AUTO              -> exit 0, silent
 #   CONSULT + exempt  -> exit 0, silent
 #   CONSULT + other   -> exit 0, stderr nudge (non-blocking reminder)
-$consultGatePath = "$CLAUDEBOOST_HOME\scripts\consult-gate.py".Replace("\", "/")
+$consultGatePath = "$boostHome\scripts\consult-gate.py".Replace("\", "/")
 $consultEditHook = [PSCustomObject]@{
     matcher = "Edit|Write|MultiEdit"
     hooks = @(
@@ -287,6 +301,41 @@ $preCompactHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
     -Sentinel "CONTEXT PRESERVATION" -Label "context preservation"
 
+# --- Stop: TTS speak hook (command-type) ---
+# Install-HookEntry checks $h.prompt for sentinel, but command-type hooks use
+# $h.command instead. Handle directly with command-string check.
+$speakHookPath = "$boostHome\scripts\speak-tts.py".Replace("\", "/")
+$speakHook = [PSCustomObject]@{
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$speakHookPath`""
+        }
+    )
+}
+$speakInstalled = $false
+if ($settings.hooks.PSObject.Properties["Stop"]) {
+    $existingStop = @($settings.hooks.Stop)
+    foreach ($e in $existingStop) {
+        if ($e.hooks) {
+            foreach ($h in $e.hooks) {
+                if ($h.command -and $h.command.Contains("speak-tts.py")) {
+                    $speakInstalled = $true
+                }
+            }
+        }
+    }
+    if (-not $speakInstalled) {
+        $settings.hooks.Stop = @($existingStop) + @($speakHook)
+        Write-Host "[OK] hooks.Stop - appended TTS speak hook" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIP] hooks.Stop - TTS speak hook already installed" -ForegroundColor Yellow
+    }
+} else {
+    $settings.hooks | Add-Member -NotePropertyName "Stop" -NotePropertyValue @($speakHook)
+    Write-Host "[OK] hooks.Stop - added TTS speak hook" -ForegroundColor Green
+}
+
 $settingsJson = ($settings | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] settings.json - CLAUDEBOOST_HOME env added" -ForegroundColor Green
@@ -331,14 +380,34 @@ try {
     Write-Host "  Run manually: pip install -e $ragDir" -ForegroundColor Yellow
 }
 
+# --- 3b. Ensure edge-tts is installed (for /speak TTS) ---
+Write-Host "`nVerifying edge-tts..." -ForegroundColor Cyan
+try {
+    $edgeTtsCheck = & python -c "import edge_tts; print('ok')" 2>&1
+    if ($edgeTtsCheck -eq "ok") {
+        Write-Host "[OK] edge-tts already installed" -ForegroundColor Green
+    } else {
+        Write-Host "Installing edge-tts..." -ForegroundColor Yellow
+        & pip install edge-tts 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[OK] edge-tts installed" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] edge-tts install failed - /speak will not work until you run: pip install edge-tts" -ForegroundColor Yellow
+        }
+    }
+} catch {
+    Write-Host "[WARN] Could not verify edge-tts: $_" -ForegroundColor Yellow
+}
+
 # --- Summary ---
 Write-Host "`n=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host "  CLAUDEBOOST_HOME = $boostHomePosix"
 Write-Host "  RAG server registered in $mcpPath"
-Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact)"
+Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact, Stop)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Restart Claude Code for MCP changes to take effect"
 Write-Host "  2. Run /boost to verify all systems"
-Write-Host "  3. (Optional) Rebuild Gas Town with 'make build' if gt errors occur"
+Write-Host "  3. Run /speak on to enable text-to-speech"
+Write-Host "  4. (Optional) Rebuild Gas Town with 'make build' if gt errors occur"
 Write-Host ""
