@@ -26,7 +26,7 @@ from pathlib import Path
 # Windows: DETACHED_PROCESS so the player runs independently
 DETACHED_PROCESS = 0x00000008
 MIN_SPEAK_CHARS = 10
-DEFAULT_MAX_CHARS = 2000
+DEFAULT_MAX_CHARS = 500
 DEFAULT_VOICE = "en-US-AndrewNeural"
 
 
@@ -88,8 +88,8 @@ def redact_secrets(text: str) -> str:
     return text
 
 
-def filter_for_speech(text: str, max_chars: int) -> str:
-    """Strip code, markdown, redact secrets, and truncate for TTS."""
+def strip_markdown(text: str) -> str:
+    """Remove markdown formatting, code blocks, and structural elements."""
     # Remove fenced code blocks
     text = re.sub(r"```[\s\S]*?```", "", text)
     # Remove inline code
@@ -108,10 +108,57 @@ def filter_for_speech(text: str, max_chars: int) -> str:
     # Remove list markers
     text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
-    # Redact sensitive data before sending to external TTS service
+    return text
+
+
+def condense_for_speech(text: str) -> str:
+    """Aggressively condense text to only the essential message.
+
+    TTS listeners can't skim — every word costs time. Keep only the
+    first few meaningful sentences and drop filler, repetition, and
+    structural scaffolding.
+    """
+    # Remove common filler phrases
+    filler = [
+        r"(?i)^(here'?s?|okay|alright|sure|great|got it|understood)[,.]?\s*",
+        r"(?i)^(let me|i'll|i will|i'm going to|i am going to)\s+",
+        r"(?i)^(now |so |well |basically |essentially |actually )",
+        r"(?i)^(as (you can see|mentioned|requested|noted))[,.]?\s*",
+    ]
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        for pat in filler:
+            line = re.sub(pat, "", line).strip()
+        if line:
+            cleaned.append(line)
+    text = " ".join(cleaned)
+
+    # Remove parenthetical asides (e.g., "(i.e., ...)", "(see ...)")
+    text = re.sub(r"\s*\([^)]{0,100}\)\s*", " ", text)
+
+    # Remove "Sources:" sections and everything after
+    text = re.sub(r"(?i)\n*sources?:[\s\S]*$", "", text)
+
+    # Collapse to first 3 sentences max for spoken output
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    sentences = [s for s in sentences if len(s) > 5]  # drop fragments
+    text = " ".join(sentences[:3])
+
+    return text.strip()
+
+
+def filter_for_speech(text: str, max_chars: int) -> str:
+    """Strip code, markdown, redact secrets, condense, and truncate for TTS."""
+    text = strip_markdown(text)
     text = redact_secrets(text)
-    # Collapse whitespace
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = condense_for_speech(text)
+
+    # Final whitespace cleanup
+    text = re.sub(r"\n{2,}", " ", text)
     text = re.sub(r"  +", " ", text)
     text = text.strip()
 
