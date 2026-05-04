@@ -115,15 +115,27 @@ def condense_for_speech(text: str) -> str:
     """Aggressively condense text to only the essential message.
 
     TTS listeners can't skim — every word costs time. Keep only the
-    first few meaningful sentences and drop filler, repetition, and
-    structural scaffolding.
+    first 2 meaningful sentences. Target: ~10-15 seconds of speech
+    (~200 chars). Everything else is readable on screen.
     """
+    # Remove "Sources:" sections and everything after
+    text = re.sub(r"(?i)\n*sources?:[\s\S]*$", "", text)
+
+    # Remove section headers (e.g., "Summary", "Details", "Changes")
+    text = re.sub(r"(?i)^(summary|details|changes|overview|context|background|notes?)\s*:?\s*$",
+                  "", text, flags=re.MULTILINE)
+
     # Remove common filler phrases
     filler = [
-        r"(?i)^(here'?s?|okay|alright|sure|great|got it|understood)[,.]?\s*",
-        r"(?i)^(let me|i'll|i will|i'm going to|i am going to)\s+",
+        r"(?i)^(here'?s?|okay|alright|sure|great|got it|understood)[,.:!]?\s*",
+        r"(?i)^(let me|i'll|i will|i'm going to|i am going to)\s+\w+\s+",
         r"(?i)^(now |so |well |basically |essentially |actually )",
         r"(?i)^(as (you can see|mentioned|requested|noted))[,.]?\s*",
+        r"(?i)^(I've (also|additionally)\s+)",
+        r"(?i)(let me know if .*$)",
+        r"(?i)(feel free to .*$)",
+        r"(?i)(if you('d| would) like.*$)",
+        r"(?i)^(the key (changes?|updates?|things?) (are|is|include)[:\s]*)",
     ]
     lines = text.split("\n")
     cleaned = []
@@ -131,22 +143,33 @@ def condense_for_speech(text: str) -> str:
         line = line.strip()
         if not line:
             continue
+        # Skip lines that are just labels or single words
+        if len(line) < 8:
+            continue
         for pat in filler:
             line = re.sub(pat, "", line).strip()
-        if line:
+        if line and len(line) > 5:
             cleaned.append(line)
     text = " ".join(cleaned)
 
-    # Remove parenthetical asides (e.g., "(i.e., ...)", "(see ...)")
+    # Remove parenthetical asides
     text = re.sub(r"\s*\([^)]{0,100}\)\s*", " ", text)
 
-    # Remove "Sources:" sections and everything after
-    text = re.sub(r"(?i)\n*sources?:[\s\S]*$", "", text)
-
-    # Collapse to first 3 sentences max for spoken output
+    # Collapse to first 2 sentences max
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    sentences = [s for s in sentences if len(s) > 5]  # drop fragments
-    text = " ".join(sentences[:3])
+    sentences = [s for s in sentences if len(s) > 10]
+    text = " ".join(sentences[:2])
+
+    # Hard cap at 300 chars (~20 seconds of speech)
+    if len(text) > 300:
+        truncated = text[:300]
+        boundary = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
+        if boundary > 100:
+            text = truncated[: boundary + 1]
+        else:
+            # Cut at last space
+            last_space = truncated.rfind(" ")
+            text = truncated[:last_space] if last_space > 100 else truncated
 
     return text.strip()
 

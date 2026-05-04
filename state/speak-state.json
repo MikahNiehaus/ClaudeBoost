@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "voice": "en-US-AndrewNeural",
-  "maxChars": 2000,
+  "maxChars": 500,
   "setAt": "2026-05-01T20:40:00Z",
   "setBy": "user /speak on"
 }
