@@ -1,21 +1,40 @@
+---
+argument-hint: [scope — e.g. "last 3 commits", "staged", "src/", "HEAD~5..HEAD"]
+description: Show Interactive Change Explorer
+allowed-tools: Read, Write, Bash, Glob, Grep
+---
+
 # Show Interactive Change Explorer
 
-Display all code changes with AI-generated explanations in an interactive terminal tab.
+Display code changes with AI-generated explanations in an interactive terminal tab.
 
-## Step 1: Detect Changes
+Scope: **$ARGUMENTS**
 
-Run these commands to find what changed:
+## Step 1: Resolve Scope
+
+If `$ARGUMENTS` is non-empty, interpret it to build the git diff command(s). Use natural language understanding — these are guidelines, not rigid patterns:
+
+| User says | Diff stat command | Diff command |
+|-----------|-------------------|--------------|
+| `last N commits` / `N commits` | `git diff HEAD~N --stat` | `git diff HEAD~N` |
+| `staged` | `git diff --staged --stat` | `git diff --staged` |
+| `unstaged` | `git diff --stat` | `git diff` |
+| A commit range like `A..B` | `git diff A..B --stat` | `git diff A..B` |
+| A branch name | `git diff <branch> --stat` | `git diff <branch>` |
+| A file or directory path | Auto-detect diff + append `-- <path>` | Auto-detect diff + append `-- <path>` |
+| Anything else | Interpret intent, pick the closest git diff invocation |
+
+**If `$ARGUMENTS` is empty** (no scope provided), auto-detect:
 ```bash
 git diff --stat 2>/dev/null
 git diff --staged --stat 2>/dev/null
 ```
-
 If both are empty, fall back to last commit:
 ```bash
 git diff HEAD~1 --stat 2>/dev/null
 ```
 
-If still nothing, tell the user "No changes to show" and STOP. Do not open a tab.
+Run the resolved stat command. If nothing comes back, tell the user "No changes to show" and STOP.
 
 Otherwise, report what you found: "Found N files with changes. Generating explanations..."
 
@@ -23,12 +42,7 @@ Otherwise, report what you found: "Found N files with changes. Generating explan
 
 ## Step 2: Get Full Diff
 
-Capture the unified diff:
-```bash
-git diff 2>/dev/null
-git diff --staged 2>/dev/null
-```
-Or if using fallback: `git diff HEAD~1 2>/dev/null`
+Run the resolved diff command (without `--stat`) to capture the unified diff. This must match the same scope from Step 1.
 
 ## Step 3: Agent Attribution
 
