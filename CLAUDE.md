@@ -8,12 +8,12 @@ semantic search — works standalone or with Gas Town.
 You have 24 specialist agents (`agents/*.xml`) and 38 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
-**RAG powers agent knowledge (MANDATORY):**
-- Spawned agents MUST call `rag_context` as their FIRST action — no exceptions, no skipping
-- When unsure which knowledge file applies: MUST call `rag_search` with a natural language query
-- When reviewing code: MUST `rag_search` for the relevant standards (e.g., "SQL security", "logging requirements")
+**RAG powers agent knowledge (ENFORCED BY HOOK):**
+- Spawned agents MUST call `rag_context` as their FIRST action
+- Use `rag_search` when unsure which knowledge file applies or when reviewing code for standards
 - NEVER guess which file to read — search for it
-- A PreToolUse hook enforces `rag_context` on every agent spawn — if you skip it, the hook will catch you
+- Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
+- PreToolUse hook on `Task` enforces this
 
 ## Decision Flow
 
@@ -34,11 +34,6 @@ If you can't cite specific lines — drop the flag. "Nothing found" is always va
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one-line fix doesn't need an agent.
 
-**Agent knowledge loading (ENFORCED BY HOOK)**: Spawned agents MUST call `rag_context` as
-their FIRST action. Include the agent name and task description in the spawn prompt
-so the agent knows what to query. You do NOT need to pre-fetch knowledge.
-A PreToolUse hook on `Task` verifies every spawn includes `rag_context` instructions.
-
 ### Model Routing
 - **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent
 - **Sonnet**: all others
@@ -57,47 +52,29 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - "No issues found" is always a valid outcome
 - Reviewers: finding something is NOT the goal. Finding REAL things is.
 
-**Structural Enforcement** (hooks, not just instructions):
-- **PreToolUse on Task**: Injects verify gate instructions into every agent spawn prompt
-- **PostToolUse on Task**: Intercepts agent output — unverified BLOCKER/HIGH findings are dropped or verified
-- **Output format**: Evidence column and Verification Status make gaps structurally visible
-- **Evaluator escalation**: NEEDS_VERIFICATION status triggers mandatory evaluator-agent spawn
+Hooks enforce this: PreToolUse injects verify gate into spawns, PostToolUse drops unverified BLOCKER/HIGH findings, NEEDS_VERIFICATION triggers evaluator-agent.
 
 ## Collaborative Mode (CONSULT / AUTO)
 
-Default is **CONSULT**. Before making any architectural decision, you must research the project, spawn `architect-agent` (Opus) for a grounded proposal, and present options to the user via `AskUserQuestion`. The user adds constraints on top; you implement.
+Default: **CONSULT**. Research project, spawn `architect-agent` (Opus) for proposal, present via `AskUserQuestion`. User adds constraints; you implement.
 
-**Architectural triggers** (fires consultation): new endpoint, new DB table/migration, new dependency, new module/stateful class, new middleware, auth/validation/error/logging strategy, new public API, new config surface, new concurrency model.
+**Triggers**: new endpoint/table/dependency/module/middleware/auth-strategy/API/config/concurrency.
+**Not triggers**: typos, bugfixes, tests, docs, config tweaks, renames, edits under `workspace/`/`.claude/`/`knowledge/`/`plans/`/`docs/`.
 
-**Not triggers** (proceed silently): typos, single-line bugfixes, tests, docs, value-only config tweaks, renames in one file, edits under `workspace/`, `.claude/`, `knowledge/`, `plans/`, `docs/`.
-
-**Consultation is additive, not gatekeeping.** RAG-required standards (parameterized queries, `logger.error` in catch, input validation, auth checks) are applied automatically — they are never up for debate. The user's role is to *add* constraints (size caps, charset allowlists, rate limits).
-
-**Research-first contract**: `architect-agent` refuses to produce a proposal unless the spawn prompt contains ≥2 `file:line` citations. No guessing — cite existing code.
-
-**Session-scoped approval memory**: approved decisions are logged to `state/session-approvals.json`. You do not re-consult on an already-decided axis within the same session.
-
-**Mode state file**: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. Missing file ⇒ CONSULT (safe default).
-
-**Bypass**: `/auto [reason]` switches to AUTO mode (autonomous). `/consult` restores CONSULT. AUTO is for prototyping, exploration, and trivial work where rework cost is low.
-
-Full protocol: `knowledge/consult-mode.xml`.
+Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically — not debatable.
+`architect-agent` requires >=2 `file:line` citations in spawn prompt.
+Approvals logged to `state/session-approvals.json` (session-scoped).
+State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
+`/auto [reason]` = AUTO. `/consult` = restore. Full protocol: `knowledge/consult-mode.xml`.
 
 ## Token Efficiency
 
-Do it right the first time. Rework costs more than ceremony.
-
-**Quality-first routing** — pick the right weight per agent:
-- **Full** (reviewer, security, performance): verify gate + evaluator-agent after
-- **Standard** (workflow, refactor, debug, test, ui, etc.): no verify gate needed
+**Agent weight routing**:
+- **Full** (reviewer, security, performance): verify gate + evaluator-agent
+- **Standard** (workflow, refactor, debug, test, ui): no verify gate
 - **Lightweight** (explore, research, docs, estimator, teacher): minimal ceremony
 
-**Always evaluator, never self-verify findings**: A fresh context catches hallucinations
-that same-context self-verification confirms. Evaluator is cheap (~1000-2000 tokens)
-vs rework from false findings (~5000-10000 tokens).
-
-**Lightweight evaluator**: Only reads cited file:lines, verdicts each finding. No full
-ceremony needed — just targeted verification.
+Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.
 
 ## Hard Rules (Non-Negotiable)
 
@@ -113,10 +90,6 @@ Use instead: React hooks, vanilla JS, native fetch.
 - No secrets in logs, URLs, or source code
 - Input validation at system boundaries
 - Auth/authz checks on endpoints
-
-### Shell Command Rules (Avoid Permission Prompts)
-- NEVER use `cd "/path" && command` — compound commands with `cd` trigger permission prompts. Use `git -C "/path"` for git, or run the command directly with absolute paths.
-- NEVER backslash-escape spaces in paths (e.g., `F\ and\ B\`). ALWAYS use double-quoted paths instead (e.g., `"F and B"`). Backslash-escaped whitespace triggers a safety check.
 
 ### Logging Standards
 - **BLOCKER**: Missing `logger.error` in catch/error blocks
@@ -149,58 +122,24 @@ Yes: document alternatives and rationale. No: just do it.
 
 ## Gas Town Compatibility
 
-Works with: `gt prime`, `gt hook`, `gt sling`, `gt mail`, `gt nudge`, `gt handoff`, beads.
-Workspace convention is compatible with bead attachment.
-Agent spawning is compatible with `gt sling` to polecats.
+Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`, `gt handoff`, beads.
 
 ## RAG Server
 
-MCP server for semantic search over agents, knowledge, workspaces, and codebases.
-Register globally so every project has access:
-
-```json
-{
-  "mcpServers": {
-    "rag-server": {
-      "command": "python",
-      "args": ["-m", "rag_server"],
-      "cwd": "<path-to-ClaudeBoost>/mcp-rag-server"
-    }
-  }
-}
-```
-
-Tools: `rag_search`, `rag_index`, `rag_context`, `rag_status`.
+MCP tools: `rag_search`, `rag_index`, `rag_context`, `rag_status`.
 
 ## Agent Roster
 
-| Agent | Specialty | Model |
-|-------|-----------|-------|
-| architect-agent | System design, patterns | Opus |
-| reviewer-agent | Code review, SOLID validation | Opus |
-| ticket-analyst-agent | Requirements analysis | Opus |
-| test-agent | Testing, TDD | Sonnet |
-| debug-agent | Root cause analysis | Sonnet |
-| security-agent | Security auditing | Sonnet |
-| performance-agent | Performance optimization | Sonnet |
-| refactor-agent | Code refactoring | Sonnet |
-| ui-agent | Frontend, accessibility | Sonnet |
-| docs-agent | Documentation | Sonnet |
-| research-agent | Investigation | Sonnet |
-| explore-agent | Code exploration | Sonnet |
-| browser-agent | Playwright testing | Sonnet |
-| workflow-agent | Complex multi-step workflows | Sonnet |
-| compliance-agent | Compliance auditing | Sonnet |
-| evaluator-agent | Output verification | Sonnet |
-| standards-validator-agent | Standards validation | Sonnet |
-| estimator-agent | Story pointing | Sonnet |
-| teacher-agent | Teaching, explanation | Sonnet |
-| devops-agent | CI/CD, Docker, deployment | Sonnet |
-| database-agent | Schema design, queries, migrations | Sonnet |
-| observability-agent | Logging, metrics, alerting | Sonnet |
+Opus: architect-agent, reviewer-agent, ticket-analyst-agent. All others: Sonnet.
+Use `rag_search` for agent details or `/list-agents`.
 
-## Browser Testing Safety
+## TTS (Text-to-Speech)
 
-Playwright/browser automation is **localhost only**.
-Allowed: localhost, 127.0.0.1, 0.0.0.0, *.local, *.test.
-If unsure whether a URL is local, ask before navigating.
+The Stop hook at `$CLAUDEBOOST_HOME/scripts/speak-tts.py` handles TTS **automatically** after every response. When `speak-state.json` has `enabled: true`, the hook reads the response, strips markdown, and speaks it aloud via edge-tts.
+
+**NEVER run edge-tts, speak-play.py, or `start` manually via Bash.** This triggers permission prompts. Just respond normally — the hook does the rest.
+
+- `/speak on` → set `speak-state.json` to `enabled: true`, respond normally
+- `/speak off` → set `speak-state.json` to `enabled: false`
+- `/speak voice <name>` → update the voice field
+- `/speak voices` → list available voices
