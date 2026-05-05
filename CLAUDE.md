@@ -1,7 +1,6 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. Agents, knowledge bases, and
-semantic search — works standalone or with Gas Town.
+Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, semantic search.
 
 ## How It Works
 
@@ -26,8 +25,7 @@ Two paths, not five mandatory steps:
 2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity)
 3. Spawn the right agent(s)
 
-Sweep-then-verify: scan all domains, but for every flag you raise, **prove it from actual code**.
-If you can't cite specific lines — drop the flag. "Nothing found" is always valid.
+Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
 
 ## Agent Spawning
 
@@ -76,33 +74,13 @@ State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 
 Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.
 
-## Hard Rules (Non-Negotiable)
-
-### jQuery Ban
-jQuery is BANNED unless user explicitly requests it.
-Detect: `$()`, `jQuery`, `import/require jquery`, CDN script tags.
-Use instead: React hooks, vanilla JS, native fetch.
-
-### Security Standards
-- Parameterized queries always (never string concatenation in SQL)
-- SQL transactions for multi-step database operations
-- OWASP top 10 awareness — see `knowledge/security.xml`
-- No secrets in logs, URLs, or source code
-- Input validation at system boundaries
-- Auth/authz checks on endpoints
-
-### Logging Standards
-- **BLOCKER**: Missing `logger.error` in catch/error blocks
-- **BLOCKER**: Sensitive data in log output
-- **Suggestion**: Missing INFO-level on service methods
-- **Suggestion**: Missing before/after on external calls
+## Hard Rules
+See global `~/.claude/CLAUDE.md` — jQuery Ban, Security Standards, Logging Standards apply here.
 
 ## When to Use What
 
 | Trigger | Action |
 |---------|--------|
-| Simple question | Answer directly |
-| Simple code change | Do it, no agent needed |
 | Ticket pasted | Save verbatim to `workspace/[task-id]/ticket.md`, plan, then delegate |
 | Complex feature | Workspace + sweep-then-verify + agents |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
@@ -128,18 +106,10 @@ Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`,
 
 MCP tools: `rag_search`, `rag_index`, `rag_context`, `rag_status`.
 
-## Agent Roster
-
-Opus: architect-agent, reviewer-agent, ticket-analyst-agent. All others: Sonnet.
-Use `rag_search` for agent details or `/list-agents`.
-
 ## TTS (Text-to-Speech)
 
-The Stop hook at `$CLAUDEBOOST_HOME/scripts/speak-tts.py` handles TTS **automatically** after every response. When `speak-state.json` has `enabled: true`, the hook reads the response, strips markdown, and speaks it aloud via edge-tts.
+Hook auto-speaks responses when enabled. **NEVER run edge-tts, speak-play.py, or `start` via Bash** — triggers permission prompts. Just respond normally.
 
-**NEVER run edge-tts, speak-play.py, or `start` manually via Bash.** This triggers permission prompts. Just respond normally — the hook does the rest.
-
-- `/speak on` → set `speak-state.json` to `enabled: true`, respond normally
-- `/speak off` → set `speak-state.json` to `enabled: false`
-- `/speak voice <name>` → update the voice field
-- `/speak voices` → list available voices
+- `/speak on|off` — toggle TTS
+- `/speak voice <name>` — change voice
+- `/speak voices` — list voices
