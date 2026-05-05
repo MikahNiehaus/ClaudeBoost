@@ -259,6 +259,24 @@ Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $consultEdit
 # above (command-type hook). No separate prompt-type hook needed; the old one
 # over-fired the same way as the AGENT SPAWN hook and is no longer installed.
 
+# --- PreToolUse: Bash guard (blocks commands that trigger permission prompts) ---
+# Command-type hook (BLOCKING — exit 2). Catches two patterns:
+#   1. cd "/path" && command — triggers "bare repository attack" prompt
+#   2. Backslash-escaped spaces — triggers "backslash-escaped whitespace" prompt
+# Claude sees the block message and retries with the correct pattern.
+$bashGuardPath = "$boostHome\scripts\bash-guard.py".Replace("\", "/")
+$bashGuardHook = [PSCustomObject]@{
+    matcher = "Bash"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$bashGuardPath`""
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $bashGuardHook `
+    -Sentinel "bash-guard.py" -Label "Bash guard (command-type)"
+
 # --- PreToolUse: process-kill safety (persistent rule) ---
 $killSafetyHook = [PSCustomObject]@{
     matcher = "Bash(pkill*)|Bash(killall*)|Bash(*Stop-Process*)|Bash(*taskkill*/IM*)"

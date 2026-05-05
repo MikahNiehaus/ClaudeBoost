@@ -114,6 +114,10 @@ Use instead: React hooks, vanilla JS, native fetch.
 - Input validation at system boundaries
 - Auth/authz checks on endpoints
 
+### Shell Command Rules (Avoid Permission Prompts)
+- NEVER use `cd "/path" && command` — compound commands with `cd` trigger permission prompts. Use `git -C "/path"` for git, or run the command directly with absolute paths.
+- NEVER backslash-escape spaces in paths (e.g., `F\ and\ B\`). ALWAYS use double-quoted paths instead (e.g., `"F and B"`). Backslash-escaped whitespace triggers a safety check.
+
 ### Logging Standards
 - **BLOCKER**: Missing `logger.error` in catch/error blocks
 - **BLOCKER**: Sensitive data in log output
