@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,28 @@ DETACHED_PROCESS = 0x00000008
 MIN_SPEAK_CHARS = 10
 DEFAULT_MAX_CHARS = 500
 DEFAULT_VOICE = "en-US-AndrewNeural"
+
+
+def kill_existing_player(temp_dir: str) -> None:
+    """Stop any currently-playing TTS before starting a new one."""
+    # Signal graceful stop via file
+    stop_file = os.path.join(temp_dir, "claudeboost_tts.stop")
+    try:
+        Path(stop_file).write_text("stop", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Kill by PID as backup
+    pid_file = os.path.join(temp_dir, "claudeboost_tts.pid")
+    try:
+        pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        Path(pid_file).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def read_json(path: str | os.PathLike, default):
@@ -249,6 +272,16 @@ def main() -> int:
         Path(text_file).write_text(text, encoding="utf-8")
     except Exception:
         return 0
+
+    # Kill any existing TTS playback before starting new
+    kill_existing_player(temp_dir)
+
+    # Clear stale stop file so the new player doesn't immediately exit
+    stale_stop = os.path.join(temp_dir, "claudeboost_tts.stop")
+    try:
+        Path(stale_stop).unlink(missing_ok=True)
+    except Exception:
+        pass
 
     play_script = str(Path(home) / "scripts" / "speak-play.py")
     try:
