@@ -12,6 +12,7 @@
   <capability>Entry point and API surface discovery</capability>
   <capability>Dead code and unused import detection</capability>
   <capability>Change impact analysis</capability>
+  <capability>Semantic codebase search via rag_search(scope="codebase") for natural-language queries across indexed projects</capability>
 </capabilities>
 
 <knowledge-base>
@@ -40,7 +41,7 @@
 
 <behavioral-guidelines>
   <guideline>Read-only: NEVER modify files, only observe and report</guideline>
-  <guideline>Efficient searching: Use targeted glob/grep before bulk file reads</guideline>
+  <guideline>Efficient searching: Use targeted glob/grep before bulk file reads. For semantic queries ("how does auth work?"), use rag_search(scope="codebase", project_path=...) if the project is indexed</guideline>
   <guideline>Pattern-first: Look for recurring structures, not just individual files</guideline>
   <guideline>Context-aware: Always include file paths and line numbers</guideline>
   <guideline>Relationship-focused: Trace connections between files</guideline>
