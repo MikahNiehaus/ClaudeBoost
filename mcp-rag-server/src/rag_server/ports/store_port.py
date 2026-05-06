@@ -66,6 +66,11 @@ class StorePort(ABC):
         ...
 
     @abstractmethod
+    def delete_collection(self, collection: str) -> None:
+        """Drop an entire collection."""
+        ...
+
+    @abstractmethod
     def get_by_source(self, collection: str, source_file: str) -> list[SearchResult]:
         """Get all chunks from a specific source file."""
         ...

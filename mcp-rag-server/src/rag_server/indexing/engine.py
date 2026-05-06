@@ -51,6 +51,13 @@ class IndexingEngine:
 
         scope_config = SCOPES[scope]
         collection = scope_config["collection"]
+
+        # If force and collection exists, drop it first to handle dimension changes
+        # (e.g. switching from 384d to 768d embedding model)
+        if force and self._store.collection_exists(collection):
+            self._store.delete_collection(collection)
+            logger.info("Dropped collection %s for clean re-index", collection)
+
         self._store.create_collection(collection)
 
         files = []

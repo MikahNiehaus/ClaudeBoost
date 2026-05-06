@@ -14,12 +14,12 @@ Toggle text-to-speech so Claude's responses are spoken aloud via edge-tts (free 
 
 2. **Parse `$ARGUMENTS`**:
 
-   - **Empty or `status`**: Display current state — enabled/disabled, voice name, max chars. Done.
+   - **Empty or `status`**: Display current state — enabled/disabled, voice name. Done.
 
-   - **`on`**: Write updated state with `"enabled": true`. Then **adopt concise mode for the rest of this session**: your responses will be spoken aloud, so write short — 1-3 sentences max, no lists, no tables, no headers, no filler. Say what matters, skip the rest. The user can still read the full text. Confirm briefly:
-     > TTS on. Keeping responses short for voice.
+   - **`on`**: Write updated state with `"enabled": true`. Prefer concise responses when TTS is on — be natural, not artificially truncated. Confirm briefly:
+     > TTS on.
 
-   - **`off`**: Write updated state with `"enabled": false`. **Drop concise mode** — return to normal response length. Confirm:
+   - **`off`**: Write updated state with `"enabled": false`. Confirm:
      > TTS off. Back to normal responses.
 
    - **`voice <name>`**: Write updated state with the new voice name (e.g. `en-US-AndrewNeural`). Confirm:
@@ -32,7 +32,6 @@ Toggle text-to-speech so Claude's responses are spoken aloud via edge-tts (free 
    {
      "enabled": <true|false>,
      "voice": "<voice name>",
-     "maxChars": 500,
      "setAt": "<current ISO 8601 timestamp>",
      "setBy": "user /speak <arg>"
    }

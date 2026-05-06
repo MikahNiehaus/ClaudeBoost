@@ -171,6 +171,7 @@ You are [agent-name]. Your VERY FIRST tool call MUST be `rag_context`:
 - agent: "[agent-name]"
 - task_description: "[task description from Step 4]"
 - max_tokens: 6000
+- weight: "full" (for reviewer/security/performance) or "standard" (all others)
 
 This returns your agent definition, relevant knowledge chunks matched to your
 task via semantic search, and related workspace history. Read and internalize
@@ -241,6 +242,7 @@ You are [agent-name]. Call `rag_context` first:
 - agent: "[agent-name]"
 - task_description: "[description]"
 - max_tokens: 4000
+- weight: "lightweight"
 
 ## Step 2: Context Loading
 If workspace/[task-id]/context.md exists, read it.

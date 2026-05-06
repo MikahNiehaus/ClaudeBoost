@@ -27,7 +27,6 @@ from pathlib import Path
 # Windows: DETACHED_PROCESS so the player runs independently
 DETACHED_PROCESS = 0x00000008
 MIN_SPEAK_CHARS = 10
-DEFAULT_MAX_CHARS = 500
 DEFAULT_VOICE = "en-US-AndrewNeural"
 
 
@@ -135,12 +134,7 @@ def strip_markdown(text: str) -> str:
 
 
 def condense_for_speech(text: str) -> str:
-    """Aggressively condense text to only the essential message.
-
-    TTS listeners can't skim — every word costs time. Keep only the
-    first 2 meaningful sentences. Target: ~10-15 seconds of speech
-    (~200 chars). Everything else is readable on screen.
-    """
+    """Clean text for speech — remove filler and noise, keep full content."""
     # Remove "Sources:" sections and everything after
     text = re.sub(r"(?i)\n*sources?:[\s\S]*$", "", text)
 
@@ -178,27 +172,11 @@ def condense_for_speech(text: str) -> str:
     # Remove parenthetical asides
     text = re.sub(r"\s*\([^)]{0,100}\)\s*", " ", text)
 
-    # Collapse to first 2 sentences max
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    sentences = [s for s in sentences if len(s) > 10]
-    text = " ".join(sentences[:2])
-
-    # Hard cap at 300 chars (~20 seconds of speech)
-    if len(text) > 300:
-        truncated = text[:300]
-        boundary = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
-        if boundary > 100:
-            text = truncated[: boundary + 1]
-        else:
-            # Cut at last space
-            last_space = truncated.rfind(" ")
-            text = truncated[:last_space] if last_space > 100 else truncated
-
     return text.strip()
 
 
-def filter_for_speech(text: str, max_chars: int) -> str:
-    """Strip code, markdown, redact secrets, condense, and truncate for TTS."""
+def filter_for_speech(text: str) -> str:
+    """Strip code, markdown, redact secrets, and clean up for TTS."""
     text = strip_markdown(text)
     text = redact_secrets(text)
     text = condense_for_speech(text)
@@ -206,20 +184,8 @@ def filter_for_speech(text: str, max_chars: int) -> str:
     # Final whitespace cleanup
     text = re.sub(r"\n{2,}", " ", text)
     text = re.sub(r"  +", " ", text)
-    text = text.strip()
 
-    if len(text) > max_chars:
-        truncated = text[:max_chars]
-        last_period = truncated.rfind(".")
-        last_question = truncated.rfind("?")
-        last_excl = truncated.rfind("!")
-        boundary = max(last_period, last_question, last_excl)
-        if boundary > max_chars // 2:
-            text = truncated[: boundary + 1]
-        else:
-            return ""  # No good sentence boundary — skip
-
-    return text
+    return text.strip()
 
 
 def main() -> int:
@@ -244,7 +210,6 @@ def main() -> int:
         return 0
 
     voice = state.get("voice", DEFAULT_VOICE)
-    max_chars = state.get("maxChars", DEFAULT_MAX_CHARS)
 
     # 3. Prevent infinite loops
     if payload.get("stop_hook_active", False):
@@ -261,7 +226,7 @@ def main() -> int:
         return 0
 
     # 5. Filter for speech
-    text = filter_for_speech(text, max_chars)
+    text = filter_for_speech(text)
     if len(text) < MIN_SPEAK_CHARS:
         return 0
 

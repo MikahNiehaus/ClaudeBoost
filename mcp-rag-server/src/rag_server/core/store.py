@@ -35,6 +35,13 @@ class ChromaStore(StorePort):
         except Exception:
             return False
 
+    def delete_collection(self, collection: str) -> None:
+        """Drop a collection entirely (used for dimension-change re-index)."""
+        try:
+            self._client.delete_collection(collection)
+        except Exception:
+            pass
+
     def add_chunks(self, collection: str, chunks: list[Chunk]) -> int:
         if not chunks:
             return 0
@@ -106,6 +113,17 @@ class ChromaStore(StorePort):
             SearchResult(content=doc, metadata=meta, score=1.0)
             for doc, meta in zip(results["documents"], results["metadatas"])
         ]
+
+    def sample_dimension(self, collection: str) -> int | None:
+        """Return the embedding dimension of the first stored vector, or None."""
+        try:
+            col = self._get_collection(collection)
+            result = col.peek(limit=1)
+            if result["embeddings"] and result["embeddings"][0]:
+                return len(result["embeddings"][0])
+        except Exception:
+            pass
+        return None
 
     def list_sources(self, collection: str) -> list[str]:
         col = self._get_collection(collection)

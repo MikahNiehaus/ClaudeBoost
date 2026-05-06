@@ -134,6 +134,16 @@ async def list_tools() -> list[Tool]:
                         "minimum": 500,
                         "maximum": 16000,
                     },
+                    "weight": {
+                        "type": "string",
+                        "enum": ["lightweight", "standard", "full"],
+                        "description": (
+                            "Agent weight class. lightweight: skip guardrails "
+                            "(explore, research, docs, estimator, teacher). "
+                            "standard/full: include all guardrails."
+                        ),
+                        "default": "standard",
+                    },
                 },
                 "required": ["agent", "task_description"],
             },
@@ -186,6 +196,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 agent=arguments["agent"],
                 task_description=arguments["task_description"],
                 max_tokens=arguments.get("max_tokens", 4000),
+                weight=arguments.get("weight", "standard"),
             )
 
         else:
@@ -198,11 +209,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
+def _build_context(
+    agent: str, task_description: str, max_tokens: int, weight: str = "standard",
+) -> dict:
     """Build a tiered context package for an agent.
 
     Tier 0: Agent definition (always included, full text)
-    Tier 1: Universal guardrails (security, coding-standards, observability)
+    Tier 1: Universal guardrails (skipped for lightweight agents)
     Tier 2: Agent-declared knowledge bases (from <knowledge-base> tags)
     Tier 3: Semantic search fills remaining budget (knowledge only, not agents)
     """
@@ -230,7 +243,7 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
         for match in _re.finditer(r'<(?:primary|secondary)\s+file="([^"]+)"', agent_def):
             declared_files.append(match.group(1))
 
-    # --- Tier 1: Universal guardrails (always included for code-writing agents) ---
+    # --- Tier 1: Universal guardrails (skipped for lightweight agents) ---
     GUARDRAIL_FILES = [
         "knowledge/security.xml",
         "knowledge/observability.xml",
@@ -241,7 +254,14 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
     tier1_chunks = []
     tier1_tokens = 0
     tier1_sources_seen = set()
+
+    # Lightweight agents (explore, research, docs, estimator, teacher) skip guardrails —
+    # they gather info / produce docs, they don't write code.
+    skip_guardrails = weight == "lightweight"
+
     for guardrail_file in GUARDRAIL_FILES:
+        if skip_guardrails:
+            break
         if tier1_tokens >= remaining_budget * 0.4:
             break  # Don't let guardrails eat more than 40% of remaining budget
         chunks = store.get_by_source("knowledge", guardrail_file)
@@ -321,6 +341,7 @@ def _build_context(agent: str, task_description: str, max_tokens: int) -> dict:
     return {
         "agent_definition": agent_def,
         "agent_file": agent_file,
+        "weight": weight,
         "relevant_knowledge": all_knowledge,
         "total_tokens_approx": total_tokens,
         "sources_used": len(all_knowledge) + (1 if agent_def else 0),
@@ -343,9 +364,23 @@ async def main():
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
     engine = IndexingEngine(embedder=embedder, store=store)
 
+    # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d)
+    force_reindex = False
+    for scope_config in SCOPES.values():
+        col_name = scope_config["collection"]
+        if store.collection_exists(col_name) and store.count(col_name) > 0:
+            sample_dim = store.sample_dimension(col_name)
+            if sample_dim and sample_dim != embedder.dimensions():
+                logger.warning(
+                    "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
+                    col_name, sample_dim, embedder.dimensions(),
+                )
+                force_reindex = True
+                break
+
     # Auto-index on startup
-    logger.info("Auto-indexing default collections...")
-    result = engine.index_all()
+    logger.info("Auto-indexing default collections%s...", " (forced)" if force_reindex else "")
+    result = engine.index_all(force=force_reindex)
     logger.info(
         "Startup indexing complete: %d files, %d chunks",
         result["files_indexed"], result["chunks_created"],

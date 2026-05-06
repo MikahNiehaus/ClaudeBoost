@@ -123,7 +123,6 @@ if (-not (Test-Path $speakPath)) {
     $speakDefault = (@{
         enabled = $false
         voice = "en-US-AndrewNeural"
-        maxChars = 500
         setAt = (Get-Date).ToString("o")
         setBy = "default"
     } | ConvertTo-Json).TrimStart([char]0xFEFF)

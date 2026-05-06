@@ -23,9 +23,16 @@ Include in the agent's prompt:
 - Task context path: `workspace/$2/context.md`
 - Required output format with Status field (COMPLETE/BLOCKED/NEEDS_INPUT)
 
-The agent calls `rag_context(agent="$1-agent", task_description="...")` itself.
+The agent calls `rag_context(agent="$1-agent", task_description="...", weight="...")` itself.
 This returns its definition + semantically matched knowledge chunks.
 You do NOT need to pre-fetch or embed knowledge in the spawn prompt.
+
+## Weight Routing
+
+Pass the correct `weight` parameter to `rag_context` based on agent type:
+- **lightweight**: explore, research, docs, estimator, teacher (skips guardrails)
+- **standard**: workflow, refactor, debug, test, ui, database, devops, observability, architect, ticket-analyst, browser, compliance, evaluator
+- **full**: reviewer, security, performance (full guardrails + verify gate)
 
 ## Hook Enforcement
 
