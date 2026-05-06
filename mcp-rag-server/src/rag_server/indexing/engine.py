@@ -19,6 +19,8 @@ from rag_server.ports.store_port import Chunk, StorePort
 
 logger = logging.getLogger(__name__)
 
+CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}
+
 
 class IndexingEngine:
     """Indexes files into the vector store with incremental support."""
@@ -154,8 +156,137 @@ class IndexingEngine:
             "files_skipped": files_skipped,
         }
 
+    def index_project(
+        self,
+        project_path: str,
+        languages: list[str] | None = None,
+        force: bool = False,
+    ) -> dict:
+        """Index an external project's source code into a per-project store.
+
+        Creates a separate ChromaDB + manifest at $CLAUDEBOOST_HOME/indexes/<project-hash>/.
+        """
+        from rag_server.core.project import discover_files, git_head, project_id, project_index_dir
+        from rag_server.core.store import ChromaStore
+
+        pid = project_id(project_path)
+        index_dir = project_index_dir(project_path)
+        index_dir.mkdir(parents=True, exist_ok=True)
+
+        # Per-project store and manifest (separate from main ClaudeBoost index)
+        project_store = ChromaStore(persist_dir=str(index_dir / "chroma"))
+        project_manifest_path = index_dir / "manifest.json"
+        project_manifest = {}
+        if project_manifest_path.exists():
+            project_manifest = json.loads(
+                project_manifest_path.read_text(encoding="utf-8")
+            )
+
+        collection = "codebase"
+        if force and project_store.collection_exists(collection):
+            project_store.delete_collection(collection)
+        project_store.create_collection(collection)
+
+        # Discover source files
+        file_paths = discover_files(project_path, languages=languages)
+        project_root = Path(project_path).resolve()
+
+        files_indexed = 0
+        chunks_created = 0
+        files_skipped = 0
+
+        for file_path in file_paths:
+            # Relative path within the target project
+            try:
+                rel_path = str(
+                    Path(file_path).relative_to(project_root)
+                ).replace("\\", "/")
+            except ValueError:
+                rel_path = file_path.replace("\\", "/")
+
+            try:
+                content = Path(file_path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                logger.warning("Skipping %s: %s", rel_path, e)
+                files_skipped += 1
+                continue
+
+            current_hash = file_hash(content)
+
+            if not force and project_manifest.get(rel_path) == current_hash:
+                files_skipped += 1
+                continue
+
+            project_store.delete_by_source(collection, rel_path)
+
+            # Always use code chunker for project files
+            from rag_server.indexing.code_chunker import chunk_code
+            raw_chunks = chunk_code(
+                content, rel_path,
+                max_tokens=MAX_CHUNK_TOKENS,
+                min_tokens=MIN_CHUNK_TOKENS,
+            )
+            if not raw_chunks:
+                files_skipped += 1
+                continue
+
+            texts = [c.content for c in raw_chunks]
+            embeddings = self._embedder.embed(texts)
+
+            store_chunks = []
+            for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                cid = chunk_id(rel_path, i)
+                metadata = build_metadata(
+                    source_file=rel_path,
+                    scope="codebase",
+                    section=raw.section,
+                    line_start=raw.line_start,
+                    line_end=raw.line_end,
+                    content_hash=current_hash,
+                    chunk_index=i,
+                    token_count=raw.token_count_approx,
+                )
+                store_chunks.append(Chunk(
+                    id=cid,
+                    content=raw.content,
+                    embedding=embedding,
+                    metadata=metadata,
+                ))
+
+            added = project_store.add_chunks(collection, store_chunks)
+            chunks_created += added
+            files_indexed += 1
+            project_manifest[rel_path] = current_hash
+
+        # Save project manifest with git HEAD for staleness detection
+        head = git_head(project_path)
+        if head:
+            project_manifest["__git_head__"] = head
+        project_manifest_path.write_text(
+            json.dumps(project_manifest, indent=2), encoding="utf-8",
+        )
+
+        logger.info(
+            "Indexed project %s (%s): %d files, %d chunks (%d skipped)",
+            pid, project_path, files_indexed, chunks_created, files_skipped,
+        )
+        return {
+            "project_id": pid,
+            "files_indexed": files_indexed,
+            "chunks_created": chunks_created,
+            "files_skipped": files_skipped,
+            "index_path": str(index_dir),
+        }
+
     def _chunk_file(self, content: str, rel_path: str):
         """Route to the right chunker based on file extension."""
+        if Path(rel_path).suffix in CODE_EXTENSIONS:
+            from rag_server.indexing.code_chunker import chunk_code
+            return chunk_code(
+                content, rel_path,
+                max_tokens=MAX_CHUNK_TOKENS,
+                min_tokens=MIN_CHUNK_TOKENS,
+            )
         if rel_path.endswith(".xml"):
             from rag_server.indexing.xml_chunker import chunk_xml
             return chunk_xml(

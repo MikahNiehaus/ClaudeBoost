@@ -43,8 +43,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="rag_search",
             description=(
-                "Search ClaudeBoost knowledge bases and agent definitions using "
-                "semantic similarity. "
+                "Search ClaudeBoost knowledge bases, agent definitions, or project "
+                "codebases using semantic similarity. "
                 "Returns the most relevant text chunks with source attribution."
             ),
             inputSchema={
@@ -56,9 +56,19 @@ async def list_tools() -> list[Tool]:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "knowledge", "agents"],
-                        "description": "Which collection to search.",
+                        "enum": ["all", "knowledge", "agents", "codebase"],
+                        "description": (
+                            "Which collection to search. "
+                            "'codebase' requires project_path."
+                        ),
                         "default": "all",
+                    },
+                    "project_path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the target project. "
+                            "Required when scope='codebase'."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -110,10 +120,41 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="rag_index_project",
+            description=(
+                "Index a project's source code for semantic codebase search. "
+                "Creates a per-project vector database. Re-runs only re-embed changed files."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_path": {
+                        "type": "string",
+                        "description": "Absolute path to the target project root.",
+                    },
+                    "languages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Language filter (e.g., ['python', 'typescript']). "
+                            "Omit to index all supported languages."
+                        ),
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force full re-index even if files haven't changed.",
+                        "default": False,
+                    },
+                },
+                "required": ["project_path"],
+            },
+        ),
+        Tool(
             name="rag_context",
             description=(
                 "Build a curated context package for an agent. Given an agent name and "
                 "task description, returns relevant knowledge chunks. "
+                "Optionally includes project codebase search (Tier 4). "
                 "Use when spawning an agent."
             ),
             inputSchema={
@@ -126,6 +167,13 @@ async def list_tools() -> list[Tool]:
                     "task_description": {
                         "type": "string",
                         "description": "What the agent will work on.",
+                    },
+                    "project_path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to target project. If provided and indexed, "
+                            "Tier 4 codebase search is included in context."
+                        ),
                     },
                     "max_tokens": {
                         "type": "integer",
@@ -160,8 +208,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 store=store,
                 query=arguments["query"],
                 scope=arguments.get("scope", "all"),
+                project_path=arguments.get("project_path"),
                 limit=arguments.get("limit", DEFAULT_SEARCH_LIMIT),
                 min_score=arguments.get("min_score", DEFAULT_MIN_SCORE),
+            )
+
+        elif name == "rag_index_project":
+            result = engine.index_project(
+                project_path=arguments["project_path"],
+                languages=arguments.get("languages"),
+                force=arguments.get("force", False),
             )
 
         elif name == "rag_index":
@@ -197,6 +253,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 task_description=arguments["task_description"],
                 max_tokens=arguments.get("max_tokens", 4000),
                 weight=arguments.get("weight", "standard"),
+                project_path=arguments.get("project_path"),
             )
 
         else:
@@ -210,7 +267,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 def _build_context(
-    agent: str, task_description: str, max_tokens: int, weight: str = "standard",
+    agent: str, task_description: str, max_tokens: int,
+    weight: str = "standard", project_path: str | None = None,
 ) -> dict:
     """Build a tiered context package for an agent.
 
@@ -218,6 +276,7 @@ def _build_context(
     Tier 1: Universal guardrails (skipped for lightweight agents)
     Tier 2: Agent-declared knowledge bases (from <knowledge-base> tags)
     Tier 3: Semantic search fills remaining budget (knowledge only, not agents)
+    Tier 4: Codebase search (if project_path provided and index exists)
     """
     import re as _re
 
@@ -335,8 +394,40 @@ def _build_context(
             })
             tier3_tokens += chunk_tokens
 
-    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks
-    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens
+    # --- Tier 4: Codebase search (if project indexed) ---
+    tier4_chunks = []
+    tier4_tokens = 0
+
+    if project_path and remaining_budget > 200:
+        from rag_server.core.project import project_index_dir
+        from rag_server.core.store import ChromaStore as _ChromaStore
+
+        idx_dir = project_index_dir(project_path)
+        chroma_dir = idx_dir / "chroma"
+        if chroma_dir.exists():
+            project_store = _ChromaStore(persist_dir=str(chroma_dir))
+            if project_store.collection_exists("codebase") and project_store.count("codebase") > 0:
+                # Budget: up to 400 tokens or remaining budget, whichever is smaller
+                tier4_budget = min(400, remaining_budget)
+                query_embedding = embedder.embed_query(task_description)
+                codebase_results = project_store.search(
+                    "codebase", query_embedding, limit=10, min_score=0.35,
+                )
+                for r in codebase_results:
+                    chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
+                    if tier4_tokens + chunk_tokens > tier4_budget:
+                        break
+                    tier4_chunks.append({
+                        "source": r.metadata.get("source_file", ""),
+                        "section": r.metadata.get("section", ""),
+                        "content": r.content,
+                        "score": r.score,
+                        "tier": "codebase",
+                    })
+                    tier4_tokens += chunk_tokens
+
+    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier4_chunks
+    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier4_tokens
 
     return {
         "agent_definition": agent_def,
@@ -349,6 +440,7 @@ def _build_context(
             "guardrails": len(tier1_chunks),
             "declared": len(tier2_chunks),
             "search": len(tier3_chunks),
+            "codebase": len(tier4_chunks),
         },
     }
 
