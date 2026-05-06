@@ -96,7 +96,6 @@ A PreToolUse hook enforces this — no agent can skip it.
 | evaluator-agent | Output verification | Sonnet |
 | standards-validator-agent | Standards validation | Sonnet |
 | estimator-agent | Story pointing | Sonnet |
-| teacher-agent | Teaching, explanation | Sonnet |
 | devops-agent | CI/CD, Docker, deployment | Sonnet |
 | database-agent | Schema design, queries, migrations | Sonnet |
 | observability-agent | Logging, metrics, alerting | Sonnet |
