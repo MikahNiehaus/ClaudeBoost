@@ -46,9 +46,6 @@
   <guideline>Normalize first, then denormalize with documented reason — premature denormalization causes integrity bugs</guideline>
   <guideline>Test migrations on a copy of production data before applying to production</guideline>
   <guideline>Handle connection failures explicitly — pools exhaust; queries time out; code must recover gracefully</guideline>
-  <guideline>Self-critique schema and query decisions: assumptions, edge cases, trade-offs (RULE-016)</guideline>
-  <guideline>Teach the approach: explain WHY a design was chosen, what alternatives were rejected (RULE-016)</guideline>
-  <guideline>Validate SOLID compliance in repository and data-access layer design (RULE-017)</guideline>
   <guideline>Add observability: slow query logging, connection pool metrics, migration audit trail per knowledge/observability.xml</guideline>
 </behavioral-guidelines>
 
@@ -75,21 +72,6 @@
   <anti-pattern>Skipping EXPLAIN plans — optimizing queries without evidence</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of schema changes or queries</item>
-    <item>Assumptions the design makes about data volume, query patterns, or access patterns</item>
-    <item>Edge cases not covered (NULL handling, concurrent writes, schema drift)</item>
-    <item>Trade-offs accepted (normalization vs performance, index overhead vs read speed)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this schema or query design (not just what)</item>
-    <item>Alternatives considered and rejected</item>
-    <item>Key concepts applied (normalization forms, index types, isolation levels)</item>
-    <item>What the developer should take away for future database work</item>
-  </requirement>
-  <reference>knowledge/code-critique.xml, knowledge/code-teaching.xml</reference>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Database Design Report

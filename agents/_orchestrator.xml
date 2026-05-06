@@ -61,23 +61,6 @@
   <verification>Orchestrator spot-checks agent output against ticket.md — any rewording = FAIL</verification>
 </ticket-preservation>
 
-<mandatory-compliance><![CDATA[
-Before responding to ANY request, STOP and verify:
-- [ ] Have I identified a task ID for this work?
-- [ ] Have I created workspace/[task-id]/ folder?
-- [ ] Have I run the Planning Checklist (all 9 domains)?
-- [ ] Have I identified which agent(s) this task requires?
-- [ ] Have I documented WHY these agents in context.md?
-- [ ] Have I selected correct model for each agent (Opus/Sonnet)?
-- [ ] If code changes: Have I spawned appropriate agent?
-- [ ] Am I using TodoWrite for multi-step tasks?
-- [ ] Am I logging ALL decisions to context.md?
-- [ ] If user pasted a ticket: Have I saved it verbatim to ticket.md?
-- [ ] If ticket.md exists: Have I instructed agents to read it and use exact wording?
-- [ ] Have I defined explicit scope boundaries (in/out) for each agent spawn?
-
-If ANY box unchecked → STOP and fix before proceeding.
-]]></mandatory-compliance>
 
 <execution-modes>
   <mode name="NORMAL" default="true">
@@ -234,7 +217,7 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
 ]]></agent-spawn-template>
 
 <lightweight-spawn-template><![CDATA[
-Use for: explore-agent, research-agent, docs-agent, estimator-agent, teacher-agent
+Use for: explore-agent, research-agent, docs-agent, estimator-agent
 These agents gather info or produce docs — they don't produce findings that need verification.
 
 ## Step 1: Load Identity + Knowledge via RAG (MANDATORY)
@@ -267,7 +250,7 @@ STANDARD TEMPLATE (no verify gate, no evaluator):
   WHY: These produce code or analysis, not severity-rated findings.
 
 LIGHTWEIGHT TEMPLATE (minimal ceremony):
-  explore-agent, research-agent, docs-agent, estimator-agent, teacher-agent
+  explore-agent, research-agent, docs-agent, estimator-agent
   WHY: These gather info or produce docs. Minimal overhead, maximum speed.
 ]]></spawn-routing>
 
@@ -351,38 +334,11 @@ If verification fails:
 - NORMAL: Ask user if they want to continue
 ]]></pre-completion-verification>
 
-<continuation-decision-tree><![CDATA[
-Agent reports status
-      │
-      ▼
-Is status BLOCKED or NEEDS_INPUT?
-      │
-      ├── YES → STOP, report to user
-      │
-      └── NO (COMPLETE) → Run verification
-                          │
-                          ▼
-                    All criteria met?
-                          │
-                          ├── YES → COMPLETE, report success
-                          │
-                          └── NO → Items remaining?
-                                    │
-                                    ├── YES → Spawn for next item
-                                    │
-                                    └── NO → Report BLOCKED
-]]></continuation-decision-tree>
-
-<compliance-checklist><![CDATA[
-Execute BEFORE proceeding:
-□ RULE-001: Am I about to write code without an agent? → Spawn agent
-□ RULE-002: Task has 2+ steps without TodoWrite? → Create todo list
-□ RULE-003: Spawning agent without planning? → Complete planning first
-□ RULE-004: Did last agent report status? → Request status
-□ RULE-005: Did I update context.md after last agent? → Update context
-□ RULE-006: Research task without research-agent? → Consider spawning
-□ RULE-007: Security task without security-agent? → Add to plan
-]]></compliance-checklist>
+<continuation-logic>
+  <rule>BLOCKED/NEEDS_INPUT → stop, report to user</rule>
+  <rule>COMPLETE + all criteria met → report success</rule>
+  <rule>COMPLETE + items remaining → spawn for next item</rule>
+</continuation-logic>
 
 <workspace-structure><![CDATA[
 workspace/[task-id]/

@@ -43,9 +43,6 @@
   <guideline>Prefer real objects: Use mocks sparingly</guideline>
   <guideline>Test the sad path: Error cases often have more bugs</guideline>
   <guideline>Keep tests fast: Slow tests don't get run</guideline>
-  <guideline>Self-critique test code: Review for assumptions, gaps (RULE-016)</guideline>
-  <guideline>Teach testing choices: Explain why this structure (RULE-016)</guideline>
-  <guideline>Validate standards: Verify test code follows best practices (RULE-017)</guideline>
 </behavioral-guidelines>
 
 <anti-patterns>
@@ -57,20 +54,6 @@
   <anti-pattern>Copy-paste test code (use parameterized tests)</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of test code</item>
-    <item>Assumptions the tests make</item>
-    <item>Edge cases not covered</item>
-    <item>Trade-offs (coverage vs speed)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this test strategy</item>
-    <item>What this test verifies and why</item>
-    <item>Alternative approaches and why rejected</item>
-    <item>Testing principles applied (AAA, isolation)</item>
-  </requirement>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Test Analysis

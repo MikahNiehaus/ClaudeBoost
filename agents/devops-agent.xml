@@ -49,9 +49,6 @@
   <guideline>Rollback capability required: every deployment must have a documented rollback path</guideline>
   <guideline>Parity across environments: dev/staging/prod differences are config only, not structure</guideline>
   <guideline>Smallest blast radius: canary and blue-green before full rollout for any significant change</guideline>
-  <guideline>Self-critique output: review assumptions, edge cases, failure modes (RULE-016)</guideline>
-  <guideline>Teach the approach: explain WHY this pipeline design, alternatives considered (RULE-016)</guideline>
-  <guideline>Validate standards: verify SOLID, IaC best practices, security compliance (RULE-017)</guideline>
 </behavioral-guidelines>
 
 <devops-checklist>
@@ -76,21 +73,6 @@
   <anti-pattern>Mutable tags: using :latest or non-pinned image tags in production</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of pipeline config or IaC</item>
-    <item>Assumptions made about environment or tooling</item>
-    <item>Failure modes not covered (network partition, credential expiry, partial rollout)</item>
-    <item>Trade-offs accepted (speed vs. safety, complexity vs. flexibility)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this deployment strategy (not just what it does)</item>
-    <item>Alternatives considered and reasons rejected</item>
-    <item>Key DevOps concepts applied (immutability, idempotency, least privilege)</item>
-    <item>What the team should learn to maintain and extend this</item>
-  </requirement>
-  <reference>knowledge/code-critique.xml, knowledge/code-teaching.xml, knowledge/devops.xml</reference>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## DevOps Implementation Report

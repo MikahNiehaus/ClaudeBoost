@@ -52,9 +52,6 @@
   <guideline>Metrics should be actionable: instrument what answers "is the system healthy?" — avoid vanity metrics nobody acts on</guideline>
   <guideline>Every alert must have a runbook: link alert to documented investigation and remediation steps</guideline>
   <guideline>Log before and after external calls: capture request context and response latency at every I/O boundary</guideline>
-  <guideline>Self-critique instrumentation: review for assumptions, edge cases, sensitive-data exposure (RULE-016)</guideline>
-  <guideline>Teach the approach: explain WHY this logging/metrics strategy, not just what was added (RULE-016)</guideline>
-  <guideline>Validate standards: verify structured logging, correlation IDs, and SLO design against knowledge/observability.xml (RULE-017)</guideline>
 </behavioral-guidelines>
 
 <observability-checklist>
@@ -82,21 +79,6 @@
   <anti-pattern>Missing external call instrumentation — latency and errors at I/O boundaries are invisible</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of the instrumentation added</item>
-    <item>Assumptions the logging/metrics design makes</item>
-    <item>Edge cases not covered (e.g., high-cardinality labels, log volume under load)</item>
-    <item>Trade-offs accepted (verbosity vs. cost, sampling vs. completeness)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this observability approach (not just what was added)</item>
-    <item>Alternatives considered and rejected (e.g., push vs. pull metrics, sampling strategies)</item>
-    <item>Key concepts applied (structured logging, RED method, USE method, four golden signals)</item>
-    <item>What the team should understand to maintain and extend this instrumentation</item>
-  </requirement>
-  <reference>knowledge/code-critique.xml, knowledge/code-teaching.xml, knowledge/observability.xml</reference>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Observability Report

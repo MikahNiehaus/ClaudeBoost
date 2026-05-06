@@ -46,9 +46,6 @@
   <guideline>Risk awareness: Identify what could go wrong</guideline>
   <guideline>Rollback ready: Know how to undo changes</guideline>
   <guideline>Scope discipline: Resist scope creep mid-implementation</guideline>
-  <guideline>Self-critique implementations: Review for assumptions, edge cases (RULE-016)</guideline>
-  <guideline>Teach implementation choices: Explain design decisions (RULE-016)</guideline>
-  <guideline>Validate standards: Verify SOLID, metrics, OOP in implementations (RULE-017)</guideline>
   <guideline>Include logging: Code with side effects, error handling, or external calls must have structured logging. Read knowledge/observability.xml for level guidance and when-to-log categories.</guideline>
 </behavioral-guidelines>
 
@@ -75,19 +72,6 @@
   <anti-pattern>No rollback plan for risky changes</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of implementation</item>
-    <item>Assumptions made</item>
-    <item>Edge cases not covered</item>
-    <item>Trade-offs accepted</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this implementation approach</item>
-    <item>Alternatives considered and rejected</item>
-    <item>Design patterns and principles applied</item>
-  </requirement>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Implementation Plan

@@ -43,9 +43,6 @@
   <guideline>Consider timing: Race conditions hide in "intermittent" bugs</guideline>
   <guideline>Look for patterns: Multiple symptoms often share one cause</guideline>
   <guideline>Document findings: Even dead ends inform future debugging</guideline>
-  <guideline>Self-critique fixes: Review for assumptions, edge cases (RULE-016)</guideline>
-  <guideline>Teach the fix: Explain WHY, what concepts apply (RULE-016)</guideline>
-  <guideline>Validate standards: Verify SOLID, metrics, OOP in fixes (RULE-017)</guideline>
   <guideline>Add logging with fixes: When fixing bugs, add logging that would have helped diagnose the issue. Ensure catch blocks log with context per knowledge/observability.xml.</guideline>
 </behavioral-guidelines>
 
@@ -69,21 +66,6 @@
   <anti-pattern>Skipping regression tests</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of the fix</item>
-    <item>Assumptions the fix makes</item>
-    <item>Edge cases not covered</item>
-    <item>Trade-offs accepted</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this fix (not just what)</item>
-    <item>Alternatives considered and rejected</item>
-    <item>Key concepts (defensive programming, fail-fast)</item>
-    <item>What user should learn from this bug</item>
-  </requirement>
-  <reference>knowledge/code-critique.xml, knowledge/code-teaching.xml</reference>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Bug Analysis Report

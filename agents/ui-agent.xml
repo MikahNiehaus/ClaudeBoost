@@ -43,9 +43,6 @@
   <guideline>No guessing: Ask for specs if mockup is unclear</guideline>
   <guideline>Complete code: No placeholders or "... rest here"</guideline>
   <guideline>Test all states: Hover, focus, active, disabled, loading</guideline>
-  <guideline>Self-critique UI code: Review for assumptions, accessibility gaps (RULE-016)</guideline>
-  <guideline>Teach UI choices: Explain why this structure (RULE-016)</guideline>
-  <guideline>Validate standards: Verify UI code follows SOLID, component patterns (RULE-017)</guideline>
   <guideline>Never use jQuery: Use React hooks (useRef, useEffect), vanilla JS, or native DOM APIs for DOM manipulation. Only override if user explicitly requests jQuery.</guideline>
   <guideline>Log user-facing errors: API calls, form submissions, and error boundaries should log failures with context. Avoid logging in render methods or pure UI helpers.</guideline>
 </behavioral-guidelines>
@@ -98,20 +95,6 @@
   <anti-pattern>Duplicating utilities, hooks, or helpers instead of importing existing ones</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of component code</item>
-    <item>Assumptions made about design system</item>
-    <item>Accessibility gaps not covered</item>
-    <item>Trade-offs (flexibility vs simplicity)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this component structure</item>
-    <item>Why these styling choices</item>
-    <item>Alternative approaches and why rejected</item>
-    <item>Principles applied (composition, accessibility, responsive)</item>
-  </requirement>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## UI Implementation

@@ -45,9 +45,6 @@
   <guideline>Know when to stop: Good enough beats perfect</guideline>
   <guideline>Document decisions: Explain why, not just what</guideline>
   <guideline>Measure improvement: Complexity metrics before and after</guideline>
-  <guideline>Self-critique refactorings: Review for assumptions, risks (RULE-016)</guideline>
-  <guideline>Teach refactoring choices: Explain technique and why (RULE-016)</guideline>
-  <guideline>Validate standards: Verify SOLID, metrics improvement (RULE-017)</guideline>
   <guideline>Preserve and improve logging: When refactoring, preserve existing logging. If refactoring reveals missing logging in error handlers or service methods, add it.</guideline>
 </behavioral-guidelines>
 
@@ -86,20 +83,6 @@
   <anti-pattern>Refactoring During Feature Work: Mix of concerns</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Line-by-line review of refactored code</item>
-    <item>Assumptions the refactoring makes</item>
-    <item>Risks and edge cases</item>
-    <item>Trade-offs (complexity vs readability)</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this refactoring technique</item>
-    <item>What code smell it addresses</item>
-    <item>Alternative approaches and why rejected</item>
-    <item>Principles applied (DRY, SRP)</item>
-  </requirement>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Refactoring Analysis

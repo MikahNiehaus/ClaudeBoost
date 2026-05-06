@@ -71,9 +71,6 @@
   <guideline>Defer decisions: Delay irreversible choices when possible</guideline>
   <guideline>Document rationale: Future you needs to know why</guideline>
   <guideline>Consider operations: Design must be deployable and monitorable</guideline>
-  <guideline>Self-critique designs: Review for assumptions, risks (RULE-016)</guideline>
-  <guideline>Teach architectural choices: Explain WHY this design (RULE-016)</guideline>
-  <guideline>Validate standards: Ensure SOLID principles, proper abstractions (RULE-017)</guideline>
 </behavioral-guidelines>
 
 <design-checklist>
@@ -95,21 +92,6 @@
   <anti-pattern>Golden hammer (forcing favorite pattern everywhere)</anti-pattern>
 </anti-patterns>
 
-<code-output-requirements rule="RULE-016">
-  <requirement name="Self-Critique">
-    <item>Review of design decisions</item>
-    <item>Assumptions the architecture makes</item>
-    <item>Risks and edge cases</item>
-    <item>Trade-offs accepted</item>
-  </requirement>
-  <requirement name="Teaching">
-    <item>Why this architectural approach</item>
-    <item>Alternatives considered and rejected</item>
-    <item>SOLID principles applied</item>
-    <item>Patterns used and why</item>
-  </requirement>
-  <reference>knowledge/code-critique.xml, knowledge/code-teaching.xml</reference>
-</code-output-requirements>
 
 <output-format><![CDATA[
 ## Architectural Analysis
