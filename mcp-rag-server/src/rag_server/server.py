@@ -150,6 +150,37 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="rag_scan",
+            description=(
+                "Dry-run scan of a project: returns what would be indexed (by language, "
+                "count, estimated size) without writing anything to the vector database. "
+                "Run this before rag_index_project to preview scope and catch surprises."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_path": {
+                        "type": "string",
+                        "description": "Absolute path to the project root.",
+                    },
+                    "languages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Language filter (e.g. ['typescript', 'csharp']). "
+                            "Omit to scan all supported languages."
+                        ),
+                    },
+                    "max_file_kb": {
+                        "type": "integer",
+                        "description": "Skip files larger than this size in KB. Default: 200.",
+                        "default": 200,
+                    },
+                },
+                "required": ["project_path"],
+            },
+        ),
+        Tool(
             name="rag_context",
             description=(
                 "Build a curated context package for an agent. Given an agent name and "
@@ -201,9 +232,20 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    # All tool handlers call blocking code (ChromaDB, subprocess, embedding inference).
+    # On Windows with the MCP subprocess stdout=pipe + anyio I/O, blocking calls inside
+    # the asyncio event loop hang indefinitely. Run ALL dispatch in a thread pool.
+    import asyncio as _asyncio
+    loop = _asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments))
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _dispatch_tool(name: str, arguments: dict) -> dict:
+    """Synchronous tool dispatch — runs in a thread pool via run_in_executor."""
     try:
         if name == "rag_search":
-            result = rag_search(
+            return rag_search(
                 embedder=embedder,
                 store=store,
                 query=arguments["query"],
@@ -213,8 +255,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 min_score=arguments.get("min_score", DEFAULT_MIN_SCORE),
             )
 
+        elif name == "rag_scan":
+            from rag_server.core.scanner import scan_project
+            scan = scan_project(
+                project_path=arguments["project_path"],
+                languages=arguments.get("languages"),
+                max_file_kb=arguments.get("max_file_kb", 200),
+            )
+            return {
+                "files_to_index": len(scan.files),
+                "files_by_language": scan.files_by_language,
+                "total_discovered": scan.total_discovered,
+                "skipped_gitignore": scan.skipped_gitignore,
+                "skipped_too_large": scan.skipped_too_large,
+                "skipped_generated": scan.skipped_generated,
+                "estimated_size_kb": scan.estimated_size_kb,
+            }
+
         elif name == "rag_index_project":
-            result = engine.index_project(
+            return engine.index_project(
                 project_path=arguments["project_path"],
                 languages=arguments.get("languages"),
                 force=arguments.get("force", False),
@@ -223,13 +282,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "rag_index":
             force = arguments.get("force", False)
             scope = arguments.get("scope", "all")
-
             if scope == "all":
                 result = engine.index_all(force=force)
                 result["scope"] = "all"
             else:
                 result = engine.index_scope(scope, force=force)
                 result["scope"] = scope
+            return result
 
         elif name == "rag_status":
             collections_status = {}
@@ -239,7 +298,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "chunks": store.count(col),
                     "files": len(store.list_sources(col)) if store.collection_exists(col) else 0,
                 }
-            result = {
+            return {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
@@ -248,7 +307,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }
 
         elif name == "rag_context":
-            result = _build_context(
+            return _build_context(
                 agent=arguments["agent"],
                 task_description=arguments["task_description"],
                 max_tokens=arguments.get("max_tokens", 4000),
@@ -257,13 +316,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
 
         else:
-            result = {"error": f"Unknown tool: {name}"}
+            return {"error": f"Unknown tool: {name}"}
 
     except Exception as e:
         logger.error("Tool %s failed: %s", name, e, exc_info=True)
-        result = {"error": str(e)}
-
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        return {"error": str(e)}
 
 
 def _build_context(
@@ -445,13 +502,16 @@ def _build_context(
     }
 
 
-async def main():
-    """Run the MCP server."""
+def sync_init() -> FileWatcher:
+    """Synchronous startup: initialize components and index files.
+
+    ChromaDB 1.5+ uses a Rust/Tokio backend that crashes when called from
+    inside an asyncio coroutine. Run all ChromaDB calls here, before asyncio.run().
+    """
     global embedder, store, engine
 
     logger.info("Starting RAG server. Project root: %s", PROJECT_ROOT)
 
-    # Initialize components (deferred from import time to avoid blocking MCP startup)
     embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
     engine = IndexingEngine(embedder=embedder, store=store)
@@ -503,6 +563,11 @@ async def main():
         watcher.watch(watch_paths, _on_file_change)
         logger.info("Watcher started for: %s", ", ".join(watch_paths))
 
+    return watcher
+
+
+async def main(watcher: FileWatcher) -> None:
+    """Run the MCP stdio server. Call sync_init() before this."""
     try:
         async with stdio_server() as (read_stream, write_stream):
             await app.run(read_stream, write_stream, app.create_initialization_options())
@@ -512,4 +577,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    _watcher = sync_init()
+    asyncio.run(main(_watcher))

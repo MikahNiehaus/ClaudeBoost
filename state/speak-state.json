@@ -1,6 +1,6 @@
 {
-  "enabled": true,
+  "enabled": false,
   "voice": "en-US-AndrewNeural",
-  "setAt": "2026-05-05T22:10:00Z",
+  "setAt": "2026-05-07T03:10:00Z",
   "setBy": "user /speak on"
 }

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from glob import glob
 from pathlib import Path
 
@@ -164,12 +165,18 @@ class IndexingEngine:
     ) -> dict:
         """Index an external project's source code into a per-project store.
 
-        Creates a separate ChromaDB + manifest at $CLAUDEBOOST_HOME/indexes/<project-hash>/.
+        Creates a separate ChromaDB + manifest at <project_path>/workspace/.rag-index/.
         """
-        from rag_server.core.project import discover_files, git_head, project_id, project_index_dir
+        import hashlib as _hashlib
+        from rag_server.core.project import project_index_dir
         from rag_server.core.store import ChromaStore
 
-        pid = project_id(project_path)
+        # Compute project ID from path only — avoids subprocess (git remote) which
+        # hangs when called from a run_in_executor thread in the MCP server context.
+        pid = _hashlib.sha256(
+            str(Path(project_path).resolve()).encode("utf-8")
+        ).hexdigest()[:12]
+
         index_dir = project_index_dir(project_path)
         index_dir.mkdir(parents=True, exist_ok=True)
 
@@ -187,13 +194,24 @@ class IndexingEngine:
             project_store.delete_collection(collection)
         project_store.create_collection(collection)
 
-        # Discover source files
-        file_paths = discover_files(project_path, languages=languages)
+        # Scan project — respects .gitignore, filters generated/large files
+        from rag_server.core.scanner import scan_project
+        scan = scan_project(project_path, languages=languages)
+        file_paths = scan.files
+        lang_summary = ", ".join(f"{lang}:{n}" for lang, n in scan.files_by_language.items())
+        logger.info(
+            "Scan complete: %d files to index (%s). "
+            "Skipped: %d gitignore, %d too-large, %d generated.",
+            len(file_paths), lang_summary,
+            scan.skipped_gitignore, scan.skipped_too_large, scan.skipped_generated,
+        )
+
         project_root = Path(project_path).resolve()
 
         files_indexed = 0
         chunks_created = 0
         files_skipped = 0
+        start_time = time.time()
 
         for file_path in file_paths:
             # Relative path within the target project
@@ -258,10 +276,17 @@ class IndexingEngine:
             files_indexed += 1
             project_manifest[rel_path] = current_hash
 
-        # Save project manifest with git HEAD for staleness detection
-        head = git_head(project_path)
-        if head:
-            project_manifest["__git_head__"] = head
+            # Progress log every 25 files
+            if files_indexed % 25 == 0:
+                elapsed = time.time() - start_time
+                rate = files_indexed / elapsed if elapsed > 0 else 0
+                remaining = (len(file_paths) - files_indexed) / rate if rate > 0 else 0
+                logger.info(
+                    "Progress: %d/%d files (%.1f files/sec, ~%ds remaining)",
+                    files_indexed, len(file_paths), rate, int(remaining),
+                )
+
+        # Save project manifest
         project_manifest_path.write_text(
             json.dumps(project_manifest, indent=2), encoding="utf-8",
         )

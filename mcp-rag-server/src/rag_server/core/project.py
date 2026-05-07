@@ -13,7 +13,7 @@ DEFAULT_EXCLUDES = {
     "node_modules", ".git", "dist", "build", "vendor", "__pycache__",
     ".venv", "venv", ".tox", ".mypy_cache", ".next", "coverage",
     ".pytest_cache", ".ruff_cache", "target", "bin", "obj",
-    ".rag-index", ".claude",
+    ".rag-index", ".claude", "packages", ".nuget",
 }
 
 # Language name -> file extensions
@@ -21,6 +21,7 @@ LANGUAGE_EXTENSIONS = {
     "python": {".py"},
     "javascript": {".js", ".jsx", ".mjs"},
     "typescript": {".ts", ".tsx"},
+    "csharp": {".cs"},
 }
 
 # Reverse lookup: extension -> language name
@@ -42,13 +43,8 @@ def project_id(project_path: str) -> str:
 
 
 def project_index_dir(project_path: str) -> Path:
-    """Return the index directory for a project under $CLAUDEBOOST_HOME/indexes/."""
-    home = os.environ.get("CLAUDEBOOST_HOME", "")
-    if not home:
-        # Fallback: derive from RAG server location
-        home = str(Path(__file__).resolve().parent.parent.parent.parent)
-    pid = project_id(project_path)
-    return Path(home) / "indexes" / pid
+    """Return the index directory for a project — stored inside the project's workspace."""
+    return Path(project_path).resolve() / "workspace" / ".rag-index"
 
 
 def discover_files(

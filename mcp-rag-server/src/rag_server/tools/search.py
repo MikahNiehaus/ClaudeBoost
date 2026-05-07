@@ -13,41 +13,6 @@ logger = logging.getLogger(__name__)
 VALID_SCOPES = ["all", "knowledge", "agents", "codebase"]
 
 
-def _refresh_if_stale(project_path: str, embedder: EmbeddingPort) -> dict | None:
-    """Check if a project index is stale (git HEAD moved) and re-index if so.
-
-    Returns the re-index result dict if refreshed, None if up-to-date.
-    """
-    from rag_server.core.project import git_head, project_index_dir
-
-    idx_dir = project_index_dir(project_path)
-    manifest_path = idx_dir / "manifest.json"
-    if not manifest_path.exists():
-        return None
-
-    current_head = git_head(project_path)
-    if not current_head:
-        return None  # Not a git repo, can't check staleness
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    stored_head = manifest.get("__git_head__")
-
-    if stored_head == current_head:
-        return None  # Up to date
-
-    logger.info(
-        "Index stale for %s (stored=%s, current=%s). Refreshing...",
-        project_path, stored_head[:8] if stored_head else "none", current_head[:8],
-    )
-
-    # Lazy import to avoid circular dependency
-    from rag_server.core.store import ChromaStore
-    from rag_server.indexing.engine import IndexingEngine
-
-    project_store = ChromaStore(persist_dir=str(idx_dir / "chroma"))
-    engine = IndexingEngine(embedder=embedder, store=project_store)
-    return engine.index_project(project_path)
-
 
 def rag_search(
     embedder: EmbeddingPort,
@@ -70,15 +35,11 @@ def rag_search(
     query_embedding = embedder.embed_query(query)
 
     all_results = []
-    refreshed = None
 
     # Codebase search uses a separate per-project store
     if scope == "codebase":
         from rag_server.core.project import project_index_dir
         from rag_server.core.store import ChromaStore
-
-        # Auto-refresh stale index before searching
-        refreshed = _refresh_if_stale(project_path, embedder)
 
         idx_dir = project_index_dir(project_path)
         chroma_dir = idx_dir / "chroma"
@@ -138,11 +99,5 @@ def rag_search(
         "total_found": len(all_results),
         "query_time_ms": elapsed_ms,
     }
-
-    if refreshed:
-        result["index_refreshed"] = {
-            "files_indexed": refreshed["files_indexed"],
-            "chunks_created": refreshed["chunks_created"],
-        }
 
     return result

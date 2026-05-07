@@ -251,7 +251,7 @@ def main() -> int:
     play_script = str(Path(home) / "scripts" / "speak-play.py")
     try:
         subprocess.Popen(
-            ["python", play_script, text_file, voice, temp_dir],
+            [sys.executable, play_script, text_file, voice, temp_dir],
             creationflags=DETACHED_PROCESS,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
