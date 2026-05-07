@@ -357,63 +357,82 @@ $settingsJson = ($settings | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] settings.json - CLAUDEBOOST_HOME env added" -ForegroundColor Green
 
+# Helper: run a native command (pip/python/etc) and return stdout+stderr text
+# without letting stderr flip $ErrorActionPreference="Stop" into a thrown
+# exception. Native stderr captured via 2>&1 surfaces as ErrorRecord objects,
+# which "Stop" mode turns into terminating errors — that swallowed real pip
+# success as a generic RemoteException in earlier setup runs. Trust the exit
+# code instead.
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory)] [string] $File,
+        [Parameter(Mandatory)] [string[]] $Arguments
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $merged = & $File @Arguments 2>&1 | ForEach-Object { "$_" }
+        return [PSCustomObject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = ($merged -join "`n")
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 # --- 3. Verify RAG server ---
 Write-Host "`nVerifying RAG server..." -ForegroundColor Cyan
 $ragDir = Join-Path $boostHome "mcp-rag-server"
 
-try {
-    # Always install from ClaudeBoost (editable mode) to ensure correct source path.
-    Write-Host "Installing RAG server from $ragDir (editable mode)..." -ForegroundColor Cyan
-    $pipOutput = & pip install -e $ragDir 2>&1
-    $pipExitCode = $LASTEXITCODE
-    if ($pipExitCode -ne 0) {
-        Write-Host "[WARN] pip install returned exit code $pipExitCode" -ForegroundColor Yellow
-        Write-Host ($pipOutput | Out-String) -ForegroundColor Yellow
-    }
-
-    # Eagerly upgrade the ML stack so transformers/tokenizers stay in sync.
-    # Another project installing a newer tokenizers can leave an older
-    # transformers in an incompatible state, producing ImportError at startup.
-    Write-Host "Upgrading ML deps (sentence-transformers + transformers + tokenizers)..." -ForegroundColor Cyan
-    & pip install --upgrade --upgrade-strategy eager sentence-transformers transformers tokenizers 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[WARN] ML-deps upgrade returned exit code $LASTEXITCODE" -ForegroundColor Yellow
-    } else {
-        Write-Host "[OK] ML deps upgraded" -ForegroundColor Green
-    }
-
-    # Full health check — catches version drift a path-only check would miss.
-    $healthScript = Join-Path $boostHome "scripts\check-rag-health.py"
-    $healthOutput = & python $healthScript 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] RAG server healthy: $healthOutput" -ForegroundColor Green
-    } else {
-        Write-Host "[WARN] RAG server health check failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
-        Write-Host ($healthOutput | Out-String) -ForegroundColor Yellow
-        Write-Host "  Run manually: python scripts\reinstall-rag.py" -ForegroundColor Yellow
-    }
-} catch {
-    Write-Host "[WARN] Could not install RAG server: $_" -ForegroundColor Yellow
+# Always install from ClaudeBoost (editable mode) to ensure correct source path.
+Write-Host "Installing RAG server from $ragDir (editable mode)..." -ForegroundColor Cyan
+$pipResult = Invoke-NativeCommand -File "pip" -Arguments @("install", "-e", $ragDir)
+if ($pipResult.ExitCode -ne 0) {
+    Write-Host "[WARN] pip install returned exit code $($pipResult.ExitCode)" -ForegroundColor Yellow
+    Write-Host $pipResult.Output -ForegroundColor Yellow
     Write-Host "  Run manually: pip install -e $ragDir" -ForegroundColor Yellow
+} else {
+    Write-Host "[OK] RAG server installed (editable mode)" -ForegroundColor Green
+}
+
+# Eagerly upgrade the ML stack so transformers/tokenizers stay in sync.
+# Another project installing a newer tokenizers can leave an older
+# transformers in an incompatible state, producing ImportError at startup.
+Write-Host "Upgrading ML deps (sentence-transformers + transformers + tokenizers)..." -ForegroundColor Cyan
+$mlResult = Invoke-NativeCommand -File "pip" -Arguments @("install", "--upgrade", "--upgrade-strategy", "eager", "sentence-transformers", "transformers", "tokenizers")
+if ($mlResult.ExitCode -ne 0) {
+    Write-Host "[WARN] ML-deps upgrade returned exit code $($mlResult.ExitCode)" -ForegroundColor Yellow
+    Write-Host $mlResult.Output -ForegroundColor Yellow
+} else {
+    Write-Host "[OK] ML deps upgraded" -ForegroundColor Green
+}
+
+# Full health check — catches version drift a path-only check would miss.
+$healthScript = Join-Path $boostHome "scripts\check-rag-health.py"
+$healthResult = Invoke-NativeCommand -File "python" -Arguments @($healthScript)
+if ($healthResult.ExitCode -eq 0) {
+    Write-Host "[OK] RAG server healthy: $($healthResult.Output)" -ForegroundColor Green
+} else {
+    Write-Host "[WARN] RAG server health check failed (exit $($healthResult.ExitCode))" -ForegroundColor Yellow
+    Write-Host $healthResult.Output -ForegroundColor Yellow
+    Write-Host "  Run manually: python scripts\reinstall-rag.py" -ForegroundColor Yellow
 }
 
 # --- 3b. Ensure edge-tts is installed (for /speak TTS) ---
 Write-Host "`nVerifying edge-tts..." -ForegroundColor Cyan
-try {
-    $edgeTtsCheck = & python -c "import edge_tts; print('ok')" 2>&1
-    if ($edgeTtsCheck -eq "ok") {
-        Write-Host "[OK] edge-tts already installed" -ForegroundColor Green
+$edgeCheck = Invoke-NativeCommand -File "python" -Arguments @("-c", "import edge_tts; print('ok')")
+if ($edgeCheck.ExitCode -eq 0 -and $edgeCheck.Output.Trim() -eq "ok") {
+    Write-Host "[OK] edge-tts already installed" -ForegroundColor Green
+} else {
+    Write-Host "Installing edge-tts..." -ForegroundColor Yellow
+    $edgeInstall = Invoke-NativeCommand -File "pip" -Arguments @("install", "edge-tts")
+    if ($edgeInstall.ExitCode -eq 0) {
+        Write-Host "[OK] edge-tts installed" -ForegroundColor Green
     } else {
-        Write-Host "Installing edge-tts..." -ForegroundColor Yellow
-        & pip install edge-tts 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "[OK] edge-tts installed" -ForegroundColor Green
-        } else {
-            Write-Host "[WARN] edge-tts install failed - /speak will not work until you run: pip install edge-tts" -ForegroundColor Yellow
-        }
+        Write-Host "[WARN] edge-tts install failed - /speak will not work until you run: pip install edge-tts" -ForegroundColor Yellow
+        Write-Host $edgeInstall.Output -ForegroundColor Yellow
     }
-} catch {
-    Write-Host "[WARN] Could not verify edge-tts: $_" -ForegroundColor Yellow
 }
 
 # --- Summary ---
