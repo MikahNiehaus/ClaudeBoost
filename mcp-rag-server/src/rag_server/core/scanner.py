@@ -2,7 +2,6 @@
 
 import logging
 import os
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,17 +77,15 @@ def scan_project(
     else:
         target_exts = ALL_CODE_EXTENSIONS
 
-    # --- Tier 1: git ls-files ---
-    raw_files, skipped_gitignore = _discover_via_git(root, target_exts)
-    method = "git"
+    # --- Tier 1: pathspec (reads .gitignore directly, no subprocess) ---
+    # git ls-files was removed — subprocess.run() hangs indefinitely in the
+    # MCP subprocess context on Windows even when called from a thread pool,
+    # and the timeout mechanism itself fails in that context.
+    raw_files, skipped_gitignore = _discover_via_pathspec(root, target_exts, DEFAULT_EXCLUDES)
+    method = "pathspec"
 
     if raw_files is None:
-        # --- Tier 2: pathspec (non-git with .gitignore) ---
-        raw_files, skipped_gitignore = _discover_via_pathspec(root, target_exts, DEFAULT_EXCLUDES)
-        method = "pathspec"
-
-    if raw_files is None:
-        # --- Tier 3: plain os.walk ---
+        # --- Tier 2: plain os.walk ---
         raw_files = _discover_via_walk(root, target_exts, DEFAULT_EXCLUDES)
         skipped_gitignore = 0
         method = "walk"
@@ -138,49 +135,6 @@ def scan_project(
 # ---------------------------------------------------------------------------
 # Discovery helpers
 # ---------------------------------------------------------------------------
-
-def _discover_via_git(root: Path, target_exts: set[str]) -> tuple[list[str] | None, int]:
-    """Use git ls-files to list tracked + untracked-non-ignored files.
-
-    Only activates if .git exists directly inside project_path — avoids scanning
-    parent git repos when the project is a subdirectory of a larger git tree.
-
-    Returns (file_list, skipped_gitignore_count) or (None, 0) if not a git repo.
-    """
-    # Only treat as a git repo if .git lives directly in the project root
-    if not (root / ".git").exists():
-        return None, 0
-
-    try:
-        result = subprocess.run(
-            [
-                "git", "-C", str(root),
-                "ls-files",
-                "--cached",           # tracked files
-                "--others",           # untracked files
-                "--exclude-standard", # apply .gitignore / .git/info/exclude
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None, 0
-
-    if result.returncode != 0:
-        return None, 0
-
-    git_relative = [p for p in result.stdout.splitlines() if p]
-    git_abs = [str(root / p) for p in git_relative]
-
-    # Count how many extension-matching files were excluded by git vs a raw walk
-    raw_walk = _discover_via_walk(root, target_exts, set())
-    git_set = {str(Path(p).resolve()) for p in git_abs}
-    walk_set = {str(Path(p).resolve()) for p in raw_walk}
-    skipped_gitignore = len(walk_set - git_set)
-
-    # Filter to target extensions
-    files = [p for p in git_abs if Path(p).suffix in target_exts]
-    return files, skipped_gitignore
-
 
 def _discover_via_pathspec(
     root: Path, target_exts: set[str], default_excludes: set[str]
