@@ -538,13 +538,14 @@ def sync_init() -> FileWatcher:
         result["files_indexed"], result["chunks_created"],
     )
 
-    # Pre-warm embedding model so first rag_context doesn't block
-    if not embedder.is_loaded:
-        logger.info("Pre-warming embedding model...")
-        embedder.embed_query("warmup")
-        logger.info("Embedding model ready.")
-    else:
+    # NOTE: Embedding model warmup is intentionally deferred.
+    # Pre-warming here blocks the MCP server from starting (5+ second delay),
+    # causing Claude Code to time out and drop the MCP connection entirely.
+    # All tool handlers run in run_in_executor, so lazy loading is safe.
+    if embedder.is_loaded:
         logger.info("Embedding model already loaded from indexing.")
+    else:
+        logger.info("Embedding model will load on first tool call (deferred for fast MCP startup).")
 
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()

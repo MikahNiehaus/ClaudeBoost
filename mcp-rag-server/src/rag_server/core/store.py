@@ -3,18 +3,11 @@
 import logging
 from pathlib import Path
 
-import chromadb
-from chromadb.config import Settings
-
 from rag_server.ports.store_port import Chunk, SearchResult, StorePort
 
-# ChromaDB 1.5+ uses a Rust/Tokio backend by default. On Windows, this backend
-# crashes with ACCESS_VIOLATION when the process's stdout is a pipe (e.g. when
-# launched as an MCP subprocess by Claude Code). Force the pure-Python SegmentAPI.
-_CHROMA_SETTINGS = Settings(
-    chroma_api_impl="chromadb.api.segment.SegmentAPI",
-    anonymized_telemetry=False,
-)
+# ChromaDB and its Settings are imported lazily in __init__ to avoid a 2.5-second
+# import penalty at module load time. This keeps MCP server startup under 1 second
+# so Claude Code doesn't time out before tools/list can be served.
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +16,22 @@ class ChromaStore(StorePort):
     """Vector store backed by ChromaDB in embedded (SQLite) mode."""
 
     def __init__(self, persist_dir: str):
+        # Lazy import: chromadb takes ~2.5s to import due to its Rust/Tokio extensions.
+        # Deferring until first instantiation keeps server.py's module-level import fast.
+        import chromadb
+        from chromadb.config import Settings
+
+        # ChromaDB 1.5+ uses a Rust/Tokio backend by default. On Windows, this backend
+        # crashes with ACCESS_VIOLATION when the process's stdout is a pipe (e.g. when
+        # launched as an MCP subprocess by Claude Code). Force the pure-Python SegmentAPI.
+        chroma_settings = Settings(
+            chroma_api_impl="chromadb.api.segment.SegmentAPI",
+            anonymized_telemetry=False,
+        )
+
         self._persist_dir = Path(persist_dir)
         self._persist_dir.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=str(self._persist_dir), settings=_CHROMA_SETTINGS)
+        self._client = chromadb.PersistentClient(path=str(self._persist_dir), settings=chroma_settings)
         logger.info("ChromaDB initialized at %s", self._persist_dir)
 
     def _get_collection(self, name: str):

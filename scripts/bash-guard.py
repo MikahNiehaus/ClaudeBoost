@@ -41,6 +41,18 @@ def check_cd_compound(command: str) -> str | None:
     return None
 
 
+def check_coauthor(command: str) -> str | None:
+    """Detect Co-Authored-By Claude attribution trailer in git commit messages."""
+    # Match the actual trailer format: Co-Authored-By: Name <email>
+    # Avoids false positives when the string appears in a commit message body/description.
+    if re.search(r"(?i)co-authored-by:\s*\S+\s*<[^>]+>", command):
+        return (
+            "BLOCKED: Do not add Co-Authored-By lines to commits. "
+            "Remove the Co-Authored-By trailer from the commit message and retry."
+        )
+    return None
+
+
 def check_backslash_spaces(command: str) -> str | None:
     """Detect backslash-escaped spaces in paths."""
     # Match backslash-space that looks like path escaping, not inside quotes
@@ -72,7 +84,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_cd_compound, check_backslash_spaces]:
+    for check in [check_coauthor, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)
