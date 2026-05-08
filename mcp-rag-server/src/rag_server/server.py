@@ -538,14 +538,16 @@ def sync_init() -> FileWatcher:
         result["files_indexed"], result["chunks_created"],
     )
 
-    # NOTE: Embedding model warmup is intentionally deferred.
-    # Pre-warming here blocks the MCP server from starting (5+ second delay),
-    # causing Claude Code to time out and drop the MCP connection entirely.
-    # All tool handlers run in run_in_executor, so lazy loading is safe.
+    # Pre-warm the embedding model at startup. With local_files_only=True and
+    # HF_HUB_OFFLINE=1 set, this is pure disk I/O (~1-2s) and no longer risks
+    # triggering the MCP 5-second startup timeout. Pre-warming eliminates the
+    # first-call hang that occurred when the HuggingFace Hub online check blocked.
     if embedder.is_loaded:
         logger.info("Embedding model already loaded from indexing.")
     else:
-        logger.info("Embedding model will load on first tool call (deferred for fast MCP startup).")
+        logger.info("Pre-warming embedding model...")
+        embedder.dimensions()  # Triggers _load_model() — fast with local_files_only=True
+        logger.info("Embedding model ready. Dimensions: %d", embedder.dimensions())
 
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()

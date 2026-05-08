@@ -30,7 +30,7 @@ class SentenceTransformerEmbedding(EmbeddingPort):
             kwargs = {}
             if self._model_name in _PREFIX_MODELS:
                 kwargs["trust_remote_code"] = True
-            self._model = SentenceTransformer(self._model_name, **kwargs)
+            self._model = SentenceTransformer(self._model_name, local_files_only=True, **kwargs)
             logger.info("Model loaded. Dimensions: %d", self.dimensions())
 
     @property
