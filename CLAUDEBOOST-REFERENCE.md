@@ -128,15 +128,20 @@
 
 **File:** `scripts/context-nudge.py`  
 **Event:** PostToolUse  
-**Tool matcher:** `Edit|Write|MultiEdit`  
+**Tool matcher:** `.*` (all tools)  
 **Type:** Command hook  
 
-**Behavior:**
-1. Skips if no `workspace/*/context.md` exists
-2. Reads and increments `state/compaction-tracker.json` `edit_count`
-3. Every `NUDGE_INTERVAL=15` edits: prints `{"additionalContext": "CONTEXT CHECKPOINT: ..."}` to stdout
+**Behavior — two modes:**
 
-**stdout:** JSON with `additionalContext` on every 15th edit  
+*Workspace present (any `workspace/*/context.md` exists):*
+1. Reads and increments `state/compaction-tracker.json` `edit_count`
+2. Every `NUDGE_INTERVAL=20` tool uses: prints `{"additionalContext": "CONTEXT CHECKPOINT: ..."}` to stdout reminding Claude to update context.md with (1) code changes and (2) important user statements (decisions, preferences, constraints)
+
+*No workspace:*
+1. Reads and increments `edit_count`
+2. At exactly `edit_count == 60`: prints once suggesting workspace creation, then loop continues from 61
+
+**stdout:** JSON with `additionalContext` at trigger points  
 **Files read/written:** `state/compaction-tracker.json`  
 **Timeout:** 3000ms  
 
@@ -282,6 +287,26 @@ Polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for up to 15 minutes
 
 ---
 
+### 1.18 project-rag-flag.py
+
+**File:** `scripts/project-rag-flag.py`  
+**Event:** PostToolUse  
+**Tool matcher:** `mcp__rag-server__rag_index_project`  
+**Type:** Command hook  
+
+**Behavior:**
+1. Reads tool output from stdin (PostToolUse JSON payload)
+2. Extracts tool result from `tool_response`, `output`, `result`, or root payload (handles all Claude Code payload shapes)
+3. If result contains `files_indexed` key → writes `$TEMP/claudeboost_project_rag_ok` (indicates active Project RAG index)
+4. Otherwise (error or unexpected output) → deletes `$TEMP/claudeboost_project_rag_ok` to clear stale flag
+
+**Exit codes:** `0` always  
+**Purpose:** Lets the status line show "Project RAG" independently from "Boost RAG"  
+**Files written:** `$TEMP/claudeboost_project_rag_ok`  
+**Timeout:** 3000ms  
+
+---
+
 ## 2. End-to-End Workflow Traces
 
 ### 2.1 Compaction Lifecycle
@@ -318,19 +343,22 @@ Claude receives restored context and resumes work
 ### 2.2 Context Nudge
 
 ```
-Agent or user edits/writes a file (Edit|Write|MultiEdit tool used)
+Any tool used (matcher: .*)
     │
     ▼
 PostToolUse fires:
     └── command hook: context-nudge.py
-        ├── Checks if workspace/*/context.md exists (skips if none)
         ├── Reads state/compaction-tracker.json
         ├── Increments edit_count
         ├── Writes back incremented count
-        └── If edit_count % 15 == 0:
-            └── Prints {"additionalContext": "CONTEXT CHECKPOINT: ..."}
+        ├── If workspace/*/context.md exists:
+        │   └── If edit_count % 20 == 0:
+        │       └── Prints {"additionalContext": "CONTEXT CHECKPOINT: update context.md with code changes AND user statements"}
+        └── If no workspace:
+            └── If edit_count == 60:
+                └── Prints {"additionalContext": "No workspace — consider creating one if this is getting complex"}
     │
-    ▼ (every 15th edit)
+    ▼ (every 20th tool use in workspace mode)
 Claude receives checkpoint nudge reminding it to update context.md
 ```
 
@@ -1321,7 +1349,8 @@ Agent reads and internalizes before taking any action
 | Matcher | Type | Script/Prompt | Purpose |
 |---------|------|---------------|---------|
 | `Task` | prompt | VERIFY GATE | Remind orchestrator to spawn evaluator for BLOCKER/HIGH/MEDIUM findings |
-| `Edit\|Write\|MultiEdit` | command | `context-nudge.py` (timeout: 3000ms) | Nudge context.md update every 15 edits |
+| `.*` | command | `context-nudge.py` (timeout: 3000ms) | Nudge context.md update every 20 tool uses (workspace mode); once at 60 uses (no-workspace mode) |
+| `mcp__rag-server__rag_index_project` | command | `project-rag-flag.py` (timeout: 3000ms) | Write `$TEMP/claudeboost_project_rag_ok` on successful project index; clear on error |
 
 ### 6.4 PreCompact
 
@@ -1379,9 +1408,9 @@ Agent reads and internalizes before taking any action
 {"edit_count": 203}
 ```
 
-- Incremented by `context-nudge.py` on every Edit/Write/MultiEdit
+- Incremented by `context-nudge.py` on every tool use (matcher: `.*`)
 - Reset to 0 by `compaction-save.py` on PreCompact
-- Every 15th edit triggers context checkpoint prompt
+- Every 20th tool use triggers context checkpoint (workspace mode); once at 60 uses triggers workspace-creation suggestion (no-workspace mode)
 
 ### 7.4 state/session-approvals.json
 
@@ -1425,10 +1454,14 @@ Agent reads and internalizes before taking any action
 
 The user settings.json includes a status line command:
 ```bash
-if [ -f "$TEMP/claudeboost_active" ]; then printf '\033[32;1m> ClaudeBoost\033[0m \033[2m|\033[0m \033[32;1mRAG\033[0m'; else printf '\033[2m> ClaudeBoost\033[0m'; fi
+printf '\033[32;1m> ClaudeBoost\033[0m'; [ -f "$TEMP/claudeboost_rag_ok" ] && printf ' \033[2m|\033[0m \033[32;1mBoost RAG\033[0m'; [ -f "$TEMP/claudeboost_project_rag_ok" ] && printf ' \033[2m|\033[0m \033[36;1mProject RAG\033[0m'; command -v gt >/dev/null 2>&1 && printf ' \033[2m|\033[0m \033[33;1mGT\033[0m'
 ```
 
-Shows green "ClaudeBoost | RAG" when `$TEMP/claudeboost_active` exists (set by `/boost`), grey otherwise.
+Four independent indicators:
+- **ClaudeBoost** (green bold): always shown — ClaudeBoost is globally registered
+- **Boost RAG** (green bold): shown only when `$TEMP/claudeboost_rag_ok` exists (written by `/boost` Step 2 on RAG health check success; cleared at Step 0 of next `/boost` run)
+- **Project RAG** (cyan bold): shown only when `$TEMP/claudeboost_project_rag_ok` exists (written by `project-rag-flag.py` hook when `rag_index_project` completes successfully; cleared on error)
+- **GT** (yellow bold): shown only when `gt` binary is on PATH (live `command -v` check — no flag file needed)
 
 ### 7.8 Global Settings
 

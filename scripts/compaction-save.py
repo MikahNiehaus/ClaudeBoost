@@ -33,7 +33,9 @@ def extract_summary(content: str) -> str:
 
     # Scan rest for status/phase/next-step lines
     keywords = ["status", "phase", "next step", "blocker", "current work",
-                "## active", "## complete", "## implement"]
+                "## active", "## complete", "## implement",
+                "## user decision", "## decision", "## requirement",
+                "## user said", "## user preference", "## constraint"]
     for i, line in enumerate(lines[5:], start=5):
         lower = line.lower()
         if any(kw in lower for kw in keywords):
