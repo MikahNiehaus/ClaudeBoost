@@ -65,8 +65,14 @@ def main() -> int:
         nudges.append(
             "[agent-spawn nudge] Spawn prompt does not instruct the agent to call "
             "rag_context. For ClaudeBoost quality routing, include "
-            "'mcp__rag-server__rag_context(agent=\"...\", task_description=\"...\")' "
+            "'mcp__rag-server__rag_context(agent=\"...\", task_description=\"...\", project_path=\"...\")' "
             "as the first action in the prompt."
+        )
+    elif "project_path" not in prompt_lower:
+        nudges.append(
+            "[agent-spawn nudge] rag_context call is missing project_path. "
+            "Include project_path=\"<cwd>\" so the agent loads project-specific "
+            "codebase context (Tier 4 RAG). Run `pwd` before spawning to get the path."
         )
 
     # Secondary check: architect-agent proposal contract.

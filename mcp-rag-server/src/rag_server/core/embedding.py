@@ -6,7 +6,7 @@ from rag_server.ports.embedding_port import EmbeddingPort
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Models that use search_query:/search_document: prefixes for better retrieval
 _PREFIX_MODELS = {"nomic-ai/nomic-embed-text-v1.5"}
@@ -27,9 +27,10 @@ class SentenceTransformerEmbedding(EmbeddingPort):
         if self._model is None:
             logger.info("Loading embedding model: %s", self._model_name)
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(
-                self._model_name, trust_remote_code=True,
-            )
+            kwargs = {}
+            if self._model_name in _PREFIX_MODELS:
+                kwargs["trust_remote_code"] = True
+            self._model = SentenceTransformer(self._model_name, **kwargs)
             logger.info("Model loaded. Dimensions: %d", self.dimensions())
 
     @property

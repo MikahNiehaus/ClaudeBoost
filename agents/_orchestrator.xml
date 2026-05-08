@@ -153,12 +153,17 @@
 You are [agent-name]. Your VERY FIRST tool call MUST be `rag_context`:
 - agent: "[agent-name]"
 - task_description: "[task description from Step 4]"
+- project_path: "[PROJECT_PATH]"
 - max_tokens: 6000
 - weight: "full" (for reviewer/security/performance) or "standard" (all others)
 
+`project_path` enables Tier 4 codebase search — relevant code snippets from the
+active project are included alongside global knowledge. If the project has not been
+indexed yet, Tier 4 is silently skipped and the rest loads normally.
+
 This returns your agent definition, relevant knowledge chunks matched to your
-task via semantic search, and related workspace history. Read and internalize
-all returned content before proceeding.
+task via semantic search, project codebase context, and related workspace history.
+Read and internalize all returned content before proceeding.
 
 **This is non-negotiable.** Do NOT read files, search code, or take any other
 action before calling `rag_context`. The orchestrator's PreToolUse hook verifies
@@ -224,6 +229,7 @@ These agents gather info or produce docs — they don't produce findings that ne
 You are [agent-name]. Call `rag_context` first:
 - agent: "[agent-name]"
 - task_description: "[description]"
+- project_path: "[PROJECT_PATH]"
 - max_tokens: 4000
 - weight: "lightweight"
 

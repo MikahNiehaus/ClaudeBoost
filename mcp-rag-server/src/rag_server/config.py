@@ -31,7 +31,7 @@ CHROMA_DIR = RAG_INDEX_DIR / "chroma"
 MANIFEST_PATH = RAG_INDEX_DIR / "manifest.json"
 
 # Embedding model
-EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 # Scoped collection paths (relative to PROJECT_ROOT)
 SCOPES = {

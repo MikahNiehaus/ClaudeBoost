@@ -16,15 +16,20 @@ Before spawning, verify:
 
 Spawn the agent using the Task tool. The agent will load its own knowledge via RAG.
 
+**Before writing the spawn prompt**, run `pwd` to get the current working directory.
+This is the `project_path` — embed it as a literal string in the spawn prompt so the
+agent can load project-specific codebase context (Tier 4 RAG).
+
 Include in the agent's prompt:
 - Agent name: `$1-agent`
 - Task description (clear and specific — RAG uses this to find relevant knowledge)
 - Instruction to call `rag_context` as Step 1 (per the initialization sequence in `_orchestrator.xml`)
+- `project_path`: the literal cwd path from `pwd` (e.g. `"C:/Development/PantryEasy"`)
 - Task context path: `workspace/$2/context.md`
 - Required output format with Status field (COMPLETE/BLOCKED/NEEDS_INPUT)
 
-The agent calls `rag_context(agent="$1-agent", task_description="...", weight="...")` itself.
-This returns its definition + semantically matched knowledge chunks.
+The agent calls `rag_context(agent="$1-agent", task_description="...", project_path="<cwd>", weight="...")` itself.
+This returns its definition + global knowledge chunks + project codebase results (if indexed).
 You do NOT need to pre-fetch or embed knowledge in the spawn prompt.
 
 ## Weight Routing
