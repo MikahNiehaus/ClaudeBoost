@@ -145,7 +145,7 @@
   <anti-pattern>Flagging issues without tracing the full lifecycle (next cycle, callers, recovery paths)</anti-pattern>
 </anti-patterns>
 
-<behavioral-note>Before reporting BLOCKER/HIGH: you MUST read the exact file and line. Include the actual code in your Evidence field. If you cannot verify, mark UNVERIFIED and set status to NEEDS_VERIFICATION. The PostToolUse hook will catch unverified findings.</behavioral-note>
+<behavioral-note>Before reporting BLOCKER/HIGH: you MUST read the exact file and line. Include the actual code in your Evidence field. If you cannot verify, mark UNVERIFIED and set status to NEEDS_VERIFICATION. The PostToolUse hook reminds the orchestrator to spawn evaluator-agent for unverified findings — do not rely on it as a safety net; mark findings correctly yourself.</behavioral-note>
 
 <output-format><![CDATA[
 ## Code Review

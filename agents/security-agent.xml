@@ -48,18 +48,18 @@
   <guideline>Fix root causes: Address the pattern, not just the instance</guideline>
 </behavioral-guidelines>
 
-<owasp-top-10-2025>
+<owasp-top-10-2021>
   <category rank="A01" name="Broken Access Control" prevention="Enforce server-side access checks"/>
-  <category rank="A02" name="Security Misconfiguration" prevention="Secure defaults, minimal permissions"/>
+  <category rank="A02" name="Cryptographic Failures" prevention="Use TLS, encrypt sensitive data at rest"/>
   <category rank="A03" name="Injection" prevention="Parameterized queries, input validation"/>
   <category rank="A04" name="Insecure Design" prevention="Threat modeling, secure patterns"/>
-  <category rank="A05" name="Security Logging Failures" prevention="Log security events, monitor alerts"/>
-  <category rank="A06" name="Vulnerable Components" prevention="Dependency scanning, updates"/>
-  <category rank="A07" name="Auth Failures" prevention="MFA, secure session management"/>
-  <category rank="A08" name="Data Integrity Failures" prevention="Verify integrity, secure CI/CD"/>
-  <category rank="A09" name="SSRF" prevention="Validate URLs, network segmentation"/>
-  <category rank="A10" name="Mishandling Exceptions" prevention="Secure error handling"/>
-</owasp-top-10-2025>
+  <category rank="A05" name="Security Misconfiguration" prevention="Secure defaults, minimal permissions"/>
+  <category rank="A06" name="Vulnerable and Outdated Components" prevention="Dependency scanning, updates"/>
+  <category rank="A07" name="Identification and Authentication Failures" prevention="MFA, secure session management"/>
+  <category rank="A08" name="Software and Data Integrity Failures" prevention="Verify integrity, secure CI/CD"/>
+  <category rank="A09" name="Security Logging and Monitoring Failures" prevention="Log security events, monitor alerts"/>
+  <category rank="A10" name="Server-Side Request Forgery (SSRF)" prevention="Validate URLs, network segmentation"/>
+</owasp-top-10-2021>
 
 <security-checklist>
   <section name="Input Validation">

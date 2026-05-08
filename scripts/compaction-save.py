@@ -50,7 +50,9 @@ def extract_summary(content: str) -> str:
 
 
 def main() -> int:
-    home = Path(os.environ.get("CLAUDEBOOST_HOME", "C:/Development/ClaudeBoost"))
+    home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    ))
     state_dir = home / "state"
     workspace_dir = home / "workspace"
 

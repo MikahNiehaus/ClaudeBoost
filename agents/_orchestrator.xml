@@ -147,7 +147,7 @@
 
 <agent-spawn-template><![CDATA[
 # MANDATORY INITIALIZATION SEQUENCE
-**STOP. Complete Steps 1-3 BEFORE any other action. A PreToolUse hook enforces this.**
+**STOP. Complete Steps 1-3 BEFORE any other action. A PreToolUse hook reminds you to call rag_context — do not skip it.**
 
 ## Step 1: Load Identity + Knowledge via RAG (MANDATORY FIRST ACTION)
 You are [agent-name]. Your VERY FIRST tool call MUST be `rag_context`:
@@ -267,7 +267,7 @@ LIGHTWEIGHT TEMPLATE (minimal ceremony):
   <sequence type="Research + implement">research → architect → workflow</sequence>
   <sequence type="Security audit + fix">security → refactor</sequence>
   <sequence type="Explore + implement">explore → architect → workflow</sequence>
-  <sequence type="Review + verify">reviewer → evaluator (MANDATORY when reviewer status is NEEDS_VERIFICATION — PostToolUse hook enforces this)</sequence>
+  <sequence type="Review + verify">reviewer → evaluator (MANDATORY when reviewer status is NEEDS_VERIFICATION — PostToolUse hook reminds the orchestrator to do this, but you must act on it)</sequence>
 </collaboration-sequences>
 
 <parallel-combinations>

@@ -133,7 +133,7 @@ For this action: [description]
     <check-after>Any agent reports findings with BLOCKER/HIGH/MEDIUM severity</check-after>
     <verification>Every finding has file:line citation AND code evidence?</verification>
     <if-violated>STOP → Mark UNVERIFIED → If BLOCKER/HIGH: spawn evaluator-agent → Do NOT present to user</if-violated>
-    <enforcement>PreToolUse injects instructions, PostToolUse intercepts output</enforcement>
+    <enforcement>PreToolUse injects instructions, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings</enforcement>
   </rule>
 </rule-specific-enforcement>
 

@@ -15,7 +15,9 @@ from pathlib import Path
 
 
 def main() -> int:
-    home = Path(os.environ.get("CLAUDEBOOST_HOME", "C:/Development/ClaudeBoost"))
+    home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    ))
     memo_path = home / "state" / "compaction-memo.json"
 
     # Read hook input

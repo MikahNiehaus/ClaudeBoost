@@ -1,10 +1,11 @@
 """Watch the changes chat file for new questions. Exits when one is found."""
 import json
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-CHAT_FILE = Path.home() / "AppData" / "Local" / "Temp" / "claudeboost" / "changes_chat.json"
+CHAT_FILE = Path(tempfile.gettempdir()) / "claudeboost" / "changes_chat.json"
 POLL_INTERVAL = 3  # seconds
 MAX_DURATION = 15 * 60  # 15 minutes
 

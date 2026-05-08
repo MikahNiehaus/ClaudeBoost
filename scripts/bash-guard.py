@@ -22,7 +22,7 @@ import sys
 
 def check_cd_compound(command: str) -> str | None:
     """Detect cd + && compound commands."""
-    # Match: cd <path> && <command> or cd <path> ; <command>
+    # Match: cd <path> && <command>
     if re.search(r"\bcd\s+.+\s*&&\s*", command):
         # Extract what command follows &&
         match = re.search(r"&&\s*(\w+)", command)

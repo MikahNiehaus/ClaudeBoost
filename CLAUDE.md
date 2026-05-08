@@ -50,7 +50,7 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - "No issues found" is always a valid outcome
 - Reviewers: finding something is NOT the goal. Finding REAL things is.
 
-Hooks enforce this: PreToolUse injects verify gate into spawns, PostToolUse drops unverified BLOCKER/HIGH findings, NEEDS_VERIFICATION triggers evaluator-agent.
+Hooks enforce this: PreToolUse injects verify gate into spawns, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION triggers evaluator-agent.
 
 ## Collaborative Mode (CONSULT / AUTO)
 

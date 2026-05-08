@@ -317,7 +317,7 @@ except KeyboardInterrupt:
     pass
 except Exception:
     # Log crash for debugging
-    with open(STATUS_FILE + '.error', 'w') as f:
+    with open(STATUS_FILE + '.error', 'w', encoding='utf-8') as f:
         traceback.print_exc(file=f)
 finally:
     sys.stdout.write(SHOW + RESET + CLEAR)

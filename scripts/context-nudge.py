@@ -18,7 +18,9 @@ NUDGE_INTERVAL = 15
 
 
 def main() -> int:
-    home = Path(os.environ.get("CLAUDEBOOST_HOME", "C:/Development/ClaudeBoost"))
+    home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    ))
     workspace_dir = home / "workspace"
 
     # No workspace = no nudge needed

@@ -203,7 +203,9 @@ def main() -> int:
         payload = {}
 
     # 2. Read state
-    home = os.environ.get("CLAUDEBOOST_HOME", "C:/Development/ClaudeBoost")
+    home = os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
     state = read_json(Path(home) / "state" / "speak-state.json", {})
 
     if not state.get("enabled", False):

@@ -45,7 +45,6 @@ def main() -> int:
 
     tool_input = payload.get("tool_input", {}) or {}
     prompt = str(tool_input.get("prompt", "") or "")
-    subagent_type = str(tool_input.get("subagent_type", "") or "")
     description = str(tool_input.get("description", "") or "")
 
     # Normalize for case-insensitive substring checks
@@ -54,12 +53,14 @@ def main() -> int:
     nudges: list[str] = []
 
     # Primary check: does the spawn prompt instruct the agent to call
-    # rag_context? We accept any of: rag_context, mcp__rag-server__rag_context,
-    # or the phrase "RAG context" as evidence.
+    # rag_context? We accept: rag_context (the function name) or
+    # mcp__rag-server__rag_context (the fully-qualified MCP tool name).
+    # "RAG context" (two words) was previously accepted but is too ambiguous —
+    # it matches plain-English phrases like "ensure RAG context is available"
+    # without the prompt actually instructing a rag_context() tool call.
     has_rag = (
         "rag_context" in prompt_lower
         or "mcp__rag-server__rag_context" in prompt_lower
-        or "rag context" in prompt_lower
     )
     if not has_rag:
         nudges.append(

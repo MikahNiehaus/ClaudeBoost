@@ -47,7 +47,9 @@ def read_json(path: str | os.PathLike, default):
 
 
 def main() -> int:
-    home = os.environ.get("CLAUDEBOOST_HOME") or r"C:/Users/grayw/OneDrive/prj/ClaudeBoost"
+    home = os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
     mode = read_json(Path(home) / "state" / "claudeboost-mode.json", {}).get("mode", "CONSULT")
 
     # AUTO: always pass silently
