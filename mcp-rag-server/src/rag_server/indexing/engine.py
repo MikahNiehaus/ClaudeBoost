@@ -221,6 +221,38 @@ class IndexingEngine:
 
         project_root = Path(project_path).resolve()
 
+        # Remove stale chunks for files that no longer exist on disk (e.g. deleted after
+        # a branch switch). Scoped to the extensions included in this run so a
+        # language-filtered run (e.g. "python only") doesn't evict chunks from a language
+        # that wasn't part of this scan.
+        if not force and project_manifest:
+            from rag_server.core.project import ALL_CODE_EXTENSIONS, LANGUAGE_EXTENSIONS
+            if languages:
+                scoped_exts = set()
+                for lang in languages:
+                    scoped_exts |= LANGUAGE_EXTENSIONS.get(lang.lower(), set())
+            else:
+                scoped_exts = ALL_CODE_EXTENSIONS
+
+            current_rel_paths = set()
+            for fp in file_paths:
+                try:
+                    current_rel_paths.add(
+                        str(Path(fp).relative_to(project_root)).replace("\\", "/")
+                    )
+                except ValueError:
+                    current_rel_paths.add(fp.replace("\\", "/"))
+
+            stale = [
+                f for f in list(project_manifest)
+                if Path(f).suffix in scoped_exts and f not in current_rel_paths
+            ]
+            if stale:
+                logger.info("Removing %d stale file(s) from index (not found on disk).", len(stale))
+                for f in stale:
+                    project_store.delete_by_source(collection, f)
+                    del project_manifest[f]
+
         files_indexed = 0
         chunks_created = 0
         files_skipped = 0
