@@ -9,20 +9,38 @@ Index the target project's source code into a per-project vector database for se
 
 ## Arguments
 
-$ARGUMENTS — can be:
-- A project path (e.g., `/index-project C:/Development/MyApp`)
-- A language filter (e.g., `/index-project C:/Development/MyApp python,typescript`)
-- `force` to re-index everything (e.g., `/index-project C:/Development/MyApp force`)
-- Empty — uses the current working directory
+$ARGUMENTS — flexible, any of:
+- Empty → use the current working directory
+- A full path → `/index-project C:/Development/MyApp`
+- A short project name → `/index-project PantryEasy`
+- A fuzzy description → `/index-project the benefits app` or `/index-project nectar`
+- Any of the above plus language filter → `PantryEasy python,typescript`
+- Any of the above plus `force` → `PantryEasy force`
 
 ## Instructions
 
 1. **Health check** — call `rag_status()` first. If it fails or returns an error, stop immediately and tell the user: "RAG server not connected — run `/mcp` to reconnect or restart Claude Code, then retry."
 
-2. Parse the arguments:
-   - If no path provided, use the primary working directory
-   - If languages specified (comma-separated after path), pass as `languages` array
-   - If "force" is specified, set `force=true`
+2. **Resolve the project path** from `$ARGUMENTS`:
+
+   a. **Empty** → use the primary working directory as the project path. Done.
+
+   b. **Full path** (starts with a drive letter like `C:/` or `/`) → use as-is.
+
+   c. **Short name or fuzzy description** → search for a matching directory.
+      - Run `ls C:/Development/` (and `ls C:/Users/mniehaus/source/repos/` if that exists) to list candidate project folders.
+      - Pick the folder whose name best matches the argument — exact match first, then case-insensitive substring, then fuzzy (e.g. "nectar" matches "NectarBenefits").
+      - If exactly one good match: use it, tell the user which path you resolved to.
+      - If multiple plausible matches: show them and use `AskUserQuestion` to ask which one.
+      - If no match: tell the user and ask them to provide the full path.
+
+   Strip language and `force` tokens from the argument before doing path resolution:
+   - Languages look like `python`, `typescript`, `csharp`, `javascript` (comma-separated)
+   - `force` is the literal word `force`
+
+3. Parse remaining tokens after path resolution:
+   - If languages specified (comma-separated), pass as `languages` array
+   - If `force` is specified, set `force=true`
 
 3. **Scan first** — call `rag_scan(project_path, languages)` before indexing.
 
