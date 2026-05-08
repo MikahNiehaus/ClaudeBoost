@@ -104,7 +104,16 @@ Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`,
 
 ## RAG Server
 
-MCP tools: `rag_search`, `rag_index`, `rag_context`, `rag_status`.
+Two distinct RAG indexes — always distinguish between them:
+
+| Term | What it is | Tools |
+|------|-----------|-------|
+| **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `rag_search scope=agents/knowledge/all`, `rag_index`, `rag_context` |
+| **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `rag_index_project`, `rag_search scope=codebase`, `/index-project` |
+
+When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
+When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.
+`rag_context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG.
 
 ## TTS (Text-to-Speech)
 
