@@ -190,6 +190,19 @@ class IndexingEngine:
             )
 
         collection = "codebase"
+
+        # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d).
+        # If the stored vectors don't match the current model, force a full re-index so
+        # searches don't fail with dimension errors. Mirrors the same check in sync_init().
+        if not force and project_store.collection_exists(collection) and project_store.count(collection) > 0:
+            sample_dim = project_store.sample_dimension(collection)
+            if sample_dim and sample_dim != self._embedder.dimensions():
+                logger.warning(
+                    "Dimension mismatch in project codebase: index=%dd, model=%dd. Forcing re-index.",
+                    sample_dim, self._embedder.dimensions(),
+                )
+                force = True
+
         if force and project_store.collection_exists(collection):
             project_store.delete_collection(collection)
         project_store.create_collection(collection)
