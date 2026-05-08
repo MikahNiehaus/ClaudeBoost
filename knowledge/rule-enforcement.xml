@@ -129,11 +129,11 @@ For this action: [description]
     <if-violated>Log inefficiency → Rewrite prompt → Continue</if-violated>
   </rule>
 
-  <rule id="RULE-009" name="Verify Gate - Evidence Required" severity="BLOCK">
+  <rule id="RULE-019" name="Verify Gate - Evidence Required" severity="BLOCK">
     <check-after>Any agent reports findings with BLOCKER/HIGH/MEDIUM severity</check-after>
     <verification>Every finding has file:line citation AND code evidence?</verification>
     <if-violated>STOP → Mark UNVERIFIED → If BLOCKER/HIGH: spawn evaluator-agent → Do NOT present to user</if-violated>
-    <enforcement>PreToolUse injects instructions, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings</enforcement>
+    <enforcement>Orchestrator spawn template (Step 4b) includes verify gate instructions; PostToolUse (type: prompt) reminds the orchestrator to spawn evaluator-agent for unverified findings</enforcement>
   </rule>
 </rule-specific-enforcement>
 

@@ -7,12 +7,12 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 You have 24 specialist agents (`agents/*.xml`) and 38 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
-**RAG powers agent knowledge (ENFORCED BY HOOK):**
+**RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
 - Spawned agents MUST call `rag_context` as their FIRST action
 - Use `rag_search` when unsure which knowledge file applies or when reviewing code for standards
 - NEVER guess which file to read — search for it
 - Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
-- PreToolUse hook on `Task` enforces this
+- PreToolUse hook on `Task` reminds you to include `rag_context` in the spawn prompt — it is a nudge, not a gate; do not rely on it as a safety net
 
 ## Decision Flow
 

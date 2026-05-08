@@ -1,16 +1,16 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 22 specialist agents, 40 knowledge
+Multi-agent orchestration toolkit for Claude Code. 23 specialist agents, 43 knowledge
 bases, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside
 
 ```
 ClaudeBoost/
-├── agents/              22 specialist agent definitions (XML)
-├── knowledge/           40 domain knowledge bases (XML)
+├── agents/              23 specialist agent definitions (XML)
+├── knowledge/           43 domain knowledge bases (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    15 slash commands
+├── .claude/commands/    20 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -45,7 +45,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 15 slash commands for task management
+- 20 slash commands for task management
 
 ## Features
 
@@ -60,10 +60,10 @@ it, lightweight where it doesn't:
 
 ### Verify Gate (Anti-Hallucination)
 
-Every finding must be proven from actual code. Structural enforcement via 4 hooks:
+Every finding must be proven from actual code. 4 hooks remind agents and the orchestrator to follow the protocol:
 
-- **PreToolUse on Task**: Routes agents to full/standard/lightweight templates
-- **PostToolUse on Task**: Triggers evaluator-agent for finding verification
+- **PreToolUse on Task**: Nudges spawn prompt to include `rag_context` and architect contract
+- **PostToolUse on Task**: Reminds orchestrator to spawn evaluator-agent for unverified findings
 - **SessionStart**: Loads quality-first routing mindset
 - **PreCompact**: Preserves routing rules across context compaction
 
@@ -72,7 +72,7 @@ Evaluator-agent always runs in a fresh context to prevent confirmation bias.
 ### RAG-Powered Knowledge
 
 Agents load their identity and relevant knowledge via `rag_context` on every spawn.
-A PreToolUse hook enforces this — no agent can skip it.
+A PreToolUse hook reminds the orchestrator to include `rag_context` in spawn prompts — it is a nudge, not a gate.
 
 ## Agents
 
@@ -102,7 +102,7 @@ A PreToolUse hook enforces this — no agent can skip it.
 
 ## Knowledge Bases
 
-40 domain expertise files covering: coding standards, security, architecture, debugging,
+43 domain expertise files covering: coding standards, security, architecture, debugging,
 testing, observability, performance, refactoring, UI implementation, API design,
 context engineering, verify gate, scope governance, rule enforcement, and more.
 

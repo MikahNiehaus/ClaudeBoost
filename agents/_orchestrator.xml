@@ -287,9 +287,9 @@ LIGHTWEIGHT TEMPLATE (minimal ceremony):
 </escalation-paths>
 
 <verify-gate-enforcement><![CDATA[
-STRUCTURAL ENFORCEMENT (hooks back this up):
-- PreToolUse on Task: routes to full/standard/lightweight based on agent type
-- PostToolUse on Task: triggers evaluator-agent for any agent with findings
+HOOK REMINDERS (nudges, not gates — you must act on them):
+- PreToolUse on Task: reminds the spawn prompt to include rag_context and architect PROPOSAL_ONLY contract
+- PostToolUse on Task: reminds the orchestrator to spawn evaluator-agent for unverified findings
 
 WHY EVALUATOR, NOT SELF-VERIFY:
 - A fresh agent context has NO confirmation bias

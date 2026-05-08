@@ -173,7 +173,7 @@ def build_graph(base: Path) -> dict:
                         "id": "hooks",
                         "title": f"{hook_count} Safety Hooks",
                         "subtitle": "Invisible guardrails that fire automatically",
-                        "detail": "Claude Code hooks that inject rules at key moments. They enforce CONSULT mode before edits, verify agents loaded RAG, block unsafe process kills, and re-inject rules after context compaction. You never see them unless they catch something.",
+                        "detail": "Claude Code hooks that inject rules at key moments. They remind Claude to use CONSULT mode before edits, verify agents loaded RAG, warn about unsafe process kills, and re-inject rules after context compaction. bash-guard.py is the only hook that mechanically blocks (cd+&& and backslash-space patterns).",
                         "responsibilities": [
                             "SessionStart: load rules into every session",
                             "PreToolUse: check before edits and agent spawns",

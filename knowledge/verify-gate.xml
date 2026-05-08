@@ -1,6 +1,6 @@
 <knowledge-base name="verify-gate" version="1.0">
 <triggers>verify, evidence, finding, blocker, citation, hallucination, false positive, unverified</triggers>
-<overview>Verify Gate protocol — every finding must be proven from actual code before presentation. Structural enforcement via hooks prevents hallucinated or unverified findings from reaching the user.</overview>
+<overview>Verify Gate protocol — every finding must be proven from actual code before presentation. Hook nudges remind agents to verify findings; the orchestrator must act on them — findings still reach the user only if the orchestrator follows the protocol.</overview>
 
 <principles>
   <principle>Every BLOCKER/HIGH/MEDIUM finding MUST cite a specific file:line</principle>
@@ -22,11 +22,11 @@
 </fresh-context-principle>
 
 <enforcement-layers>
-  <layer name="PreToolUse on Task" when="Agent spawn">
-    <description>Injects verify gate instructions into every agent spawn prompt. The agent receives explicit instructions to verify findings and mark unverified ones.</description>
+  <layer name="Spawn Template" when="Agent spawn">
+    <description>The orchestrator's spawn template (Step 4b) includes verify gate instructions in every spawn prompt. The agent receives explicit instructions to verify findings and mark unverified ones. The PreToolUse Task hook nudges about rag_context and architect contract — it does not inject verify gate instructions itself.</description>
   </layer>
   <layer name="PostToolUse on Task" when="Agent completion">
-    <description>Fires after every agent completes. Parent agent must scan output for unverified BLOCKER/HIGH findings. Unverified findings are either verified on the spot or dropped.</description>
+    <description>Fires after every agent completes as an LLM nudge (type: prompt). It reminds the parent agent to scan output for unverified BLOCKER/HIGH findings. The parent agent must act on this reminder — the hook cannot mechanically drop findings.</description>
   </layer>
   <layer name="Output Format" when="Agent produces findings">
     <description>Evidence column in tables and Evidence field in blockers make verification status structurally visible. NEEDS_VERIFICATION status triggers evaluator escalation.</description>
@@ -68,7 +68,7 @@
 </status-values>
 
 <rationale>
-  <point>The rag_context enforcement pattern works because a hook fires at every spawn — no exceptions. The verify gate replicates this at TWO hook points: PreToolUse (construction-time) and PostToolUse (completion-time).</point>
+  <point>The rag_context reminder pattern works because a hook nudges at every spawn — no exceptions. The verify gate replicates this at TWO points: spawn template (construction-time instructions) and PostToolUse nudge (completion-time reminder).</point>
   <point>Output format changes make verification status structurally visible — you can't fill in the Evidence column without actually verifying.</point>
   <point>The evaluator escalation path becomes mandatory rather than optional when NEEDS_VERIFICATION is reported.</point>
   <point>False positives erode trust faster than missed issues. It is better to report 3 verified findings than 10 where half are wrong.</point>

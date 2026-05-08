@@ -17,7 +17,7 @@
   </aspect>
 </cia-triad>
 
-<owasp-top-10 year="2025">
+<owasp-top-10 year="2021">
   <vulnerability id="A01" name="Broken Access Control">
     <risk>Users accessing data beyond their permissions</risk>
     <prevention>
@@ -28,12 +28,12 @@
     </prevention>
   </vulnerability>
 
-  <vulnerability id="A02" name="Security Misconfiguration">
-    <risk>Insecure defaults, unnecessary features, verbose errors</risk>
+  <vulnerability id="A02" name="Cryptographic Failures">
+    <risk>Sensitive data exposed due to weak or missing encryption</risk>
     <prevention>
-      <item>Remove unnecessary features, components</item>
-      <item>Secure defaults for all environments</item>
-      <item>Disable detailed error messages in production</item>
+      <item>Use TLS for data in transit</item>
+      <item>Encrypt sensitive data at rest</item>
+      <item>Avoid weak algorithms (MD5, SHA-1, DES)</item>
     </prevention>
   </vulnerability>
 
@@ -58,10 +58,13 @@
     </prevention>
   </vulnerability>
 
-  <vulnerability id="A05" name="Security Logging Failures">
-    <risk>Breaches go undetected; attackers remain persistent</risk>
-    <log>Authentication events, authorization failures, validation failures</log>
-    <do-not-log>Passwords, session tokens, credit cards, PII</do-not-log>
+  <vulnerability id="A05" name="Security Misconfiguration">
+    <risk>Insecure defaults, unnecessary features, verbose errors</risk>
+    <prevention>
+      <item>Remove unnecessary features, components</item>
+      <item>Secure defaults for all environments</item>
+      <item>Disable detailed error messages in production</item>
+    </prevention>
   </vulnerability>
 
   <vulnerability id="A06" name="Vulnerable Components">
@@ -95,21 +98,18 @@
     </prevention>
   </vulnerability>
 
-  <vulnerability id="A09" name="SSRF">
+  <vulnerability id="A09" name="Security Logging and Monitoring Failures">
+    <risk>Breaches go undetected; attackers remain persistent</risk>
+    <log>Authentication events, authorization failures, validation failures</log>
+    <do-not-log>Passwords, session tokens, credit cards, PII</do-not-log>
+  </vulnerability>
+
+  <vulnerability id="A10" name="Server-Side Request Forgery (SSRF)">
     <risk>Application fetches remote resource from user-supplied URL</risk>
     <prevention>
       <item>Validate and sanitize all user-supplied URLs</item>
       <item>Block requests to internal/private IPs</item>
       <item>Use allowlists for permitted destinations</item>
-    </prevention>
-  </vulnerability>
-
-  <vulnerability id="A10" name="Exception Handling">
-    <risk>Poor error handling leads to security issues</risk>
-    <prevention>
-      <item>Handle all exceptions explicitly</item>
-      <item>Don't expose stack traces to users</item>
-      <item>Fail securely (deny access on error)</item>
     </prevention>
   </vulnerability>
 </owasp-top-10>

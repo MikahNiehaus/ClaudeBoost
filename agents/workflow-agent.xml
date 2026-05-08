@@ -52,8 +52,8 @@
 <workflow-patterns>
   <pattern name="Simple Feature">Plan → Implement → Test → Review → Done</pattern>
   <pattern name="Complex Feature">Plan → Phase 1 (Foundation) → Verify → Phase 2 (Core) → Verify → Phase 3 (Integration) → Review → Done</pattern>
-  <pattern name="TDD Workflow">Plan → Write Tests (failing) ��� Implement → Tests Pass → Refactor �� Review</pattern>
-  <pattern name="Bug Fix Workflow">Reproduce → Root Cause → Fix �� Regression Test → Review → Done</pattern>
+  <pattern name="TDD Workflow">Plan → Write Tests (failing) → Implement → Tests Pass → Refactor → Review</pattern>
+  <pattern name="Bug Fix Workflow">Reproduce → Root Cause → Fix → Regression Test → Review → Done</pattern>
 </workflow-patterns>
 
 <circuit-breakers>

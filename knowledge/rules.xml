@@ -1,6 +1,6 @@
 <knowledge-base name="rules" version="1.0">
 <triggers>rule, RULE-, violation, compliance, block, warn, enforcement</triggers>
-<overview>15 system rules enforced by orchestrator and compliance-agent</overview>
+<overview>20 system rules enforced by orchestrator and compliance-agent</overview>
 
 <rule-format>
   <field name="ID">Unique identifier (RULE-XXX)</field>
@@ -176,6 +176,19 @@
     <agent>architect-agent</agent>
     <agent>standards-validator-agent</agent>
   </applies-to>
+</rule>
+
+<rule id="RULE-021" name="Visual Communication Framework Annotation">
+  <trigger>When providing any technical explanation, diagram, or architecture description</trigger>
+  <condition>Response includes at least one framework annotation (SOLID, GoF, DDD, TDD, CIA, GRASP, Clean Code, KISS-DRY-YAGNI)</condition>
+  <action>Add appropriate framework annotation before responding.</action>
+  <applies-to>
+    <agent>architect-agent</agent>
+    <agent>reviewer-agent</agent>
+    <agent>explore-agent</agent>
+    <agent>workflow-agent</agent>
+  </applies-to>
+  <ref>knowledge/visual-communication.xml</ref>
 </rule>
 
 <rule id="RULE-022" name="Mandatory Best Practices Review">
