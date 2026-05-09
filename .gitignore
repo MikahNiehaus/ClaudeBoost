@@ -2,6 +2,7 @@ workspace/
 references/
 mcp-rag-server/.rag-index/
 indexes/
+state/
 __pycache__/
 *.pyc
 .claude/settings.local.json
