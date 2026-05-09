@@ -46,7 +46,7 @@ status_start_row = sr + 2
 
 systems = ['PRIVACY', 'RAG', 'GT', 'RULES', 'AGENTS']
 # BOOST is a control signal, not displayed — tracked separately
-control_keys = {'BOOST'}
+control_keys = {'BOOST', 'ATTENTION'}
 
 
 def read_status():
@@ -212,13 +212,21 @@ if args.quick:
 try:
     frame = 0
     all_online_since = None
+    status = read_status()  # initial read so variables are always defined
+    attention = ''
 
     while True:
         frame += 1
 
-        # Read status every 5 frames to reduce file I/O
-        if frame % 5 == 1:
+        # Read status every 3 frames (~150ms at 20fps)
+        if frame % 3 == 1:
             status = read_status()
+            new_att = status.get('ATTENTION', '')
+            if new_att and not attention:
+                # New attention signal — beep to alert user
+                sys.stdout.write('\a')
+                sys.stdout.flush()
+            attention = new_att
 
         all_online = all(
             v not in ('waiting', 'checking') and not v.startswith('fail')
@@ -237,21 +245,18 @@ try:
         if frame > 2400:  # 120 second timeout
             break
 
-        # Build rain grid
-        grid = {}
+        # Build rain grid — flat list (r*cols+c) for faster lookup than dict
+        grid = [None] * (rows * cols)
         for d in drops:
             for i in range(d.length):
                 ry = d.y - i
                 if 0 <= ry < rows and 0 <= d.x < cols:
-                    if i == 0:
-                        grid[(ry, d.x)] = (BG, random.choice('01'))
-                    elif i < 3:
-                        grid[(ry, d.x)] = (G, random.choice('01'))
-                    else:
-                        grid[(ry, d.x)] = (DG, random.choice('01'))
+                    color = BG if i == 0 else (G if i < 3 else DG)
+                    grid[ry * cols + d.x] = (color, '01'[random.getrandbits(1)])
             d.update(rows)
 
         # Protected rows
+        attention_row = rows - 3
         protected = set()
         if frame > 15:
             protected.add(tr)
@@ -262,6 +267,8 @@ try:
                 protected.add(status_start_row + i)
         if all_online:
             protected.add(status_start_row + len(systems) + 1)
+        if attention:
+            protected.add(attention_row)
 
         # Render
         output = [HOME]
@@ -299,12 +306,25 @@ try:
                     output.append(f'{BLACK_BG}{" " * pad}{BG}{banner}{" " * max(0, cols - pad - len(banner))}{RESET}{BLACK_BG}')
                     continue
 
-            # Rain row
+                # Attention banner — flashing red, tells user to return to Claude tab
+                if attention and r == attention_row:
+                    if (frame // 4) % 2 == 0:
+                        detail = f': {attention[:50]}' if len(attention) > 1 else ''
+                        msg = f'[ !! RETURN TO CLAUDE TAB{detail} !! ]'
+                        pad = max(0, (cols - len(msg)) // 2)
+                        output.append(f'{BLACK_BG}{" " * pad}{RED}{msg}{" " * max(0, cols - pad - len(msg))}{RESET}{BLACK_BG}')
+                    else:
+                        output.append(f'{BLACK_BG}{" " * cols}{RESET}{BLACK_BG}')
+                    continue
+
+            # Rain row — flat list lookup: grid[r*cols + c]
             row_buf = []
+            row_offset = r * cols
             for c in range(cols):
-                if (r, c) in grid:
-                    color, ch = grid[(r, c)]
-                    row_buf.append(f'{color}{ch}')
+                cell = grid[row_offset + c]
+                if cell is not None:
+                    color, ch = cell
+                    row_buf.append(color + ch)
                 else:
                     row_buf.append(' ')
             output.append(f'{BLACK_BG}{"".join(row_buf)}{RESET}{BLACK_BG}')

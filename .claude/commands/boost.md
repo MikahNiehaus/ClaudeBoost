@@ -5,6 +5,12 @@ allowed-tools: Bash, Read, Glob
 
 # ClaudeBoost Activation
 
+> **ATTENTION Protocol** — The animation tab is open and the user is watching it. If you need to ask the user something or hit a permission issue during boost, write an attention signal FIRST so the animation displays a flashing red banner telling them to return to the Claude tab:
+> ```bash
+> echo "ATTENTION:brief reason here" >> "$TEMP/claudeboost_status.txt"
+> ```
+> Do this before every `AskUserQuestion` call during the boost sequence. The banner auto-clears when boost completes.
+
 ## Step 0: Launch Animation and Clear Caches
 
 **This is the VERY FIRST thing you do — before ANY other tool calls or checks.**
@@ -60,6 +66,15 @@ Use "RAG:failed" if rag_status fails entirely. Use "RAG:ready" if it works even 
 
 **RAG is non-negotiable.** If RAG fails, boost activation is incomplete — tell the user to fix it.
 
+## Step 2.5: Index ClaudeBoost Codebase (Project RAG)
+
+Keep the codebase index current so `rag_search(scope="codebase")` works against ClaudeBoost's own source. First get the path:
+```bash
+echo "$CLAUDEBOOST_HOME"
+```
+
+Then call `rag_index_project(project_path=<value from above>)`. This is incremental — only changed files re-embed, so it's fast. Report briefly: "X files updated, Y chunks." Skip if RAG is failed.
+
 ## Step 3: Activate Gas Town (MANDATORY — always prime, auto-init if needed)
 
 GT is already marked "checking". Check if `gt` exists, try `gt prime`, and
@@ -109,9 +124,9 @@ if [ -f "$CLAUDEBOOST_HOME/state/session-approvals.json" ]; then echo '{"session
 
 ## Step 6: Workspace Discovery
 
-Scan for active workspaces and reconnect to in-progress work:
+Ensure workspace directory exists, then scan for active tasks:
 ```bash
-if [ -d "workspace" ]; then for d in workspace/*/; do if [ -f "${d}context.md" ]; then echo "WORKSPACE: $d"; head -5 "${d}context.md"; echo "---"; fi; done; else echo "No workspace/ directory found"; fi
+mkdir -p workspace && for d in workspace/*/; do if [ -f "${d}context.md" ]; then echo "WORKSPACE: $d"; head -5 "${d}context.md"; echo "---"; fi; done; echo "workspace/ ready"
 ```
 
 If workspaces are found:
@@ -119,7 +134,7 @@ If workspaces are found:
 - Note which ones have recent activity (check git log for last modified)
 - If exactly one workspace exists, read its full `context.md` to restore session state
 
-If no workspaces found, that's fine — this may be a fresh session.
+If no workspace subdirectories exist, report "No active workspaces — workspace/ directory created and ready."
 
 ## Step 7: Activate and Report
 
