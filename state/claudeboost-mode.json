@@ -1,6 +1,6 @@
 {
   "mode": "CONSULT",
-  "setAt": "2026-04-10T00:00:00Z",
-  "setBy": "default",
-  "reason": "ClaudeBoost default"
+  "setAt": "2026-05-08T00:00:00Z",
+  "setBy": "user /consult",
+  "reason": "returning to default collaborative mode"
 }

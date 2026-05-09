@@ -31,22 +31,25 @@ def main() -> int:
     except Exception:
         payload = {}
 
-    # PostToolUse stdin contains tool output under various keys depending on
-    # Claude Code version. Try the most common wrappers first, then the raw payload.
-    tool_output = (
-        payload.get("tool_response")
-        or payload.get("output")
-        or payload.get("result")
-        or payload
-    )
+    # PostToolUse stdin: tool_response is a list of MCP content blocks:
+    # [{"type": "text", "text": "<json string>"}]
+    # Extract the text from the first text-type block, then check for files_indexed.
+    raw_response = payload.get("tool_response") or payload.get("output") or payload.get("result")
 
-    # Detect successful indexing: output must contain files_indexed
-    if isinstance(tool_output, dict) and "files_indexed" in tool_output:
-        try:
-            flag_path.write_text("ok", encoding="utf-8")
-        except Exception:
-            pass
-    elif isinstance(tool_output, str) and "files_indexed" in tool_output:
+    text_output = ""
+    if isinstance(raw_response, list):
+        # MCP content block format
+        for block in raw_response:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_output = block.get("text", "")
+                break
+    elif isinstance(raw_response, str):
+        text_output = raw_response
+    elif isinstance(raw_response, dict):
+        text_output = json.dumps(raw_response)
+
+    # Detect successful indexing: output must contain files_indexed key
+    if "files_indexed" in text_output:
         try:
             flag_path.write_text("ok", encoding="utf-8")
         except Exception:
