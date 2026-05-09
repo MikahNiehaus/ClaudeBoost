@@ -1114,7 +1114,7 @@ Agent reads and internalizes before taking any action
 **Description:** Activate ClaudeBoost — load RAG + GT and prime the session  
 **Tools:** Bash, Read, Glob  
 **Steps:**
-1. Launch matrix-boost.py animation (new WT tab), clear `__pycache__`
+1. Launch matrix-boost.py animation (new WT tab), clear `__pycache__`, clear Boost RAG and Project RAG flag files
 2. Verify privacy env vars (`DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`) — auto-fix if missing
 3. Activate RAG: `check-rag-health.py` → auto-repair if exit 2 or 3 → call `rag_context` to prime
 4. Activate Gas Town: `gt prime` → auto-init (`gt init`) if not a GT workspace
@@ -1460,7 +1460,7 @@ printf '\033[32;1m> ClaudeBoost\033[0m'; [ -f "$TEMP/claudeboost_rag_ok" ] && pr
 Four independent indicators:
 - **ClaudeBoost** (green bold): always shown — ClaudeBoost is globally registered
 - **Boost RAG** (green bold): shown only when `$TEMP/claudeboost_rag_ok` exists (written by `/boost` Step 2 on RAG health check success; cleared at Step 0 of next `/boost` run)
-- **Project RAG** (cyan bold): shown only when `$TEMP/claudeboost_project_rag_ok` exists (written by `project-rag-flag.py` hook when `rag_index_project` completes successfully; cleared on error)
+- **Project RAG** (cyan bold): shown only when `$TEMP/claudeboost_project_rag_ok` exists (written by `project-rag-flag.py` hook when `rag_index_project` completes successfully; cleared on error or at Step 0 of next `/boost` run)
 - **GT** (yellow bold): shown only when `gt` binary is on PATH (live `command -v` check — no flag file needed)
 
 ### 7.8 Global Settings

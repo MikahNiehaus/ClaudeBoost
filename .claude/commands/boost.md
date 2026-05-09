@@ -11,7 +11,7 @@ allowed-tools: Bash, Read, Glob
 
 Run this EXACT bash command FIRST, alone. Do NOT modify it. Do NOT use powershell or Start-Process:
 ```bash
-BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && rm -f "$TEMP/claudeboost_rag_ok" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w 0 new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
+BOOST_TMP="$TEMP" && echo "" > "$BOOST_TMP/claudeboost_status.txt" && rm -f "$TEMP/claudeboost_rag_ok" && rm -f "$TEMP/claudeboost_project_rag_ok" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; wt.exe -w 0 new-tab --title "CLAUDE BOOST" python "$CLAUDEBOOST_HOME/scripts/matrix-boost.py"
 ```
 
 This clears Python bytecode caches (so RAG server loads fresh code on next restart) and opens the Matrix animation as a NEW TAB in the SAME Windows Terminal window. The animation reads the status file live and shows each system coming online as checks complete. The tab closes automatically when all systems are online.

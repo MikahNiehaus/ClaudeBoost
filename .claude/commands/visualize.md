@@ -57,12 +57,14 @@ python "$CLAUDEBOOST_HOME/scripts/visualize-viewer/render.py" "graph.json" "visu
 
 ## Step 4: Launch
 
-Open the board in a new Windows Terminal tab:
+Open the board in the default browser using a Windows-format path:
 ```bash
-wt.exe -w 0 new-tab --title "VISUALIZE" cmd /c "start $(pwd)/workspace/[output-dir]/visualize/visualize.html"
+WIN_PATH="$(cygpath -w "$(realpath workspace/[output-dir]/visualize/visualize.html)")" && cmd.exe /c start "" "$WIN_PATH"
 ```
 
-**NEVER use `powershell Start-Process` or `cmd start` directly** — use `wt.exe -w 0 new-tab` to open as a sibling tab.
+Replace `[output-dir]` with the actual directory name (e.g., `visualize-2026-05-09`).
+
+**NEVER pass `$(pwd)` or bash paths directly to `cmd.exe`, `start`, or `explorer.exe`** — bash returns Unix paths (`/c/Development/...`) that cmd.exe cannot parse. Always convert with `cygpath -w` first.
 
 ## Step 5: Report
 

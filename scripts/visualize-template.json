@@ -1,29 +1,166 @@
 {
-  "_instructions": "This is the template for /visualize graph data. Claude fills this in based on project analysis. Delete _instructions and _field_guide before saving the final version.",
+  "_instructions": "Template for /visualize project-map. Claude fills this in from repo analysis. Delete _instructions and _field_guide before saving the final version. Use the layers format — it is what the renderer supports.",
   "_field_guide": {
-    "project": "Project name string",
-    "generated_at": "ISO 8601 timestamp",
-    "mode": "self (ClaudeBoost self-map) or project (target repo analysis)",
-    "layout_hint": "dagre-lr | dagre-tb | cose | circle",
-    "groups": "Array of {id, label, color} defining node categories",
-    "nodes": "Array of node objects — see node_field_guide below",
-    "edges": "Array of {source, target, kind, label} — kinds: calls, spawns, reads, writes, depends, triggers, composes",
-    "node_field_guide": {
+    "title": "Page heading shown at the top",
+    "subtitle": "One-line summary (e.g. '5 services · 3 data stores · 2 external APIs')",
+    "side_rails": "Optional array of cross-cutting concern cards shown flanking the main layers. Each has: id, title, subtitle, detail, side ('left' or 'right'). Use for: auth middleware, logging, config, shared libraries.",
+    "layers": "Main content as ordered vertical layers. Use flow_label to label the arrow between layers. Each layer has: id, label, description (optional), style ('highlight' for emphasis), then ONE OF: cards, columns, exchanges, decisions.",
+    "layer_types": {
+      "cards": "Flat horizontal row of card objects. Use for a single tier of components at the same abstraction level.",
+      "columns": "Array of column objects each with a label and cards. Use to group cards within a layer by sub-category (e.g. 'Frontend' vs 'Backend' services).",
+      "exchanges": "Array of {left, right, request_label, response_label} for back-and-forth flows (API calls, queue messages, DB queries).",
+      "decisions": "Array of {question, outcomes[]} for branching flows (auth check → allow/deny, cache hit → return/fetch).",
+      "notes": "Array of {text, style ('info'|'warning'|'success'), icon} callout boxes within a layer."
+    },
+    "card_fields": {
       "id": "Unique string identifier",
-      "label": "Display name shown in the box",
-      "group": "Must match a group id",
-      "kind": "agent | knowledge | hook | state | command | service | module | datastore | external",
-      "purpose": "One sentence explaining what this does",
-      "responsibilities": "Optional array of responsibility strings",
-      "citations": "Optional array of {file, lines, shows}",
-      "details_md": "Optional long-form markdown for the drawer (pre-rendered to HTML by render.py)"
+      "title": "Display name shown in the box (keep short)",
+      "subtitle": "Second line — tech stack, type, or key fact",
+      "detail": "One clear sentence on what this component does",
+      "responsibilities": "Optional array of bullet-point responsibilities shown when expanded",
+      "badge": "Optional short label on a colored chip (e.g. 'API', 'DB', 'Cache')",
+      "badge_color": "Optional CSS color for the badge background",
+      "icon": "Optional emoji icon shown before the title",
+      "accent": "Optional left-border CSS color (e.g. '#e74c3c' for danger, '#27ae60' for safe)",
+      "citations": "Optional array of {file, lines, shows} — click-to-copy file references"
     }
   },
-  "project": "",
-  "generated_at": "",
-  "mode": "",
-  "layout_hint": "dagre-lr",
-  "groups": [],
-  "nodes": [],
-  "edges": []
+  "title": "",
+  "subtitle": "",
+  "side_rails": [],
+  "layers": [
+    {
+      "_example_columns": "Use columns when a layer has sub-groups side by side",
+      "id": "frontend",
+      "label": "FRONTEND",
+      "description": "User-facing layer",
+      "columns": [
+        {
+          "label": "Web App",
+          "cards": [
+            {
+              "id": "spa",
+              "title": "React SPA",
+              "subtitle": "TypeScript · Vite",
+              "detail": "Client-side app served as static files. Communicates with the API via fetch.",
+              "badge": "SPA",
+              "badge_color": "#1abc9c",
+              "icon": "🌐",
+              "responsibilities": [
+                "Render UI from API data",
+                "Handle auth token storage",
+                "Route between pages"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "Mobile",
+          "cards": [
+            {
+              "id": "mobile",
+              "title": "React Native",
+              "subtitle": "iOS + Android",
+              "detail": "Same API, different renderer.",
+              "badge": "Mobile",
+              "badge_color": "#8e44ad"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_example_exchange": "Use exchanges for request/response flows between components",
+      "id": "api-layer",
+      "label": "API LAYER",
+      "flow_label": "HTTP + JSON",
+      "exchanges": [
+        {
+          "request_label": "POST /auth/login",
+          "response_label": "JWT token",
+          "left": {
+            "id": "client-req",
+            "title": "Client Request",
+            "subtitle": "Bearer token in header",
+            "detail": "Every request after login carries the JWT in Authorization header."
+          },
+          "right": {
+            "id": "auth-middleware",
+            "title": "Auth Middleware",
+            "subtitle": "Validates JWT, sets req.user",
+            "detail": "Rejects 401 if token is missing, expired, or tampered. Passes user context downstream."
+          }
+        }
+      ]
+    },
+    {
+      "_example_decision": "Use decisions for branching flows",
+      "id": "cache-check",
+      "label": "CACHE LAYER",
+      "flow_label": "passes to",
+      "decisions": [
+        {
+          "question": {
+            "id": "cache-q",
+            "title": "Cache Hit?",
+            "subtitle": "Redis TTL check",
+            "detail": "Check Redis for the query key before hitting the DB."
+          },
+          "outcomes": [
+            {
+              "label": "HIT",
+              "style": "success",
+              "id": "cache-hit",
+              "title": "Return Cached",
+              "subtitle": "~2ms response",
+              "detail": "Returns cached JSON directly. No DB query."
+            },
+            {
+              "label": "MISS",
+              "style": "failure",
+              "id": "cache-miss",
+              "title": "Query DB",
+              "subtitle": "then write to cache",
+              "detail": "Runs parameterized SQL, writes result to Redis with TTL, returns data."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_example_cards": "Use cards for a flat horizontal row at the same level",
+      "id": "data",
+      "label": "DATA LAYER",
+      "flow_label": "reads/writes",
+      "cards": [
+        {
+          "id": "postgres",
+          "title": "PostgreSQL",
+          "subtitle": "Primary store",
+          "detail": "All user and business data. Parameterized queries only. Transactions for multi-step writes.",
+          "badge": "SQL",
+          "badge_color": "#3498db",
+          "icon": "🗄️"
+        },
+        {
+          "id": "redis",
+          "title": "Redis",
+          "subtitle": "Cache + sessions",
+          "detail": "Short-TTL cache for hot queries. Session store for auth tokens.",
+          "badge": "Cache",
+          "badge_color": "#e74c3c",
+          "icon": "⚡"
+        },
+        {
+          "id": "s3",
+          "title": "S3",
+          "subtitle": "File storage",
+          "detail": "Static assets and user uploads. Pre-signed URLs for direct client access.",
+          "badge": "Files",
+          "badge_color": "#f39c12",
+          "icon": "📦"
+        }
+      ]
+    }
+  ]
 }

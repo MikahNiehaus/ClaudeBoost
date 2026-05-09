@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
-"""ClaudeBoost self-map extractor. Outputs a clean layered graph for the visualize viewer."""
+"""ClaudeBoost self-map extractor. Outputs a rich layered graph for the visualize viewer."""
 
 import json
-import re
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# Agent groupings for column layout
+OPUS_AGENTS = {"architect-agent", "reviewer-agent", "ticket-analyst-agent"}
+QUALITY_AGENTS = {
+    "security-agent", "test-agent", "debug-agent",
+    "performance-agent", "refactor-agent", "evaluator-agent",
+}
+SUPPORT_AGENTS = {
+    "docs-agent", "teacher-agent", "ui-agent", "workflow-agent",
+    "explore-agent", "estimator-agent", "browser-agent",
+    "ticket-analyst-agent",  # also Opus, handled above
+}
 
 
 def extract_agents(base: Path) -> list[dict]:
@@ -15,8 +27,6 @@ def extract_agents(base: Path) -> list[dict]:
     agents_dir = base / "agents"
     if not agents_dir.exists():
         return cards
-
-    opus_agents = {"architect-agent", "reviewer-agent", "ticket-analyst-agent"}
 
     for xml_file in sorted(agents_dir.glob("*.xml")):
         if xml_file.name.startswith("_"):
@@ -39,47 +49,144 @@ def extract_agents(base: Path) -> list[dict]:
         if goal_el is not None and goal_el.text:
             goal = goal_el.text.strip()
 
-        model = "Opus" if name in opus_agents else "Sonnet"
-        subtitle = f"{model} · {role[:60]}{'...' if len(role) > 60 else ''}" if role else model
+        is_opus = name in OPUS_AGENTS
+        model = "Opus" if is_opus else "Sonnet"
+        subtitle = f"{model} · {role[:55]}{'...' if len(role) > 55 else ''}" if role else model
 
-        cards.append({
+        card: dict = {
             "id": name,
             "title": name,
             "subtitle": subtitle,
             "detail": goal or role,
             "citations": [{"file": f"agents/{xml_file.name}", "lines": "1-end", "shows": "agent definition"}],
-        })
+        }
+        if is_opus:
+            card["badge"] = "Opus"
+            card["badge_color"] = "#8e44ad"
+            card["accent"] = "#8e44ad"
+
+        cards.append(card)
 
     return cards
+
+
+def build_agent_columns(agent_cards: list[dict]) -> list[dict]:
+    """Split agents into columns by category."""
+    opus_cards = [c for c in agent_cards if c["id"] in OPUS_AGENTS]
+    quality_cards = [c for c in agent_cards if c["id"] in QUALITY_AGENTS and c["id"] not in OPUS_AGENTS]
+    support_cards = [c for c in agent_cards if c["id"] in SUPPORT_AGENTS and c["id"] not in OPUS_AGENTS]
+    other_cards = [
+        c for c in agent_cards
+        if c["id"] not in OPUS_AGENTS and c["id"] not in QUALITY_AGENTS and c["id"] not in SUPPORT_AGENTS
+    ]
+
+    columns = []
+    if opus_cards:
+        columns.append({"label": "Opus — Strategic", "cards": opus_cards})
+    if quality_cards:
+        columns.append({"label": "Sonnet — Quality", "cards": quality_cards})
+    if support_cards:
+        columns.append({"label": "Sonnet — Support", "cards": support_cards})
+    if other_cards:
+        columns.append({"label": "Sonnet — Other", "cards": other_cards})
+
+    if not columns:
+        columns = [{"label": "Agents", "cards": agent_cards}]
+
+    return columns
+
+
+def count_layer_cards(layer: dict) -> int:
+    """Count nodes across any layer type."""
+    if "cards" in layer:
+        return len(layer["cards"])
+    if "columns" in layer:
+        return sum(len(col.get("cards", [])) for col in layer["columns"])
+    if "exchanges" in layer:
+        return len(layer["exchanges"]) * 2
+    if "decisions" in layer:
+        return sum(1 + len(d.get("outcomes", [])) for d in layer["decisions"])
+    return 0
 
 
 def build_graph(base: Path) -> dict:
     """Build the layered graph for ClaudeBoost self-map."""
     agent_cards = extract_agents(base)
 
-    # Split agents into featured (Opus) and others
-    opus_cards = [c for c in agent_cards if "Opus" in c.get("subtitle", "")]
-    sonnet_cards = [c for c in agent_cards if "Opus" not in c.get("subtitle", "")]
-
-    # Count knowledge bases
+    # Resource counts
     kb_count = len(list((base / "knowledge").glob("*.xml"))) if (base / "knowledge").exists() else 0
-
-    # Count slash commands
     cmd_count = len(list((base / ".claude" / "commands").glob("*.md"))) if (base / ".claude" / "commands").exists() else 0
 
-    # Count hooks from setup.ps1
     hook_count = 0
     setup = base / "scripts" / "setup.ps1"
     if setup.exists():
         content = setup.read_text(encoding="utf-8-sig")
         hook_count = content.count("Install-HookEntry")
 
+    agent_columns = build_agent_columns(agent_cards)
+
     return {
         "project": "ClaudeBoost",
         "title": "How ClaudeBoost Works",
         "subtitle": f"{len(agent_cards)} agents · {kb_count} knowledge bases · {hook_count} hooks · {cmd_count} commands",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+
+        # Cross-cutting concerns flanking the main layers
+        "side_rails": [
+            {
+                "id": "global-rules",
+                "title": "Global Rules",
+                "subtitle": "~/.claude/CLAUDE.md",
+                "detail": "jQuery ban, parameterized queries, logger.error in every catch block, no secrets in logs or URLs. Applied to every session — not debatable.",
+                "side": "left",
+                "icon": "🔒",
+                "accent": "#e74c3c",
+                "responsibilities": [
+                    "jQuery ban — use React hooks / vanilla JS",
+                    "Parameterized queries only (no SQL concatenation)",
+                    "logger.error in every catch block",
+                    "No secrets in logs, URLs, or source code",
+                    "Localhost-only browser automation",
+                ],
+            },
+            {
+                "id": "slash-commands",
+                "title": f"{cmd_count} Slash Commands",
+                "subtitle": ".claude/commands/*.md",
+                "detail": f"Installed globally in ~/.claude/commands/ — available in every project. Includes /boost, /visualize, /spawn-agent, /plan-task, /review, /consult, /auto, and more.",
+                "side": "left",
+                "icon": "⌨",
+                "accent": "#3498db",
+                "responsibilities": [
+                    "/boost — activate all systems at session start",
+                    "/visualize — interactive architecture board",
+                    "/spawn-agent — delegate to a specialist",
+                    "/plan-task — sweep-then-verify across 7 domains",
+                    "/consult and /auto — toggle collaborative mode",
+                ],
+            },
+            {
+                "id": "knowledge-rail",
+                "title": f"{kb_count} Knowledge Bases",
+                "subtitle": "knowledge/*.xml — semantic search via RAG",
+                "detail": f"XML files covering every domain agents need. Agents search these at runtime via RAG rather than memorizing them. Indexed automatically on startup.",
+                "side": "right",
+                "icon": "📚",
+                "accent": "#27ae60",
+                "responsibilities": [
+                    "Security: OWASP top 10, parameterized queries, auth",
+                    "Testing: methodology, coverage, TDD",
+                    "Architecture: SOLID, DDD, patterns",
+                    "Logging: structured, levels, no-PII",
+                    "Performance: profiling, caching, bottlenecks",
+                    f"...and {kb_count - 5} more domains",
+                ],
+                "citations": [{"file": "knowledge/", "lines": "dir", "shows": "all knowledge bases"}],
+            },
+        ],
+
         "layers": [
+            # ── 1. INPUT ──────────────────────────────────────────────────────────
             {
                 "id": "user",
                 "label": "INPUT",
@@ -87,106 +194,173 @@ def build_graph(base: Path) -> dict:
                     {
                         "id": "you",
                         "title": "You",
-                        "subtitle": "Slash commands, chat, or pasted tickets",
-                        "detail": "You interact with Claude normally. ClaudeBoost changes how Claude thinks and acts behind the scenes — enforcing standards, routing to specialist agents, and making sure architectural decisions go through you first.",
+                        "subtitle": "Chat · tickets · slash commands",
+                        "detail": "You interact with Claude Code normally. ClaudeBoost changes how Claude thinks behind the scenes — enforcing standards, routing to specialists, and routing architectural decisions through you first.",
+                        "icon": "👤",
+                        "responsibilities": [
+                            "Type requests, paste tickets, or run slash commands",
+                            "Approve or adjust architectural proposals (CONSULT mode)",
+                            "Add constraints the system can't infer (rate limits, size caps)",
+                        ],
                     }
-                ]
-            },
-            {
-                "id": "core",
-                "label": "CORE SYSTEM",
-                "flow_label": "sends request to",
-                "cards": [
-                    {
-                        "id": "orchestrator",
-                        "title": "Orchestrator",
-                        "subtitle": "Routes requests to the right agents",
-                        "detail": "The brain of ClaudeBoost. It reads your request, classifies it (simple → just do it, complex → plan + delegate), creates workspace folders, picks which agents to spawn, and combines their outputs. It never writes code itself.",
-                        "responsibilities": [
-                            "Classify: simple task or complex task?",
-                            "Create workspace folders for complex work",
-                            "Choose which specialist agents to spawn",
-                            "Combine agent outputs into your response",
-                        ],
-                        "citations": [{"file": "agents/_orchestrator.xml", "lines": "1-50", "shows": "decision tree"}],
-                    },
-                    {
-                        "id": "consult",
-                        "title": "CONSULT Mode",
-                        "subtitle": "Asks before big architectural decisions",
-                        "detail": "Default mode. Before any major decision (new endpoint, new dependency, auth strategy), Claude researches first, proposes 2-3 options, and asks you to pick. You add constraints on top — size caps, rate limits, charset restrictions. RAG-required standards (SQL parameterization, error logging) apply automatically.",
-                        "responsibilities": [
-                            "Research the project before proposing anything",
-                            "Present 2-3 options with clear tradeoffs",
-                            "Let you add constraints on top",
-                            "Remember your choices for the session",
-                        ],
-                        "citations": [{"file": "knowledge/consult-mode.xml", "lines": "1-108", "shows": "full protocol"}],
-                    },
                 ],
             },
+
+            # ── 2. TASK CLASSIFICATION ────────────────────────────────────────────
+            {
+                "id": "classify",
+                "label": "TASK CLASSIFICATION",
+                "flow_label": "classifies as",
+                "decisions": [
+                    {
+                        "question": {
+                            "id": "classify-q",
+                            "title": "Simple or Complex?",
+                            "subtitle": "Orchestrator decides",
+                            "detail": "A one-line fix, typo, or single-file rename is simple. Anything needing planning, multiple agents, workspace tracking, or architectural decisions is complex.",
+                        },
+                        "outcomes": [
+                            {
+                                "label": "SIMPLE",
+                                "style": "success",
+                                "id": "simple-path",
+                                "title": "Direct Execution",
+                                "subtitle": "No ceremony",
+                                "detail": "Just do it. No workspace folder, no agents, no domain sweep. Claude handles it directly and responds immediately.",
+                            },
+                            {
+                                "label": "COMPLEX",
+                                "id": "complex-path",
+                                "title": "Plan + Delegate",
+                                "subtitle": "workspace/ + sweep + agents",
+                                "detail": "Creates workspace/[task-id]/, runs sweep-then-verify across 7 domains (testing, docs, security, architecture, performance, review, clarity), then spawns specialist agents — up to 3 in parallel.",
+                            },
+                        ],
+                    }
+                ],
+            },
+
+            # ── 3. COLLABORATIVE MODE ─────────────────────────────────────────────
+            {
+                "id": "consult",
+                "label": "COLLABORATIVE MODE",
+                "flow_label": "routes through",
+                "decisions": [
+                    {
+                        "question": {
+                            "id": "consult-q",
+                            "title": "CONSULT Mode?",
+                            "subtitle": "Default: on — /auto to disable",
+                            "detail": "Triggers on: new endpoints, tables, dependencies, modules, auth strategies, APIs, config surfaces, concurrency models. Not on: bugfixes, tests, docs, renames, config value tweaks.",
+                            "citations": [{"file": "knowledge/consult-mode.xml", "lines": "1-108", "shows": "full protocol"}],
+                        },
+                        "outcomes": [
+                            {
+                                "label": "CONSULT (default)",
+                                "style": "success",
+                                "id": "consult-yes",
+                                "title": "Research + Propose",
+                                "subtitle": "architect-agent → 2-3 options → you pick",
+                                "detail": "Spawns architect-agent (Opus) with >=2 file:line citations. Presents 2-3 options via AskUserQuestion. You pick and add constraints. Claude implements. Approvals logged to state/session-approvals.json.",
+                                "responsibilities": [
+                                    "Research project context first (RAG + 2-3 files)",
+                                    "Present 2-3 options with clear tradeoffs",
+                                    "Let you add constraints (size caps, rate limits)",
+                                    "Log your approval for the session",
+                                ],
+                            },
+                            {
+                                "label": "AUTO",
+                                "id": "consult-no",
+                                "title": "Autonomous",
+                                "subtitle": "/auto [reason] to enable · /consult to restore",
+                                "detail": "Skips consultation gate for architectural decisions. Standards (parameterized queries, logger.error, input validation) still apply automatically. Best for prototyping or trivial work.",
+                            },
+                        ],
+                    }
+                ],
+            },
+
+            # ── 4. SPECIALIST AGENTS ──────────────────────────────────────────────
             {
                 "id": "agents",
                 "label": "SPECIALIST AGENTS",
                 "flow_label": "delegates work to",
-                "cards": opus_cards + [
-                    {
-                        "id": "other-agents",
-                        "title": f"+{len(sonnet_cards)} more agents",
-                        "subtitle": "Sonnet · test, debug, security, UI, docs, refactor...",
-                        "detail": f"All {len(sonnet_cards)} Sonnet-powered specialists: " + ", ".join(c["title"] for c in sonnet_cards[:12]) + (f", and {len(sonnet_cards)-12} more" if len(sonnet_cards) > 12 else "") + ". Each is an expert in one domain. Up to 3 can run in parallel.",
-                    },
-                ],
+                "columns": agent_columns,
             },
+
+            # ── 5. KNOWLEDGE RETRIEVAL ────────────────────────────────────────────
             {
-                "id": "knowledge",
-                "label": "KNOWLEDGE & SEARCH",
-                "flow_label": "searches for standards in",
-                "cards": [
+                "id": "rag-layer",
+                "label": "KNOWLEDGE RETRIEVAL",
+                "flow_label": "each agent queries",
+                "exchanges": [
                     {
-                        "id": "rag",
-                        "title": "RAG Search",
-                        "subtitle": "Semantic search over all knowledge",
-                        "detail": "An MCP server that indexes every knowledge base and agent definition. Agents ask natural language questions like 'SQL security standards' and RAG returns the right file. This is how agents know the rules without memorizing 38 documents.",
-                        "responsibilities": [
-                            "Index all knowledge bases on startup",
-                            "Return relevant docs for natural language queries",
-                            "Every agent must call it as their first action",
-                        ],
-                        "citations": [{"file": "mcp-rag-server/", "lines": "dir", "shows": "MCP server"}],
-                    },
-                    {
-                        "id": "knowledge",
-                        "title": f"{kb_count} Knowledge Bases",
-                        "subtitle": "Security, testing, logging, architecture, and more",
-                        "detail": f"XML files covering every domain: security standards, testing methodology, logging requirements, debugging, architecture patterns, coding standards, and more. These are the rules agents follow — searchable through RAG.",
-                        "citations": [{"file": "knowledge/", "lines": "dir", "shows": "all knowledge bases"}],
-                    },
+                        "request_label": "rag_context(agent, task)",
+                        "response_label": "tiered docs — guardrails + standards",
+                        "left": {
+                            "id": "agent-query",
+                            "title": "Agent (First Action)",
+                            "subtitle": "Must call rag_context before anything else",
+                            "detail": "Every spawned agent calls rag_context as its very first action. This loads the 4-tier context: guardrails (tier 0), declared agent knowledge (tier 1-2), related standards (tier 3), project codebase (tier 4). The PreToolUse hook reminds if the spawn prompt omits it.",
+                            "responsibilities": [
+                                "Tier 0: hard guardrails (always applied)",
+                                "Tier 1-2: declared knowledge for this agent",
+                                "Tier 3: related standards from other domains",
+                                "Tier 4: relevant chunks from project source code",
+                            ],
+                        },
+                        "right": {
+                            "id": "rag-server",
+                            "title": "RAG MCP Server",
+                            "subtitle": "Embeddings · auto-indexed · 2s updates",
+                            "detail": "MCP server that indexes agents + knowledge bases using sentence-transformers. Starts automatically with Claude Code. Re-indexes changed files within 2 seconds via file watcher. Returns semantically ranked chunks.",
+                            "responsibilities": [
+                                "Index all agents and knowledge on startup",
+                                "Watch for file changes, re-index within 2s",
+                                "Return ranked chunks for natural language queries",
+                                "Per-project index for source code (rag_index_project)",
+                            ],
+                            "citations": [{"file": "mcp-rag-server/", "lines": "dir", "shows": "MCP server source"}],
+                        },
+                    }
                 ],
             },
+
+            # ── 6. SAFETY & ENFORCEMENT ───────────────────────────────────────────
             {
                 "id": "enforcement",
                 "label": "SAFETY & ENFORCEMENT",
-                "flow_label": "enforced by",
+                "flow_label": "governed by",
                 "cards": [
                     {
                         "id": "hooks",
                         "title": f"{hook_count} Safety Hooks",
-                        "subtitle": "Invisible guardrails that fire automatically",
-                        "detail": "Claude Code hooks that inject rules at key moments. They remind Claude to use CONSULT mode before edits, verify agents loaded RAG, warn about unsafe process kills, and re-inject rules after context compaction. bash-guard.py is the only hook that mechanically blocks (cd+&& and backslash-space patterns).",
+                        "subtitle": "Fire automatically at key moments",
+                        "detail": "Claude Code hooks that inject rules at key moments. All hooks except bash-guard.py are type:prompt nudges (exit 0) — they remind Claude rather than mechanically block. bash-guard.py blocks cd+&& and backslash-space patterns only.",
+                        "badge": "Hooks",
+                        "badge_color": "#e67e22",
                         "responsibilities": [
-                            "SessionStart: load rules into every session",
-                            "PreToolUse: check before edits and agent spawns",
-                            "PostToolUse: verify agent output has evidence",
-                            "PreCompact: re-inject rules after memory compression",
+                            "SessionStart: load global rules into every session",
+                            "PreToolUse: inject verify gate into agent spawns",
+                            "PostToolUse: nudge evaluator-agent for unverified findings",
+                            "PreCompact: re-inject rules after context compression",
                         ],
                         "citations": [{"file": "scripts/setup.ps1", "lines": "92-200", "shows": "hook installation"}],
                     },
                     {
                         "id": "verify",
                         "title": "Verify Gate",
-                        "subtitle": "Anti-hallucination — every finding needs proof",
-                        "detail": "Every finding an agent reports must cite a specific file and line number as proof. If it can't point to actual code, the finding gets dropped. 'Nothing found' is always a valid outcome. This prevents agents from inventing problems.",
+                        "subtitle": "Every finding must cite file:line",
+                        "detail": "Anti-hallucination protocol: every finding an agent reports must be proven from actual code with a specific file and line number as evidence. If it can't point to real code, the finding is dropped. 'Nothing found' is always a valid outcome.",
+                        "badge": "Anti-Hallucination",
+                        "badge_color": "#c0392b",
+                        "responsibilities": [
+                            "Every finding cites specific file:line",
+                            "If no proof: drop the finding (not report it)",
+                            "'Nothing found' is always a valid outcome",
+                            "Evaluator-agent verifies flagged findings",
+                        ],
                         "citations": [{"file": "knowledge/verify-gate.xml", "lines": "1-end", "shows": "verify gate protocol"}],
                     },
                 ],
@@ -205,8 +379,10 @@ def main() -> None:
 
     graph = build_graph(base)
     Path(output).write_text(json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8")
-    total_cards = sum(len(layer.get("cards", [])) for layer in graph["layers"])
-    print(f"Extracted {total_cards} cards in {len(graph['layers'])} layers -> {output}")
+
+    total = sum(count_layer_cards(layer) for layer in graph["layers"])
+    rail_count = len(graph.get("side_rails", []))
+    print(f"Extracted {total} nodes across {len(graph['layers'])} layers + {rail_count} side rails -> {output}")
 
 
 if __name__ == "__main__":

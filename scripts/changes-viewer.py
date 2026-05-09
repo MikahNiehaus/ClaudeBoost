@@ -239,7 +239,8 @@ class HudChangesViewer(BaseChangesViewer):
         yield Footer()
 
     def on_mount(self) -> None:
-        # Hide main UI during animation
+        # Hide main UI during animation — do NOT call super().on_mount() here.
+        # _build_tree() is called explicitly by _transition_to_main() after the animation.
         self.query_one("#summary").display = False
         self.query_one("#file-tree").display = False
         self.query_one("#diff-view").display = False
@@ -251,8 +252,7 @@ class HudChangesViewer(BaseChangesViewer):
             self.query_one("#scan-screen").display = False
             self.query_one("#summary").display = True
             self.query_one("#file-tree").display = True
-            # Build tree
-            super().on_mount()
+            self._build_tree()
         except Exception:
             pass
 

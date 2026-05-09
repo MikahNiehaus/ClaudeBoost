@@ -92,13 +92,16 @@ The markdown file format:
 **Explanation:** <explanation text>
 ```
 
-## Step 6: Launch TUI
+## Step 6: Launch TUI + Chat Watcher
 
-Ensure the `textual` dependency is installed, then open the interactive viewer in a new terminal tab:
+Ensure the `textual` dependency is installed, then open the interactive viewer in a new terminal tab and start the chat watcher background process:
 ```bash
 python -c "import textual" 2>/dev/null || pip install textual
 wt.exe -w 0 new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
+mkdir -p "$TEMP/claudeboost" && nohup python "$CLAUDEBOOST_HOME/scripts/chat-watcher.py" > "$TEMP/claudeboost/chat-watcher.log" 2>&1 &
 ```
+
+The `chat-watcher.py` script polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for 15 minutes and answers questions using the Anthropic API (claude-haiku). It runs completely independently — no manual monitoring needed.
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.
 
@@ -110,26 +113,5 @@ Tell the user:
 - How many files and explanations were generated
 - Where the documentation was saved
 - That the TUI is open in the adjacent tab
+- That the chat watcher is running in the background (3-second polling, 15-minute window)
 - That they can ask questions about code in the chat box at the bottom of the diff view
-
-## Step 8: Chat Monitor
-
-The TUI has a chat input box. When the user types a question, it gets written to `$TEMP/claudeboost/changes_chat.json`. The TUI auto-polls for answers every 3 seconds.
-
-**How to monitor**: Use the `Read` tool to check `$TEMP/claudeboost/changes_chat.json` periodically (when user interaction pauses or when they mention asking a question in the viewer). When a question with an empty `answer` field is found:
-1. Read the `question`, `context_file`, and `context_code` fields
-2. Generate a concise answer about that code
-3. Write the answer back using the Write tool — update the `answer` and `answered_at` fields
-4. The TUI picks up the answer automatically and displays it inline
-
-Chat file format:
-```json
-{
-  "question": "What does this lock do?",
-  "context_file": "src/services/sync_orchestrator.py",
-  "context_code": "self._sync_lock = threading.Lock()",
-  "asked_at": "2026-04-05T02:30:00",
-  "answer": "",
-  "answered_at": ""
-}
-```

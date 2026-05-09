@@ -24,13 +24,13 @@ For EACH domain, READ the knowledge base and evaluate whether this task triggers
 
 | Domain | Knowledge Base | Evaluate Against |
 |--------|---------------|------------------|
-| Testing | `knowledge/testing.md` | Does task involve code changes, bug fixes, behavior modifications? |
-| Documentation | `knowledge/documentation.md` | Does task add/change APIs, configs, user features? |
-| Security | `knowledge/security.md` | Does task involve auth, user input, sensitive data, DB, HTTP? |
-| Architecture | `knowledge/architecture.md` | Does task add components, change boundaries, require design? |
-| Performance | `knowledge/performance.md` | Does task involve loops, DB queries, caching, hot paths? |
-| Review | `knowledge/pr-review.md` | Will task produce code ready for merge? |
-| Clarity | `knowledge/ticket-understanding.md` | Is the request vague or missing acceptance criteria? |
+| Testing | `knowledge/testing.xml` | Does task involve code changes, bug fixes, behavior modifications? |
+| Documentation | `knowledge/documentation.xml` | Does task add/change APIs, configs, user features? |
+| Security | `knowledge/security.xml` | Does task involve auth, user input, sensitive data, DB, HTTP? |
+| Architecture | `knowledge/architecture.xml` | Does task add components, change boundaries, require design? |
+| Performance | `knowledge/performance.xml` | Does task involve loops, DB queries, caching, hot paths? |
+| Review | `knowledge/pr-review.xml` | Will task produce code ready for merge? |
+| Clarity | `knowledge/ticket-understanding.xml` | Is the request vague or missing acceptance criteria? |
 
 ### Step 3: Generate Subtasks
 

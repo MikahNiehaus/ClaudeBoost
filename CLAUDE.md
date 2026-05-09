@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 24 specialist agents (`agents/*.xml`) and 38 knowledge bases (`knowledge/*.xml`).
+You have 23 agents (`agents/*.xml`) and 43 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
@@ -50,7 +50,7 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - "No issues found" is always a valid outcome
 - Reviewers: finding something is NOT the goal. Finding REAL things is.
 
-Hooks enforce this: PreToolUse injects verify gate into spawns, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION triggers evaluator-agent.
+Hooks remind you of this: PreToolUse nudges agents to call rag_context in spawn prompts, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION status flags a finding for evaluator-agent escalation.
 
 ## Collaborative Mode (CONSULT / AUTO)
 

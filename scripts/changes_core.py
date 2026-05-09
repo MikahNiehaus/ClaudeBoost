@@ -506,6 +506,7 @@ class BaseChangesViewer(App):
         self._collapsed_hunks: set[int] = set()
         self._reviewed_files: set[str] = set()
         self._tree_nodes: dict[str, TreeNode] = {}  # path -> tree node for label updates
+        self._tree_built: bool = False  # guard: _build_tree() must only run once
 
     def _get_summary_colors(self) -> dict[str, str]:
         """Override to customize summary panel colors."""
@@ -561,7 +562,11 @@ class BaseChangesViewer(App):
         )
         yield Footer()
 
-    def on_mount(self) -> None:
+    def _build_tree(self) -> None:
+        """Populate the file tree. Guarded — only runs once regardless of how many times called."""
+        if self._tree_built:
+            return
+        self._tree_built = True
         tree: Tree = self.query_one("#file-tree", Tree)
         tree.show_root = True
         tree.root.expand()
@@ -585,6 +590,9 @@ class BaseChangesViewer(App):
                 self._tree_nodes[f["path"]] = node
 
         self.query_one("#diff-view").display = False
+
+    def on_mount(self) -> None:
+        self._build_tree()
 
     def _update_tree_labels(self) -> None:
         """Update tree labels to show reviewed status."""
