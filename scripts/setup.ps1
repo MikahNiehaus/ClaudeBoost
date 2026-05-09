@@ -408,6 +408,21 @@ if ($mlResult.ExitCode -ne 0) {
     Write-Host "[OK] ML deps upgraded" -ForegroundColor Green
 }
 
+# Remove torchvision if it's incompatible with the installed torch.
+# We only do text embeddings so torchvision is never needed. A CUDA-built
+# torchvision installed alongside CPU torch raises RuntimeError on import,
+# breaking the entire sentence_transformers import chain.
+$tvCheck = Invoke-NativeCommand -File "python" -Arguments @("-c", "import torchvision")
+if ($tvCheck.ExitCode -ne 0) {
+    Write-Host "torchvision import failed — uninstalling incompatible build..." -ForegroundColor Yellow
+    $tvUninstall = Invoke-NativeCommand -File "pip" -Arguments @("uninstall", "torchvision", "-y")
+    if ($tvUninstall.ExitCode -eq 0) {
+        Write-Host "[OK] torchvision removed" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] Could not remove torchvision: $($tvUninstall.Output)" -ForegroundColor Yellow
+    }
+}
+
 # Full health check — catches version drift a path-only check would miss.
 $healthScript = Join-Path $boostHome "scripts\check-rag-health.py"
 $healthResult = Invoke-NativeCommand -File "python" -Arguments @($healthScript)

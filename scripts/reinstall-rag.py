@@ -49,6 +49,18 @@ def main() -> int:
         "tokenizers",
     ])
 
+    # 3. Remove torchvision if it's incompatible with the installed torch.
+    # We only do text embeddings — torchvision is never needed. A CUDA-built
+    # torchvision installed alongside CPU torch raises RuntimeError on import,
+    # which breaks the entire sentence_transformers import chain.
+    tv_check = subprocess.run(
+        [sys.executable, "-c", "import torchvision"],
+        capture_output=True,
+    )
+    if tv_check.returncode != 0:
+        print("torchvision import failed — uninstalling incompatible build")
+        run([sys.executable, "-m", "pip", "uninstall", "torchvision", "-y"])
+
     print("RAG reinstall complete.")
     return 0
 
