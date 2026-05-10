@@ -8,7 +8,7 @@
   <agent name="reviewer-agent" rationale="Final quality gate before shipping - catches architecture, security, subtle bugs"/>
 </always-opus>
 
-<default-sonnet count="19">
+<default-sonnet count="20">
   <agent name="test-agent" notes="Escalate for complex mocking strategies"/>
   <agent name="debug-agent" notes="Escalate for architectural bugs"/>
   <agent name="workflow-agent" notes="Escalate for complex integrations"/>
@@ -28,6 +28,7 @@
   <agent name="devops-agent"/>
   <agent name="database-agent"/>
   <agent name="rag-indexing-agent"/>
+  <agent name="e2e-agent"/>
 </default-sonnet>
 
 <decision-tree><![CDATA[

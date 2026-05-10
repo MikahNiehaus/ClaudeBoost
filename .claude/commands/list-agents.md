@@ -29,6 +29,7 @@ List all agent files from `agents/` directory (excluding `_orchestrator.xml`) an
 | `explore-agent` | Codebase exploration | `knowledge/code-exploration.xml` | Understanding codebases |
 | `observability-agent` | Logging, metrics, tracing, alerting | `knowledge/observability.xml` | Design monitoring, observability, incident response |
 | `performance-agent` | Profiling, optimization | `knowledge/performance.xml` | Performance issues, bottlenecks |
+| `e2e-agent` | End-to-end UI testing, structured test plans | `knowledge/e2e-testing.xml` | Full E2E test runs with screenshot evidence |
 | `rag-indexing-agent` | Pre-index analysis, scope recommendation | — | Recommend codebase indexing scope and filters |
 | `refactor-agent` | Code smells, refactoring | `knowledge/refactoring.xml` | Code cleanup, technical debt |
 | `research-agent` | Web research, verification | `knowledge/research.xml` | Deep research, fact-checking |
@@ -57,6 +58,7 @@ Verify outputs meet requirements    → evaluator-agent
 Understand a codebase               → explore-agent
 Design monitoring/observability     → observability-agent
 Optimize performance                → performance-agent
+Run structured E2E UI tests         → e2e-agent
 Recommend RAG indexing scope        → rag-indexing-agent
 Clean up / refactor code            → refactor-agent
 Research external topics            → research-agent

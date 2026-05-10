@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 23 agents (`agents/*.xml`) and 43 knowledge bases (`knowledge/*.xml`).
+You have 24 agents (`agents/*.xml`) and 44 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
@@ -69,7 +69,7 @@ State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 
 **Agent weight routing**:
 - **Full** (reviewer, security, performance): verify gate + evaluator-agent
-- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator): no verify gate
+- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator, e2e): no verify gate
 - **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.

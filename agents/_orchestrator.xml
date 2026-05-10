@@ -25,6 +25,7 @@
   <agent name="compliance-agent">Rule compliance, governance</agent>
   <agent name="standards-validator-agent">SOLID, coding standards enforcement</agent>
   <agent name="rag-indexing-agent">RAG index scope analysis</agent>
+  <agent name="e2e-agent">End-to-end UI testing, structured test plans</agent>
 </agent-roster>
 
 <ticket-detection>
@@ -259,7 +260,7 @@ FULL TEMPLATE (verify gate + evaluator after):
 STANDARD TEMPLATE (no verify gate, no evaluator):
   workflow-agent, refactor-agent, debug-agent, test-agent, ui-agent, database-agent,
   devops-agent, observability-agent, compliance-agent, standards-validator-agent,
-  evaluator-agent, architect-agent, ticket-analyst-agent, browser-agent
+  evaluator-agent, architect-agent, ticket-analyst-agent, browser-agent, e2e-agent
   WHY: These produce code or analysis, not severity-rated findings.
 
 LIGHTWEIGHT TEMPLATE (minimal ceremony):

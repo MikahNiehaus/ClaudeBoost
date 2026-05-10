@@ -108,6 +108,10 @@ if errorlevel 1 (
     echo         Index built successfully.
 )
 
+:: Count slash commands for summary
+set CMD_COUNT=0
+for /f %%i in ('dir /b /a-d "%BOOST_DIR%\.claude\commands\*.md" 2^>nul ^| find /c /v ""') do set CMD_COUNT=%%i
+
 echo.
 echo  ============================================================
 echo   ClaudeBoost installed!

@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08  
-**Coverage:** All 16 hook registrations, 22 agent XMLs + orchestrator, 43 knowledge XMLs, 22 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 23 agent XMLs + orchestrator, 44 knowledge XMLs, 23 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -568,7 +568,7 @@ Agent reads and internalizes before taking any action
 
 ### Spawn Template Types
 - **Full** (reviewer, security, performance): verify gate + evaluator after completion
-- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, compliance, standards-validator, observability, devops, database): no verify gate
+- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, compliance, standards-validator, observability, devops, database, e2e): no verify gate
 - **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 ---
@@ -896,6 +896,25 @@ Agent reads and internalizes before taking any action
 
 ---
 
+### 3.24 e2e-agent
+
+**File:** `agents/e2e-agent.xml`  
+**Model:** Sonnet  
+**Role:** End-to-End UI Test Specialist — executes structured test plans through the browser only  
+**Key behaviors:**
+- STANDARD spawn template
+- Spawned by `/end-to-end-test` command; can also be spawned by orchestrator for structured E2E testing
+- App discovery via Project RAG + browser navigation before generating test plan
+- Builds component registry — catalogs all UI instances by type and structure
+- Uses equivalence partitioning and boundary value analysis for test case generation
+- **MCP Playwright tools only** — never writes `.spec.ts` files; never uses Bash for Playwright
+- **Localhost only** — never navigates to non-localhost without explicit user permission (OAuth redirect exception)
+- Snapshot-first verification: text confirmation before screenshot; screenshots annotated with red JS overlay
+- Reports distinguish PASS / FAIL / BLOCKED — no shortcuts, no self-certification
+- Knowledge: `e2e-testing.xml` (primary), `playwright.xml`, `testing.xml`
+
+---
+
 ## 4. Knowledge Files
 
 ### 4.1 api-design.xml
@@ -1201,6 +1220,13 @@ Agent reads and internalizes before taking any action
 
 ---
 
+### 4.44 e2e-testing.xml
+**Triggers:** end-to-end test, e2e, UI test, browser test, integration test, acceptance test, smoke test, regression, playwright test, /end-to-end-test  
+**Domain:** E2E UI testing philosophy and anti-cheat patterns  
+**Content:** E2E philosophy (verify user's experience, not developer's intent; every test reproducible by human at browser; honest FAIL > fabricated PASS); anti-cheat patterns (catalog of shortcuts that produce false results); intelligent test generation via equivalence partitioning and boundary value analysis; evidence collection requirements (snapshot-first, screenshot with red annotation overlay); used exclusively by e2e-agent
+
+---
+
 ## 5. Slash Commands
 
 ### 5.1 /boost
@@ -1402,7 +1428,7 @@ Agent reads and internalizes before taking any action
 ### 5.19 /list-agents
 **File:** `.claude/commands/list-agents.md`  
 **Description:** List all available agents with expertise domains  
-**Output:** Agent summary table (22 agents), quick decision guide
+**Output:** Agent summary table (23 agents), quick decision guide
 
 ---
 
@@ -1430,6 +1456,22 @@ Agent reads and internalizes before taking any action
 **Checks:** RAG server health, required hooks (6), state files (3), edge-tts, ClaudeBoost RAG indexed, global CLAUDE.md  
 **Repair:** Auto-repairs via reinstall-rag.py or setup.ps1 re-run; up to 3 retries per check  
 **Output:** Pass/fail table; "Run /boost" if all pass
+
+---
+
+### 5.23 /end-to-end-test <target-url> [scope]
+**File:** `.claude/commands/end-to-end-test.md`  
+**Description:** End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with screenshot evidence  
+**Argument:** `<target-url>` (localhost only) + optional `scope` (auth|crud|nav|errors|responsive|all; default: all)  
+**Agent:** `e2e-agent`  
+**Phases:**
+- Phase 0: Parse args, hard-stop on staging/prod URLs, derive task ID, create workspace, load RAG knowledge, index project codebase
+- Phase 1: App discovery via browser snapshot crawl + RAG codebase search; builds component registry and App Map
+- Phase 2: Test plan generation using scope-to-category mapping + intelligent rules (equivalence partitioning, boundary values); evaluator-agent removes unverified TCs; PAUSE for user approval
+- Phase 3: Test execution — browser MCP tools only; snapshot-first text verification; annotated screenshots for PASS only; every TC gets PASS/FAIL/BLOCKED
+- Phase 4: Report written to `workspace/$TASK_ID/report.md`; screenshots in `snapshots/`  
+**Anti-cheat enforcement:** No Bash DB queries, no API bypasses, no fabricated PASS — honest FAIL is the output  
+**Hard stops:** Production/staging URLs blocked; any self-audit question NO → FAIL, never PASS
 
 ---
 

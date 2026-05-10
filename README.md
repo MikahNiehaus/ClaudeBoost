@@ -1,6 +1,6 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 23 specialist agents, 43 knowledge
+Multi-agent orchestration toolkit for Claude Code. 23 specialist agents, 44 knowledge
 bases, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside
@@ -8,9 +8,9 @@ bases, semantic RAG search, and Gas Town integration — all installable globall
 ```
 ClaudeBoost/
 ├── agents/              23 specialist agent definitions (XML)
-├── knowledge/           43 domain knowledge bases (XML)
+├── knowledge/           44 domain knowledge bases (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    22 slash commands
+├── .claude/commands/    23 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -45,7 +45,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 22 slash commands for task management
+- 23 slash commands for task management
 
 ## Features
 
@@ -100,10 +100,11 @@ A PreToolUse hook reminds the orchestrator to include `rag_context` in spawn pro
 | database-agent | Schema design, queries, migrations | Sonnet |
 | observability-agent | Logging, metrics, alerting | Sonnet |
 | rag-indexing-agent | RAG index advisor — scans scope, recommends filters | Sonnet |
+| e2e-agent | End-to-end UI testing, structured test plans | Sonnet |
 
 ## Knowledge Bases
 
-43 domain expertise files covering: coding standards, security, architecture, debugging,
+44 domain expertise files covering: coding standards, security, architecture, debugging,
 testing, observability, performance, refactoring, UI implementation, API design,
 context engineering, verify gate, scope governance, rule enforcement, and more.
 
