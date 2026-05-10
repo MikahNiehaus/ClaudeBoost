@@ -218,7 +218,7 @@ async def list_tools() -> list[Tool]:
                         "enum": ["lightweight", "standard", "full"],
                         "description": (
                             "Agent weight class. lightweight: skip guardrails "
-                            "(explore, research, docs, estimator, teacher). "
+                            "(explore, research, docs, estimator, rag-indexing). "
                             "standard/full: include all guardrails."
                         ),
                         "default": "standard",
@@ -371,7 +371,7 @@ def _build_context(
     tier1_tokens = 0
     tier1_sources_seen = set()
 
-    # Lightweight agents (explore, research, docs, estimator, teacher) skip guardrails —
+    # Lightweight agents (explore, research, docs, estimator, rag-indexing) skip guardrails —
     # they gather info / produce docs, they don't write code.
     skip_guardrails = weight == "lightweight"
 

@@ -17,7 +17,7 @@ Check: Does `workspace/[task-id]/context.md` exist?
 
 ### Gate 3: Planning Verification
 Check: Is the "Plan" section in context.md populated?
-- If NO: Run Planning Checklist (ALL 7 domains) before proceeding
+- If NO: Run Planning Checklist (ALL 9 domains) before proceeding
 - If YES: Continue
 
 ### Gate 4: TodoWrite Verification

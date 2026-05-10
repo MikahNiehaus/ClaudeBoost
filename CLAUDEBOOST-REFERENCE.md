@@ -596,7 +596,7 @@ Agent reads and internalizes before taking any action
 - **PROPOSAL_ONLY contract:** Returns BLOCKED if prompt does not contain literal "PROPOSAL_ONLY" AND at least 2 `file:line` citations
 - Output: Required-by-standards + 2-3 grounded options with trade-offs + recommendation
 - Handoff: via AskUserQuestion; approval logged to `state/session-approvals.json`
-- Knowledge: `architecture.xml`, `coding-standards.xml`
+- Knowledge: `architecture.xml`, `workflow.xml`, `consult-mode.xml`
 
 ---
 
@@ -610,6 +610,7 @@ Agent reads and internalizes before taking any action
 - FULL spawn template — always followed by evaluator-agent for BLOCKER/HIGH findings
 - Required: Best Practices Assessment (SOLID + GoF + OOP + Clean Code + Metrics)
 - Outputs grade A-F with PASS/FAIL/SKIP verdict
+- Knowledge: `pr-review.xml`, `architecture.xml`
 
 ---
 
@@ -623,6 +624,7 @@ Agent reads and internalizes before taking any action
 - Must use EXACT wording from `ticket.md` — never paraphrase
 - INVEST criteria, Given-When-Then format
 - Scope creep prevention: 4-step response when out-of-scope requests detected
+- Knowledge: `ticket-understanding.xml`, `workflow.xml`
 
 ---
 
@@ -648,7 +650,7 @@ Agent reads and internalizes before taking any action
 **Key behaviors:**
 - FULL spawn template
 - Latency targets: p50 < 100ms, p90 < 200ms, p99 < 500ms
-- Knowledge: `performance.xml`
+- Knowledge: `performance.xml`, `architecture.xml`
 
 ---
 
@@ -662,7 +664,7 @@ Agent reads and internalizes before taking any action
 - 5 failure patterns to avoid: premature stopping, test manipulation, context drift, scope creep, skipping verification
 - Plan-then-execute: Explore → Plan → Implement → Commit
 - Circuit breaker: 5 attempts max before escalating
-- Knowledge: `workflow.xml`, `observability.xml`
+- Knowledge: `workflow.xml`, `organization.xml`
 
 ---
 
@@ -676,7 +678,7 @@ Agent reads and internalizes before taking any action
 - 5 debugging frameworks: CoT, ReAct, Self-Ask, Five Whys, Structured Prompt
 - Failure indicators: 2-3 iterations without progress, repetition loop
 - 20-30 minute time box
-- Knowledge: `debugging.xml`
+- Knowledge: `debugging.xml`, `testing.xml`
 
 ---
 
@@ -691,7 +693,7 @@ Agent reads and internalizes before taking any action
 - Required categories: happy path, edge cases, error conditions, state transitions, async edge cases
 - Mock guidance: external APIs/DB/filesystem/time — never mock the subject
 - Production safety: never use production URLs/keys/destructive SQL without WHERE
-- Knowledge: `testing.xml`
+- Knowledge: `testing.xml`, `debugging.xml`
 
 ---
 
@@ -704,7 +706,7 @@ Agent reads and internalizes before taking any action
 - STANDARD spawn template
 - Trigger thresholds: >40 lines / complexity>10 / params>4 / class>300 / duplication>3
 - Safe process: ensure tests → commit → one change → run tests → commit → repeat
-- Knowledge: `refactoring.xml`
+- Knowledge: `refactoring.xml`, `architecture.xml`
 
 ---
 
@@ -756,7 +758,7 @@ Agent reads and internalizes before taking any action
 **Key behaviors:**
 - LIGHTWEIGHT spawn template
 - 4 workflows: Quick Overview (<5 min), Feature Understanding (5-15 min), Dependency Analysis (10-20 min), Architecture Discovery (20-30 min)
-- Knowledge: `code-exploration.xml`
+- Knowledge: `code-exploration.xml`, `architecture.xml`
 
 ---
 
@@ -770,7 +772,7 @@ Agent reads and internalizes before taking any action
 - Methodology: Planning → Execution → Verification → Synthesis
 - Source credibility tiers: 1=High Authority, 2=Medium, 3=Requires Verification
 - Never present unverified information as fact
-- Knowledge: `research.xml`
+- Knowledge: `research.xml`, `documentation.xml`
 
 ---
 
@@ -784,7 +786,7 @@ Agent reads and internalizes before taking any action
 - Always use `mcp__playwright__*` MCP tools directly (never write Playwright code unless explicitly asked)
 - Auto-allow: localhost, 127.0.0.1, OAuth domains; ask for external URLs
 - Package: `@playwright/mcp`
-- Knowledge: `playwright.xml`
+- Knowledge: `playwright.xml`, `testing.xml`, `ticket-understanding.xml`
 
 ---
 
@@ -813,7 +815,7 @@ Agent reads and internalizes before taking any action
 - Checks that agent spawning followed proper protocols and status fields are present
 - Rule-by-rule analysis: identifies if trigger occurred, verifies condition met, logs violations with evidence
 - Severity classification: CRITICAL (integrity at risk), MAJOR (contained violation), MINOR (warn rule), INFO (best practice)
-- Knowledge: `rule-enforcement.xml`
+- Knowledge: `rule-enforcement.xml`, `CLAUDE.md`
 
 ---
 
@@ -828,7 +830,7 @@ Agent reads and internalizes before taking any action
 - Code metrics enforcement: cyclomatic complexity ≤10 (HIGH if >15), methods ≤40 lines, class ≤300 lines, params ≤4, nesting ≤3, inheritance depth ≤3
 - Verdicts: PASS / PASS_WITH_WARNINGS / FAIL — required fixes must resolve before COMPLETE
 - Practical, not pedantic: context-aware (45-line method may be fine if clear)
-- Knowledge: `coding-standards.xml`, `architecture.xml`, `refactoring.xml`
+- Knowledge: `coding-standards.xml`, `architecture.xml`
 
 ---
 
@@ -1025,7 +1027,7 @@ Agent reads and internalizes before taking any action
 ### 4.19 model-selection.xml
 **Triggers:** model, opus, sonnet, haiku, escalate, complexity  
 **Domain:** Model routing  
-**Content:** Always-Opus: architect/ticket-analyst/reviewer; Sonnet for 15 others; decision tree; 5 escalation trigger categories (Agent Type, Complexity, Stakes, Ambiguity, Reasoning Depth, Mid-Task); complexity scoring dimensions; mid-task escalation scenarios; model characteristics
+**Content:** Always-Opus: architect/ticket-analyst/reviewer; Sonnet for 19 others; decision tree; 6 escalation trigger categories (Agent Type, Complexity, Stakes, Ambiguity, Reasoning Depth, Mid-Task Escalation); complexity scoring dimensions; mid-task escalation scenarios; model characteristics
 
 ---
 
@@ -1132,7 +1134,7 @@ Agent reads and internalizes before taking any action
 ### 4.34 self-reflection.xml
 **Triggers:** confidence, reflection, uncertainty, calibration  
 **Domain:** Agent self-assessment  
-**Content:** Confidence levels (HIGH: known good patterns, MEDIUM: reasonable assumption, LOW: uncertain — must flag); model selection costs (Opus 4.5 $5/$25, Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5); orchestration pattern; context length guidance
+**Content:** Confidence levels (HIGH: known good patterns, MEDIUM: reasonable assumption, LOW: uncertain — must flag); model selection costs (Opus 4.6 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5); orchestration pattern; context length guidance
 
 ---
 
@@ -1321,7 +1323,7 @@ Agent reads and internalizes before taking any action
 **Description:** Execute planning phase only (no execution)  
 **Steps:**
 1. Create `workspace/$1/` and init context.md with PLANNING state
-2. Run 7-domain planning checklist (Testing/Docs/Security/Architecture/Performance/Review/Clarity)
+2. Run 9-domain planning checklist (Testing/Docs/Security/Architecture/Performance/Review/Clarity/Browser Testing/Observability)
 3. Generate subtasks (Solvability + Completeness + Non-Redundancy principles)
 4. Determine execution strategy (Sequential/Parallel/Hybrid)
 5. Update context.md with full plan
@@ -1452,7 +1454,7 @@ Agent reads and internalizes before taking any action
 | `Bash(mkdir*workspace*)` | prompt | Workspace creation check | Remind to call rag_search + gt prime |
 | `Task` | command | `agent-spawn-gate.py` | Verify rag_context in spawn prompt |
 | `Edit\|Write\|MultiEdit` | command | `consult-gate.py` | Check CONSULT mode approval |
-| `Bash(pkill*)\|Bash(killall*)\|...` | prompt | Process kill safety | Block broad name-pattern kills |
+| `Bash(pkill*)\|Bash(killall*)\|...` | prompt | Process kill safety | Remind to use specific PID instead of broad name-pattern kills |
 | `Bash` | command | `bash-guard.py` | Block co-author trailer, cd&&, backslash paths |
 
 ### 6.3 PostToolUse

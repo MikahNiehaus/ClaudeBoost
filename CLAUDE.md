@@ -69,8 +69,8 @@ State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 
 **Agent weight routing**:
 - **Full** (reviewer, security, performance): verify gate + evaluator-agent
-- **Standard** (workflow, refactor, debug, test, ui): no verify gate
-- **Lightweight** (explore, research, docs, estimator, teacher): minimal ceremony
+- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator): no verify gate
+- **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.
 

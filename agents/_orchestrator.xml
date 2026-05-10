@@ -19,6 +19,12 @@
   <agent name="ticket-analyst-agent" model="opus">Requirements, scope</agent>
   <agent name="browser-agent">Interactive browser testing</agent>
   <agent name="evaluator-agent">Output verification, quality gate</agent>
+  <agent name="observability-agent">Logging, metrics, tracing</agent>
+  <agent name="devops-agent">CI/CD, deployment, infrastructure</agent>
+  <agent name="database-agent">Schema design, queries, migrations</agent>
+  <agent name="compliance-agent">Rule compliance, governance</agent>
+  <agent name="standards-validator-agent">SOLID, coding standards enforcement</agent>
+  <agent name="rag-indexing-agent">RAG index scope analysis</agent>
 </agent-roster>
 
 <ticket-detection>
@@ -112,7 +118,7 @@
   <domain name="Review" trigger="Code ready for merge" agent="reviewer-agent" knowledge="pr-review.xml"/>
   <domain name="Clarity" trigger="Vague requirements" agent="ticket-analyst-agent" knowledge="ticket-understanding.xml"/>
   <domain name="Browser Testing" trigger="Interactive UI testing" agent="browser-agent" knowledge="playwright.xml"/>
-  <domain name="Observability" trigger="Service methods, error handling, external calls, data mutations" agent="workflow-agent" knowledge="observability.xml"/>
+  <domain name="Observability" trigger="Service methods, error handling, external calls, data mutations" agent="observability-agent" knowledge="observability.xml"/>
 </planning-checklist>
 
 <subtask-requirements>
@@ -222,7 +228,7 @@ End with: Status (COMPLETE|BLOCKED|NEEDS_INPUT), Work Completed, Handoff Notes
 ]]></agent-spawn-template>
 
 <lightweight-spawn-template><![CDATA[
-Use for: explore-agent, research-agent, docs-agent, estimator-agent
+Use for: explore-agent, research-agent, docs-agent, estimator-agent, rag-indexing-agent
 These agents gather info or produce docs — they don't produce findings that need verification.
 
 ## Step 1: Load Identity + Knowledge via RAG (MANDATORY)
@@ -252,11 +258,12 @@ FULL TEMPLATE (verify gate + evaluator after):
 
 STANDARD TEMPLATE (no verify gate, no evaluator):
   workflow-agent, refactor-agent, debug-agent, test-agent, ui-agent, database-agent,
-  devops-agent, observability-agent, architect-agent, ticket-analyst-agent, browser-agent
+  devops-agent, observability-agent, compliance-agent, standards-validator-agent,
+  evaluator-agent, architect-agent, ticket-analyst-agent, browser-agent
   WHY: These produce code or analysis, not severity-rated findings.
 
 LIGHTWEIGHT TEMPLATE (minimal ceremony):
-  explore-agent, research-agent, docs-agent, estimator-agent
+  explore-agent, research-agent, docs-agent, estimator-agent, rag-indexing-agent
   WHY: These gather info or produce docs. Minimal overhead, maximum speed.
 ]]></spawn-routing>
 

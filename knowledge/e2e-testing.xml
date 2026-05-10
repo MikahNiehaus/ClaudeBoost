@@ -1,0 +1,392 @@
+<knowledge-base name="e2e-testing" version="1.0">
+<triggers>end-to-end test, e2e, UI test, browser test, integration test, acceptance test, smoke test, regression, playwright test, /end-to-end-test</triggers>
+<overview>E2E UI testing via browser automation. Tests verify what the USER sees, not what the developer expects. Every test requires browser-based evidence. No database shortcuts. No fabricated results.</overview>
+
+<e2e-philosophy>
+  <principle>E2E tests verify the user's experience, not the developer's intent</principle>
+  <principle>A test that passes via a database shortcut proves nothing about what the user sees</principle>
+  <principle>Every test case must be reproducible by a human sitting at a browser</principle>
+  <principle>Evidence is not optional — it is the output of the test</principle>
+  <principle>An honest FAIL is more valuable than a fabricated PASS</principle>
+  <principle>The database can be written to by background jobs and migrations. Finding a record in the database does not prove the UI created it.</principle>
+</e2e-philosophy>
+
+<anti-cheat-patterns>
+  <description>Catalog of testing shortcuts that produce false results. Recognize these patterns and refuse them.</description>
+
+  <cheat name="Database Shortcut" severity="CRITICAL">
+    <description>Querying the database directly to verify that a UI action persisted data, instead of observing the result in the UI.</description>
+    <example-bad>Run: sqlite3 app.db "SELECT * FROM users WHERE email='test@test.com'" to verify signup worked.</example-bad>
+    <example-good>After signup, navigate to the user list or profile page and verify the user appears there using browser_snapshot.</example-good>
+    <why-banned>The database can be written to by background jobs, migrations, or direct DB access. Finding a record proves the database was written — NOT that the UI created it correctly. The user cannot query the database; they can only see the UI.</why-banned>
+  </cheat>
+
+  <cheat name="Fabricated Pass" severity="CRITICAL">
+    <description>Marking a test PASS without executing any browser actions to verify it, or based solely on code reading.</description>
+    <example-bad>Marking TC-005 PASS because the code reads `if (success) { setMessage("Saved!") }` — so it "should" work.</example-bad>
+    <example-good>Click Save, call browser_snapshot to confirm the success message appears in the accessibility tree, then take a screenshot with the message annotated.</example-good>
+    <why-banned>Code can be correct but produce wrong UI due to conditional rendering, CSS visibility, async timing bugs, or race conditions. Only the browser shows what the user actually sees.</why-banned>
+  </cheat>
+
+  <cheat name="Irrelevant Screenshot" severity="HIGH">
+    <description>Taking a screenshot of a page or state unrelated to the test case and presenting it as evidence.</description>
+    <example-bad>Screenshotting the home page as evidence that the "Create Product" form saved correctly.</example-bad>
+    <example-good>After submitting the Create Product form, navigate to the product list, call browser_snapshot to confirm the new item appears in text, then screenshot the list with a red annotation box around the new item.</example-good>
+    <why-banned>Evidence must directly demonstrate the assertion. A home page screenshot proves the home page loads — nothing else.</why-banned>
+  </cheat>
+
+  <cheat name="Pre-Action Screenshot" severity="HIGH">
+    <description>Taking the screenshot before performing the test steps, then using it as the AFTER screenshot.</description>
+    <example-bad>Take screenshot, then click Delete, then mark PASS using the pre-delete screenshot as "evidence."</example-bad>
+    <example-good>Click Delete, wait for the item to disappear, call browser_snapshot to confirm absence in text, then screenshot the updated list.</example-good>
+    <why-banned>The AFTER screenshot must show the post-action state. A pre-action screenshot proves nothing about what the action did.</why-banned>
+  </cheat>
+
+  <cheat name="API Bypass" severity="HIGH">
+    <description>Using browser_evaluate to call the app's internal API endpoints directly, bypassing the UI form flow.</description>
+    <example-bad>browser_evaluate: fetch('/api/users', { method: 'POST', body: JSON.stringify({email: 'test@test.com'}) }) to "create a user" without using the UI form.</example-bad>
+    <example-good>Navigate to /register, fill the form fields using browser_fill_form, click Submit, verify the success state via browser_snapshot.</example-good>
+    <why-banned>Calling the API directly tests the API, not the UI. Bugs in form validation, client-side logic, error messages, and UI feedback are completely invisible when bypassing the form.</why-banned>
+  </cheat>
+
+  <cheat name="Selective Test Execution" severity="MEDIUM">
+    <description>Running only the easy tests and omitting hard ones from the report without marking them BLOCKED.</description>
+    <example-bad>Omitting TC-012 (error state for invalid input) from the report because triggering a validation error requires specific setup.</example-bad>
+    <example-good>Attempt TC-012 — submit the form with invalid input, call browser_snapshot to check whether validation messages appear, mark PASS or FAIL based on actual observation.</example-good>
+    <why-banned>Skipped tests hide bugs. The test plan is a contract — all items must be resolved.</why-banned>
+  </cheat>
+</anti-cheat-patterns>
+
+<intelligent-test-generation>
+  <description>Rules for generating appropriate test coverage without combinatorial explosion. Apply these during test plan generation.</description>
+
+  <rule name="Enum Exhaustion" applies-to="toggle, select, radio group, segmented control">
+    <condition>Control has N discrete states and N is 7 or fewer</condition>
+    <action>Generate ONE test case per state. A 3-option toggle (yes/no/undefined) → 3 TCs.</action>
+    <rationale>Small enums are cheap to exhaust. Each state is a distinct code path. Skipping any state leaves bugs uncaught.</rationale>
+  </rule>
+
+  <rule name="Large Enum Boundary Values" applies-to="select with many options, type-ahead">
+    <condition>Control has N discrete states and N is more than 7</condition>
+    <action>Generate 3 TCs: first option, last option, one invalid/out-of-range option.</action>
+    <rationale>Exhausting 50 dropdown options is pointless churn. First/last/invalid catches the boundary bugs that matter.</rationale>
+  </rule>
+
+  <rule name="Boolean Controls" applies-to="checkbox, toggle, switch">
+    <action>Always generate exactly 2 TCs: enabled state and disabled state.</action>
+  </rule>
+
+  <rule name="List and Collection Coverage" applies-to="lists, tables, grids, feeds, todo lists, grocery lists">
+    <action>Always generate exactly these 4 TCs — no more, no fewer:</action>
+    <tc order="1">Empty state — list has zero items. Verify empty state message renders.</tc>
+    <tc order="2">One item — list has exactly one item. Verify it renders correctly.</tc>
+    <tc order="3">Several items — list has 3 to 5 items. Verify layout handles multiple items.</tc>
+    <tc order="4">Full or maximum — list has many items or hits a page boundary. Verify pagination or scroll works.</tc>
+    <forbidden>Do NOT test every permutation of item content. The content of items does not matter — the COUNT does.</forbidden>
+    <rationale>Empty state catches missing placeholder UI. One item catches singular/plural bugs. Several items catches layout issues. Full catches pagination. These 4 cases cover the real failure modes.</rationale>
+  </rule>
+
+  <rule name="Form Validation" applies-to="forms with validation rules">
+    <action>Generate ONE TC per validation rule, not one TC per field.</action>
+    <validation-tc-types>
+      <type>Required field blank — submit with empty required field, verify error message</type>
+      <type>Invalid format — submit email field with non-email value, verify format error</type>
+      <type>Max length — submit field at limit and over limit, verify behavior</type>
+      <type>Cross-field validation — if fields have dependencies (e.g., password confirmation), test the mismatch case</type>
+    </validation-tc-types>
+    <forbidden>Do NOT generate one TC per field × one TC per rule. That is a combinatorial explosion with no additional coverage value.</forbidden>
+  </rule>
+
+  <rule name="UI Consistency" applies-to="any component type with multiple instances across pages">
+    <action>Generate ONE UI consistency TC per component type that has multiple instances.</action>
+    <what-to-check>Same HTML element type, same aria role, same interaction model (click vs keyboard).</what-to-check>
+    <rationale>A dropdown implemented with &lt;select&gt; in one place and a custom div in another is a bug waiting to happen — accessibility, keyboard nav, and automation all break differently.</rationale>
+  </rule>
+
+  <always-include>
+    <tc>TC-SMOKE-01: Home page loads without console errors</tc>
+    <tc>TC-SMOKE-02: All primary nav links resolve without 404 or error page</tc>
+  </always-include>
+</intelligent-test-generation>
+
+<token-efficiency-protocol>
+  <description>Minimize token consumption without sacrificing evidence quality. Screenshots are expensive; use text-based verification first.</description>
+
+  <principle name="Snapshot-First">
+    <rule>ALWAYS call browser_snapshot before browser_take_screenshot</rule>
+    <rule>Confirm the expected state exists in the accessibility tree text before capturing an image</rule>
+    <why>browser_snapshot returns text (cheap). browser_take_screenshot returns an image (expensive). Verify in text first, image only as final evidence.</why>
+  </principle>
+
+  <principle name="Screenshot on Pass Only">
+    <rule>If browser_snapshot does NOT confirm the expected state, mark FAIL immediately</rule>
+    <rule>Record the observed snapshot text as the failure evidence — no screenshot needed</rule>
+    <why>A failed test needs a description of what went wrong, not an image of the wrong state. Saves significant token cost on failure cases.</why>
+  </principle>
+
+  <principle name="Discovery Phase Text Only">
+    <rule>During app discovery (Phase 1), use browser_snapshot for all page crawling</rule>
+    <rule>Take only ONE browser_take_screenshot for the initial landing page</rule>
+    <why>Discovery is reconnaissance, not evidence collection. Text snapshots give all the information needed to build the component registry and App Map.</why>
+  </principle>
+
+  <principle name="Batch Annotations">
+    <rule>When multiple elements on the same page need annotation, inject all overlays before taking ONE screenshot</rule>
+    <rule>Remove all overlays after the single screenshot</rule>
+    <rule>Example: for a UI consistency TC showing two inconsistent dropdowns on the same page, inject two overlays, take one screenshot, remove both</rule>
+    <why>Each browser_evaluate call costs tokens. Batching reduces the number of round-trips for multi-element annotation.</why>
+  </principle>
+
+  <principle name="Skip Before Screenshots for Smoke Tests">
+    <rule>For smoke tests and navigation tests, skip the BEFORE screenshot</rule>
+    <rule>Include BEFORE screenshot only for state-change tests: create, update, delete, toggle</rule>
+    <why>A nav test BEFORE screenshot shows the same page as the AFTER screenshot in most cases. No additional evidence value.</why>
+  </principle>
+
+  <principle name="Navigation Batch Mode">
+    <rule>For all navigation TCs (do all nav links resolve?), execute them in sequence: navigate, snapshot title/status, record in text, then screenshot each page once</rule>
+    <rule>Check for 404 in the snapshot text before committing to a screenshot</rule>
+    <why>Nav tests are rapid and cheap in text form. Group them together to avoid per-test overhead.</why>
+  </principle>
+</token-efficiency-protocol>
+
+<screenshot-annotation-technique>
+  <purpose>Mark the specific element or region being verified so screenshots are self-documenting evidence</purpose>
+  <requirement>Required for any test that verifies a specific button, form field, error message, list item, or UI element. Not required for full-page load tests.</requirement>
+
+  <inject-snippet><![CDATA[
+// Inject red annotation overlay via browser_evaluate
+// Replace TOP_PX, LEFT_PX, W_PX, H_PX with coordinates from browser_snapshot
+(function() {
+  const existing = document.getElementById('__e2e_ann__');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = '__e2e_ann__';
+  overlay.style.cssText = 'position:fixed;top:TOP_PXpx;left:LEFT_PXpx;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:2px;';
+  document.body.appendChild(overlay);
+})();
+  ]]></inject-snippet>
+
+  <remove-snippet><![CDATA[
+// Remove annotation overlay via browser_evaluate (call after screenshot)
+(function(){ const e = document.getElementById('__e2e_ann__'); if (e) e.remove(); })();
+  ]]></remove-snippet>
+
+  <multi-element-snippet><![CDATA[
+// For annotating multiple elements: use unique IDs
+// Inject all, take ONE screenshot, then remove all
+(function() {
+  ['__e2e_ann_1__', '__e2e_ann_2__'].forEach(id => {
+    const e = document.getElementById(id);
+    if (e) e.remove();
+  });
+  const specs = [
+    { id: '__e2e_ann_1__', top: TOP1, left: LEFT1, w: W1, h: H1 },
+    { id: '__e2e_ann_2__', top: TOP2, left: LEFT2, w: W2, h: H2 }
+  ];
+  specs.forEach(s => {
+    const d = document.createElement('div');
+    d.id = s.id;
+    d.style.cssText = `position:fixed;top:${s.top}px;left:${s.left}px;width:${s.w}px;height:${s.h}px;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:2px;`;
+    document.body.appendChild(d);
+  });
+})();
+  ]]></multi-element-snippet>
+
+  <workflow>
+    <step order="1">Call browser_snapshot to get element positions and confirm expected state in text</step>
+    <step order="2">Identify the element or region to annotate (button, message, list item, form field)</step>
+    <step order="3">Call browser_evaluate with inject-snippet, substituting coordinates</step>
+    <step order="4">Call browser_take_screenshot — the red overlay is visible in the image</step>
+    <step order="5">Call browser_evaluate with remove-snippet</step>
+    <step order="6">Update plan.md with the screenshot filename</step>
+  </workflow>
+
+  <coordinate-guidance>
+    <source>browser_snapshot accessibility tree contains element bounding boxes. Use these for x/y/w/h values.</source>
+    <fallback>If exact coordinates are not available, annotate the semantic region: nav bar (top:0, left:0, w:100%, h:80), form container (estimated), list area (estimated).</fallback>
+    <never>Never leave a test screenshot unannotated when a specific element is the point of verification.</never>
+  </coordinate-guidance>
+</screenshot-annotation-technique>
+
+<ui-consistency-pass>
+  <description>Detect structural mismatches across instances of the same component type. One TC per component type with multiple instances.</description>
+
+  <what-to-check>
+    <check>HTML element type: does every dropdown use &lt;select&gt;, or do some use custom divs?</check>
+    <check>ARIA roles: does every dialog have role="dialog", or are some missing it?</check>
+    <check>Interaction model: do all buttons respond to keyboard Enter, or only some?</check>
+    <check>Class naming: does every card use the same CSS class pattern?</check>
+  </what-to-check>
+
+  <process>
+    <step order="1">Navigate to the page containing the canonical (first) instance of the component type</step>
+    <step order="2">Call browser_snapshot, extract the element type and aria role</step>
+    <step order="3">Navigate to each subsequent page with another instance</step>
+    <step order="4">Call browser_snapshot, compare element type and aria role</step>
+    <step order="5a">If all consistent: PASS — record in plan.md with a note ("all dropdowns use &lt;select&gt;")</step>
+    <step order="5b">If inconsistent: inject overlays on BOTH the canonical and deviant instances, take ONE screenshot, mark FAIL with description</step>
+  </process>
+
+  <example-fail>Dropdown on /products renders as &lt;select id="sort"&gt;; dropdown on /orders renders as &lt;div role="combobox"&gt; — structural inconsistency across pages</example-fail>
+  <example-pass>All 4 status toggles across the app use &lt;input type="radio"&gt; with role="radio" — consistent</example-pass>
+</ui-consistency-pass>
+
+<test-case-categories>
+  <category name="Smoke Tests" always-include="true">
+    <tc>Home page loads without console errors (browser_console_messages must be empty of errors)</tc>
+    <tc>All primary nav links resolve without 404 — check status code and page content in browser_snapshot</tc>
+  </category>
+
+  <category name="Authentication Flows" scope-flag="auth">
+    <tc>Login with valid credentials → verify user is authenticated (name/avatar visible, protected content accessible)</tc>
+    <tc>Login with invalid credentials → verify error message appears in UI (not just absence of redirect)</tc>
+    <tc>Logout → verify user is logged out (redirect to login page, protected routes block)</tc>
+    <tc>Navigate to protected route without auth → verify redirect to login page</tc>
+  </category>
+
+  <category name="CRUD Operations" scope-flag="crud">
+    <tc>Create: Fill form, submit via UI, verify new entity appears in list/detail view — browser_snapshot must show the new item</tc>
+    <tc>Read list: Navigate to list view, verify entities render — browser_snapshot checks for expected items</tc>
+    <tc>Read detail: Navigate to detail view, verify all expected fields are present in browser_snapshot</tc>
+    <tc>Update: Open edit form, change a field, save via UI, verify change appears in list or detail view</tc>
+    <tc>Delete: Trigger delete action via UI, confirm dialog if present, verify entity removed from list in browser_snapshot</tc>
+    <tc>Empty state: Navigate to list with no data — verify empty state message renders (not blank page)</tc>
+  </category>
+
+  <category name="Navigation" scope-flag="nav">
+    <tc>Each primary nav link resolves without 404 or error page</tc>
+    <tc>Browser back button returns to previous page correctly</tc>
+    <tc>Links within page content navigate correctly</tc>
+    <tc>Page title or breadcrumb matches current location</tc>
+  </category>
+
+  <category name="Error States" scope-flag="errors">
+    <tc>Submit form with required field blank → verify validation message appears in UI</tc>
+    <tc>Submit email field with invalid format → verify format error appears</tc>
+    <tc>Navigate to a nonexistent path (e.g., /this-does-not-exist) → verify 404 page renders (not blank, not stack trace)</tc>
+  </category>
+
+  <category name="Responsive Behavior" scope-flag="responsive">
+    <tc>Mobile (375px width): Key pages render without horizontal scroll — use browser_resize to 375x667 before snapshot</tc>
+    <tc>Tablet (768px width): Layout adapts, content accessible — browser_resize to 768x1024</tc>
+    <tc>Desktop (1280px width): Full layout, no content clipping — browser_resize to 1280x900</tc>
+    <note>Use browser_resize to change viewport. Take browser_snapshot after resize to check for overflow or clipping in text.</note>
+  </category>
+
+  <category name="UI Consistency" scope-flag="all">
+    <tc>One TC per component type with multiple instances — compare HTML structure across all instances</tc>
+    <tc>Generated automatically from the component registry during test plan creation</tc>
+  </category>
+</test-case-categories>
+
+<evidence-standards>
+  <standard name="Snapshot Before Screenshot">
+    <rule>ALWAYS call browser_snapshot to confirm expected state in text BEFORE calling browser_take_screenshot</rule>
+    <rule>If snapshot does not confirm expected state, mark FAIL with snapshot text — no screenshot needed</rule>
+  </standard>
+
+  <standard name="One Screenshot Per Test Case">
+    <minimum>Every PASS test case must have at least one AFTER screenshot</minimum>
+    <recommended>BEFORE + AFTER pair for state-change tests (create, update, delete, toggle)</recommended>
+    <skip>BEFORE screenshot not required for smoke tests and navigation tests</skip>
+  </standard>
+
+  <standard name="Screenshot Must Match Assertion">
+    <rule>If test asserts "user sees a success message", screenshot must show that success message</rule>
+    <rule>If test asserts "item is deleted from list", screenshot must show the list WITHOUT that item</rule>
+    <rule>If screenshot does not show the asserted state, the test is FAIL — not PASS</rule>
+  </standard>
+
+  <standard name="Annotation Required for Specific Elements">
+    <rule>If test verifies a specific button, form field, error message, list item, or UI element — annotate it</rule>
+    <rule>Full-page screenshots for page-load tests and navigation tests do not require annotation</rule>
+  </standard>
+
+  <standard name="Naming Convention">
+    <format>TC-[ID]-[before|after].png</format>
+    <examples>TC-001-before.png, TC-001-after.png, TC-012-after.png</examples>
+    <storage>workspace/[task-id]/snapshots/</storage>
+  </standard>
+</evidence-standards>
+
+<temp-logging-protocol>
+  <purpose>Allow verification of backend operations that produce no visible UI confirmation</purpose>
+
+  <legitimate-use-cases>
+    <case>An async background job is triggered — no immediate success message appears in the UI</case>
+    <case>A webhook is sent to an external service — UI shows no confirmation</case>
+    <case>An audit log entry is created — the app has no UI that exposes the audit log</case>
+  </legitimate-use-cases>
+
+  <illegitimate-use-cases>
+    <case>The UI shows a success toast but checking logs is easier — use the UI</case>
+    <case>The UI shows a list that should update — navigate back to the list</case>
+    <case>You have not fully explored the UI for confirmation yet — keep exploring before resorting to logs</case>
+  </illegitimate-use-cases>
+
+  <protocol>
+    <step order="1" name="Identify">rag_search(scope="codebase") — find the function that handles the operation</step>
+    <step order="2" name="Read">Read the target file with the Read tool</step>
+    <step order="3" name="Insert">Add: console.log('[E2E-TEMP] TC-NNN: [description]'); immediately after the operation completes</step>
+    <step order="4" name="Execute">Perform the browser action that triggers the function</step>
+    <step order="5" name="Verify">Call browser_console_messages — confirm the log line appears with the correct TC-NNN prefix</step>
+    <step order="6" name="Remove">Edit the file to remove the log line</step>
+    <step order="7" name="Confirm">Read the file again to confirm the log line is gone — MANDATORY</step>
+    <step order="8" name="Document">In plan.md: PASS | verified via temp-log (removed)</step>
+  </protocol>
+
+  <warning>If used more than 2 times in one session: "WARNING: Temp-logging used N times. Each must genuinely lack a visible UI confirmation. Review each case."</warning>
+  <absolute-rule>NEVER leave temp-log statements in the codebase after the test session ends. Verify removal in Step 7.</absolute-rule>
+</temp-logging-protocol>
+
+<app-discovery-methodology>
+  <purpose>Understand an unfamiliar app before generating test cases. Two legal channels: RAG codebase search and browser navigation. No database access.</purpose>
+
+  <rag-discovery>
+    <query name="Routes">rag_search(scope="codebase", query="routes pages navigation URL paths", limit=6)</query>
+    <query name="Auth">rag_search(scope="codebase", query="authentication login session user roles JWT cookie", limit=5)</query>
+    <query name="Entities">rag_search(scope="codebase", query="form submit create update delete entity model schema", limit=5)</query>
+    <extract>From results: route paths, entity names, auth mechanism, form structures, known features</extract>
+  </rag-discovery>
+
+  <browser-discovery>
+    <step>Navigate to root URL, take ONE screenshot for the landing page, then switch to browser_snapshot for all remaining discovery</step>
+    <step>From the snapshot, enumerate ALL nav links, buttons, and top-level interactive elements</step>
+    <step>Follow each top-level nav link, take browser_snapshot, record: page title, forms, lists, buttons, component types</step>
+    <step>Limit to 2 levels deep — this is reconnaissance, not exhaustive crawl</step>
+    <step>On each page, note: component types and their HTML structure (for component registry)</step>
+  </browser-discovery>
+
+  <app-map-format><![CDATA[
+## App Map — [URL]
+
+**Date**: [date]
+**Scope**: [scope]
+
+## Pages Discovered
+- / — [description]
+- /[page] — [description]
+
+## Authentication
+- Required: yes/no
+- Login route: [path]
+- Protected routes: [list]
+
+## Entities
+[entity names discovered]
+
+## Key Flows
+[auth flows, CRUD flows, etc.]
+
+## Component Registry
+| Component Type | Page | Selector Hint | N States / Size |
+|---|---|---|---|
+| [type] | [page] | [selector] | [count] |
+
+## Startup Console Errors
+[any errors from initial load]
+  ]]></app-map-format>
+</app-discovery-methodology>
+
+</knowledge-base>

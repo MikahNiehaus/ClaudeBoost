@@ -56,7 +56,7 @@ it, lightweight where it doesn't:
 
 - **Full** (reviewer, security, performance): verify gate + evaluator-agent verification
 - **Standard** (workflow, refactor, debug, test, ui, etc.): no verify gate overhead
-- **Lightweight** (explore, research, docs, estimator, teacher): minimal ceremony
+- **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 ### Verify Gate (Anti-Hallucination)
 

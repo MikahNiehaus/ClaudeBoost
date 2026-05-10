@@ -1,6 +1,6 @@
 <knowledge-base name="model-selection" version="1.0">
 <triggers>model, opus, sonnet, haiku, escalate, complexity, which model</triggers>
-<overview>Two-tier model selection: Sonnet (default for 15 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
+<overview>Two-tier model selection: Sonnet (default for 19 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
 
 <always-opus count="3">
   <agent name="architect-agent" rationale="Design decisions cascade everywhere - bad architecture propagates through entire codebase"/>

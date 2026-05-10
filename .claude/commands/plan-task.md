@@ -31,6 +31,8 @@ For EACH domain, READ the knowledge base and evaluate whether this task triggers
 | Performance | `knowledge/performance.xml` | Does task involve loops, DB queries, caching, hot paths? |
 | Review | `knowledge/pr-review.xml` | Will task produce code ready for merge? |
 | Clarity | `knowledge/ticket-understanding.xml` | Is the request vague or missing acceptance criteria? |
+| Browser Testing | `knowledge/playwright.xml` | Does task require interactive UI or end-to-end browser testing? |
+| Observability | `knowledge/observability.xml` | Does task involve service methods, error handling, external calls, or data mutations? |
 
 ### Step 3: Generate Subtasks
 
