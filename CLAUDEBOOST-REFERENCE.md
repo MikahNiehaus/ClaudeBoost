@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08  
-**Coverage:** All 17 hook registrations, 22 agent XMLs + orchestrator, 43 knowledge XMLs, 20 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 22 agent XMLs + orchestrator, 43 knowledge XMLs, 22 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -568,8 +568,8 @@ Agent reads and internalizes before taking any action
 
 ### Spawn Template Types
 - **Full** (reviewer, security, performance): verify gate + evaluator after completion
-- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator): no verify gate
-- **Lightweight** (explore, research, docs, estimator): minimal ceremony
+- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, compliance, standards-validator, observability, devops, database): no verify gate
+- **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 ---
 
@@ -799,6 +799,98 @@ Agent reads and internalizes before taking any action
 - Reads actual code at each cited location
 - Verdicts: VERIFIED (keep) / FALSE POSITIVE (drop)
 - Cost: ~1000-2000 tokens vs ~5000-10000 tokens rework from false findings
+
+---
+
+### 3.18 compliance-agent
+
+**File:** `agents/compliance-agent.xml`  
+**Model:** Sonnet  
+**Role:** Internal Auditor — rule compliance verification and system governance  
+**Key behaviors:**
+- STANDARD spawn template
+- Reads CLAUDE.md for current rule definitions; audits `workspace/[task-id]/context.md` for task history
+- Checks that agent spawning followed proper protocols and status fields are present
+- Rule-by-rule analysis: identifies if trigger occurred, verifies condition met, logs violations with evidence
+- Severity classification: CRITICAL (integrity at risk), MAJOR (contained violation), MINOR (warn rule), INFO (best practice)
+- Knowledge: `rule-enforcement.xml`
+
+---
+
+### 3.19 standards-validator-agent
+
+**File:** `agents/standards-validator-agent.xml`  
+**Model:** Sonnet  
+**Role:** Code Quality Architect — SOLID, design patterns, OOP, code metrics  
+**Key behaviors:**
+- STANDARD spawn template
+- Validates SOLID principles (SRP, OCP, LSP, ISP, DIP) and GoF design patterns
+- Code metrics enforcement: cyclomatic complexity ≤10 (HIGH if >15), methods ≤40 lines, class ≤300 lines, params ≤4, nesting ≤3, inheritance depth ≤3
+- Verdicts: PASS / PASS_WITH_WARNINGS / FAIL — required fixes must resolve before COMPLETE
+- Practical, not pedantic: context-aware (45-line method may be fine if clear)
+- Knowledge: `coding-standards.xml`, `architecture.xml`, `refactoring.xml`
+
+---
+
+### 3.20 observability-agent
+
+**File:** `agents/observability-agent.xml`  
+**Model:** Sonnet  
+**Role:** Observability Specialist — logging, metrics, tracing, alerting  
+**Key behaviors:**
+- STANDARD spawn template
+- **BLOCKER**: missing `logger.error` in catch/error blocks; **BLOCKER**: sensitive data (PII, tokens) in logs
+- Structured JSON logging with consistent fields: timestamp, level, service, traceId, spanId, message, error
+- Correlation IDs must propagate across all service boundaries (HTTP headers, queues, async jobs)
+- OpenTelemetry tracing; SLO/SLI design with error budgets; every alert must link to a runbook
+- Knowledge: `observability.xml`, `error-handling.xml`, `performance.xml`
+
+---
+
+### 3.21 devops-agent
+
+**File:** `agents/devops-agent.xml`  
+**Model:** Sonnet  
+**Role:** DevOps/Infrastructure Specialist — CI/CD, containerization, IaC, deployment  
+**Key behaviors:**
+- STANDARD spawn template
+- Infrastructure as code always: no manual console clicks, everything version-controlled
+- Immutable deployments: replace, never patch running instances; canary/blue-green before full rollout
+- Fail-fast pipelines: lint and unit tests first, expensive steps last
+- Rollback capability required: every deployment must have a documented and tested rollback path
+- No secrets in code, logs, URLs, environment printouts, or image layers
+- Knowledge: `devops.xml`, `security.xml`
+
+---
+
+### 3.22 database-agent
+
+**File:** `agents/database-agent.xml`  
+**Model:** Sonnet  
+**Role:** Database Specialist — schema design, query optimization, migrations  
+**Key behaviors:**
+- STANDARD spawn template
+- **Hard blocker**: parameterized queries ALWAYS — string concatenation in SQL is never allowed
+- Transactions for all multi-step writes — never leave data partially written
+- Reversible migrations required — every up migration needs a tested down migration
+- Read EXPLAIN plans before adding indexes — never optimize without evidence
+- Anti-patterns flagged: N+1 queries, SELECT * in production, missing FK indexes, irreversible migrations
+- Knowledge: `database.xml`, `security.xml`, `performance.xml`
+
+---
+
+### 3.23 rag-indexing-agent
+
+**File:** `agents/rag-indexing-agent.xml`  
+**Model:** Sonnet  
+**Role:** RAG Indexing Advisor — pre-index scan, scope recommendation  
+**Key behaviors:**
+- LIGHTWEIGHT spawn template
+- **Always** call `rag_scan` FIRST — never jump straight to `rag_index_project`
+- **Never** call `rag_index_project` — return a recommendation to the orchestrator, which confirms with the user
+- Detects red flags: total files >1000, JS >2× TS count (bundled output), generated/vendored file leakage
+- Estimates indexing time at ~5 files/sec (100 files ≈ 20s; 1000 files ≈ 3 min; 2000+ → require language filter)
+- Returns concrete recommendation: which languages to index, whether to proceed/filter/abort
 
 ---
 
@@ -1118,7 +1210,7 @@ Agent reads and internalizes before taking any action
 2. Verify privacy env vars (`DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`) — auto-fix if missing
 3. Activate RAG: `check-rag-health.py` → auto-repair if exit 2 or 3 → call `rag_context` to prime
 4. Activate Gas Town: `gt prime` → auto-init (`gt init`) if not a GT workspace
-5. Check enforcement hooks via `check-hooks.py` for PreToolUse and PreCompact
+5. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 6. Verify `~/.claude/CLAUDE.md` exists
 7. Read CONSULT/AUTO mode, clear `session-approvals.json`
 8. Scan `workspace/*/context.md` for active tasks
@@ -1317,6 +1409,25 @@ Agent reads and internalizes before taking any action
 **Description:** Generate project documentation in `docs/` folder  
 **Note:** docs/ is gitignored; run after completing features  
 **Output:** README.md, architecture.md, api.md (as applicable to the project)
+
+---
+
+### 5.21 /code-review [scope]
+**File:** `.claude/commands/code-review.md`  
+**Description:** 14-pass parallel code review — simplicity, patterns, ticket alignment, evaluator  
+**Scope:** staged, last N commits, branch name, file path, PR #  
+**Phases:** RAG context + project index (0) → understand diff (1) → pass selection (2) → 13 parallel passes batched 3-at-a-time (3) → Evaluator Opus agent (pass 14, always last) (4) → report with grade A-F (5)  
+**Output:** Grade (A-F), BLOCKERS, WARNINGS, NITS, FALSE POSITIVES
+
+---
+
+### 5.22 /setup
+**File:** `.claude/commands/setup.md`  
+**Description:** Full ClaudeBoost setup and verification — idempotent, safe after any git pull  
+**Phases:** Locate home (0) → run setup.ps1 (1) → verify 6 checks in loop with auto-repair (2) → status table (3)  
+**Checks:** RAG server health, required hooks (6), state files (3), edge-tts, ClaudeBoost RAG indexed, global CLAUDE.md  
+**Repair:** Auto-repairs via reinstall-rag.py or setup.ps1 re-run; up to 3 retries per check  
+**Output:** Pass/fail table; "Run /boost" if all pass
 
 ---
 

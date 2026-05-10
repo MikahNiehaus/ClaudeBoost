@@ -92,11 +92,11 @@ GT is "ready" if `command -v gt` succeeds. "failed" ONLY if `gt` is not on PATH.
 
 **GT is mandatory.** If GT is not on PATH, warn the user to install it — do NOT silently skip it. Both RAG and GT must be active for a fully boosted session.
 
-## Step 4: Check Enforcement Hooks
+## Step 4: Check Hooks
 
-Verify that PreToolUse and PreCompact hooks are configured in settings.json:
+Verify that all six hook types are configured in settings.json:
 ```bash
-BOOST_TMP="$TEMP" && HOOKS_OK=true && if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" PreToolUse 2>/dev/null; then true; else echo "PreToolUse hooks: MISSING"; HOOKS_OK=false; fi && if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" PreCompact 2>/dev/null; then true; else echo "PreCompact hooks: MISSING"; HOOKS_OK=false; fi && if [ "$HOOKS_OK" = false ]; then echo "[WARN] Enforcement hooks missing - run setup.ps1 to install"; fi
+BOOST_TMP="$TEMP" && HOOKS_OK=true && for hook in SessionStart PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" "$hook" 2>/dev/null; then true; else echo "$hook hooks: MISSING"; HOOKS_OK=false; fi; done && if [ "$HOOKS_OK" = false ]; then echo "[WARN] Some hooks missing - run setup.ps1 to install"; fi
 ```
 
 If hooks are missing, warn the user to run `setup.ps1`. This is not a blocking failure — boost continues.
@@ -148,7 +148,7 @@ BOOST_TMP="$TEMP" && touch "$BOOST_TMP/claudeboost_active" && echo "BOOST:done" 
 ### Systems Status
 - RAG: ready/failed (chunk counts)
 - GT: ready/failed (version)
-- Hooks: PreToolUse + PreCompact present/missing
+- Hooks: all 6 types present/missing (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 - Rules: CLAUDE.md loaded/missing
 
 ### Active Workspaces

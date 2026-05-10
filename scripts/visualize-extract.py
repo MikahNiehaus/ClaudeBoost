@@ -15,7 +15,7 @@ QUALITY_AGENTS = {
     "performance-agent", "refactor-agent", "evaluator-agent",
 }
 SUPPORT_AGENTS = {
-    "docs-agent", "teacher-agent", "ui-agent", "workflow-agent",
+    "docs-agent", "ui-agent", "workflow-agent",
     "explore-agent", "estimator-agent", "browser-agent",
     "ticket-analyst-agent",  # also Opus, handled above
 }
@@ -337,7 +337,7 @@ def build_graph(base: Path) -> dict:
                         "id": "hooks",
                         "title": f"{hook_count} Safety Hooks",
                         "subtitle": "Fire automatically at key moments",
-                        "detail": "Claude Code hooks that inject rules at key moments. All hooks except bash-guard.py are type:prompt nudges (exit 0) — they remind Claude rather than mechanically block. bash-guard.py blocks cd+&& and backslash-space patterns only.",
+                        "detail": "Claude Code hooks that inject rules at key moments. Hooks are a mix of prompt-type (LLM reminders) and command-type scripts. bash-guard.py blocks cd+&& and backslash-space patterns; all other command-type hooks nudge without blocking.",
                         "badge": "Hooks",
                         "badge_color": "#e67e22",
                         "responsibilities": [
@@ -345,8 +345,10 @@ def build_graph(base: Path) -> dict:
                             "PreToolUse: inject verify gate into agent spawns",
                             "PostToolUse: nudge evaluator-agent for unverified findings",
                             "PreCompact: re-inject rules after context compression",
+                            "UserPromptSubmit: stop TTS playback on new input",
+                            "Stop: speak response via TTS",
                         ],
-                        "citations": [{"file": "scripts/setup.ps1", "lines": "92-200", "shows": "hook installation"}],
+                        "citations": [{"file": "scripts/setup.ps1", "lines": "146-415", "shows": "hook installation"}],
                     },
                     {
                         "id": "verify",

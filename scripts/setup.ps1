@@ -117,6 +117,8 @@ $approvalsPath = Join-Path $stateDir "session-approvals.json"
 if (-not (Test-Path $approvalsPath)) {
     [System.IO.File]::WriteAllText($approvalsPath, '{"sessionId":"","approvals":[]}', [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/session-approvals.json - seeded empty" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] state/session-approvals.json - preserving existing session data" -ForegroundColor Yellow
 }
 $speakPath = Join-Path $stateDir "speak-state.json"
 if (-not (Test-Path $speakPath)) {
@@ -139,7 +141,7 @@ if (-not $settings.PSObject.Properties["hooks"]) {
 
 # Helper: install a hook entry if its sentinel string isn't already present.
 # - If the hook type doesn't exist, create it with the new entry.
-# - If it exists and no prompt contains the sentinel, append the new entry.
+# - If it exists and neither prompt nor command contains the sentinel, append the new entry.
 # - If the sentinel is already present, skip (idempotent on upgrade).
 function Install-HookEntry {
     param(
@@ -158,7 +160,7 @@ function Install-HookEntry {
     foreach ($e in $existing) {
         if ($e.hooks) {
             foreach ($h in $e.hooks) {
-                if ($h.prompt -and $h.prompt.Contains($Sentinel)) {
+                if (($h.prompt -and $h.prompt.Contains($Sentinel)) -or ($h.command -and $h.command.Contains($Sentinel))) {
                     Write-Host "[SKIP] hooks.$HookType - $Label already installed" -ForegroundColor Yellow
                     return
                 }
@@ -197,6 +199,36 @@ $consultSessionHook = [PSCustomObject]@{
 }
 Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $consultSessionHook `
     -Sentinel "CONSULT vs AUTO" -Label "CONSULT protocol"
+
+# --- SessionStart: codebase RAG (project_path reminder) ---
+$codebaseRagHook = [PSCustomObject]@{
+    matcher = "Always"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "prompt"
+            prompt = "CODEBASE RAG: When calling rag_context or instructing agents to call rag_context, always include project_path set to the primary working directory. This enables Tier 4 codebase search so agents automatically get relevant source code from the target project. When using rag_search for code understanding, use scope='codebase' with the project_path. If the project has not been indexed yet, suggest /index-project first."
+            statusMessage = "Loading codebase RAG..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $codebaseRagHook `
+    -Sentinel "CODEBASE RAG" -Label "codebase RAG reminder"
+
+# --- SessionStart: compaction restore (injects memo after compaction) ---
+$compactionRestorePath = "$boostHome\scripts\compaction-restore.py".Replace("\", "/")
+$compactionRestoreHook = [PSCustomObject]@{
+    matcher = "Always"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$compactionRestorePath`""
+            timeout = 5000
+            statusMessage = "Restoring context after compaction..."
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "SessionStart" -Entry $compactionRestoreHook `
+    -Sentinel "compaction-restore.py" -Label "compaction restore (command-type)"
 
 # --- PreToolUse: agent-spawn gate on Task (command-type) ---
 # Command-type hook (not prompt). The old prompt-type hook instructed the
@@ -304,7 +336,38 @@ $verifyGateHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PostToolUse" -Entry $verifyGateHook `
     -Sentinel "VERIFY GATE: Scan agent output" -Label "verify gate"
 
-# --- PreCompact: context preservation (original) ---
+# --- PostToolUse: context nudge (counter-based, all tools) ---
+$contextNudgePath = "$boostHome\scripts\context-nudge.py".Replace("\", "/")
+$contextNudgeHook = [PSCustomObject]@{
+    matcher = ".*"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$contextNudgePath`""
+            timeout = 3000
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PostToolUse" -Entry $contextNudgeHook `
+    -Sentinel "context-nudge.py" -Label "context nudge (command-type)"
+
+# --- PostToolUse: project RAG flag (rag_index_project success indicator) ---
+$projectRagFlagPath = "$boostHome\scripts\project-rag-flag.py".Replace("\", "/")
+$projectRagFlagHook = [PSCustomObject]@{
+    matcher = "mcp__rag-server__rag_index_project"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$projectRagFlagPath`""
+            timeout = 3000
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PostToolUse" -Entry $projectRagFlagHook `
+    -Sentinel "project-rag-flag.py" -Label "project RAG flag (command-type)"
+
+# --- PreCompact: context preservation + compaction save ---
+$compactionSavePath = "$boostHome\scripts\compaction-save.py".Replace("\", "/")
 $preCompactHook = [PSCustomObject]@{
     matcher = "Always"
     hooks = @(
@@ -313,14 +376,34 @@ $preCompactHook = [PSCustomObject]@{
             prompt = "CONTEXT PRESERVATION — quality-first routing:`n1. Agent spawns: ``rag_context`` Step 1, route by type (full/standard/lightweight)`n2. Finding verification: ALWAYS evaluator-agent, never self-verify (confirmation bias)`n3. GT commands: ``gt prime``, ``gt sling``, ``gt handoff```n4. Decision flow: simple (just do it) vs complex (workspace + agents)`n5. Rework costs more than ceremony. Do it right the first time.`n6. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json — re-check after compact. Default CONSULT: research + propose + ask before architectural decisions."
             statusMessage = "Preserving RAG/GT/CONSULT awareness before compaction..."
         }
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$compactionSavePath`""
+            timeout = 5000
+            statusMessage = "Saving working state before compaction..."
+        }
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
-    -Sentinel "CONTEXT PRESERVATION" -Label "context preservation"
+    -Sentinel "CONTEXT PRESERVATION" -Label "context preservation + compaction save"
+
+# --- UserPromptSubmit: TTS interrupt (stop playback on user input) ---
+$speakStopPath = "$boostHome\scripts\speak-stop.py".Replace("\", "/")
+$speakStopHook = [PSCustomObject]@{
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$speakStopPath`""
+            timeout = 3000
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "UserPromptSubmit" -Entry $speakStopHook `
+    -Sentinel "speak-stop.py" -Label "TTS interrupt (command-type)"
 
 # --- Stop: TTS speak hook (command-type) ---
-# Install-HookEntry checks $h.prompt for sentinel, but command-type hooks use
-# $h.command instead. Handle directly with command-string check.
+# Direct $h.command sentinel check for idempotency — kept from original implementation.
+# Note: Install-HookEntry also handles command-type hooks after the R50 fix.
 $speakHookPath = "$boostHome\scripts\speak-tts.py".Replace("\", "/")
 $speakHook = [PSCustomObject]@{
     hooks = @(
@@ -454,7 +537,7 @@ if ($edgeCheck.ExitCode -eq 0 -and $edgeCheck.Output.Trim() -eq "ok") {
 Write-Host "`n=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host "  CLAUDEBOOST_HOME = $boostHomePosix"
 Write-Host "  RAG server registered in $mcpPath"
-Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact, Stop)"
+Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Restart Claude Code for MCP changes to take effect"

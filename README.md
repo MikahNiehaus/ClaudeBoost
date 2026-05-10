@@ -10,7 +10,7 @@ ClaudeBoost/
 ├── agents/              23 specialist agent definitions (XML)
 ├── knowledge/           43 domain knowledge bases (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    20 slash commands
+├── .claude/commands/    22 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -33,7 +33,7 @@ powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 
 This registers everything globally:
 - RAG MCP server (semantic search in every project)
-- Hooks (SessionStart, PreToolUse, PostToolUse, PreCompact)
+- Hooks (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 - CLAUDEBOOST_HOME environment variable
 - Agent/knowledge files in GT directives (if GT installed)
 
@@ -45,7 +45,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 20 slash commands for task management
+- 22 slash commands for task management
 
 ## Features
 
@@ -99,6 +99,7 @@ A PreToolUse hook reminds the orchestrator to include `rag_context` in spawn pro
 | devops-agent | CI/CD, Docker, deployment | Sonnet |
 | database-agent | Schema design, queries, migrations | Sonnet |
 | observability-agent | Logging, metrics, alerting | Sonnet |
+| rag-indexing-agent | RAG index advisor — scans scope, recommends filters | Sonnet |
 
 ## Knowledge Bases
 
