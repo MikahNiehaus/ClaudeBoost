@@ -125,6 +125,23 @@ Then retry.
 
 ---
 
+### Check 6 — statusLine
+
+```bash
+python -c "
+import json, os
+p = os.path.expanduser('~/.claude/settings.json')
+s = json.load(open(p))
+sl = s.get('statusLine', {})
+cmd = sl.get('command', '')
+print('PRESENT' if 'ClaudeBoost' in cmd else 'MISSING')
+"
+```
+
+If MISSING: re-run `setup.ps1` — it now creates the statusLine on fresh installs. Then restart Claude Code for the change to take effect.
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -142,6 +159,7 @@ Required hooks           : OK (6/6) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING
+statusLine               : OK / MISSING (restart Claude Code after setup.ps1)
 
 ─────────────────────────────────────────
 ```

@@ -85,13 +85,22 @@ if ($settings.env.PSObject.Properties["CLAUDEBOOST_HOME"]) {
     $settings.env | Add-Member -NotePropertyName "CLAUDEBOOST_HOME" -NotePropertyValue $boostHomePosix
 }
 
-# Fix statusLine to use $TEMP instead of $LOCALAPPDATA/Temp
+# Configure statusLine — create if missing, fix path if stale
+$statusLineCmdTemplate = "printf '\033[32;1m> ClaudeBoost\033[0m'; [ -f ""`$TEMP/claudeboost_rag_ok"" ] && printf ' \033[2m|\033[0m \033[32;1mBoost RAG\033[0m'; [ -f ""`$TEMP/claudeboost_project_rag_ok"" ] && printf ' \033[2m|\033[0m \033[36;1mProject RAG\033[0m'; command -v gt >/dev/null 2>&1 && printf ' \033[2m|\033[0m \033[33;1mGT\033[0m'"
 if ($settings.PSObject.Properties["statusLine"]) {
     $cmd = $settings.statusLine.command
     if ($cmd -and $cmd.Contains('$LOCALAPPDATA/Temp')) {
         $settings.statusLine.command = $cmd.Replace('$LOCALAPPDATA/Temp', '$TEMP')
         Write-Host "[OK] statusLine - fixed to use `$TEMP" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIP] statusLine - already configured" -ForegroundColor Yellow
     }
+} else {
+    $settings | Add-Member -NotePropertyName "statusLine" -NotePropertyValue ([PSCustomObject]@{
+        type = "command"
+        command = $statusLineCmdTemplate
+    })
+    Write-Host "[OK] statusLine - created ClaudeBoost status bar" -ForegroundColor Green
 }
 
 # --- 2a. Seed state directory (CONSULT mode + session approvals) ---

@@ -450,9 +450,9 @@ Orchestrator scans agent output for BLOCKER/HIGH/MEDIUM findings
         - Step 1: rag_context (lightweight)
         - Reads each cited file:line
         - For each finding:
-        │   ├── Code matches claim → VERIFIED (keep)
-        │   └── Code does not match → FALSE POSITIVE (drop)
-        └── Returns: only verified findings with evidence
+        │   ├── Code matches claim → CONFIRMED (keep)
+        │   └── Code does not match → FALSE_POSITIVE (drop)
+        └── Returns: only confirmed findings with evidence
     │
     ▼
 Present only verified findings to user
@@ -783,7 +783,7 @@ Agent reads and internalizes before taking any action
 **Role:** Interactive browser testing via Playwright  
 **Key behaviors:**
 - STANDARD spawn template
-- Always use `mcp__playwright__*` MCP tools directly (never write Playwright code unless explicitly asked)
+- Always use `mcp__playwright__*` MCP tools directly (never write Playwright code — unconditional `<must-not>`)
 - Auto-allow: localhost, 127.0.0.1, OAuth domains; ask for external URLs
 - Package: `@playwright/mcp`
 - Knowledge: `playwright.xml`, `testing.xml`, `ticket-understanding.xml`
@@ -799,7 +799,7 @@ Agent reads and internalizes before taking any action
 - STANDARD spawn template
 - Receives specific findings + file:line citations
 - Reads actual code at each cited location
-- Verdicts: VERIFIED (keep) / FALSE POSITIVE (drop)
+- Verdicts: CONFIRMED (keep) / FALSE_POSITIVE (drop)
 - Cost: ~1000-2000 tokens vs ~5000-10000 tokens rework from false findings
 
 ---
@@ -927,7 +927,7 @@ Agent reads and internalizes before taking any action
 ### 4.2 architecture.xml
 **Triggers:** architecture, design, SOLID, patterns, clean architecture, DDD, coupling  
 **Domain:** System and code architecture  
-**Content:** SOLID principles with violation signs and examples; Clean Architecture layers; DDD concepts (Entity, Value Object, Aggregate, Bounded Context); GoF patterns (Creational/Structural/Behavioral); quality metrics (cyclomatic complexity ranges 1-4=simple, 5-7=moderate, 8-10=complex, 11+=refactor); anti-patterns; ADR template
+**Content:** SOLID principles with violation signs and examples; Clean Architecture layers; DDD concepts (Entity, Value Object, Aggregate, Bounded Context); GoF patterns (Creational/Structural/Behavioral); quality metrics (cyclomatic complexity ranges 1-10=simple, 11-20=moderate, 21-50=complex, 51+=untestable); anti-patterns; ADR template
 
 ---
 
@@ -962,7 +962,7 @@ Agent reads and internalizes before taking any action
 ### 4.7 coding-standards.xml
 **Triggers:** standards, SOLID, GoF, jQuery, complexity, code quality  
 **Domain:** Code quality standards  
-**Content:** Priority hierarchy (Security > Correctness > Maintainability > Performance > Simplicity); SOLID with checklists; GoF patterns with when-to-use/avoid; hard limits (complexity ≤10, method ≤40 lines, class ≤300, params ≤4, nesting ≤3, inheritance ≤3); **jQuery BANNED** (detection: `$()`, `jQuery`, CDN tags); Standards Compliance Check template with PASS/PASS_WITH_WARNINGS/FAIL verdicts
+**Content:** Priority hierarchy (Security > Correctness > Maintainability > Performance > Simplicity); SOLID with checklists; GoF patterns with when-to-use/avoid; hard limits (complexity ≤10, method ≤40 lines, class ≤300, params ≤4, nesting ≤3, inheritance ≤3); **jQuery BANNED** (detection: `$()`, `jQuery`, CDN tags); Standards Compliance Check template with violations table (PASS/PASS_WITH_WARNINGS/FAIL verdicts defined in RULE-017 of rules.xml)
 
 ---
 
