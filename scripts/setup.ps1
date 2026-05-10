@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 
 # Resolve ClaudeBoost install path from script location
 $boostHome = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$boostHomePosix = $boostHome.Replace("\", "/")
 $claudeDir = Join-Path $env:USERPROFILE ".claude"
 
 Write-Host "`n=== ClaudeBoost Setup ===" -ForegroundColor Cyan
@@ -78,7 +79,6 @@ if (Test-Path $settingsPath) {
 if (-not $settings.PSObject.Properties["env"]) {
     $settings | Add-Member -NotePropertyName "env" -NotePropertyValue ([PSCustomObject]@{})
 }
-$boostHomePosix = $boostHome.Replace("\", "/")
 if ($settings.env.PSObject.Properties["CLAUDEBOOST_HOME"]) {
     $settings.env.CLAUDEBOOST_HOME = $boostHomePosix
 } else {
