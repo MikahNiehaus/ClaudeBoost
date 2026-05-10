@@ -1659,10 +1659,10 @@ Four independent indicators:
 
 | Tier | Name | Source | Token Budget | Conditions |
 |------|------|--------|--------------|-----------|
-| 0 | Agent definition | agents/<name>.xml from ChromaDB "agents" collection | Priority | Always |
+| 0 | Agent definition | agents/<name>.xml read directly from filesystem | Priority | Always |
 | 1 | Universal guardrails | security.xml, observability.xml, coding-standards.xml, scope-governance.xml | Up to 40% | Skip if `weight=lightweight` |
-| 2 | Declared KBs | `<knowledge-base>` elements from agent XML | Up to 50% of remaining | Always |
-| 3 | Semantic search | rag_search(task_description, scope="all", min_score=0.4) | Remaining | Always |
+| 2 | Declared KBs | `<primary>` and `<secondary>` file attributes within agent XML `<knowledge-base>` section | Up to 50% of remaining | Always |
+| 3 | Semantic search | store.search("knowledge", query_embedding, min_score=0.4) | Remaining | Always |
 | 4 | Project codebase | Per-project ChromaDB at `<project>/workspace/.rag-index/` | min(400, remaining) | Only if `project_path` provided and indexed |
 
 ### 8.4 Two Distinct RAG Indexes
@@ -1679,13 +1679,15 @@ Four independent indicators:
 | Weight | Tier 1 (Guardrails) | Token Budget |
 |--------|---------------------|--------------|
 | `lightweight` | Skipped | Minimal |
-| `standard` | Included | Normal |
-| `full` | Fully included | Maximum |
+| `standard` | Included | Same as full |
+| `full` | Included | Same as standard |
+
+Note: In the RAG context builder, `standard` and `full` are treated identically — both include guardrails. The full/standard distinction is at the orchestration layer (evaluator-agent, verify gate), not in `_build_context()`.
 
 **Agent routing:**
 - `full`: reviewer-agent, security-agent, performance-agent
 - `standard`: workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator
-- `lightweight`: explore, research, docs, estimator
+- `lightweight`: explore, research, docs, estimator, rag-indexing
 
 ---
 

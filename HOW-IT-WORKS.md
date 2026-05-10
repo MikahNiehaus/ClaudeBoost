@@ -8,7 +8,7 @@ convoys, hooks, etc.), see the [gastown README](gastown/README.md).
 
 The upstream gastown repo is a generic multi-agent framework. Your setup adds:
 
-1. **ClaudeMemory integration** — quality directives, formulas, plugins, and guard scripts
+1. **ClaudeBoost integration** — quality directives, formulas, plugins, and guard scripts
 2. **Windows compatibility fixes** — patches to make GT run on Windows (no tmux, no Unix signals)
 3. **gtstart.bat** — one-click launcher that bootstraps any project into a GT rig
 4. **Custom directives** — behavioral rules for each agent role
@@ -62,7 +62,7 @@ Session menu:
 - **[2] Continue** — `claude --continue -p "gt prime"` (resume last session)
 - **[3] Resume** — `claude --resume` (pick from list)
 
-## ClaudeMemory Integration
+## ClaudeBoost Integration
 
 ### Directives (`~/gt/directives/`)
 

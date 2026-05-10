@@ -1,1 +1,1 @@
-"""MCP RAG server for ClaudeMemory."""
+"""MCP RAG server for ClaudeBoost."""

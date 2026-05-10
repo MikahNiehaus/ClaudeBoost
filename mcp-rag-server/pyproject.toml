@@ -1,7 +1,7 @@
 [project]
 name = "rag-server"
 version = "0.1.0"
-description = "MCP RAG server for ClaudeMemory - semantic search over knowledge bases, agent definitions, and workspace history"
+description = "MCP RAG server for ClaudeBoost - semantic search over knowledge bases and agent definitions"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0",

@@ -19,7 +19,7 @@
 <workarounds>
   <workaround priority="1" name="Use Relative Paths" primary="true">
     <correct>./src/file.ts, agents/_shared-output.xml</correct>
-    <wrong>C:/prj/ClaudeMemory/agents/_shared-output.xml</wrong>
+    <wrong>C:/prj/ClaudeBoost/agents/_shared-output.xml</wrong>
     <rule>ALWAYS use relative paths (e.g., ./src/file.ts). DO NOT use absolute paths.</rule>
   </workaround>
 
