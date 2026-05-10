@@ -30,7 +30,7 @@
 **Behavior:**
 - Reads spawn prompt from `stdin` as JSON (`{"tool_input": {"prompt": "..."}}`)
 - Checks (case-insensitive) for `rag_context` OR `mcp__rag-server__rag_context` in the prompt
-- If missing: writes a 4-line nudge to `stderr`
+- If missing: writes a single-line nudge to `stderr`
 - Also checks that `project_path` is present in the prompt
 - For `architect-agent` specifically: checks for the literal string `PROPOSAL_ONLY` AND at least 2 `file:line` citations via regex `[\w./\\-]+\.[\w]+:\d+(?:-\d+)?`
 - Always exits `0` — this is a nudge, not a hard block
@@ -73,13 +73,13 @@
 **Behavior:**
 1. Reads all `workspace/*/context.md` files
 2. Extracts summaries from each
-3. Archives summaries to `state/compaction-history/` with timestamp filename
-4. Saves memo to `state/compaction-memo.json` as `{session_id, compaction_number, timestamp, memo}`
+3. Archives the previous compaction memo to `state/compaction-history/` with filename `<session_id[:16]>-compact-<n>.json`
+4. Saves new memo to `state/compaction-memo.json` as `{session_id, compaction_number, timestamp, memo}`
 5. Resets `state/compaction-tracker.json` to `{"edit_count": 0}`
 
 **stdout:** Nothing (or success message)  
-**Files read:** `workspace/*/context.md`  
-**Files written:** `state/compaction-memo.json`, `state/compaction-history/<timestamp>.json`, `state/compaction-tracker.json`  
+**Files read:** `workspace/*/context.md`, `state/compaction-memo.json`  
+**Files written:** `state/compaction-memo.json`, `state/compaction-history/<session_id>-compact-<n>.json`, `state/compaction-tracker.json`  
 
 ---
 
@@ -319,7 +319,7 @@ PreCompact hooks fire:
     ├── prompt hook: "CONTEXT PRESERVATION — quality-first routing..."
     └── command hook: compaction-save.py
         ├── Reads workspace/*/context.md
-        ├── Archives to state/compaction-history/<timestamp>.json
+        ├── Archives to state/compaction-history/<session_id>-compact-<n>.json
         ├── Saves memo to state/compaction-memo.json
         └── Resets state/compaction-tracker.json to {"edit_count": 0}
     │
@@ -535,18 +535,18 @@ Agent calls rag_context(agent=..., task_description=..., project_path=..., max_t
 MCP RAG server: _build_context()
     │
     ├── Tier 0: Agent definition
-    │   └── Reads agents/<agent-name>.xml from ChromaDB "agents" collection
+    │   └── Reads agents/<agent-name>.xml directly from filesystem (not ChromaDB)
     │
     ├── Tier 1: Universal guardrails (skipped if weight=lightweight)
     │   └── GUARDRAIL_FILES: security.xml, observability.xml, coding-standards.xml, scope-governance.xml
     │       Up to 40% of token budget
     │
     ├── Tier 2: Declared knowledge bases
-    │   └── Reads <knowledge-base> elements from agent XML
+    │   └── Parses <primary> and <secondary> file attributes within agent XML <knowledge-base> section
     │       Up to 50% of remaining budget
     │
     ├── Tier 3: Semantic search
-    │   └── rag_search(query=task_description, scope="all", min_score=0.4)
+    │   └── store.search("knowledge", query_embedding, min_score=0.4)
     │       Results ranked by similarity score
     │
     └── Tier 4: Project codebase (if project_path provided and indexed)
@@ -593,7 +593,7 @@ Agent reads and internalizes before taking any action
 **Model:** Opus  
 **Role:** System design, SOLID principles, design patterns  
 **Key behaviors:**
-- **PROPOSAL_ONLY contract:** Returns BLOCKED if prompt does not contain literal "PROPOSAL_ONLY" AND at least 2 `file:line` citations
+- **PROPOSAL_ONLY contract:** When PROPOSAL_ONLY is in the spawn prompt, returns BLOCKED if fewer than 2 `file:line` citations are present (absent PROPOSAL_ONLY bypasses consultation-mode entirely)
 - Output: Required-by-standards + 2-3 grounded options with trade-offs + recommendation
 - Handoff: via AskUserQuestion; approval logged to `state/session-approvals.json`
 - Knowledge: `architecture.xml`, `workflow.xml`, `consult-mode.xml`
@@ -609,7 +609,7 @@ Agent reads and internalizes before taking any action
 - 11-pass trigger-conditional checklist (see pr-review.xml)
 - FULL spawn template — always followed by evaluator-agent for BLOCKER/HIGH findings
 - Required: Best Practices Assessment (SOLID + GoF + OOP + Clean Code + Metrics)
-- Outputs grade A-F with PASS/FAIL/SKIP verdict
+- Outputs PASS/PASS_WITH_WARNINGS/FAIL (Best Practices Verdict) with PASS/FAIL/SKIP per self-review pass
 - Knowledge: `pr-review.xml`, `architecture.xml`
 
 ---
@@ -675,7 +675,7 @@ Agent reads and internalizes before taking any action
 **Role:** Bug investigation, root cause analysis  
 **Key behaviors:**
 - STANDARD spawn template
-- 5 debugging frameworks: CoT, ReAct, Self-Ask, Five Whys, Structured Prompt
+- 4 debugging frameworks: CoT, ReAct, Self-Ask, Five Whys (from `<debugging-frameworks>`; "Structured Prompt" is a separate prompt-template section, not a framework)
 - Failure indicators: 2-3 iterations without progress, repetition loop
 - 20-30 minute time box
 - Knowledge: `debugging.xml`, `testing.xml`
@@ -997,7 +997,7 @@ Agent reads and internalizes before taking any action
 ### 4.12 debugging.xml
 **Triggers:** debug, bug, error, root cause, investigate  
 **Domain:** Debugging methodology  
-**Content:** 78% accuracy on complex multi-file debugging; 81% failure rate on semantic-preserving changes; 60% location bias in first 25% of code; 5 debugging frameworks; failure indicators; 20-30 minute time box
+**Content:** 78% accuracy on complex multi-file debugging; 81% failure rate on semantic-preserving changes; 60% location bias in first 25% of code; 4 debugging frameworks (CoT, ReAct, Self-Ask, Five Whys); failure indicators; 20-30 minute time box
 
 ---
 

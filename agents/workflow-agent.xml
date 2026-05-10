@@ -57,7 +57,7 @@
 </workflow-patterns>
 
 <circuit-breakers>
-  <trigger>Tests fail more than 3 times without progress</trigger>
+  <trigger>Tests fail more than 5 times without progress (per knowledge/workflow.xml circuit-breaker)</trigger>
   <trigger>Scope changes significantly mid-implementation</trigger>
   <trigger>Unexpected complexity discovered</trigger>
   <trigger>Dependencies become blocked</trigger>

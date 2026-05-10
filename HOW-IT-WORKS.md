@@ -16,7 +16,7 @@ The upstream gastown repo is a generic multi-agent framework. Your setup adds:
 ## Your Workspace Layout
 
 ```
-~/OneDrive/prj/ClaudeBoost/         <-- This repo (source + config)
+<ClaudeBoost>/                        <-- This repo (source + config)
   gastown/                           <-- Upstream GT source (build gt.exe from here)
   SETUP-GUIDE.md                     <-- Windows installation guide
   HOW-IT-WORKS.md                    <-- This file
@@ -153,7 +153,7 @@ GT was designed for macOS/Linux. Your setup includes these Windows fixes
 
 After making source changes, rebuild:
 ```bash
-cd ~/OneDrive/prj/ClaudeBoost/gastown
+cd $CLAUDEBOOST_HOME/gastown
 go build -o gt.exe ./cmd/gt
 cp gt.exe "$HOME/go/bin/gt.exe"
 ```

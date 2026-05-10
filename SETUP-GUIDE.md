@@ -16,8 +16,8 @@ If you just want the agents, knowledge bases, RAG search, and slash commands:
 ### 1. Clone ClaudeBoost
 
 ```bash
-git clone <your-repo-url> ~/OneDrive/prj/ClaudeBoost
-cd ~/OneDrive/prj/ClaudeBoost
+git clone <your-repo-url> <install-path>
+cd <install-path>
 ```
 
 ### 2. Run the Installer
@@ -171,7 +171,7 @@ otherwise the new PATH entries won't be picked up.
 ### 1. Clone the repo
 
 ```bash
-cd ~/OneDrive/prj/ClaudeBoost  # or wherever you keep projects
+cd <install-path>  # wherever you cloned ClaudeBoost
 git clone https://github.com/steveyegge/gastown.git
 ```
 
@@ -232,7 +232,7 @@ into YAML double-quoted strings, where `\U` is interpreted as a hex escape.
 ### After all fixes, rebuild:
 
 ```bash
-cd ~/OneDrive/prj/ClaudeBoost/gastown
+cd $CLAUDEBOOST_HOME/gastown
 go build -o gt.exe ./cmd/gt
 cp gt.exe "$HOME/go/bin/gt.exe"
 ```
@@ -278,7 +278,7 @@ This auto-fixes most issues. Expected remaining warnings on Windows:
 After GT is set up and working, run the ClaudeBoost installer:
 
 ```batch
-cd ~/OneDrive/prj/ClaudeBoost
+cd <install-path>
 .\install.bat
 ```
 

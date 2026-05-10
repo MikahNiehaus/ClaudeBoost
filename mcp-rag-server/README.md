@@ -49,7 +49,7 @@ with the correct `RAG_PROJECT_ROOT` for your machine. Manual registration exampl
 |----------|---------|-------------|
 | `RAG_PROJECT_ROOT` | Auto-detected | Path to ClaudeBoost project root |
 | `RAG_INDEX_DIR` | `{root}/mcp-rag-server/.rag-index` | Where ChromaDB stores data |
-| `RAG_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformers model name |
+| `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Sentence-transformers model name |
 
 ## How It Works
 
