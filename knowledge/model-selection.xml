@@ -1,6 +1,6 @@
 <knowledge-base name="model-selection" version="1.0">
 <triggers>model, opus, sonnet, haiku, escalate, complexity, which model</triggers>
-<overview>Two-tier model selection: Sonnet (default for 20 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
+<overview>Two-tier model selection: Sonnet (default for 21 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
 
 <always-opus count="3">
   <agent name="architect-agent" rationale="Design decisions cascade everywhere - bad architecture propagates through entire codebase"/>
@@ -8,7 +8,7 @@
   <agent name="reviewer-agent" rationale="Final quality gate before shipping - catches architecture, security, subtle bugs"/>
 </always-opus>
 
-<default-sonnet count="20">
+<default-sonnet count="21">
   <agent name="test-agent" notes="Escalate for complex mocking strategies"/>
   <agent name="debug-agent" notes="Escalate for architectural bugs"/>
   <agent name="workflow-agent" notes="Escalate for complex integrations"/>
@@ -29,6 +29,7 @@
   <agent name="database-agent"/>
   <agent name="rag-indexing-agent"/>
   <agent name="e2e-agent"/>
+  <agent name="research-rag-agent"/>
 </default-sonnet>
 
 <decision-tree><![CDATA[

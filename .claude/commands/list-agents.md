@@ -33,6 +33,7 @@ List all agent files from `agents/` directory (excluding `_orchestrator.xml`) an
 | `rag-indexing-agent` | Pre-index analysis, scope recommendation | — | Recommend codebase indexing scope and filters |
 | `refactor-agent` | Code smells, refactoring | `knowledge/refactoring.xml` | Code cleanup, technical debt |
 | `research-agent` | Web research, verification | `knowledge/research.xml` | Deep research, fact-checking |
+| `research-rag-agent` | External source indexing, per-task research RAG | `knowledge/research-rag.xml` | Index web pages, PDFs, docs into workspace research RAG |
 | `reviewer-agent` | PR review, feedback | `knowledge/pr-review.xml` | Code reviews |
 | `security-agent` | Security review, OWASP | `knowledge/security.xml` | Security audits, vulnerability review |
 | `standards-validator-agent` | SOLID principles, design patterns | `knowledge/coding-standards.xml` | Validate code against standards |
@@ -62,6 +63,7 @@ Run structured E2E UI tests         → e2e-agent
 Recommend RAG indexing scope        → rag-indexing-agent
 Clean up / refactor code            → refactor-agent
 Research external topics            → research-agent
+Index external docs/PDFs into RAG  → research-rag-agent
 Review a pull request               → reviewer-agent
 Security audit or review            → security-agent
 Validate code against standards     → standards-validator-agent

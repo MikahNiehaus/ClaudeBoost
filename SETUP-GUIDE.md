@@ -33,7 +33,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 23 slash commands | `~/.claude/commands/` |
+| 4 | Links 24 slash commands | `~/.claude/commands/` |
 | 5 | Links agents + knowledge to GT directives (if GT installed) | `~/gt/directives/` |
 | 6 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
@@ -57,12 +57,12 @@ a different location, re-run `install.bat` to update the path.
 Open any project in Claude Code and try:
 - `rag_status` — should show collections with chunk counts (counts vary based on file count)
 - `rag_search "SQL injection"` — should return results from security.xml
-- `/list-agents` — should list all 23 agents
+- `/list-agents` — should list all 24 agents
 
 That's it. Every Claude Code session now has:
-- Semantic search over 44 knowledge bases and 24 agent XML files
+- Semantic search over 44 knowledge bases and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 23 slash commands for task management
+- 24 slash commands for task management
 
 ### How RAG works after install
 
@@ -296,7 +296,7 @@ These extend Gas Town with ClaudeBoost's quality system:
 - `polecat.md` — Self-reflection, code critique, teaching, SOLID spot-check, confidence levels
 - `witness.md` — Output validation, MAST failure detection, escalation triggers
 - `crew.md` — Interactive quality standards
-- `agents/` — 23 specialist agents + orchestrator (24 XML files, linked by `install.bat`)
+- `agents/` — 24 specialist agents + orchestrator (25 XML files, linked by `install.bat`)
 - `knowledge/` — 44 domain knowledge bases (linked by `install.bat`)
 
 ### Hooks (`~/.gt/`)
@@ -396,7 +396,7 @@ but the actual workspace it creates is at `~/gt/<project-name>/crew/<your-userna
 # Standalone (always works)
 rag_status                    # In Claude Code — shows collection counts
 rag_search "SQL injection"    # Should return security.xml results
-ls ~/.claude/commands/        # 23 slash commands
+ls ~/.claude/commands/        # 24 slash commands
 cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 
 # Gas Town (if installed)
@@ -404,7 +404,7 @@ go version                    # Should show windows/amd64
 dolt version                  # Should show 1.84.0+
 bd list --json | head -3      # Should return JSON (even if empty)
 gt dolt status                # Should show "running"
-ls ~/gt/directives/agents/    # 24 agent XML files (23 specialist + orchestrator)
+ls ~/gt/directives/agents/    # 25 agent XML files (24 specialist + orchestrator)
 ls ~/gt/directives/knowledge/ # 44 knowledge XML files
 
 # Health

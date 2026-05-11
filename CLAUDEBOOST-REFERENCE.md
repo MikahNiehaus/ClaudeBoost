@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08  
-**Coverage:** All 16 hook registrations, 23 agent XMLs + orchestrator, 44 knowledge XMLs, 23 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 44 knowledge XMLs, 24 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1431,7 +1431,7 @@ Agent reads and internalizes before taking any action
 ### 5.19 /list-agents
 **File:** `.claude/commands/list-agents.md`  
 **Description:** List all available agents with expertise domains  
-**Output:** Agent summary table (23 agents), quick decision guide
+**Output:** Agent summary table (24 agents), quick decision guide
 
 ---
 
@@ -1475,6 +1475,25 @@ Agent reads and internalizes before taking any action
 - Phase 4: Report written to `workspace/$TASK_ID/report.md`; screenshots in `snapshots/`  
 **Anti-cheat enforcement:** No Bash DB queries, no API bypasses, no fabricated PASS — honest FAIL is the output  
 **Hard stops:** Production/staging URLs blocked; any self-audit question NO → FAIL, never PASS
+
+---
+
+### 5.24 /research-rag <task-id> [topic] [url1 url2 ...]
+**File:** `.claude/commands/research-rag.md`  
+**Description:** Build a per-task workspace-scoped research RAG from external sources (web pages, PDFs, docs)  
+**Agent:** `research-rag-agent` (weight: lightweight)  
+**Knowledge:** `knowledge/research-rag.xml`  
+**Phases:**
+- Phase 0: Parse args (task-id, topic, seed URLs), create workspace, read context.md for topic if empty
+- Phase 1: Source discovery — 2-3 WebSearch queries, score by domain tier (A: auto-include, B: include, C: flag, Skip: exclude silently)
+- Phase 2: User approval gate — show source table, wait for "all" / "skip N,M" / additional URLs before indexing
+- Phase 3: Index — call `rag_index_research` with approved sources + workspace_path; report chunks per source
+- Phase 4: Verify — `rag_search scope=research` with representative query; show top 3 results  
+- Phase 5: Update context.md with "Research Sources" section (URLs, format, chunk counts)  
+**Domain tiers:** A = arxiv, github, official docs, MDN, OWASP, NIST; B = stackoverflow, vendor engineering blogs; C = medium, personal blogs; Skip = paywalled, social media  
+**Index location:** `workspace/[task-id]/.rag-index/research/` (per-task, not shared with ClaudeBoost RAG or codebase index)  
+**Constraints:** Max 20 URLs without consent; always approval-gate before indexing; no paywalled content  
+**Query:** `rag_search scope=research workspace_path=<WORKSPACE> query="<concept>"`
 
 ---
 

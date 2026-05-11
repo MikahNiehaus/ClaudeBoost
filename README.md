@@ -1,16 +1,16 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 23 specialist agents, 44 knowledge
+Multi-agent orchestration toolkit for Claude Code. 24 specialist agents, 44 knowledge
 bases, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside
 
 ```
 ClaudeBoost/
-├── agents/              23 specialist agent definitions (XML)
+├── agents/              24 specialist agent definitions (XML)
 ├── knowledge/           44 domain knowledge bases (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    23 slash commands
+├── .claude/commands/    24 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -45,7 +45,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 23 slash commands for task management
+- 24 slash commands for task management
 
 ## Features
 

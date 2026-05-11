@@ -35,7 +35,7 @@ You do NOT need to pre-fetch or embed knowledge in the spawn prompt.
 ## Weight Routing
 
 Pass the correct `weight` parameter to `rag_context` based on agent type:
-- **lightweight**: explore, research, docs, estimator, rag-indexing (skips guardrails)
+- **lightweight**: explore, research, docs, estimator, rag-indexing, research-rag (skips guardrails)
 - **standard**: workflow, refactor, debug, test, ui, database, devops, observability, standards-validator, architect, ticket-analyst, browser, compliance, evaluator
 - **full**: reviewer, security, performance (full guardrails + verify gate)
 

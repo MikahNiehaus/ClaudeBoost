@@ -26,6 +26,7 @@
   <agent name="standards-validator-agent">SOLID, coding standards enforcement</agent>
   <agent name="rag-indexing-agent">RAG index scope analysis</agent>
   <agent name="e2e-agent">End-to-end UI testing, structured test plans</agent>
+  <agent name="research-rag-agent">External source indexing, per-task research RAG</agent>
 </agent-roster>
 
 <ticket-detection>
@@ -264,7 +265,7 @@ STANDARD TEMPLATE (no verify gate, no evaluator):
   WHY: These produce code or analysis, not severity-rated findings.
 
 LIGHTWEIGHT TEMPLATE (minimal ceremony):
-  explore-agent, research-agent, docs-agent, estimator-agent, rag-indexing-agent
+  explore-agent, research-agent, docs-agent, estimator-agent, rag-indexing-agent, research-rag-agent
   WHY: These gather info or produce docs. Minimal overhead, maximum speed.
 ]]></spawn-routing>
 
