@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 24 agents (`agents/*.xml`) and 44 knowledge bases (`knowledge/*.xml`).
+You have 24 agents (`agents/*.xml`) and 45 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**

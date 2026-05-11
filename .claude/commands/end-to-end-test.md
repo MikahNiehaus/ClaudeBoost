@@ -147,6 +147,14 @@ Write `workspace/$TASK_ID/context.md`:
 
 ## Phase 2: Test Plan Generation
 
+**PHASE 2 ENTRY GATE — verify before starting:**
+
+Read `workspace/$TASK_ID/context.md`. Confirm it exists and has a non-empty "Pages Discovered" section.
+
+If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed. Print: "Phase 2 blocked: App Map not found. Complete Phase 1 first." Return to Phase 1.
+
+---
+
 **The test plan is written to disk BEFORE any test executes. This is structural anti-cheat — a plan that predates execution cannot be fabricated.**
 
 **2a — Generate test cases from SCOPE + App Map + component registry.**
@@ -217,6 +225,19 @@ Ask: "Test plan written to `workspace/$TASK_ID/plan.md`. Found **N test cases** 
 ---
 
 ## Phase 3: Test Execution — Browser Only
+
+**⛔ PHASE 3 ENTRY GATE — MANDATORY CHECK BEFORE ANY BROWSER ACTION:**
+
+1. Read `workspace/$TASK_ID/plan.md`.
+2. Verify it exists AND contains at least one `- [ ] TC-` line.
+
+If plan.md does NOT exist or has no test cases → **STOP**. Do not proceed to any browser action.
+Print: "Phase 3 blocked: plan.md not found or empty. Complete Phase 2 first."
+Return to Phase 2 and generate the test plan.
+
+This gate exists because Phase 3 executes a pre-written plan. There is no such thing as "running tests while writing the plan" — that produces fabricated results. The plan must exist on disk, written before execution began.
+
+---
 
 **Print this block BEFORE running any test:**
 

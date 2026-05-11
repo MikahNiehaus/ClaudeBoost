@@ -60,7 +60,7 @@ Open any project in Claude Code and try:
 - `/list-agents` — should list all 24 agents
 
 That's it. Every Claude Code session now has:
-- Semantic search over 44 knowledge bases and 25 agent XML files
+- Semantic search over 45 knowledge bases and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
 - 24 slash commands for task management
 
@@ -405,7 +405,7 @@ dolt version                  # Should show 1.84.0+
 bd list --json | head -3      # Should return JSON (even if empty)
 gt dolt status                # Should show "running"
 ls ~/gt/directives/agents/    # 25 agent XML files (24 specialist + orchestrator)
-ls ~/gt/directives/knowledge/ # 44 knowledge XML files
+ls ~/gt/directives/knowledge/ # 45 knowledge XML files
 
 # Health
 gt doctor                     # Should be mostly green

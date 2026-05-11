@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08  
-**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 44 knowledge XMLs, 24 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 45 knowledge XMLs, 24 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1227,6 +1227,11 @@ Agent reads and internalizes before taking any action
 **Triggers:** end-to-end test, e2e, UI test, browser test, integration test, acceptance test, smoke test, regression, playwright test, /end-to-end-test  
 **Domain:** E2E UI testing philosophy and anti-cheat patterns  
 **Content:** E2E philosophy (verify user's experience, not developer's intent; every test reproducible by human at browser; honest FAIL > fabricated PASS); anti-cheat patterns (catalog of shortcuts that produce false results); intelligent test generation via equivalence partitioning and boundary value analysis; evidence collection requirements (snapshot-first, screenshot with red annotation overlay); used exclusively by e2e-agent
+
+### 4.45 research-rag.xml
+**Triggers:** research RAG, workspace RAG, external source indexing, per-task research, /research-rag, index external docs, research-rag-agent  
+**Domain:** Per-task workspace-scoped research RAG guidelines  
+**Content:** When to use (unfamiliar libraries/frameworks, security patterns, architecture decisions, compliance requirements, algorithm research, third-party API integration) vs not-for (project code — use codebase RAG; debugging errors; questions covered by ClaudeBoost knowledge bases); 4 source quality tiers (A=auto-trust: arxiv/github/official vendor docs/MDN/IETF/NIST/OWASP; B=include-by-default: stackoverflow/dev.to/vendor engineering blogs; C=show-ask: medium/substack/personal blogs; skip=exclude: paywalls/social media/SEO spam); PDF vs URL decision rules (`.pdf` extension or Content-Type → PDF path; GitHub blob → HTML path; arxiv.org/abs → HTML, /pdf → PDF); chunking guidelines (512 tokens/chunk ≈400 words, split on H2/H3 headings, min 40 tokens, code blocks preserved intact); query strategies (specific concept-level queries, 2-3 narrow queries for complex topics, combine with codebase RAG); workspace scoping (per-task ChromaDB at `workspace/[task-id]/.rag-index/research/`, does not share with global ClaudeBoost RAG or other tasks); 6 anti-patterns (index-without-reading, over-indexing >20 URLs, single-domain-bias, skip-chunk-quality-check <5 chunks signals failed fetch, research-instead-of-code, stale-research across tasks)
 
 ---
 

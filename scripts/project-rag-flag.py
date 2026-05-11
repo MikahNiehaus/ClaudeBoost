@@ -5,6 +5,10 @@ When rag_index_project completes successfully (files_indexed key present in
 output), writes $TEMP/claudeboost_project_rag_ok so the status line can show
 a "Project RAG" indicator independently from the "Boost RAG" indicator.
 
+Also writes state/last-indexed-head.json with the current git HEAD and branch
+so that reindex-check.py (SessionStart hook) can detect stale indexes on the
+next session open.
+
 Clears the flag if the tool returned an error (no files_indexed key).
 
 Exit codes:
@@ -14,8 +18,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 FLAG_FILENAME = "claudeboost_project_rag_ok"
@@ -52,6 +58,26 @@ def main() -> int:
     if "files_indexed" in text_output:
         try:
             flag_path.write_text("ok", encoding="utf-8")
+        except Exception:
+            pass
+
+        # Also record current git HEAD so reindex-check.py can detect stale indexes
+        try:
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+            branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+            home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..")
+            ))
+            head_file = home / "state" / "last-indexed-head.json"
+            head_file.write_text(json.dumps({
+                "head": head,
+                "branch": branch,
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
+            }), encoding="utf-8")
         except Exception:
             pass
     else:

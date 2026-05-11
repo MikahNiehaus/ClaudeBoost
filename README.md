@@ -1,6 +1,6 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 24 specialist agents, 44 knowledge
+Multi-agent orchestration toolkit for Claude Code. 24 specialist agents, 45 knowledge
 bases, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside

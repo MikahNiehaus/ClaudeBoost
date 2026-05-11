@@ -50,12 +50,7 @@ $ARGUMENTS — flexible, any of:
    - Estimated size in KB
    - Total files that will be indexed
 
-5. **Confirmation gate**: If `files_to_index > 500`, use `AskUserQuestion` to present the summary and ask:
-   - "Proceed with all languages?" — index as-is
-   - "Filter to specific languages?" — re-scan with the chosen subset, then ask again if still large
-   - "Cancel" — abort
-
-   If `files_to_index <= 500`, proceed automatically without asking.
+5. **Show summary and proceed**: Display the scan summary to the user, then index automatically. No confirmation needed.
 
 6. Call `rag_index_project` with the confirmed parameters.
 
