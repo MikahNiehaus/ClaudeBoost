@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<knowledge-base name="research-rag" version="1.0">
+  <description>
+    Guidelines for using the workspace-scoped research RAG: when to use it, how to find quality
+    sources, chunking expectations, query strategies, and anti-patterns to avoid.
+  </description>
+
+  <when-to-use>
+    <use-case>Unfamiliar library or framework — official docs, README, migration guides</use-case>
+    <use-case>Security patterns — OWASP, CVE advisories, auth/crypto specs (RFC, NIST)</use-case>
+    <use-case>Architecture decisions — compare approaches before proposing one</use-case>
+    <use-case>Compliance requirements — GDPR, HIPAA, PCI-DSS spec sections</use-case>
+    <use-case>Algorithm research — arxiv papers, academic surveys</use-case>
+    <use-case>Third-party API integration — vendor docs, SDK changelogs</use-case>
+
+    <not-for>
+      <item>Reading project code — use rag_search scope=codebase or direct file reads</item>
+      <item>Debugging a specific error — read stack traces and code directly</item>
+      <item>Anything already covered by the ClaudeBoost knowledge bases (rag_search scope=knowledge)</item>
+      <item>General questions answerable from training data</item>
+    </not-for>
+  </when-to-use>
+
+  <source-quality-tiers>
+    <tier name="A" label="auto-trust">
+      <description>High-signal, authoritative sources. Auto-include in candidate list.</description>
+      <domains>
+        arxiv.org, github.com, docs.python.org, docs.rs, pkg.go.dev, crates.io,
+        *.readthedocs.io, developer.mozilla.org (MDN), docs.microsoft.com,
+        developer.apple.com, cloud.google.com/docs, docs.aws.amazon.com,
+        learn.microsoft.com, peps.python.org, tc39.es, w3.org, ietf.org, nist.gov,
+        owasp.org
+      </domains>
+    </tier>
+
+    <tier name="B" label="include-by-default">
+      <description>Generally reliable. Include unless user says skip.</description>
+      <domains>
+        stackoverflow.com, dev.to, engineering.*.com (official vendor engineering blogs),
+        blog.*.io (if from recognized open source project authors),
+        css-tricks.com, smashingmagazine.com, web.dev, freecodecamp.org
+      </domains>
+    </tier>
+
+    <tier name="C" label="show-ask">
+      <description>Variable quality. Show to user with label; do not auto-select.</description>
+      <domains>
+        medium.com, hashnode.dev, substack.com, personal blogs, dev.to posts by unknown authors,
+        reddit.com (r/programming etc.), hackernoon.com
+      </domains>
+    </tier>
+
+    <tier name="skip" label="exclude">
+      <description>Exclude silently. Do not surface to user.</description>
+      <signals>
+        Paywalled content (paywall detected in fetched text),
+        Social media (twitter.com, linkedin.com, facebook.com),
+        SEO aggregator spam (thin content, keyword-stuffed titles),
+        Results that are 100% ads or marketing copy,
+        Sites requiring login to read content
+      </signals>
+    </tier>
+  </source-quality-tiers>
+
+  <pdf-vs-url>
+    <decision-tree>
+      <rule>URL ends with .pdf → use PDF ingestion path (chunk_pdf_url)</rule>
+      <rule>URL returns Content-Type: application/pdf → same PDF path</rule>
+      <rule>GitHub blob/raw URL (github.com/*/blob/* or raw.githubusercontent.com) → HTML path (renders as page)</rule>
+      <rule>arxiv.org/abs/* → HTML path (abstract page); arxiv.org/pdf/* → PDF path</rule>
+      <rule>Local .pdf file → chunk_pdf_file</rule>
+      <rule>Local .md or .txt → markdown chunker</rule>
+    </decision-tree>
+
+    <pdf-caveats>
+      PyMuPDF extracts text reliably from most PDFs. Known limitations:
+      - Image-only scanned PDFs: no text extracted (pages skipped, result count = 0)
+      - Math formulas: extracted as plain text, symbols may be garbled
+      - Multi-column layouts: text order may be incorrect
+      If chunk count is unexpectedly low, check if the PDF is scanned/image-based.
+    </pdf-caveats>
+  </pdf-vs-url>
+
+  <chunking-guidelines>
+    <target-tokens>512 tokens per chunk (≈ 400 words)</target-tokens>
+    <split-strategy>
+      HTML/Markdown: split on H2/H3 heading boundaries first, then paragraph breaks if section
+      exceeds 512 tokens.
+      PDF: split on detected section headings (all-caps lines, numbered headings), then paragraphs.
+    </split-strategy>
+    <minimum-chunk>40 tokens — chunks below this are discarded as noise</minimum-chunk>
+    <code-blocks>Preserved intact; not split mid-block even if they exceed max_tokens</code-blocks>
+    <quality-signal>
+      If rag_index_research returns fewer than 5 chunks for a source, the page was likely:
+      (a) blocked/paywalled, (b) image-only PDF, (c) a redirect page with no content.
+      Investigate before trusting that source.
+    </quality-signal>
+  </chunking-guidelines>
+
+  <query-strategies>
+    <principle>Write specific, concept-level queries — not broad topics</principle>
+    <examples>
+      <good>PKCE code challenge generation SHA-256</good>
+      <good>chromadb SegmentAPI Windows multiprocessing fix</good>
+      <good>sentence-transformers batch embedding GPU memory</good>
+      <bad>authentication</bad>
+      <bad>python</bad>
+      <bad>how to fix bug</bad>
+    </examples>
+    <multi-query>
+      For complex topics, run 2-3 narrow queries covering different aspects rather than
+      one broad query. Example for OAuth2:
+      - "OAuth2 PKCE flow authorization code"
+      - "refresh token rotation security"
+      - "OAuth2 state parameter CSRF protection"
+    </multi-query>
+    <combine-with-codebase>
+      Research RAG answers "how does X work". Project codebase RAG answers "where is X used
+      in this project". Use both when implementing something new in an existing codebase.
+    </combine-with-codebase>
+  </query-strategies>
+
+  <workspace-scoping>
+    <rule>
+      Research RAG is strictly per-task. Each task workspace gets its own ChromaDB instance
+      at workspace/[task-id]/.rag-index/research/. It does NOT share data with:
+      - The global ClaudeBoost RAG (agents/, knowledge/)
+      - Other task workspaces
+      - The project codebase index
+    </rule>
+    <workspace-path>
+      Always pass the absolute path to the task workspace directory.
+      Example: /path/to/ClaudeBoost/workspace/AUTH-42
+      The research index will be at workspace/AUTH-42/.rag-index/research/
+    </workspace-path>
+  </workspace-scoping>
+
+  <anti-patterns>
+    <anti-pattern name="index-without-reading">
+      Do not index a source and immediately trust rag_search results as ground truth.
+      If the source is critical (security, compliance), read the actual document section
+      to verify the chunk is accurate and not truncated mid-thought.
+    </anti-pattern>
+    <anti-pattern name="over-indexing">
+      Do not index more than 20 URLs without user consent. Broad scrapes slow indexing
+      and dilute search quality with irrelevant content.
+    </anti-pattern>
+    <anti-pattern name="single-domain-bias">
+      Do not index 10+ pages from the same site without considering breadth. A single vendor's
+      docs may not represent the full solution space.
+    </anti-pattern>
+    <anti-pattern name="skip-chunk-quality-check">
+      Always check sources_failed and whether any source returned fewer than 5 chunks.
+      Low chunk counts indicate a failed fetch, blocked page, or image-only PDF.
+    </anti-pattern>
+    <anti-pattern name="research-instead-of-code">
+      Research RAG supplements code reading; it does not replace it.
+      Never skip reading the actual project code in favor of research results.
+    </anti-pattern>
+    <anti-pattern name="stale-research">
+      Research RAG is per-task and ephemeral. After a task is complete, the index is
+      no longer maintained. Do not reuse research from a different task's workspace.
+    </anti-pattern>
+  </anti-patterns>
+</knowledge-base>

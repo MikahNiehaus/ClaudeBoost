@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ClaudeBoost Chat Watcher — answers questions from the changes/visualize TUI viewers.
+ClaudeBoost Chat Watcher — answers questions from the changes TUI viewer.
 
-Polls the chat JSON files every 3 seconds and answers unanswered questions
+Polls the chat JSON file every 3 seconds and answers unanswered questions
 using `claude -p` (Claude Code CLI non-interactive mode). No API key needed —
 uses the same OAuth credentials as the running Claude Code session.
 Runs for up to 15 minutes then exits. Launch via: python chat-watcher.py
@@ -31,7 +31,6 @@ MAX_RUNTIME = 15 * 60  # 15 minutes then exit
 
 CHAT_FILES = [
     Path(os.environ.get("TEMP", "/tmp")) / "claudeboost" / "changes_chat.json",
-    Path(os.environ.get("TEMP", "/tmp")) / "claudeboost" / "visualize_chat.json",
 ]
 
 SYSTEM_PROMPT = (

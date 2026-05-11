@@ -56,10 +56,11 @@ async def list_tools() -> list[Tool]:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "knowledge", "agents", "codebase"],
+                        "enum": ["all", "knowledge", "agents", "codebase", "research"],
                         "description": (
                             "Which collection to search. "
-                            "'codebase' requires project_path."
+                            "'codebase' requires project_path. "
+                            "'research' requires workspace_path."
                         ),
                         "default": "all",
                     },
@@ -68,6 +69,13 @@ async def list_tools() -> list[Tool]:
                         "description": (
                             "Absolute path to the target project. "
                             "Required when scope='codebase'."
+                        ),
+                    },
+                    "workspace_path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the task workspace directory. "
+                            "Required when scope='research'."
                         ),
                     },
                     "limit": {
@@ -181,6 +189,41 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="rag_index_research",
+            description=(
+                "Index URLs, PDFs, or local files into a per-task research RAG. "
+                "Creates a workspace-scoped vector database that can be queried with "
+                "rag_search scope='research'. Supports web pages, PDF URLs, and local "
+                ".pdf/.md/.txt files. Incremental: skips sources whose content hasn't changed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "List of URLs (web pages or PDFs) or absolute local file paths "
+                            "to index. Supports http/https URLs and local .pdf, .md, .txt files."
+                        ),
+                    },
+                    "workspace_path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the task workspace directory. "
+                            "Research index stored at workspace_path/.rag-index/research/."
+                        ),
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Re-index even if source content hasn't changed.",
+                        "default": False,
+                    },
+                },
+                "required": ["sources", "workspace_path"],
+            },
+        ),
+        Tool(
             name="rag_context",
             description=(
                 "Build a curated context package for an agent. Given an agent name and "
@@ -251,6 +294,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 query=arguments["query"],
                 scope=arguments.get("scope", "all"),
                 project_path=arguments.get("project_path"),
+                workspace_path=arguments.get("workspace_path"),
                 limit=arguments.get("limit", DEFAULT_SEARCH_LIMIT),
                 min_score=arguments.get("min_score", DEFAULT_MIN_SCORE),
             )
@@ -276,6 +320,15 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             return engine.index_project(
                 project_path=arguments["project_path"],
                 languages=arguments.get("languages"),
+                force=arguments.get("force", False),
+            )
+
+        elif name == "rag_index_research":
+            from rag_server.tools.research import rag_index_research
+            return rag_index_research(
+                embedder=embedder,
+                sources=arguments["sources"],
+                workspace_path=arguments["workspace_path"],
                 force=arguments.get("force", False),
             )
 

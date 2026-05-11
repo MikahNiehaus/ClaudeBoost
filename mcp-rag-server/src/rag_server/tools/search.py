@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from pathlib import Path
 
 from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, SCOPES
 from rag_server.ports.embedding_port import EmbeddingPort
@@ -10,8 +11,7 @@ from rag_server.ports.store_port import StorePort
 
 logger = logging.getLogger(__name__)
 
-VALID_SCOPES = ["all", "knowledge", "agents", "codebase"]
-
+VALID_SCOPES = ["all", "knowledge", "agents", "codebase", "research"]
 
 
 def rag_search(
@@ -20,6 +20,7 @@ def rag_search(
     query: str,
     scope: str = "all",
     project_path: str | None = None,
+    workspace_path: str | None = None,
     limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = DEFAULT_MIN_SCORE,
 ) -> dict:
@@ -30,14 +31,45 @@ def rag_search(
     if scope == "codebase" and not project_path:
         return {"error": "project_path is required when scope='codebase'"}
 
+    if scope == "research" and not workspace_path:
+        return {"error": "workspace_path is required when scope='research'"}
+
     start = time.time()
 
     query_embedding = embedder.embed_query(query)
 
     all_results = []
 
+    # Research search uses a per-task workspace store
+    if scope == "research":
+        from rag_server.core.store import ChromaStore
+
+        research_chroma = (
+            Path(workspace_path).resolve() / ".rag-index" / "research" / "chroma"
+        )
+        if not research_chroma.exists():
+            return {
+                "results": [],
+                "total_found": 0,
+                "query_time_ms": 0,
+                "error": (
+                    "Research index not found at workspace. "
+                    "Run rag_index_research first."
+                ),
+            }
+
+        research_store = ChromaStore(persist_dir=str(research_chroma))
+        if research_store.collection_exists("research") and research_store.count("research") > 0:
+            results = research_store.search(
+                collection="research",
+                query_embedding=query_embedding,
+                limit=limit,
+                min_score=min_score,
+            )
+            all_results.extend(results)
+
     # Codebase search uses a separate per-project store
-    if scope == "codebase":
+    elif scope == "codebase":
         from rag_server.core.project import project_index_dir
         from rag_server.core.store import ChromaStore
 
