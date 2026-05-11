@@ -21,6 +21,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__rag-server__rag_search|mcp__rag-server__rag_context",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-error-guard.py\""
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
