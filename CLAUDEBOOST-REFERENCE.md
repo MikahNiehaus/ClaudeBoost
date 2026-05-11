@@ -31,7 +31,7 @@
 - Reads spawn prompt from `stdin` as JSON (`{"tool_input": {"prompt": "..."}}`)
 - Checks (case-insensitive) for `rag_context` OR `mcp__rag-server__rag_context` in the prompt
 - If missing: writes a single-line nudge to `stderr`
-- Also checks that `project_path` is present in the prompt
+- If `rag_context` IS present: also checks (elif) that `project_path` is in the prompt — if missing, writes a separate nudge
 - For `architect-agent` specifically: checks for the literal string `PROPOSAL_ONLY` AND at least 2 `file:line` citations via regex `[\w./\\-]+\.[\w]+:\d+(?:-\d+)?`
 - Always exits `0` — this is a nudge, not a hard block
 
@@ -78,7 +78,7 @@
 5. Resets `state/compaction-tracker.json` to `{"edit_count": 0}`
 
 **stdout:** Nothing (or success message)  
-**Files read:** `workspace/*/context.md`, `state/compaction-memo.json`  
+**Files read:** `workspace/*/context.md`, `state/compaction-memo.json`, `state/claudeboost-mode.json`  
 **Files written:** `state/compaction-memo.json`, `state/compaction-history/<session_id>-compact-<n>.json`, `state/compaction-tracker.json`  
 
 ---
@@ -257,10 +257,12 @@ Prints `rag_server.__file__` — the filesystem path where rag_server is install
 **Args:** `<source_dir> <output_graph_json>`  
 
 **Behavior:**
-- Reads `agents/*.xml` (skipping files prefixed with `_`)
-- Builds a layered `graph.json` with 5 layers: user, core, agents, knowledge, enforcement
-- Each node has: id, label, kind, purpose, layer
-- Each edge has: from, to, kind, label
+- Reads `agents/*.xml` (skipping files prefixed with `_`) and counts knowledge XMLs, commands, and hook entries
+- Builds a `graph.json` with 6 layers: user (INPUT), classify (TASK CLASSIFICATION), consult (COLLABORATIVE MODE), agents (SPECIALIST AGENTS), rag-layer (KNOWLEDGE RETRIEVAL), enforcement (SAFETY & ENFORCEMENT)
+- Also includes `side_rails` (left: Global Rules, Slash Commands; right: Knowledge Bases) flanking the main layers
+- Nodes (cards) have: id, title, subtitle, detail, optional badge/accent/responsibilities/citations
+- Agents split into 4 columns by category: Opus—Strategic, Sonnet—Quality, Sonnet—Support, Sonnet—Other
+- No explicit edge list — layer relationships are implicit via ordering and `flow_label` per layer
 
 Used by `/visualize` Step 2a (self-map mode).
 
@@ -319,6 +321,7 @@ PreCompact hooks fire:
     ├── prompt hook: "CONTEXT PRESERVATION — quality-first routing..."
     └── command hook: compaction-save.py
         ├── Reads workspace/*/context.md
+        ├── Reads state/claudeboost-mode.json (includes mode in memo)
         ├── Archives to state/compaction-history/<session_id>-compact-<n>.json
         ├── Saves memo to state/compaction-memo.json
         └── Resets state/compaction-tracker.json to {"edit_count": 0}
@@ -405,7 +408,7 @@ PreToolUse fires:
         ├── Reads spawn prompt from stdin JSON
         ├── Checks for "rag_context" in prompt (case-insensitive)
         ├── If missing: writes nudge to stderr
-        ├── Checks project_path is present
+        ├── If rag_context present (elif): checks project_path is in prompt — if missing, writes separate nudge
         ├── If agent is architect-agent:
         │   ├── Checks for literal "PROPOSAL_ONLY"
         │   └── Checks for >= 2 file:line citations (regex)
@@ -745,7 +748,7 @@ Agent reads and internalizes before taking any action
 **Key behaviors:**
 - LIGHTWEIGHT spawn template
 - Fibonacci scale: 1/2/3/5/8/13 (must-split at 13)
-- 9 complexity multipliers
+- 8 complexity multipliers
 - Knowledge: `story-pointing.xml`
 
 ---
@@ -757,7 +760,7 @@ Agent reads and internalizes before taking any action
 **Role:** Codebase understanding  
 **Key behaviors:**
 - LIGHTWEIGHT spawn template
-- 4 workflows: Quick Overview (<5 min), Feature Understanding (5-15 min), Dependency Analysis (10-20 min), Architecture Discovery (20-30 min)
+- 3 exploration depths: Quick (2-3 min), Moderate (5-10 min), Thorough (15+ min)
 - Knowledge: `code-exploration.xml`, `architecture.xml`
 
 ---
@@ -1039,14 +1042,14 @@ Agent reads and internalizes before taking any action
 ### 4.18 memory-management.xml
 **Triggers:** memory, context, compact, compaction, session, persist  
 **Domain:** Context and memory persistence  
-**Content:** Auto-compact at ~95% (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60` overrides to 60%); memory hierarchy (Enterprise/Project/User/Local/Task); persistence strategies; PERSISTENT mode checkpoint format; parallel agent hard limits (context <50%: 3 agents; 50-75%: 2 agents; >75%: 1 agent); batch pattern; background agent advantages; token estimation
+**Content:** Auto-compact at ~95% (env var `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60` overriding to 60% is set in settings.json — see section 7.1, not in this file); memory hierarchy (Enterprise/Project/User/Local/Task); persistence strategies; PERSISTENT mode checkpoint format; parallel agent hard limits (Simple tasks: 3 agents; Complex tasks: 2 agents; Low context >75%: 1 agent); batch pattern; background agent advantages; token estimation
 
 ---
 
 ### 4.19 model-selection.xml
 **Triggers:** model, opus, sonnet, haiku, escalate, complexity  
 **Domain:** Model routing  
-**Content:** Always-Opus: architect/ticket-analyst/reviewer; Sonnet for 19 others; decision tree; 6 escalation trigger categories (Agent Type, Complexity, Stakes, Ambiguity, Reasoning Depth, Mid-Task Escalation); complexity scoring dimensions; mid-task escalation scenarios; model characteristics
+**Content:** Always-Opus: architect/ticket-analyst/reviewer; Sonnet for 20 others; decision tree; 6 escalation trigger categories (Agent Type, Complexity, Stakes, Ambiguity, Reasoning Depth, Mid-Task Escalation); complexity scoring dimensions; mid-task escalation scenarios; model characteristics
 
 ---
 
@@ -1188,7 +1191,7 @@ Agent reads and internalizes before taking any action
 ### 4.39 tool-design.xml
 **Triggers:** tool, MCP, tool definition, API, function, parameter  
 **Domain:** MCP tool design  
-**Content:** 4 core principles (Clear Naming, Self-Documenting Parameters, Actionable Error Messages, Token-Efficient Responses); pagination design; format control; tool scope (when to split vs combine); namespacing; error categories with actions; token budget (tool definition: 100-300 tokens, each parameter: 20-50 tokens); refinement cycle
+**Content:** 4 core principles (Clear Naming, Self-Documenting Parameters, Actionable Error Messages, Token-Efficient Responses); pagination design; format control; tool scope (when to split vs combine); namespacing; error categories with actions; token budget (tool name + description: 50-100 tokens, each parameter: 20-50 tokens); refinement cycle
 
 ---
 
@@ -1209,7 +1212,7 @@ Agent reads and internalizes before taking any action
 ### 4.42 visual-communication.xml
 **Triggers:** explain, diagram, visual, architecture, show me, structure, flow  
 **Domain:** ASCII diagram communication  
-**Content:** 8 design frameworks (SOLID, GoF, OOP Four Pillars, TDD, DDD, CIA Triad, GRASP, Clean Code, KISS-DRY-YAGNI); 4 architecture ASCII diagrams (Clean Architecture, Hexagonal, CQRS, Event Sourcing); 7 diagram templates (layered-architecture, request-flow, component-interaction, security-box, comparison-matrix, before-after, di-flow); annotation formats; RULE-021 integration: every explanation must include at least one framework annotation
+**Content:** 9 design frameworks (SOLID, GoF, OOP Four Pillars, TDD, DDD, CIA Triad, GRASP, Clean Code, KISS-DRY-YAGNI); 4 architecture ASCII diagrams (Clean Architecture, Hexagonal, CQRS, Event Sourcing); 7 diagram templates (layered-architecture, request-flow, component-interaction, security-box, comparison-matrix, before-after, di-flow); annotation formats; RULE-021 integration: every explanation must include at least one framework annotation
 
 ---
 
@@ -1237,6 +1240,7 @@ Agent reads and internalizes before taking any action
 1. Launch matrix-boost.py animation (new WT tab), clear `__pycache__`, clear Boost RAG and Project RAG flag files
 2. Verify privacy env vars (`DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`) — auto-fix if missing
 3. Activate RAG: `check-rag-health.py` → auto-repair if exit 2 or 3 → call `rag_context` to prime
+3.5. Index ClaudeBoost Codebase (Project RAG): call `rag_index_project` on CLAUDEBOOST_HOME — keeps `rag_search(scope="codebase")` current against ClaudeBoost source
 4. Activate Gas Town: `gt prime` → auto-init (`gt init`) if not a GT workspace
 5. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 6. Verify `~/.claude/CLAUDE.md` exists
@@ -1284,9 +1288,8 @@ Agent reads and internalizes before taking any action
 2a. Self-map: run `visualize-extract.py` to build `graph.json`
 2b. Project-map: analyze repo manually, build graph.json following template
 3. Save to workspace, render `visualize.html` via `render.py`
-4. Launch via `wt.exe -w 0 new-tab`
+4. Open HTML board in default browser via `cmd.exe /c start` (Windows path conversion via `cygpath -w`)
 5. Report node/edge counts, keyboard shortcuts
-6. Monitor `$TEMP/claudeboost/visualize_chat.json` for chat questions
 
 ---
 
@@ -1453,7 +1456,7 @@ Agent reads and internalizes before taking any action
 **File:** `.claude/commands/setup.md`  
 **Description:** Full ClaudeBoost setup and verification — idempotent, safe after any git pull  
 **Phases:** Locate home (0) → run setup.ps1 (1) → verify 6 checks in loop with auto-repair (2) → status table (3)  
-**Checks:** RAG server health, required hooks (6), state files (3), edge-tts, ClaudeBoost RAG indexed, global CLAUDE.md  
+**Checks:** RAG server health, required hooks (6), state files (3), edge-tts, global CLAUDE.md, statusLine  
 **Repair:** Auto-repairs via reinstall-rag.py or setup.ps1 re-run; up to 3 retries per check  
 **Output:** Pass/fail table; "Run /boost" if all pass
 

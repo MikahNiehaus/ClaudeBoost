@@ -1,6 +1,6 @@
 <knowledge-base name="model-selection" version="1.0">
 <triggers>model, opus, sonnet, haiku, escalate, complexity, which model</triggers>
-<overview>Two-tier model selection: Sonnet (default for 19 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
+<overview>Two-tier model selection: Sonnet (default for 20 agents), Opus (critical checkpoints and complex reasoning). Priority: Quality > Accuracy > Token Cost.</overview>
 
 <always-opus count="3">
   <agent name="architect-agent" rationale="Design decisions cascade everywhere - bad architecture propagates through entire codebase"/>
@@ -121,7 +121,7 @@ Is agent architect/ticket-analyst/reviewer?
     <best-for>Implementation, testing, debugging, documentation</best-for>
     <avoid-for>Tasks requiring deep architectural reasoning</avoid-for>
   </model>
-  <context-note>Both support 200K context; Sonnet has 1M beta; for >100K tokens, prefer Opus for synthesis</context-note>
+  <context-note>Both Opus 4.6 and Sonnet 4.6 support 1M context; for very large contexts requiring deep synthesis, prefer Opus</context-note>
 </model-characteristics>
 
 <anti-patterns>

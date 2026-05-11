@@ -57,7 +57,7 @@
 
 <forbidden-libraries>
   <library name="jQuery" severity="BLOCKER">
-    <status>BANNED in ViveryAscend codebase</status>
+    <status>BANNED — global rule across all projects</status>
     <reason>Incompatible with React/Next.js paradigm. jQuery directly manipulates the DOM, conflicting with React's virtual DOM.</reason>
     <if-user-asks-for-dom-manipulation>
       <use context="React component">useRef() + useEffect() for direct DOM access</use>

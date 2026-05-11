@@ -28,7 +28,7 @@ $ARGUMENTS — flexible, any of:
    b. **Full path** (starts with a drive letter like `C:/` or `/`) → use as-is.
 
    c. **Short name or fuzzy description** → search for a matching directory.
-      - Run `ls C:/Development/` (and `ls C:/Users/mniehaus/source/repos/` if that exists) to list candidate project folders.
+      - Run `ls C:/Development/` (and `ls "$HOME/source/repos/"` if that exists) to list candidate project folders.
       - Pick the folder whose name best matches the argument — exact match first, then case-insensitive substring, then fuzzy (e.g. "nectar" matches "NectarBenefits").
       - If exactly one good match: use it, tell the user which path you resolved to.
       - If multiple plausible matches: show them and use `AskUserQuestion` to ask which one.

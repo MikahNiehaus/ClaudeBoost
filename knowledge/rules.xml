@@ -43,6 +43,8 @@
     <domain id="5">Performance - Large loops, DB queries, caching, hot paths?</domain>
     <domain id="6">Review - Code changes ready for merge?</domain>
     <domain id="7">Clarity - Vague request, missing acceptance criteria?</domain>
+    <domain id="8">Browser Testing - Interactive UI or end-to-end browser testing required?</domain>
+    <domain id="9">Observability - Service methods, error handling, external calls, or data mutations?</domain>
   </planning-checklist>
 </rule>
 

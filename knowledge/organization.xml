@@ -98,6 +98,8 @@ PERSISTENT: "**MODE: PERSISTENT** | Progress: 23/45 files | Next: Convert src/se
     <domain name="Performance" needed="[Yes/No]" criteria="[specific]" agent="performance-agent"/>
     <domain name="Review" needed="[Yes/No]" criteria="[specific]" agent="reviewer-agent"/>
     <domain name="Clarity" needed="[Yes/No]" criteria="[specific]" agent="ticket-analyst-agent"/>
+    <domain name="Browser Testing" needed="[Yes/No]" criteria="[specific]" agent="browser-agent"/>
+    <domain name="Observability" needed="[Yes/No]" criteria="[specific]" agent="observability-agent"/>
   </planning-checklist>
 
   <subtasks>

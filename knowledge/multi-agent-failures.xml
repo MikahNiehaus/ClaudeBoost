@@ -6,7 +6,7 @@
   <category id="1" name="System Design Issues" percent="32%">
     <failure mode="Unclear Specification" description="Agent role/boundaries ambiguous" prevention="Explicit JSON schemas for inputs/outputs"/>
     <failure mode="Missing Context" description="Agent lacks info to decide" prevention="Require context.md reading before action"/>
-    <failure mode="Wrong Agent Selection" description="Task routed to wrong expertise" prevention="Explicit routing table in _orchestrator.md"/>
+    <failure mode="Wrong Agent Selection" description="Task routed to wrong expertise" prevention="Explicit routing table in _orchestrator.xml"/>
     <failure mode="Scope Creep" description="Agent does more than assigned" prevention="Define explicit boundaries in agent definition"/>
     <failure mode="Overlapping Responsibilities" description="Multiple agents claim same work" prevention="Clear domain ownership in collaboration matrix"/>
   </category>

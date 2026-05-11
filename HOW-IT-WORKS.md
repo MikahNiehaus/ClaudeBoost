@@ -31,7 +31,7 @@ The upstream gastown repo is a generic multi-agent framework. Your setup adds:
   rigs.json                          <-- Registry of all rigs
   CLAUDE.md                          <-- Base instructions for all agent sessions
   <rig>/                             <-- Each registered project
-    crew/mikah/                      <-- Your interactive workspace
+    crew/<your-username>/            <-- Your interactive workspace
     polecats/                        <-- Autonomous worker workspaces
 
 ~/OneDrive/prj/<project>/            <-- Your source projects
@@ -45,7 +45,7 @@ When you run `gtstart.bat` from any project directory:
 ```
 Is this already a rig?
   |
-  YES --> cd ~/gt/<name>/crew/mikah --> Session Menu --> Claude Code
+  YES --> cd ~/gt/<name>/crew/<your-username> --> Session Menu --> Claude Code
   |
   NO  --> [1] Start Dolt
           [2] Init git (if needed)
@@ -177,7 +177,7 @@ cd ~/OneDrive/prj/MyProject
 ./gtstart.bat
 
 # Option B: Go directly to crew workspace
-cd ~/gt/MyProject/crew/mikah
+cd ~/gt/MyProject/crew/<your-username>
 claude -p "gt prime"
 ```
 

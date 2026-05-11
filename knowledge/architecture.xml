@@ -162,8 +162,8 @@ class OrderService:
     <range min="51" max="999">Untestable - refactor immediately</range>
   </metric>
   <size-guidelines>
-    <guideline type="Functions" max="50 lines" ideal="20 lines"/>
-    <guideline type="Classes" max="400 statements"/>
+    <guideline type="Functions" max="40 lines" ideal="20 lines"/>
+    <guideline type="Classes" max="300 lines"/>
     <guideline type="Files" max="500-1000 lines"/>
   </size-guidelines>
 </quality-metrics>

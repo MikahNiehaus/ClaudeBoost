@@ -68,8 +68,8 @@ That's it. Every Claude Code session now has:
 
 The RAG MCP server starts automatically when Claude Code opens any project.
 
-- **On startup**: indexes any new or changed files in agents/, knowledge/, workspace/
-- **Auto-watcher**: monitors agents/, knowledge/, and workspace/ for file changes — re-indexes within 2 seconds
+- **On startup**: indexes any new or changed files in agents/, knowledge/
+- **Auto-watcher**: monitors agents/ and knowledge/ for file changes — re-indexes within 2 seconds
 - **No manual action needed**: just work normally, the index stays up to date
 
 ### Re-indexing manually
@@ -86,7 +86,6 @@ Only changed files get re-indexed normally (incremental via SHA-256 hash compari
 |-------|------------|----------------|
 | knowledge | `knowledge/*.xml` (44 files) | Coding standards, security, architecture, debugging, etc. |
 | agents | `agents/*.xml` (24 files) | Agent definitions with capabilities, guidelines, output formats |
-| workspaces | `workspace/*/context.md`, `workspace/*/ticket.md` | Task history, decisions, tickets |
 
 ---
 
@@ -389,7 +388,7 @@ On launch, it presents a session menu:
 - **[3] Resume** — pick from a list of past sessions
 
 The bat lives in your source project directory (e.g., `~/OneDrive/prj/MyProject/gtstart.bat`),
-but the actual workspace it creates is at `~/gt/<project-name>/crew/mikah/`.
+but the actual workspace it creates is at `~/gt/<project-name>/crew/<your-username>/`.
 
 ## Verification Checklist
 

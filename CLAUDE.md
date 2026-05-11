@@ -22,7 +22,7 @@ Two paths, not five mandatory steps:
 
 **Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this")
 1. Create `workspace/[task-id]/` — announce with one line
-2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity)
+2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
 3. Spawn the right agent(s)
 
 Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).

@@ -161,7 +161,7 @@ def build_graph(base: Path) -> dict:
                     "/boost — activate all systems at session start",
                     "/visualize — interactive architecture board",
                     "/spawn-agent — delegate to a specialist",
-                    "/plan-task — sweep-then-verify across 7 domains",
+                    "/plan-task — sweep-then-verify across 9 domains",
                     "/consult and /auto — toggle collaborative mode",
                 ],
             },
@@ -233,7 +233,7 @@ def build_graph(base: Path) -> dict:
                                 "id": "complex-path",
                                 "title": "Plan + Delegate",
                                 "subtitle": "workspace/ + sweep + agents",
-                                "detail": "Creates workspace/[task-id]/, runs sweep-then-verify across 7 domains (testing, docs, security, architecture, performance, review, clarity), then spawns specialist agents — up to 3 in parallel.",
+                                "detail": "Creates workspace/[task-id]/, runs sweep-then-verify across 9 domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability), then spawns specialist agents — up to 3 in parallel.",
                             },
                         ],
                     }

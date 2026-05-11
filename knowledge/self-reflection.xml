@@ -86,7 +86,7 @@
   <scenario tokens="&lt;10K">Any model suitable</scenario>
   <scenario tokens="10K-50K">Sonnet preferred</scenario>
   <scenario tokens=">50K">Sonnet or Opus (Haiku "loses track fast")</scenario>
-  <scenario tokens=">200K">Sonnet with 1M context beta</scenario>
+  <scenario tokens=">200K">Sonnet 4.6 or Opus 4.6 (both support 1M context)</scenario>
 </context-length-guidance>
 
 </knowledge-base>

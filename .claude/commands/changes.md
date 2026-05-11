@@ -101,7 +101,7 @@ wt.exe -w 0 new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-
 mkdir -p "$TEMP/claudeboost" && nohup python "$CLAUDEBOOST_HOME/scripts/chat-watcher.py" > "$TEMP/claudeboost/chat-watcher.log" 2>&1 &
 ```
 
-The `chat-watcher.py` script polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for 15 minutes and answers questions using the Anthropic API (claude-haiku). It runs completely independently — no manual monitoring needed.
+The `chat-watcher.py` script polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for 15 minutes and answers questions using `claude -p` (Claude Code CLI, no API key needed). It runs completely independently — no manual monitoring needed.
 
 **NEVER use `powershell Start-Process` or `cmd start`** — those open separate windows.
 
