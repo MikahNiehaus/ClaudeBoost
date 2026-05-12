@@ -33,6 +33,12 @@
   <trigger status="BLOCKED">Mockup unclear, missing design assets, can't access design system</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>Reuse first: BEFORE building any component, widget, or utility, search the codebase for existing implementations. Extend or compose existing code rather than creating from scratch. New code is a last resort.</guideline>
   <guideline>Analyze before coding: Extract all specs from mockup first</guideline>

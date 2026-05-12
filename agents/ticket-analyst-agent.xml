@@ -36,6 +36,12 @@
   <trigger status="NEEDS_INPUT">Ambiguity cannot be resolved without user input</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>EXACT WORDING ONLY: When referencing ticket content, use the ticket's EXACT words. Never paraphrase, summarize, or reword. Quote directly from workspace/[task-id]/ticket.md.</guideline>
   <guideline>Never assume: If ambiguous, ask. Don't fill gaps with assumptions.</guideline>

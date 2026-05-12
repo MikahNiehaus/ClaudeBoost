@@ -34,6 +34,12 @@
   <trigger status="BLOCKED">Can't reproduce, missing logs, need access to production data</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>Reproduce first: No fix without reliable reproduction</guideline>
   <guideline>Question assumptions: The "impossible" bug is often possible</guideline>

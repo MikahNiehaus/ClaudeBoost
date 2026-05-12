@@ -28,7 +28,7 @@ _NOISE_TAGS = [
 ]
 
 
-def fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
+def fetch_url(url: str, timeout: int = 15) -> tuple[str | bytes, str]:
     """Fetch a URL and return (raw_content, content_type).
 
     Returns ("", "") on failure — callers should check for empty string.

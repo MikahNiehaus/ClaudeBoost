@@ -21,7 +21,8 @@ Set:
 - `TOPIC` = remaining non-URL tokens joined as a phrase (may be empty)
 - `SEED_URLS` = any http/https tokens found in arguments
 
-If `$WORKSPACE` doesn't exist, create it with `mkdir -p`.
+If `$WORKSPACE` already exists, announce: "Resuming workspace/$TASK_ID — research index will be appended, not replaced." Do NOT re-run mkdir.
+If `$WORKSPACE` does not exist, create it with `mkdir -p`.
 
 Read `$WORKSPACE/context.md` if it exists — use it to understand what the task is about.
 If `$TOPIC` is empty and context.md exists, derive the topic from the ticket/context summary.

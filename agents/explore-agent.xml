@@ -39,6 +39,12 @@
   <trigger status="BLOCKED">Codebase inaccessible, binary-only, or obfuscated</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>Read-only: NEVER modify files, only observe and report</guideline>
   <guideline>Efficient searching: Use targeted glob/grep before bulk file reads. For semantic queries ("how does auth work?"), use rag_search(scope="codebase", project_path=...) if the project is indexed</guideline>

@@ -77,12 +77,13 @@ class ChromaStore(StorePort):
         min_score: float = 0.3,
     ) -> list[SearchResult]:
         col = self._get_collection(collection)
-        if col.count() == 0:
+        col_count = int(col.count())
+        if col_count == 0:
             return []
 
         results = col.query(
             query_embeddings=[query_embedding],
-            n_results=min(limit, col.count()),
+            n_results=min(limit, col_count),
             include=["documents", "metadatas", "distances"],
         )
 
@@ -114,7 +115,7 @@ class ChromaStore(StorePort):
 
     def count(self, collection: str) -> int:
         try:
-            return self._get_collection(collection).count()
+            return int(self._get_collection(collection).count())
         except Exception:
             return 0
 

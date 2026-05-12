@@ -38,6 +38,12 @@
   <trigger status="BLOCKED">Cannot access schema, missing query plans, no production-scale data for testing</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>Parameterized queries ALWAYS — string concatenation in SQL is a hard blocker, no exceptions</guideline>
   <guideline>Transactions for multi-step operations — never leave data in a partially-written state</guideline>

@@ -30,6 +30,12 @@
   <trigger status="BLOCKED">Missing source context, unclear scope, can't access referenced code</trigger>
 </handoff-triggers>
 
+<rag-enforcement>
+  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="2">If rag_context fails or MCP tools are unavailable: STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."</rule>
+  <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
+</rag-enforcement>
+
 <behavioral-guidelines>
   <guideline>Explain the WHY: Code shows what, docs explain why</guideline>
   <guideline>No code paraphrasing: Don't describe implementation line-by-line</guideline>

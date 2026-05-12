@@ -22,36 +22,104 @@ This loads coding-standards, security, scope-governance guardrails. Read the res
 
 **0b — Project RAG index** (ensure codebase search works):
 
-```bash
-pwd
-```
-
-Call `rag_index_project(project_path=<cwd output>)`. Report: "X files updated."
+Wait until Phase 1b resolves `REPO_PATH`, then call `rag_index_project(project_path=<REPO_PATH>)`. Report: "X files updated."
 
 ---
 
 ## Phase 1: Understand the Diff
 
-**1a — Resolve scope and get stat:**
+**1a — Parse arguments into FEATURE_BRANCH, BASE_BRANCH, REPO_PATH.**
 
-| Argument | Stat command | Diff command |
-|----------|-------------|--------------|
-| `staged` | `git diff --staged --stat` | `git diff --staged` |
-| `last N commits` / `N commits` | `git diff HEAD~N --stat` | `git diff HEAD~N` |
-| A commit range `A..B` | `git diff A..B --stat` | `git diff A..B` |
-| A branch name | `git diff <branch> --stat` | `git diff <branch>` |
-| A file/dir path | auto-detect + append `-- <path>` | same |
-| Empty | staged → unstaged → HEAD~1 | same |
+Parse `$ARGUMENTS` using these rules in order:
 
-Run the stat command. If nothing returns, tell the user "No changes to show" and STOP.
+**Sprint normalization** — convert any of these to a branch name:
+- `sprint 45`, `Sprint45`, `sprint-45` → `Sprint-45`
+- `sprint 45 diff fix/ASC-1175-benassist-bottom-sheet` → BASE=`Sprint-45`, FEATURE=`fix/ASC-1175-benassist-bottom-sheet`
 
-**1b — Get full diff:**
+**Two-branch syntax** — any of these mean "diff FEATURE from BASE":
+- `<feature-branch> diff <base-branch>`
+- `<feature-branch> from <base-branch>`
+- `<base-branch> diff <feature-branch>` (sprint first = sprint is base)
+- `<branch> sprint <N>` → feature=branch, base=Sprint-N
 
+**Single branch** — one branch name, no base:
+- Use it as FEATURE_BRANCH, BASE_BRANCH = current branch (`git rev-parse --abbrev-ref HEAD`)
+
+**Standard scopes** (no branch names detected):
+- `staged`, `last N commits`, `HEAD~N`, `A..B`, file paths — handle as before (BASE=current HEAD)
+
+**Vague or no scope** — the user described what they want without specifying a git expression. In this case, do NOT default silently to HEAD~1. Instead: gather state, show it, and ask.
+
+Run this to understand local state:
 ```bash
-git diff <resolved-scope>
+git -C "<REPO_PATH>" status --short
+git -C "<REPO_PATH>" diff --stat HEAD
+git -C "<REPO_PATH>" diff --staged --stat
+git -C "<REPO_PATH>" log --oneline -10
 ```
 
-Store this as **REVIEW_DIFF**. Do NOT truncate it.
+Present a summary:
+```
+I see:
+  Staged:    N files (+X/-Y lines)
+  Unstaged:  N files (+X/-Y lines)
+  Unpushed commits (vs origin): N commits
+    - abc1234 commit message
+    - def5678 commit message
+
+What do you want reviewed?
+  1. Staged changes only
+  2. All uncommitted changes (staged + unstaged)
+  3. Last N commits
+  4. A specific commit range or file
+  (Or describe what you changed)
+```
+
+Wait for the user's answer before proceeding.
+
+After parsing: set `FEATURE_BRANCH`, `BASE_BRANCH`, `DIFF_SPEC` (= `BASE_BRANCH...FEATURE_BRANCH` for two-branch; appropriate git expression for others).
+
+**1b — Find the repo containing the branch.**
+
+Use `pwd` as the starting REPO_PATH. Try:
+```bash
+git -C "<pwd>" branch -a | grep -F "<FEATURE_BRANCH>"
+```
+
+If not found in cwd, derive the projects root dynamically and scan sibling repos:
+```bash
+# Parent of the current git root = the projects directory
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+DEV_DIR=$(dirname "$GIT_ROOT")
+
+for d in "$DEV_DIR"/*/; do
+  git -C "$d" branch -a 2>/dev/null | grep -qF "<FEATURE_BRANCH>" && echo "$d" && break
+done
+```
+
+If still not found, try one level deeper (grandchildren of `$DEV_DIR`):
+```bash
+for d in "$DEV_DIR"/*/*/; do
+  git -C "$d" branch -a 2>/dev/null | grep -qF "<FEATURE_BRANCH>" && echo "$d" && break
+done
+```
+
+Once found: set `REPO_PATH` to that directory. Announce: "Found branch in `<REPO_PATH>`."
+
+If not found anywhere: tell the user "Branch `<FEATURE_BRANCH>` not found — check the branch name or repo path" and STOP.
+
+**1c — Get stat and full diff:**
+
+```bash
+git -C "<REPO_PATH>" diff <DIFF_SPEC> --stat
+git -C "<REPO_PATH>" diff <DIFF_SPEC>
+```
+
+Use `...` (three dots) for branch-vs-branch diffs — this shows only commits unique to FEATURE_BRANCH since it diverged from BASE_BRANCH, not every difference between the two tips.
+
+If stat returns nothing: "No changes between `<BASE_BRANCH>` and `<FEATURE_BRANCH>`" and STOP.
+
+Store the full diff as **REVIEW_DIFF**. Do NOT truncate it.
 
 **1c — RAG-powered pattern search** (understand what changed before spawning):
 

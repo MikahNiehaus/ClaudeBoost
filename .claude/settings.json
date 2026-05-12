@@ -9,6 +9,14 @@
             "command": "python \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -23,11 +31,19 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__rag-server__rag_search|mcp__rag-server__rag_context",
+        "matcher": "mcp__rag-server__",
         "hooks": [
           {
             "type": "command",
             "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-error-guard.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\""
           }
         ]
       }
@@ -37,7 +53,46 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-save.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-agent-guard.py\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\""
           }
         ]
       }

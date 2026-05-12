@@ -90,15 +90,24 @@
 **Tool matcher:** `Always`  
 **Type:** Command hook  
 
-**Behavior:**
-- Only fires when `hook_input.get("source") == "compact"` (i.e., after a compaction, not on fresh session start)
-- Reads `state/compaction-memo.json`
+**Behavior — two activation paths:**
+
+*`source="compact"` (auto-compact or /compact):*
+- Reads `state/handoff-latest.json`; falls back to `state/compaction-memo.json`
 - Emits `{"additionalContext": "POST-COMPACTION CONTEXT RESTORATION\n..."}` to stdout
 
-**stdout:** JSON with `additionalContext` key containing the restored memo  
-**Files read:** `state/compaction-memo.json`  
+*`source="clear"` (after /clear):*
+- Reads `state/handoff-latest.json`
+- **Age guard**: rejects if handoff timestamp > 30 minutes old (`AGE_GUARD_SECONDS=1800`)
+- **CWD guard**: rejects if handoff `cwd` doesn't match current session cwd (prevents injecting wrong project's context)
+- If both guards pass: emits `{"additionalContext": "POST-CLEAR TRANSITION CONTEXT RESTORATION\n..."}`
 
-**Key invariant:** No-ops on regular session starts; only activates after compaction.
+*All other sources (regular session start):* no-op, exits 0.
+
+**stdout:** JSON with `additionalContext` key containing restored memo + conversation highlights  
+**Files read:** `state/handoff-latest.json`, `state/compaction-memo.json` (fallback)  
+
+**Key invariant:** No-ops on regular session starts. Only fires after compaction or /clear.
 
 ---
 
@@ -309,12 +318,79 @@ Polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for up to 15 minutes
 
 ---
 
+### 1.19 session-clear-save.py
+
+**File:** `scripts/session-clear-save.py`  
+**Event:** SessionEnd  
+**Tool matcher:** `Always`  
+**Type:** Command hook  
+
+**Behavior:**
+- Gates on `source == "" or source == "clear"` — no-ops on other sources
+- Detects active workspace: reads `state/active-workspace.json` first; falls back to most recently modified `workspace/*/context.md`
+- Extracts scoped workspace memo from the active workspace's `context.md` only (not all workspaces)
+- Parses transcript via `handoff_core.extract_conversation()` to collect: user messages (up to 15), assistant snippets (up to 10), file paths touched (up to 20)
+- Writes `state/handoff-latest.json` with trigger `"SessionEnd(clear)"`, timestamp, cwd, workspace memo, and conversation highlights
+- Also updates `state/compaction-memo.json` for backward compatibility
+- Resets `state/compaction-tracker.json` and `state/behavior-tracker.json` to zero so the new session starts clean
+- Emits `{"additionalContext": "[Clear Handoff] Context saved — N user turns, M files touched. Restore path: ..."}` to stdout
+
+**Exit codes:** `0` always (SessionEnd cannot block termination)  
+**Files read:** `state/active-workspace.json`, `state/claudeboost-mode.json`, `workspace/*/context.md`, transcript JSONL  
+**Files written:** `state/handoff-latest.json`, `state/compaction-memo.json`, `state/compaction-tracker.json`, `state/behavior-tracker.json`  
+
+**Key invariant:** Scoped restore — saves only the active workspace, not all workspaces. The next session via `compaction-restore.py` therefore restores only relevant context.
+
+---
+
+### 1.20 stop-context-guard.py
+
+**File:** `scripts/stop-context-guard.py`  
+**Event:** Stop  
+**Tool matcher:** `Always`  
+**Type:** Command hook  
+
+**Behavior:**
+- Reads `state/compaction-tracker.json` for current `edit_count`
+- **Threshold gate**: only activates when `edit_count > THRESHOLD (40)` AND `(edit_count - THRESHOLD) % FIRE_EVERY (20) == 0`
+- Finds the most recently modified `workspace/*/context.md`
+- If `context.md` age > `STALE_MINUTES (20)`: blocks Claude's stop with a `{"decision": "block", "reason": "..."}` message listing exactly what to document
+- Block message reminds to run `/clear-safe` if at a natural stopping point
+
+**Exit codes:**
+- `0` = allow stop (below threshold, or context is fresh)
+- `2` = block stop (high tool count + stale context.md)
+
+**Files read:** `state/compaction-tracker.json`, `workspace/*/context.md`  
+**Thresholds:** `THRESHOLD=40`, `FIRE_EVERY=20`, `STALE_MINUTES=20`  
+
+---
+
+### 1.21 handoff_core.py
+
+**File:** `scripts/handoff_core.py`  
+**Invocation:** Shared library — imported by `session-clear-save.py`  
+**Type:** Utility module (not a hook)  
+
+**Functions:**
+- `extract_conversation(transcript_path, ...)` — parses Claude Code JSONL transcript; collects user messages, assistant snippets, file paths from `tool_use` blocks; deduplicates near-duplicates (>85% similarity); guards against timeout by capping at last 2000 lines
+- `format_conversation_md(conversation)` — formats the dict as a markdown block for `additionalContext`
+
+**Key behaviors:**
+- Accepts both Unix (`/`) and Windows (`C:\`) absolute paths in `_is_file_path()`
+- Rejects shell injection patterns (`&&`, `|`, `$(`, `` ` ``)
+- Returns `None` if transcript unreadable or yields no content
+
+**Renamed from:** `handoff-core.py` — hyphen made Python `import` impossible (silent fail); renamed to use underscore.
+
+---
+
 ## 2. End-to-End Workflow Traces
 
 ### 2.1 Compaction Lifecycle
 
 ```
-User triggers compaction (context ~60% used — CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60)
+User triggers compaction (context ~90% used — CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90)
     │
     ▼
 PreCompact hooks fire:
@@ -499,7 +575,80 @@ User starts typing → UserPromptSubmit fires:
 
 ---
 
-### 2.7 Mode Switching (CONSULT ↔ AUTO)
+### 2.7 Clear-Safe → Clear → Restore Lifecycle
+
+```
+User runs /clear-safe
+    │
+    ▼
+Slash command clear-safe.md:
+    1. Read state/active-workspace.json (field: workspace)
+       If missing/invalid: auto-detect via most recently modified workspace/*/context.md
+    2. Read active workspace's context.md — audit for 4 checks:
+       ├── Status section present and non-empty?
+       ├── Next step present and actionable?
+       ├── Key decisions documented?
+       └── File modified within last 60 minutes?
+       If any check fails: DRAFT the missing sections from session context — do not block.
+       Re-run checks. If still failing: ask user only about the specific missing field.
+    3. Print survival summary:
+       ┌─────────────────────────────┐
+       │ Active workspace : [task-id]│
+       │ context.md age   : N min ago│
+       │ Status    : [one-liner]     │
+       │ Next step : [next action]   │
+       │ Decisions : N documented    │
+       └─────────────────────────────┘
+    4. Write state/active-workspace.json: {"workspace": "[task-id]"}
+    5. Tell user: "Pre-flight complete. Type /clear to proceed."
+    │
+    ▼
+User types /clear
+    │
+    ▼
+SessionEnd hook fires:
+    └── command hook: session-clear-save.py
+        ├── Gate: source == "" or source == "clear" (no-op otherwise)
+        ├── Read state/active-workspace.json → resolve active workspace task-id
+        ├── Extract scoped workspace memo from workspace/[task-id]/context.md only
+        ├── Parse transcript via handoff_core.extract_conversation():
+        │   ├── User messages (up to 15, deduped)
+        │   ├── Assistant snippets (up to 10, deduped)
+        │   └── File paths from tool_use blocks (up to 20)
+        ├── Write state/handoff-latest.json (trigger: "SessionEnd(clear)")
+        ├── Update state/compaction-memo.json (backward compat)
+        ├── Reset state/compaction-tracker.json + state/behavior-tracker.json to 0
+        └── Emit {"additionalContext": "[Clear Handoff] Context saved — N turns, M files"}
+    │
+    ▼
+[Context cleared — new session starts]
+    │
+    ▼
+SessionStart hook fires (source="clear"):
+    └── command hook: compaction-restore.py
+        ├── source == "clear" path:
+        │   ├── Read state/handoff-latest.json
+        │   ├── Age guard: reject if timestamp > 30 minutes ago
+        │   ├── CWD guard: reject if handoff cwd ≠ current session cwd
+        │   └── If both guards pass: emit {"additionalContext": "POST-CLEAR TRANSITION CONTEXT RESTORATION\n...workspace_memo + conversation"}
+        └── No-op if guards fail (prevents injecting stale or wrong-project context)
+    │
+    ▼
+Claude receives scoped context:
+    - Active workspace memo (only the workspace that was active at /clear time)
+    - Recent user messages + files touched from last session
+    - Resume instructions pointing to workspace/[task-id]/context.md
+```
+
+**Key design properties:**
+- Scoped restore: injects ONLY the active workspace's context, not all workspaces
+- Age guard prevents stale handoff injection if /clear was run long ago
+- CWD guard prevents injecting ClaudeBoost context into unrelated projects
+- Drafting (not blocking) in /clear-safe means the audit never stalls the workflow
+
+---
+
+### 2.8 Mode Switching (CONSULT ↔ AUTO)
 
 ```
 User runs /auto [reason]
@@ -529,7 +678,7 @@ consult-gate.py resumes checking all non-exempt writes
 
 ---
 
-### 2.8 RAG Context Loading (rag_context tiered system)
+### 2.9 RAG Context Loading (rag_context tiered system)
 
 ```
 Agent calls rag_context(agent=..., task_description=..., project_path=..., max_tokens=..., weight=...)
@@ -1343,7 +1492,7 @@ Agent reads and internalizes before taking any action
 **Description:** Index a project's codebase for semantic search (Project RAG)  
 **Steps:**
 1. Health check: `rag_status()` first
-2. Resolve project path: empty=cwd, full path=as-is, short name=fuzzy match in `C:/Development/`
+2. Resolve project path: empty=cwd, full path=as-is, short name=fuzzy match in parent of current git root (`dirname $(git rev-parse --show-toplevel)`)
 3. Parse language filters and `force` flag
 4. Scan: `rag_scan(project_path, languages)` — show summary table
 5. Confirmation gate if files_to_index > 500
@@ -1483,7 +1632,27 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.24 /research-rag <task-id> [topic] [url1 url2 ...]
+### 5.24 /clear-safe
+
+**File:** `.claude/commands/clear-safe.md`  
+**Description:** Pre-flight verified context clear — verifies workspace state is captured before you type /clear  
+**Tools:** Read, Write  
+**Steps:**
+1. Read `state/active-workspace.json`; if missing, auto-detect most recently modified `workspace/*/context.md`
+2. Audit context.md for 4 checks: Status present, Next step present, Key decisions documented, file < 60 min old
+   - If any check fails: **draft** the missing sections from session knowledge, write them to context.md, re-check
+   - Only ask the user if a section genuinely cannot be inferred
+3. Show survival summary: active workspace, context.md age, Status/Next step/Decisions count, scoped-restore notice
+4. Write `state/active-workspace.json: {"workspace": "[task-id]"}`
+5. Tell user to type `/clear`; SessionEnd hook saves state automatically
+
+**Key behavior:** Does NOT call /clear — user types it themselves after seeing the summary.  
+**Scoped restore:** The next session via `compaction-restore.py` restores ONLY the active workspace, not all workspaces.  
+**Related hooks:** `session-clear-save.py` (SessionEnd), `stop-context-guard.py` (Stop), `compaction-restore.py` (SessionStart)
+
+---
+
+### 5.25 /research-rag <task-id> [topic] [url1 url2 ...]
 **File:** `.claude/commands/research-rag.md`  
 **Description:** Build a per-task workspace-scoped research RAG from external sources (web pages, PDFs, docs)  
 **Agent:** `research-rag-agent` (weight: lightweight)  
@@ -1552,6 +1721,13 @@ Agent reads and internalizes before taking any action
 | Matcher | Type | Script | Purpose |
 |---------|------|--------|---------|
 | (none) | command | `speak-tts.py` | Speak Claude's response via edge-tts |
+| (none) | command | `stop-context-guard.py` | Block stop if >40 tool uses + context.md stale >20 min |
+
+### 6.7 SessionEnd
+
+| Matcher | Type | Script | Purpose |
+|---------|------|--------|---------|
+| Always | command | `session-clear-save.py` | Save workspace handoff on /clear; reset counters for new session |
 
 ---
 
@@ -1566,7 +1742,7 @@ Agent reads and internalizes before taking any action
 | `DISABLE_ERROR_REPORTING` | `1` | Disable error reporting |
 | `DISABLE_FEEDBACK_COMMAND` | `1` | Hide feedback prompt |
 | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` | `1` | Disable survey |
-| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | `60` | Auto-compact at 60% context usage (not default 95%) |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | `90` | Auto-compact at 90% context usage — raised to give more working room before auto-compact fires as a safety-net fallback |
 | `ENABLE_PROMPT_CACHING_1H` | `1` | Enable 1-hour prompt caching |
 
 ### 7.2 state/claudeboost-mode.json
@@ -1645,7 +1821,20 @@ Four independent indicators:
 - **Project RAG** (cyan bold): shown only when `$TEMP/claudeboost_project_rag_ok` exists (written by `project-rag-flag.py` hook when `rag_index_project` completes successfully; cleared on error or at Step 0 of next `/boost` run)
 - **GT** (yellow bold): shown only when `gt` binary is on PATH (live `command -v` check — no flag file needed)
 
-### 7.8 Global Settings
+### 7.8 state/active-workspace.json
+
+```json
+{"workspace": "clear-instead-of-compact"}
+```
+
+- Written by `/clear-safe` Step 4 — records which workspace is active before /clear
+- Read by `session-clear-save.py` (SessionEnd) to scope the handoff to one workspace
+- Falls back to most recently modified `workspace/*/context.md` if missing or invalid
+- Write `{"workspace": ""}` if no active workspace
+
+---
+
+### 7.10 Global Settings
 
 | Setting | Value | Effect |
 |---------|-------|--------|
@@ -1654,6 +1843,54 @@ Four independent indicators:
 | `effortLevel` | `high` | High reasoning effort |
 | `voice.enabled` | `true` | Voice input enabled |
 | `voice.mode` | `hold` | Hold-to-speak mode |
+
+---
+
+### 7.11 Context Threshold (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
+
+Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to control when auto-compact fires:
+
+```
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90
+```
+
+Default is ~75-83% (Claude Code version dependent). Setting to 90 gives
+more working room before auto-compact fires as a safety-net fallback.
+Do not set above 95 — the compaction process needs a token buffer to build
+its summary, and too little buffer causes compaction to fail.
+
+**To update:** Add or change the value in `~/.claude/settings.json` under
+the `env` key. Takes effect on next Claude Code start.
+
+**Why 90 and not higher:** With the clear-instead-of-compact system installed,
+auto-compact is a safety net only. The primary path is Claude manually running
+`/clear` at a natural stopping point when `context-nudge.py` fires the
+CONTEXT HEALTH CHECK nudge (at 100+ tool uses). Setting to 90 ensures there
+is always enough buffer for the compaction LLM to summarize if `/clear` is
+not run in time.
+
+**Clear-instead-of-compact state files:**
+
+| File | Written by | Read by | Purpose |
+|------|-----------|---------|---------|
+| `state/handoff-latest.json` | `compaction-save.py` (PreCompact), `session-clear-save.py` (SessionEnd) | `compaction-restore.py` (SessionStart) | Unified handoff for both compact and /clear paths |
+| `state/compaction-memo.json` | `compaction-save.py`, `session-clear-save.py` | `compaction-restore.py` (fallback) | Backward-compat memo; kept for external tooling |
+
+`state/handoff-latest.json` schema:
+```json
+{
+  "session_id": "...",
+  "timestamp": "2026-05-12T18:00:00+00:00",
+  "trigger": "PreCompact | SessionEnd(clear)",
+  "cwd": "C:/Development/ClaudeBoost",
+  "workspace_memo": "# Active Workspaces\n...",
+  "conversation": {
+    "user_messages": ["..."],
+    "assistant_snippets": ["..."],
+    "files_touched": ["..."]
+  }
+}
+```
 
 ---
 

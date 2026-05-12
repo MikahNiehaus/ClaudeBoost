@@ -17,18 +17,67 @@ Arguments: **$ARGUMENTS**
 
 Split `$ARGUMENTS` on whitespace. First token = `TARGET_URL`. Second token = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default to `all` if omitted).
 
+**0a-ii — Ticket tracing (ask if not provided).**
+
+If the user is working from a ticket (e.g., `ASC-1175`, `FEAT-42`), ask:
+```
+Which ticket is this testing? (Enter ID or 'none')
+What was the original bug / broken behavior?
+```
+
+Record the answers as `TICKET_ID` and `ORIGINAL_BUG_DESC`. These are used in Phase 2 to ensure at least one TC directly targets the broken scenario — not just the display side of the fix.
+
+If the user says 'none', skip ticket tracing. Do not block on this.
+
 **0b — Environment hard-stop (check BEFORE any browser action).**
 
+**URL pattern check (static):**
 If `TARGET_URL` contains any of: `staging`, `stg`, `stage`, `prod`, `prd`, `production`
-OR ends with: `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.app`
+OR ends with: `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.app`, `.azure.com`, `.cloudapp.net`, `.onmicrosoft.com`
 → STOP immediately. Print: "Cannot run E2E tests against staging/production URL." No exceptions, no override.
 
-**0c — Derive TASK_ID.**
+> Note: This is a static check on the URL you were given. A live environment probe happens in Phase 1a AFTER navigation, which catches OAuth redirects and hidden prod environments.
 
-Format: `e2e-[hostname]-[port]-[YYYY-MM-DD]`
-Example: `e2e-localhost-3000-2026-05-10`
+**0c — Derive TASK_ID (resume-first).**
 
-**0d — Create workspace.**
+Before creating anything, check for an existing workspace for this target:
+
+```bash
+ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
+```
+
+(Replace `[HOSTNAME]` and `[PORT]` with the values parsed from `TARGET_URL`.)
+
+**If one or more matching workspaces exist:**
+- Find the most recent (sort by date suffix descending).
+- Check whether it has a `plan.md` or `context.md` (i.e., it is in-progress or completed).
+- If in-progress or completed: **do not create a new workspace**. Set `TASK_ID` to the existing folder name and skip Phase 0d entirely.
+
+  **Determine resume phase** by checking which files exist in `workspace/$TASK_ID/`:
+
+  | Files present | Resume at |
+  |---|---|
+  | `report.md` | All phases complete — print "Workspace has a completed report. Use `--fresh` to start over." then STOP. |
+  | `plan.md` with at least one `- [ ] TC-` line | Phase 2 done → skip Phases 0e–2, jump to Phase 3 |
+  | `plan.md` but no unchecked `[ ]` lines | All TCs already marked → print "All tests have results. Use `--fresh` to re-run." then STOP. |
+  | `context.md` but no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
+  | Neither `context.md` nor `plan.md` | Workspace empty → resume from Phase 0e |
+
+  Print:
+  ```
+  Resuming workspace: workspace/[existing-task-id]/
+  Detected state: Phase [N] in progress — skipping completed phases.
+  (Use /end-to-end-test <url> --fresh to force a new session.)
+  ```
+
+- If the folder exists but is empty (no plan.md or context.md): reuse it, proceed to Phase 0d with `TASK_ID` set to that folder name.
+
+**If no matching workspace exists OR `$ARGUMENTS` contains `--fresh`:**
+- Derive: `TASK_ID = e2e-[hostname]-[port]-[YYYY-MM-DD]`
+- Example: `e2e-localhost-3000-2026-05-10`
+- Proceed to Phase 0d.
+
+**0d — Create workspace (only if no existing workspace was found).**
 
 ```bash
 mkdir -p "$CLAUDEBOOST_HOME/workspace/$TASK_ID/snapshots"
@@ -71,6 +120,29 @@ Display environment confirmation:
 Call `browser_navigate(url=$TARGET_URL)`.
 Call `browser_take_screenshot` → save to `workspace/$TASK_ID/snapshots/discovery-home.png`.
 Call `browser_console_messages` — note any startup errors.
+
+**Live environment probe (runs immediately after first navigation — catches OAuth redirects):**
+
+1. Call `browser_snapshot`. Read the current URL from the accessibility tree.
+   - If the URL has changed from `TARGET_URL` (e.g., redirected by SSO/OAuth), re-run the Phase 0b blocklist check against the NEW URL.
+   - If the new URL matches any blocked pattern → **STOP**. Print: "Redirect detected to non-local URL: [new url]. Halting to protect production data."
+
+2. Call `browser_evaluate` with:
+   ```javascript
+   JSON.stringify({
+     hostname: window.location.hostname,
+     env: window.__ENV__ || window.ENV || window.environment || null,
+     title: document.title
+   })
+   ```
+   - If `hostname` is not `localhost`, `127.0.0.1`, `0.0.0.0`, or a `.local`/`.test` domain → **STOP**.
+   - If `env` value contains `prod`, `production`, `live`, or `staging` → **STOP**.
+   - If `title` contains `Production`, `PROD`, or `Live` → **STOP**.
+   - On any STOP: Print: "Environment probe blocked execution: [detail]. This appears to be a non-local or production environment."
+
+3. Scan `browser_snapshot` accessibility tree for visible text: "Production Environment", "PROD", "Live Site", "Do not test here". If found → **STOP** with the same message.
+
+Only continue past this probe if ALL checks pass.
 
 **Switch to snapshots-only from here forward during discovery.**
 
@@ -194,6 +266,23 @@ If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed
   - Source: [RAG hit / browser discovery / component registry]
 ```
 
+**Coverage completeness mandate (anti-laziness — enforce before writing draft):**
+
+- Every **form** in the component registry → at minimum: 1 happy-path TC + 1 required-field-blank TC
+- Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists)
+- Every **nav link** in the App Map → at least one TC that navigates to it and confirms it loads
+- Every **toggle / select / enum** → one TC per state (per the intelligent generation rules above)
+- If a discovered component has NO TC: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
+- BLOCKED status is only valid for genuine external preconditions (e.g., "requires admin account not provisioned"). Complexity or difficulty is never a valid reason.
+
+**Ticket tracing (if TICKET_ID was provided in Phase 0):**
+
+Add a `TC-TICKET-01` test case that directly exercises `ORIGINAL_BUG_DESC`. This TC:
+- Must test the **write side or trigger side** of the fix, not just the display side.
+- Example: if the bug was "background job not writing DB records", the TC must verify records were written — not just that the UI renders them.
+- If the write side requires a background job, use the **Background Job Verification protocol** in Phase 3.
+- Mark this TC as `[REQUIRED — ticket regression]` in the plan. It cannot be BLOCKED or marked "prior session".
+
 **Write draft plan to disk:** `workspace/$TASK_ID/plan-draft.md`
 
 **2b — Anti-hallucination evaluator.**
@@ -239,6 +328,35 @@ This gate exists because Phase 3 executes a pre-written plan. There is no such t
 
 ---
 
+**Prior-session result check (mandatory when resuming an existing workspace):**
+
+If `plan.md` already contains result entries from a previous run (lines starting with `- [x]`, `- [F]`, or `- [B]`):
+
+1. Count prior-session results: how many TCs are already marked in each category.
+2. Print:
+   ```
+   ⚠️  RESUMING WORKSPACE — Prior Session Results Detected
+   ─────────────────────────────────────────────────────
+   Found N tests with prior-session results:
+     [x] PASS:    M  →  must re-run or explicitly accepted
+     [F] FAIL:    N  →  must re-run or explicitly accepted
+     [B] BLOCKED: N  →  carried over if blocking reason unchanged
+
+   Type 'rerun all'          — re-run everything from scratch
+   Type 'accept TC-001,002'  — carry over specific results as-is
+   Type 'rerun TC-003,004'   — re-run specific tests, carry over the rest
+   ─────────────────────────────────────────────────────
+   ```
+3. **PAUSE — wait for user response before running any test.**
+4. Apply the user's selection:
+   - Accepted TCs: keep existing result entry unchanged.
+   - Re-run TCs: reset their line to `- [ ] TC-NNN: ...` (unchecked) in plan.md.
+   - Any TC not explicitly accepted → reset to `[ ]` and re-run.
+5. **TC-TICKET-01 marked `[REQUIRED — ticket regression]` is NEVER accepted as a prior-session result.** Reset it to `[ ]` regardless of what the user says and re-run it.
+6. If no prior-session results exist (this is a fresh plan): skip this block and proceed immediately.
+
+---
+
 **Print this block BEFORE running any test:**
 
 ```
@@ -251,11 +369,44 @@ BANNED ACTIONS IN THIS PHASE:
   - No internal API calls via browser_evaluate to bypass the UI
   - No marking [x] PASS before the AFTER screenshot is saved
   - No silent omissions — every TC gets PASS / FAIL / BLOCKED
+  - No BLOCKED for difficulty — only for genuine missing preconditions
+  - No skipping steps because they "seem unnecessary"
+  - No inferring success without snapshot confirmation
 ========================================
 TOKEN EFFICIENCY: snapshot first (text), screenshot only after
 text confirms expected state. Failed tests: no screenshot needed.
 ========================================
 ```
+
+**Destructive action pre-flight (MANDATORY — runs once before ANY test executes):**
+
+1. Scan `plan.md` for all TCs whose Steps contain: create, submit, save, add, update, edit, delete, remove, toggle, change, clear, reset.
+2. Build a table of destructive TCs:
+
+   | TC-ID | Action type | Entity / target |
+   |-------|-------------|-----------------|
+   | TC-03 | create      | Order           |
+   | TC-07 | delete      | Product         |
+
+3. If the table is non-empty → **PAUSE**. Print:
+
+   ```
+   ⚠️  DESTRUCTIVE ACTION REVIEW
+   ───────────────────────────────────────
+   The following TCs will write or delete real data:
+   [table from step 2]
+
+   This is a local dev environment (confirmed by probe).
+   Test data will be prefixed with "[E2E-TEST]" where the
+   UI has a name/title/label field, to aid cleanup.
+
+   Confirm: type 'go' to proceed, or list TC-IDs to skip.
+   ───────────────────────────────────────
+   ```
+
+4. Do NOT execute any destructive TC until user responds with `go` or a skip list.
+5. For all destructive TCs that create named records: prefix the value in any name/title/label field with `[E2E-TEST]` during execution. This makes synthetic records identifiable.
+6. Note each destructive TC in the report under a "Data Side-Effects" section.
 
 **For each `- [ ] TC-NNN` in `plan.md`, execute this loop:**
 
@@ -302,13 +453,15 @@ If coordinates unknown from snapshot: annotate the relevant viewport region (e.g
 Call `browser_console_messages`. Record any errors.
 
 **Step 6 — Self-audit (answer YES to ALL before marking PASS).**
-1. Did I perform every Step in the browser?
-2. Did the snapshot in Step 3 confirm the Expected state?
-3. Did I take the AFTER screenshot AFTER performing the steps?
+1. Did I perform EVERY numbered step in the test case — none skipped?
+2. Did the snapshot in Step 3 confirm the Expected state in actual text?
+3. Did I take the AFTER screenshot AFTER performing the steps (not before)?
 4. Does the screenshot show the annotated point of interest?
-5. Did I use ONLY `mcp__playwright__*` for verification?
+5. Did I use ONLY `mcp__playwright__*` for verification — no Bash, no direct API calls?
+6. If marking BLOCKED: is the blocking reason a specific external precondition, NOT complexity or difficulty?
+7. If this is a resumed workspace: was this TC re-run in the current session, or explicitly accepted by the user? A prior-session result that was NOT explicitly accepted is NOT valid evidence — it must be NEEDS-RERUN.
 
-**If ANY answer is NO → mark FAIL or BLOCKED, never PASS.**
+**If ANY answer is NO → mark FAIL, BLOCKED, or NEEDS-RERUN, never PASS. "It probably worked" is FAIL, not PASS.**
 
 **Step 7 — Update plan.md.**
 
@@ -316,6 +469,44 @@ Edit `plan.md`, replacing the checkbox:
 - PASS: `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png`
 - FAIL: `- [F] TC-NNN: ... FAIL | observed: [snapshot text describing what was seen]`
 - BLOCKED: `- [B] TC-NNN: ... BLOCKED | reason: [specific verifiable reason]`
+- NEEDS-RERUN: `- [S] TC-NNN: ... NEEDS-RERUN | reason: [prior session result not re-executed / precondition changed]`
+
+**Step 8 — Rollback attempt (destructive TCs only).**
+
+Only applies if this TC was destructive (Steps contained: create, submit, save, add, update, edit, delete, remove, toggle, change, clear, reset).
+
+1. **Attempt cleanup via UI** (for create/add TCs): navigate to the entity's list page and delete the `[E2E-TEST]`-prefixed record using the app's Delete button.
+   - Deletion succeeds → mark this TC as **CLEANED UP**. No further action.
+   - No delete UI, delete is disabled, or deletion fails → mark this TC as **UNCLEAN STATE**. Add to session `UNCLEAN_DESTRUCTIVE_TCS`:
+     ```
+     [TC-ID] | [action type] | [entity/target] | cleanup not possible: [reason]
+     ```
+
+2. For **delete/update TCs**: mark as **UNCLEAN STATE** only if the deletion removed non-test data with no restore path, or the update overwrote real data with no undo.
+
+**Gate — before each subsequent destructive TC:**
+
+Before executing any TC whose Steps contain: create, submit, save, add, update, edit, delete, remove, toggle, change, clear, reset — check `UNCLEAN_DESTRUCTIVE_TCS`.
+
+If the list is non-empty → **PAUSE**. Print:
+
+```
+⚠️  UNROLLED DESTRUCTIVE STATE DETECTED
+──────────────────────────────────────────────
+Prior test(s) wrote data that has NOT been cleaned up:
+
+[table: TC-ID | action | entity | reason cleanup was skipped]
+
+About to execute: [next TC-ID] — [description]
+
+Type 'go'         to proceed anyway
+Type 'skip TC-NNN' to skip the next destructive TC
+Type 'stop'       to end execution and go to the report phase
+──────────────────────────────────────────────
+```
+
+Do NOT execute the next destructive TC until user responds.
+If user types `stop` → jump directly to Phase 4.
 
 **Batch optimization for nav tests:**
 For all `TC-NAV-*` tests: navigate to each page in sequence, call `browser_snapshot` after each (text check for 404/title), then take ONE screenshot per page. Annotate the page title/header region. This avoids per-test overhead for simple navigation checks.
@@ -345,13 +536,76 @@ Protocol:
 
 Print warning if used >2 times: "WARNING: Temp-logging invoked N times. Each use requires a legitimate reason — no visible UI confirmation must be available."
 
+**Background Job Verification (only for async scheduled/queued jobs with no UI trigger):**
+
+Legitimate uses: cron jobs, Hangfire/Sidekiq/Quartz workers, service-bus consumers — jobs that run in the background, write to the DB, and have no synchronous UI response to verify.
+NOT legitimate: UI shows a success toast, list update, or status badge — use the UI instead. Also NOT a replacement for temp-logging when a synchronous server-side function needs verification.
+
+Protocol:
+1. `rag_search(scope="codebase", query="[job class name] job worker execute schedule")` — find the job class and the table/column it writes.
+2. `Read` the job class file. Identify:
+   - What DB table/column the job writes (the "write side" — this is what must be verified)
+   - Any dev/admin endpoint that can trigger the job manually (e.g., `/admin/jobs/trigger`, `/api/internal/run-job`, a dev-only controller action)
+   - Any existing test helper or rake task that fires the job
+3. **Trigger strategy (pick first available):**
+   a. **Admin/dev endpoint**: use `browser_navigate` to the trigger URL, or `browser_evaluate` to call it via `fetch`. Confirm the response indicates the job ran.
+   b. **Browser UI trigger**: if there is an admin panel button that enqueues the job, click it.
+   c. **Wait for schedule**: only if the job fires within 60 seconds. Note the start time. Poll every 10s using `browser_snapshot` or a curl to a read-only status endpoint.
+   d. **No trigger available**: mark TC as `[B] BLOCKED | reason: No local trigger found for [JobClassName]. Manual DB seeding or job invocation needed.` Do NOT invent a result, do NOT substitute temp-logging.
+4. **Verify the write side after the job runs:**
+   - Navigate to the UI page that displays the job's output (the record, status, or count). Call `browser_snapshot`. Confirm the expected text/state appears.
+   - OR: `curl` a **local, read-only** API endpoint that returns the written data. Confirm the expected record exists in the response.
+   - The query itself returning rows is not sufficient — the app must surface the result through the UI or a local API read, so you know the app is reading what the job wrote.
+5. Take a screenshot showing the verified output. Annotate the relevant element or data row.
+6. Note in plan.md: `PASS | verified via background-job-verification (trigger: [method used], verified via: [UI page / curl endpoint])`
+
+---
+
+## Phase 3 Close — Screenshot Validation Pass
+
+**Run this pass after ALL TCs complete, before Phase 4.**
+
+Spawn `evaluator-agent` to independently audit every screenshot taken this session. The main orchestrator must NOT self-verify — this is the hallucination guard.
+
+**Pass `evaluator-agent` the following:**
+
+1. The list of all `TC-NNN-after.png` files saved to `workspace/$TASK_ID/snapshots/` this session.
+2. The corresponding TC entry from `plan.md` for each screenshot (TC-ID, description, expected outcome).
+3. The instruction below.
+
+**Evaluator instruction:**
+
+> For each screenshot, determine:
+> 1. **Annotation present?** — Is there a visible red border overlay on a specific element or region? (Not a full-screen border or a border on a blank area.) Mark: YES / NO.
+> 2. **Annotation on point of interest?** — Does the annotated region correspond to the element described in the TC's Expected outcome? Mark: YES / MISPLACED / UNCLEAR.
+> 3. **Screenshot taken after action?** — Does the visible page state reflect the post-action state described in the expected outcome (e.g., record created, toast shown, nav link highlighted)? Mark: YES / NO.
+>
+> For each screenshot, return one of:
+> - `OK` — all three checks pass
+> - `RETAKE: [reason]` — annotation missing, misplaced, or screenshot shows wrong state
+
+**Orchestrator — apply evaluator results:**
+
+For each screenshot the evaluator marks `RETAKE`:
+
+1. Re-navigate to the page the TC exercised (`browser_navigate`).
+2. Reproduce the exact post-action state by re-running the TC steps (use judgment — for a create TC, if the record was cleaned up, re-create it with `[E2E-TEST-RETAKE]` prefix so it's identifiable).
+3. Re-inject the annotation overlay targeting the correct element.
+4. Call `browser_take_screenshot` → overwrite `workspace/$TASK_ID/snapshots/TC-NNN-after.png`.
+5. Remove the overlay.
+6. Note in plan.md alongside the TC: `screenshot retaken after evaluator audit`.
+
+If a retake is not possible (page state cannot be reproduced without side-effects): note in plan.md: `screenshot retake skipped — [reason]`.
+
+Print after the pass: "Screenshot audit complete. Evaluator flagged N / M screenshots for retake. [N] retaken, [K] skipped."
+
 ---
 
 ## Phase 4: Report
 
 **4a — Tally results.**
 
-Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`.
+Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`, NEEDS-RERUN `[S]`.
 
 **4b — Write report.**
 
@@ -368,12 +622,13 @@ Write `workspace/$TASK_ID/report.md`:
 
 ## Summary
 
-| Result  | Count |
-|---------|-------|
-| PASS    | N     |
-| FAIL    | N     |
-| BLOCKED | N     |
-| Total   | N     |
+| Result       | Count |
+|--------------|-------|
+| PASS         | N     |
+| FAIL         | N     |
+| BLOCKED      | N     |
+| NEEDS-RERUN  | N     |
+| Total        | N     |
 
 **Overall**: PASS / FAIL / PARTIAL
 
@@ -384,6 +639,10 @@ Write `workspace/$TASK_ID/report.md`:
 ## Blocked Tests
 
 [For each BLOCKED: TC-ID, description, blocking reason]
+
+## Needs-Rerun
+
+[For each NEEDS-RERUN: TC-ID, description, reason — e.g., "prior session result, not re-executed this session"]
 
 ## Evidence Index
 

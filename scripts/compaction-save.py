@@ -24,31 +24,45 @@ def read_json(path: str | os.PathLike, default=None):
         return default if default is not None else {}
 
 
-def extract_summary(content: str) -> str:
-    """Extract key info from a context.md file: title, goal, status, next steps."""
-    lines = content.split("\n")
+def extract_summary(content: str, char_budget: int = 2000) -> str:
+    """
+    Split content on ## headings. Include sections up to char_budget,
+    skipping known large/low-signal sections. Priority sections go first.
+    """
+    import re
 
-    # Always include first 5 lines (title + goal)
-    summary_lines = list(lines[:5])
+    SKIP_SECTIONS = {
+        "research sources", "cloned repos", "agent contributions",
+        "improvement rounds", "work done",
+    }
+    PRIORITY_KEYWORDS = [
+        "goal", "status", "next step", "decision", "blocked", "blocker",
+        "remaining", "constraint", "requirement", "user said", "user preference",
+        "progress", "completion criteria", "gotcha", "implement",
+    ]
 
-    # Scan rest for status/phase/next-step lines
-    keywords = ["status", "phase", "next step", "blocker", "current work",
-                "## active", "## complete", "## implement",
-                "## user decision", "## decision", "## requirement",
-                "## user said", "## user preference", "## constraint"]
-    for i, line in enumerate(lines[5:], start=5):
-        lower = line.lower()
-        if any(kw in lower for kw in keywords):
-            summary_lines.extend(lines[i:i + 3])
+    # Split on any ## or ### heading
+    parts = re.split(r'\n(?=#{1,3} )', content.strip())
+    preamble = parts[0][:500]  # first 500 chars always (title, task id, status)
 
-    # Deduplicate preserving order, cap at 20 lines
-    seen = set()
-    result = []
-    for line in summary_lines:
-        if line not in seen:
-            seen.add(line)
-            result.append(line)
-    return "\n".join(result[:20])
+    priority, other = [], []
+    for section in parts[1:]:
+        heading = section.split('\n')[0].lower()
+        if any(skip in heading for skip in SKIP_SECTIONS):
+            continue
+        bucket = priority if any(kw in heading for kw in PRIORITY_KEYWORDS) else other
+        bucket.append(section)
+
+    result = [preamble]
+    used = len(preamble)
+    for section in priority + other:
+        chunk = section[:400]  # 400 chars per section max
+        if used + len(chunk) > char_budget:
+            break
+        result.append(chunk)
+        used += len(chunk)
+
+    return "\n\n".join(result)
 
 
 def main() -> int:
@@ -124,7 +138,16 @@ def main() -> int:
 
     memo_text = "\n".join(parts)
 
-    # Save
+    # Extract conversation highlights from transcript
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from handoff_core import extract_conversation, format_conversation_md
+        transcript_path_str = hook_input.get("transcript_path", "")
+        conversation = extract_conversation(transcript_path_str) if transcript_path_str else None
+    except Exception:
+        conversation = None
+
+    # Save compaction-memo.json (backward compat — compaction-restore.py fallback reads this)
     memo_data = {
         "session_id": session_id,
         "compaction_number": compaction_number,
@@ -134,12 +157,37 @@ def main() -> int:
     state_dir.mkdir(parents=True, exist_ok=True)
     memo_path.write_text(json.dumps(memo_data, indent=2), encoding="utf-8")
 
+    # Write unified handoff-latest.json (read by compaction-restore.py for both compact + clear)
+    handoff_data = {
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "trigger": "PreCompact",
+        "cwd": hook_input.get("cwd", ""),
+        "workspace_memo": memo_text,
+        "conversation": conversation or {},
+    }
+    try:
+        (state_dir / "handoff-latest.json").write_text(
+            json.dumps(handoff_data, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
     # Reset the context-nudge counter (fresh start after compaction)
     tracker_path = state_dir / "compaction-tracker.json"
     try:
         tracker_path.write_text('{"edit_count": 0}', encoding="utf-8")
     except Exception:
         pass
+
+    # Inject workspace state + conversation highlights into the compaction summary
+    context_out = memo_text
+    if conversation and (conversation.get("user_messages") or conversation.get("files_touched")):
+        try:
+            context_out += "\n\n## Conversation Highlights\n" + format_conversation_md(conversation)
+        except Exception:
+            pass
+    print(json.dumps({"additionalContext": context_out}))
 
     return 0
 
