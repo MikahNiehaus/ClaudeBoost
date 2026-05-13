@@ -8,9 +8,9 @@ for %%I in ("%SRCDIR%") do set "RIGNAME=%%~nxI"
 set "RIGNAME=%RIGNAME: =-%"
 
 :: Check if this is already a rig — fast path
-if exist "%USERPROFILE%\gt\%RIGNAME%\crew\mikah" (
+if exist "%USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%" (
     echo Opening crew workspace for %RIGNAME%...
-    cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\mikah"
+    cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%"
     echo.
     echo ========================================
     echo   Session Options
@@ -94,12 +94,12 @@ echo [6/6] Creating crew workspace...
 cd /d "%USERPROFILE%\gt"
 
 :: Try gt crew add first (works for rigs with remotes)
-gt crew add mikah --rig %RIGNAME% 2>nul
+gt crew add %USERNAME% --rig %RIGNAME% 2>nul
 if errorlevel 1 (
     :: For adopted local rigs without remotes, create crew manually
     echo Creating crew workspace manually for local rig...
-    mkdir "%USERPROFILE%\gt\%RIGNAME%\crew\mikah" 2>nul
-    cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\mikah"
+    mkdir "%USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%" 2>nul
+    cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%"
     xcopy /E /I /Q "%SRCDIR%" "." >nul 2>&1
     mkdir ".claude" 2>nul
 )
@@ -111,10 +111,10 @@ echo.
 echo ========================================
 echo   Ready! Launching Claude Code...
 echo   Rig: %RIGNAME%
-echo   Workspace: %USERPROFILE%\gt\%RIGNAME%\crew\mikah
+echo   Workspace: %USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%
 echo ========================================
 echo.
-cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\mikah"
+cd /d "%USERPROFILE%\gt\%RIGNAME%\crew\%USERNAME%"
 echo.
 echo ========================================
 echo   Session Options

@@ -1737,7 +1737,7 @@ Agent reads and internalizes before taking any action
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `CLAUDEBOOST_HOME` | `C:/Development/ClaudeBoost` | Root path for all ClaudeBoost scripts/state |
+| `CLAUDEBOOST_HOME` | `C:/path/to/ClaudeBoost` | Root path for all ClaudeBoost scripts/state |
 | `DISABLE_TELEMETRY` | `1` | Disable Claude Code telemetry |
 | `DISABLE_ERROR_REPORTING` | `1` | Disable error reporting |
 | `DISABLE_FEEDBACK_COMMAND` | `1` | Hide feedback prompt |
@@ -1882,7 +1882,7 @@ not run in time.
   "session_id": "...",
   "timestamp": "2026-05-12T18:00:00+00:00",
   "trigger": "PreCompact | SessionEnd(clear)",
-  "cwd": "C:/Development/ClaudeBoost",
+  "cwd": "C:/path/to/ClaudeBoost",
   "workspace_memo": "# Active Workspaces\n...",
   "conversation": {
     "user_messages": ["..."],

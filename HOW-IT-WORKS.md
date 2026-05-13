@@ -1,4 +1,4 @@
-# Mikah's Gas Town Setup — How It All Works
+# Gas Town Setup — How It All Works
 
 This documents **your specific GT configuration** — the custom layer on top of
 the upstream [gastown](gastown/) repo. For core GT concepts (rigs, polecats,

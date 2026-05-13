@@ -6,3 +6,13 @@ state/
 __pycache__/
 *.pyc
 .claude/settings.local.json
+.env
+.env.*
+*.log
+node_modules/
+polecats/
+witness/
+refinery/
+mayor/
+crew/
+/workspace
