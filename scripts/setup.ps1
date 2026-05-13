@@ -396,6 +396,22 @@ $preCompactHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreCompact" -Entry $preCompactHook `
     -Sentinel "CONTEXT PRESERVATION" -Label "context preservation + compaction save"
 
+# --- SessionEnd: clear handoff save ---
+# Saves workspace context + transcript highlights to state/handoff-latest.json
+# whenever the user runs /clear (source=clear) or the session ends naturally.
+# This must be in GLOBAL settings so it fires in every project, not just ClaudeBoost.
+$clearSavePath = "$boostHome\scripts\session-clear-save.py".Replace("\", "/")
+$clearSaveHook = [PSCustomObject]@{
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$clearSavePath`""
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "SessionEnd" -Entry $clearSaveHook `
+    -Sentinel "session-clear-save.py" -Label "clear handoff save"
+
 # --- UserPromptSubmit: TTS interrupt (stop playback on user input) ---
 $speakStopPath = "$boostHome\scripts\speak-stop.py".Replace("\", "/")
 $speakStopHook = [PSCustomObject]@{
@@ -546,7 +562,7 @@ if ($edgeCheck.ExitCode -eq 0 -and $edgeCheck.Output.Trim() -eq "ok") {
 Write-Host "`n=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host "  CLAUDEBOOST_HOME = $boostHomePosix"
 Write-Host "  RAG server registered in $mcpPath"
-Write-Host "  Hooks configured (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)"
+Write-Host "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Restart Claude Code for MCP changes to take effect"

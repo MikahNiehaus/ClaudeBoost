@@ -69,12 +69,30 @@ Write `$CLAUDEBOOST_HOME/state/active-workspace.json`:
 
 If there is no active workspace, write `{"workspace": ""}`.
 
+**Step 4b — Save handoff and arm the clear-pending flag.**
+
+Run the save script to capture current workspace state into `state/handoff-latest.json`:
+
+```bash
+echo '{}' | python "$CLAUDEBOOST_HOME/scripts/session-clear-save.py"
+```
+
+Then write `$CLAUDEBOOST_HOME/state/clear-pending.json` with the current UTC timestamp:
+
+```json
+{"pending": true, "timestamp": "[current UTC ISO timestamp — e.g. 2026-05-12T18:30:00+00:00]"}
+```
+
+Replace `[current UTC ISO timestamp]` with the actual current time in ISO format.
+
+This flag is consumed by `session-primer.py` on the first message after `/clear`, which injects the saved workspace context so you resume right where you left off. Do not send any other messages between this step and typing `/clear` — the flag is one-shot.
+
 **Step 5 — Confirm and hand off**
 
 Tell the user:
 
 > Pre-flight complete. Type `/clear` to proceed.
-> The SessionEnd hook will save your state automatically.
+> State is saved to `state/handoff-latest.json` and will be restored on your first message after clearing.
 > The next session will restore only **[task-id]** context — not all workspaces.
 
 If the user says anything other than confirming (asks a question, requests a change):

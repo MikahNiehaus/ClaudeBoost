@@ -1,12 +1,12 @@
 ---
 argument-hint: [scope — "staged", "last 2 commits", branch name, file path, PR #]
-description: 14-pass parallel code review — simplicity, patterns, ticket alignment, evaluator
+description: 15-pass parallel code review — simplicity, patterns, ticket alignment, test execution, evaluator
 allowed-tools: Read, Write, Bash, Glob, Grep, Agent
 ---
 
-# /code-review — 14-Pass Parallel Code Review
+# /code-review — 15-Pass Parallel Code Review
 
-Run 13 independent review passes as batched parallel agents, then a final Evaluator (pass 14) that classifies every finding. Orchestrator understands the diff with RAG before spawning anything — no blind agent launches.
+Run 14 independent review passes as batched parallel agents, then a final Evaluator (pass 15) that classifies every finding. Orchestrator understands the diff with RAG before spawning anything — no blind agent launches.
 
 Scope: **$ARGUMENTS**
 
@@ -153,17 +153,19 @@ Decide which of passes 1-13 to run. Be decisive — skipping a pass when inappli
 **ALWAYS run (never skip):**
 - **Pass 8** — Ticket Alignment: always relevant, even if no formal ticket (use git commit intent)
 - **Pass 13** — Banned Dependencies: always run, costs almost nothing
+- **Pass 14** — Test Coverage & Logging: always run for any logic change
 
 **Skip ONLY when clearly inapplicable (state why):**
 - **Pass 10** — Manual Smoke Test: skip if pure backend/data/config change with zero UI components touched
 - **Pass 11** — Migration/Schema: skip ONLY if zero model class files or migration files appear in the diff
 - **Pass 12** — Platform Footguns: skip if purely algorithmic/data logic with no framework APIs or platform-specific patterns
+- **Pass 14** — Test Coverage & Logging: skip ONLY if diff is purely docs, config values, or comments with zero logic
 
 **Never skip passes 1-7, 9** — simplicity, dead code, debug cleanup, patterns, conventions, and spec precision always apply to any diff.
 
 List your selections before spawning:
 ```
-Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10 if UI], [11 if schema], [12 if platform], 13, 14
+Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10 if UI], [11 if schema], [12 if platform], 13, 14, 15
 Skipping: [X — reason]
 ```
 
@@ -266,6 +268,7 @@ Question: Did I match the ticket's wording and requirements exactly?
 - "multi select" means multiple values can actually be selected — verify it.
 - "alphabetical" means read the list top to bottom — verify the sort.
 - No silent reinterpretation — clarify instead of guessing.
+- **String/Label Renames:** If the diff changes any user-facing string (label, `[DisplayName]`, column `.Name()`, error message, constant), grep the repo for the old value. List every file:line still using it. Any unupdated occurrence is a WARNING — HTML labels, model attributes, export configs, and validation messages all count equally.
 
 **Pass 10 — Manual Smoke Test (skip if no UI)**
 Question: Did I actually use this feature in a browser/device?
@@ -291,31 +294,117 @@ Question: Am I importing or using any library, pattern, or API that is banned or
 - Grep for jQuery: `$(`, `jQuery`, `import.*jquery`, `require.*jquery`, `cdn.*jquery`, `$.ajax`. **jQuery is BANNED — no exceptions.**
 - Check for deprecated imports the rest of the codebase has already migrated away from.
 
+**Pass 14 — Test Coverage & Logging (skip only for pure docs/config/comments)**
+Question: Does this change have adequate test coverage and logging?
+
+*Test coverage:*
+- For every new function, class, or exported symbol: does a corresponding test exist or does the diff include one?
+- For every changed behaviour (not just refactor): is there a test that would catch a regression if this logic broke?
+- If the project has a test directory, grep for test files that reference the changed file/module. If none exist, flag as WARNING (or BLOCKER if the change is business logic).
+- Do NOT flag missing tests for: pure refactors with identical observable behaviour, config-only changes, generated/migration files.
+
+*Logging:*
+- Every `catch` block must call `logger.error` (or equivalent) — missing is a BLOCKER per coding standards.
+- Sensitive data (tokens, passwords, PII) must never appear in log output — flag as BLOCKER.
+- Service methods and external calls should have INFO-level logging before/after — missing is a WARNING.
+- Do not flag logging on simple pure functions or trivial getters.
+
+Output findings in the standard JSON format. Flag test gaps as WARNING by default; upgrade to BLOCKER if the changed code is a critical path (auth, payments, data integrity).
+
 ---
 
-## Phase 4: Evaluator — Pass 14 (Always Runs, Always Last)
+## Phase 3b: Test Execution (Orchestrator runs this — not an agent)
 
-After ALL batches complete, spawn a single evaluator agent. Use **Opus model**.
+After all pass batches complete and before spawning the Evaluator, the orchestrator runs existing tests against the changed code.
+
+**Permission note:** This phase runs Bash commands (`npx jest`, `python -m pytest`, `npm test`, etc.) in the target repo. These are real test runners — they may install dependencies, write build artifacts, or take time. Announce the detected command to the user before running: "Running tests: `<command>`". If the command requires a permission prompt you can't auto-approve, tell the user what to allow and continue with the review; mark TEST_RESULTS as "Not run — permission required for `<command>`".
+
+**Step 1 — Detect test framework:**
+```bash
+# Check for common test configs in order
+ls "<REPO_PATH>/package.json" 2>/dev/null && grep -E '"(jest|vitest|mocha|jasmine)"' "<REPO_PATH>/package.json"
+ls "<REPO_PATH>/pytest.ini" "<REPO_PATH>/pyproject.toml" "<REPO_PATH>/setup.cfg" 2>/dev/null
+ls "<REPO_PATH>/Makefile" 2>/dev/null && grep -E '^test' "<REPO_PATH>/Makefile"
+```
+
+If no test framework detected: skip Phase 3b, note "No test framework found" in the evaluator input. Do NOT treat this as a finding — it may be a library or tool with no test runner configured.
+
+**Step 2 — Find test files for changed code:**
+
+For each changed source file in REVIEW_DIFF, derive the likely test file path (e.g. `src/foo.ts` → `src/foo.test.ts`, `tests/test_foo.py`, `__tests__/foo.spec.js`). Check if those files exist:
+```bash
+# Example for a TypeScript project
+git -C "<REPO_PATH>" diff <DIFF_SPEC> --name-only | while read f; do
+  base="${f%.*}"
+  for pat in "${base}.test.*" "${base}.spec.*" "__tests__/$(basename $base).*" "tests/test_$(basename $base).*"; do
+    ls "<REPO_PATH>/$pat" 2>/dev/null
+  done
+done
+```
+
+**Step 3 — Run tests:**
+
+*If test files exist for changed code:* run only those test files (targeted run, not the full suite).
+*If the diff touches existing test files directly:* run those test files.
+*If the diff changes a file with broad usage (e.g. a shared utility):* run the full test suite.
+
+Detect and use the right command:
+- Jest/Vitest: `npx jest --testPathPattern="<test-file>" --passWithNoTests` or `npx vitest run <test-file>`
+- pytest: `python -m pytest <test-file> -v`
+- Makefile: `make test`
+- Fallback: check `package.json` scripts for a `"test"` key → `npm test`
+
+Run with a 120-second timeout. Capture stdout+stderr.
+
+**Step 4 — Record results as TEST_RESULTS:**
+
+```
+TEST_RESULTS:
+  Framework: <jest|pytest|vitest|none>
+  Tests run: <N>
+  Passed: <N>
+  Failed: <N>
+  Skipped: <N>
+  Failures:
+    - <test name>: <error message, truncated to 200 chars>
+  Command: <the exact command run>
+  Exit code: <0|non-zero>
+```
+
+If tests failed: these are **automatic BLOCKERs** — the evaluator must surface them regardless of other findings.
+If tests passed: note "Tests passed (N/N)" — evaluator factors this as positive signal.
+
+---
+
+## Phase 4: Evaluator — Pass 15 (Always Runs, Always Last)
+
+After ALL batches complete and Phase 3b test results are recorded, spawn a single evaluator agent. Use **Opus model**.
 
 Prompt:
 ```
 Your FIRST action: call rag_context(agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>")
 
-You are the Evaluator for a code review. You do NOT re-review the code — you review the FINDINGS from passes 1-13.
+You are the Evaluator for a code review. You do NOT re-review the code — you review the FINDINGS from passes 1-14 and the TEST RESULTS from Phase 3b.
 
 == ALL FINDINGS ==
 <insert the JSON output from every completed pass agent, clearly separated by pass number>
 == END FINDINGS ==
 
-For each finding:
-1. Classify as:
+== TEST RESULTS ==
+<insert TEST_RESULTS verbatim from Phase 3b, or "No test framework detected" if skipped>
+== END TEST RESULTS ==
+
+Rules:
+1. Any test FAILURE is an automatic BLOCKER — do not downgrade, even if the failure looks flaky.
+2. "No tests found for changed files" from Pass 14 + no test framework → leave as WARNING (can't run what doesn't exist).
+3. For all other findings, classify as:
    - BLOCKER: must fix before merge
    - WARNING: should fix, not blocking
    - NIT: style preference, optional
    - FALSE POSITIVE: not actually an issue — explain precisely why
-2. If two findings contradict each other, resolve the conflict with reasoning.
-3. Reject vague findings — "this could be simpler" without saying HOW → FALSE POSITIVE.
-4. Every BLOCKER and WARNING must have a specific file:line and a concrete fix suggestion. If it doesn't, downgrade it to NIT or FALSE POSITIVE.
+4. If two findings contradict each other, resolve the conflict with reasoning.
+5. Reject vague findings — "this could be simpler" without saying HOW → FALSE POSITIVE.
+6. Every BLOCKER and WARNING must have a specific file:line and a concrete fix suggestion. If it doesn't, downgrade it to NIT or FALSE POSITIVE.
 
 Output:
 **Grade: A/B/C/D/F**
@@ -323,19 +412,20 @@ Output:
 - B: no blockers, warnings or nits only
 - C: no blockers, meaningful warnings
 - D: 1-2 blockers
-- F: 3+ blockers
+- F: 3+ blockers (or any test failures)
 
 **BLOCKERS** (numbered, file:line, description, fix)
 **WARNINGS** (numbered)
 **NITS** (numbered)
 **FALSE POSITIVES** (with explanation)
+**TEST RESULTS SUMMARY** (pass/fail/skipped, or "not run")
 ```
 
 ---
 
 ## Phase 5: Report
 
-Output the full evaluator report. Lead with the grade. Then blockers → warnings → nits.
+Output the full evaluator report. Lead with the grade. Then blockers → warnings → nits → test results summary.
 
 Final message to user:
-> "Review complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. [If grade C or better: Ready to merge after warnings addressed. If D/F: Address blockers before merging.]"
+> "Review complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [If grade C or better: Ready to merge after warnings addressed. If D/F or any test failures: Address blockers before merging.]"

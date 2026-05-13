@@ -40,7 +40,17 @@ OR ends with: `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.a
 
 **0c — Derive TASK_ID (resume-first).**
 
-Before creating anything, check for an existing workspace for this target:
+Before creating anything, check for an existing workspace. **Ticket workspace takes priority over URL-based workspace.**
+
+**Step 1 — Ticket workspace check (runs first if TICKET_ID is set):**
+
+If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
+```bash
+ls "$CLAUDEBOOST_HOME/workspace/$TICKET_ID/" 2>/dev/null
+```
+If the folder exists → set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
+
+**Step 2 — URL-based workspace check (runs only if no ticket workspace found):**
 
 ```bash
 ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
@@ -48,40 +58,53 @@ ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
 
 (Replace `[HOSTNAME]` and `[PORT]` with the values parsed from `TARGET_URL`.)
 
-**If one or more matching workspaces exist:**
+If one or more matching workspaces exist:
 - Find the most recent (sort by date suffix descending).
-- Check whether it has a `plan.md` or `context.md` (i.e., it is in-progress or completed).
-- If in-progress or completed: **do not create a new workspace**. Set `TASK_ID` to the existing folder name and skip Phase 0d entirely.
+- Set `TASK_ID` to that folder name.
 
-  **Determine resume phase** by checking which files exist in `workspace/$TASK_ID/`:
-
-  | Files present | Resume at |
-  |---|---|
-  | `report.md` | All phases complete — print "Workspace has a completed report. Use `--fresh` to start over." then STOP. |
-  | `plan.md` with at least one `- [ ] TC-` line | Phase 2 done → skip Phases 0e–2, jump to Phase 3 |
-  | `plan.md` but no unchecked `[ ]` lines | All TCs already marked → print "All tests have results. Use `--fresh` to re-run." then STOP. |
-  | `context.md` but no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
-  | Neither `context.md` nor `plan.md` | Workspace empty → resume from Phase 0e |
-
-  Print:
-  ```
-  Resuming workspace: workspace/[existing-task-id]/
-  Detected state: Phase [N] in progress — skipping completed phases.
-  (Use /end-to-end-test <url> --fresh to force a new session.)
-  ```
-
-- If the folder exists but is empty (no plan.md or context.md): reuse it, proceed to Phase 0d with `TASK_ID` set to that folder name.
-
-**If no matching workspace exists OR `$ARGUMENTS` contains `--fresh`:**
+If no matching workspace exists OR `$ARGUMENTS` contains `--fresh`:
 - Derive: `TASK_ID = e2e-[hostname]-[port]-[YYYY-MM-DD]`
 - Example: `e2e-localhost-3000-2026-05-10`
-- Proceed to Phase 0d.
+- Proceed to Phase 0d (no resume check needed for a new workspace).
 
-**0d — Create workspace (only if no existing workspace was found).**
+**Resume-phase detection (runs after TASK_ID is set to an existing folder):**
+
+Check which files exist in `workspace/$TASK_ID/`:
+
+| Files present | Resume at |
+|---|---|
+| `report.md` | All phases complete — print "Workspace has a completed report. Use `--fresh` to start over." then STOP. |
+| `plan.md` with at least one `- [ ] TC-` line | Phase 2 done → skip Phases 0e–2, jump to Phase 3 |
+| `plan.md` but no unchecked `[ ]` lines | All TCs already marked → print "All tests have results. Use `--fresh` to re-run." then STOP. |
+| `context.md` but no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
+| Neither `context.md` nor `plan.md` | Workspace exists but no E2E state yet → proceed to Phase 0d |
+
+Print:
+```
+Resuming workspace: workspace/[existing-task-id]/
+Detected state: Phase [N] in progress — skipping completed phases.
+(Use /end-to-end-test <url> --fresh to force a new session.)
+```
+
+**0d — Create workspace and set SNAPSHOTS_DIR.**
+
+Pick a non-colliding snapshot folder name by checking what already exists:
 
 ```bash
-mkdir -p "$CLAUDEBOOST_HOME/workspace/$TASK_ID/snapshots"
+ls "$CLAUDEBOOST_HOME/workspace/$TASK_ID/" 2>/dev/null
 ```
+
+- If no `snapshots` folder exists → use `snapshots`
+- If `snapshots` exists but no `snapshots-e2e` → use `snapshots-e2e`
+- If both exist → use `snapshots-e2e-[YYYY-MM-DD]`
+
+Set `SNAPSHOTS_DIR = workspace/$TASK_ID/<chosen-folder-name>` (relative to `$CLAUDEBOOST_HOME`).
+
+```bash
+mkdir -p "$CLAUDEBOOST_HOME/$SNAPSHOTS_DIR"
+```
+
+Announce: "Snapshots → `$SNAPSHOTS_DIR/`"
 
 **0e — Load knowledge via RAG (do this FIRST before any browser action).**
 
@@ -118,7 +141,7 @@ Display environment confirmation:
 ```
 
 Call `browser_navigate(url=$TARGET_URL)`.
-Call `browser_take_screenshot` → save to `workspace/$TASK_ID/snapshots/discovery-home.png`.
+Call `browser_take_screenshot` → save to `$SNAPSHOTS_DIR/discovery-home.png`.
 Call `browser_console_messages` — note any startup errors.
 
 **Live environment probe (runs immediately after first navigation — catches OAuth redirects):**
@@ -428,6 +451,14 @@ Call `browser_snapshot`. Scan the accessibility tree text for the Expected state
 
 Identify the element or region to annotate (from browser_snapshot coordinates).
 
+**CRITICAL — floating widgets (dropdowns, popups, tooltips, Kendo/Select2/custom comboboxes):**
+
+- **NEVER call `scrollIntoView` on an option inside a floating widget.** This triggers an outside-click and closes the popup before the screenshot fires — leaving the annotation on empty space with stale coordinates.
+- To scroll a dropdown list: use `scrollTop` on the popup's `<ul>` or scroll container, NOT on the individual option element.
+- **Inject overlay and take screenshot as the very last two actions** — no intervening `browser_snapshot`, `browser_evaluate`, `browser_wait_for`, or any other call between inject and screenshot. Any intermediate action can close the widget.
+- After injecting the overlay, immediately call `browser_take_screenshot`. Do not read or verify anything first.
+- If the element's bounding rect returns `{0,0,0,0}` — the element is not rendered (popup closed). Do NOT use stale coordinates. Re-open the popup and retry from Step 2.
+
 Inject annotation overlay:
 ```javascript
 (function() {
@@ -440,7 +471,7 @@ Inject annotation overlay:
 })();
 ```
 
-Call `browser_take_screenshot` → save as `workspace/$TASK_ID/snapshots/TC-NNN-after.png`.
+Call `browser_take_screenshot` → save as `$SNAPSHOTS_DIR/TC-NNN-after.png`.
 
 Remove overlay:
 ```javascript
@@ -569,7 +600,7 @@ Spawn `evaluator-agent` to independently audit every screenshot taken this sessi
 
 **Pass `evaluator-agent` the following:**
 
-1. The list of all `TC-NNN-after.png` files saved to `workspace/$TASK_ID/snapshots/` this session.
+1. The list of all `TC-NNN-after.png` files saved to `$SNAPSHOTS_DIR/` this session.
 2. The corresponding TC entry from `plan.md` for each screenshot (TC-ID, description, expected outcome).
 3. The instruction below.
 
@@ -591,7 +622,7 @@ For each screenshot the evaluator marks `RETAKE`:
 1. Re-navigate to the page the TC exercised (`browser_navigate`).
 2. Reproduce the exact post-action state by re-running the TC steps (use judgment — for a create TC, if the record was cleaned up, re-create it with `[E2E-TEST-RETAKE]` prefix so it's identifiable).
 3. Re-inject the annotation overlay targeting the correct element.
-4. Call `browser_take_screenshot` → overwrite `workspace/$TASK_ID/snapshots/TC-NNN-after.png`.
+4. Call `browser_take_screenshot` → overwrite `$SNAPSHOTS_DIR/TC-NNN-after.png`.
 5. Remove the overlay.
 6. Note in plan.md alongside the TC: `screenshot retaken after evaluator audit`.
 
@@ -618,7 +649,7 @@ Write `workspace/$TASK_ID/report.md`:
 **Date**: [date]
 **Scope**: [SCOPE]
 **Plan**: workspace/$TASK_ID/plan.md
-**Snapshots**: workspace/$TASK_ID/snapshots/
+**Snapshots**: $SNAPSHOTS_DIR/
 
 ## Summary
 
@@ -667,6 +698,6 @@ Write `workspace/$TASK_ID/report.md`:
 
 Print the Summary table. List all failures with their observed state. List blocked tests with reasons.
 
-End with: "Full report → `workspace/$TASK_ID/report.md`. Screenshots → `workspace/$TASK_ID/snapshots/`."
+End with: "Full report → `workspace/$TASK_ID/report.md`. Screenshots → `$SNAPSHOTS_DIR/`."
 
 Call `browser_close`.

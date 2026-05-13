@@ -77,10 +77,10 @@ python "$CLAUDEBOOST_HOME/scripts/check-rag-health.py"; echo "EXIT=$?"
 
 ### Check 2 — Required Hooks
 
-All six hook types must be registered in `~/.claude/settings.json`:
+All seven hook types must be registered in `~/.claude/settings.json`:
 
 ```bash
-for hook in SessionStart PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
+for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
   python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" "$hook" && echo "OK: $hook" || echo "MISSING: $hook"
 done
 ```

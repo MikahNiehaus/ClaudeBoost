@@ -77,6 +77,14 @@ Always spawn evaluator for findings — never self-verify. Evaluator only reads 
 ## Hard Rules
 See global `~/.claude/CLAUDE.md` — jQuery Ban, Security Standards, Logging Standards apply here.
 
+### Label / String Consistency Fix Rule
+When fixing a label, field name, or string inconsistency:
+1. Grep for ALL occurrences of the old value across the entire repo before touching anything.
+2. List every match found — HTML labels, [DisplayName] attributes, export column .Name() calls, validation ErrorMessage strings, constants, comments.
+3. Default: update ALL of them in one commit.
+4. Exception: if a location is genuinely out of scope (e.g. a migration filename, a historical comment), state it explicitly and justify the skip.
+Never silently leave occurrences untouched because the bug report only mentioned a subset of surfaces.
+
 ## When to Use What
 
 | Trigger | Action |
