@@ -1,21 +1,29 @@
-"""Code chunking via tree-sitter AST parsing.
+"""Code chunking and graph-edge extraction via tree-sitter AST parsing.
 
-Extracts functions, classes, and file-level summaries as RawChunks.
-Falls back to blank-line splitting for unsupported languages or parse failures.
+Public API:
+    chunk_code(text, source_file, ...) -> list[RawChunk]
+    extract_edges(text, language, filepath) -> list[GraphEdge]
+
+chunk_code falls back to blank-line splitting for unsupported languages.
+extract_edges returns [] for unsupported/unparseable files — never raises.
 """
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rag_server.indexing.markdown_chunker import RawChunk, estimate_tokens
+
+if TYPE_CHECKING:
+    from rag_server.ports.graph_port import GraphEdge
 
 logger = logging.getLogger(__name__)
 
 # Tree-sitter language modules — imported lazily to avoid hard failure
-_PARSERS = {}
+_PARSERS: dict = {}
 
 # Node types that represent top-level definitions per language
-_DEFINITION_TYPES = {
+_DEFINITION_TYPES: dict[str, set[str]] = {
     "python": {
         "function_definition",
         "class_definition",
@@ -38,53 +46,177 @@ _DEFINITION_TYPES = {
         "type_alias_declaration",
         "enum_declaration",
     },
+    "go": {
+        "function_declaration",
+        "method_declaration",
+        "type_declaration",
+    },
+    "rust": {
+        "function_item",
+        "impl_item",
+        "struct_item",
+        "trait_item",
+        "enum_item",
+        "mod_item",
+    },
+    "java": {
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "method_declaration",
+    },
+    "c": {
+        "function_definition",
+        "declaration",
+    },
+    "cpp": {
+        "function_definition",
+        "class_specifier",
+        "namespace_definition",
+        "template_declaration",
+    },
+    "ruby": {
+        "method",
+        "class",
+        "module",
+        "singleton_method",
+    },
+    "bash": {
+        "function_definition",
+    },
+    "lua": {
+        "function_declaration",
+        "local_function",
+        "function_definition",
+    },
+    "kotlin": {
+        "function_declaration",
+        "class_declaration",
+        "object_declaration",
+        "companion_object",
+    },
+    "swift": {
+        "function_declaration",
+        "class_declaration",
+        "struct_declaration",
+        "protocol_declaration",
+        "extension_declaration",
+    },
+    "php": {
+        "function_definition",
+        "class_declaration",
+        "interface_declaration",
+    },
+    "csharp": {
+        "class_declaration",
+        "interface_declaration",
+        "method_declaration",
+        "namespace_declaration",
+        "enum_declaration",
+        "struct_declaration",
+    },
+    # css, html, json, toml, yaml: no top-level definitions — fallback chunker handles them
 }
 
-# Map file extensions to tree-sitter language key
-_EXT_TO_LANG = {
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
+# Map file extensions to tree-sitter language key (AST-aware languages only)
+# Data formats (css/html/json/toml/yaml) are discovered by project.py but chunked
+# via _fallback_chunk — they intentionally do not appear here.
+_EXT_TO_LANG: dict[str, str] = {
+    ".py":   "python",
+    ".js":   "javascript",
+    ".jsx":  "javascript",
+    ".mjs":  "javascript",
+    ".ts":   "typescript",
+    ".tsx":  "typescript",
+    ".go":   "go",
+    ".rs":   "rust",
+    ".java": "java",
+    ".c":    "c",
+    ".h":    "c",
+    ".cpp":  "cpp",
+    ".cc":   "cpp",
+    ".cxx":  "cpp",
+    ".hpp":  "cpp",
+    ".rb":   "ruby",
+    ".sh":   "bash",
+    ".bash": "bash",
+    ".lua":  "lua",
+    ".kt":   "kotlin",
+    ".kts":  "kotlin",
+    ".swift": "swift",
+    ".php":  "php",
+    ".cs":   "csharp",
+}
+
+# Map language key -> (module_name, method_name) for dynamic import.
+# TypeScript is handled separately (exposes language_typescript + language_tsx).
+_LANG_MODULE_MAP: dict[str, tuple[str, str]] = {
+    "python":     ("tree_sitter_python",     "language"),
+    "javascript": ("tree_sitter_javascript", "language"),
+    "go":         ("tree_sitter_go",         "language"),
+    "rust":       ("tree_sitter_rust",       "language"),
+    "c":          ("tree_sitter_c",          "language"),
+    "cpp":        ("tree_sitter_cpp",        "language"),
+    "java":       ("tree_sitter_java",       "language"),
+    "ruby":       ("tree_sitter_ruby",       "language"),
+    "bash":       ("tree_sitter_bash",       "language"),
+    "lua":        ("tree_sitter_lua",        "language"),
+    "kotlin":     ("tree_sitter_kotlin",     "language"),
+    "swift":      ("tree_sitter_swift",      "language"),
+    "php":        ("tree_sitter_php",        "language"),
+    "csharp":     ("tree_sitter_c_sharp",    "language"),
 }
 
 
 def _get_parser(language: str):
-    """Lazy-load a tree-sitter parser for the given language."""
+    """Lazy-load a tree-sitter parser for the given language.
+
+    Returns None (and caches None) if the tree-sitter grammar package is not
+    installed — callers fall back to blank-line chunking.
+    """
     if language in _PARSERS:
         return _PARSERS[language]
 
+    # tsx shares the typescript grammar package
+    if language == "tsx":
+        _get_parser("typescript")
+        return _PARSERS.get("tsx")
+
+    # TypeScript exposes two parsers via non-standard method names
+    if language == "typescript":
+        return _load_typescript_parsers()
+
+    if language not in _LANG_MODULE_MAP:
+        _PARSERS[language] = None
+        return None
+
+    module_name, method_name = _LANG_MODULE_MAP[language]
     try:
+        import importlib
         from tree_sitter import Language, Parser
-
-        if language == "python":
-            import tree_sitter_python as ts_mod
-        elif language == "javascript":
-            import tree_sitter_javascript as ts_mod
-        elif language == "typescript":
-            import tree_sitter_typescript as ts_mod
-            # tree-sitter-typescript exposes .language_typescript() and .language_tsx()
-            lang_obj = Language(ts_mod.language_typescript())
-            parser = Parser(lang_obj)
-            _PARSERS[language] = parser
-            # Also set up tsx
-            tsx_lang = Language(ts_mod.language_tsx())
-            tsx_parser = Parser(tsx_lang)
-            _PARSERS["tsx"] = tsx_parser
-            return parser
-        else:
-            _PARSERS[language] = None
-            return None
-
-        lang_obj = Language(ts_mod.language())
-        parser = Parser(lang_obj)
+        ts_mod = importlib.import_module(module_name)
+        lang_fn = getattr(ts_mod, method_name)
+        parser = Parser(Language(lang_fn()))
         _PARSERS[language] = parser
         return parser
-    except (ImportError, Exception) as e:
-        logger.warning("Failed to load tree-sitter for %s: %s", language, e)
+    except (ImportError, AttributeError, Exception) as e:
+        logger.warning("tree-sitter grammar not available for %s: %s", language, e)
         _PARSERS[language] = None
+        return None
+
+
+def _load_typescript_parsers():
+    """Load tree-sitter-typescript, which exposes ts and tsx as separate parsers."""
+    try:
+        import tree_sitter_typescript as ts_mod
+        from tree_sitter import Language, Parser
+        _PARSERS["typescript"] = Parser(Language(ts_mod.language_typescript()))
+        _PARSERS["tsx"] = Parser(Language(ts_mod.language_tsx()))
+        return _PARSERS["typescript"]
+    except (ImportError, Exception) as e:
+        logger.warning("tree-sitter grammar not available for typescript: %s", e)
+        _PARSERS["typescript"] = None
+        _PARSERS["tsx"] = None
         return None
 
 
@@ -111,22 +243,18 @@ def chunk_code(
     if not language:
         return _fallback_chunk(text, source_file, max_tokens, min_tokens)
 
-    # Use tsx parser for .tsx files
+    # tsx has its own parser but shares typescript's definition types
     parser_key = "tsx" if ext == ".tsx" else language
-    # Ensure base language parser is loaded first (triggers tsx setup for typescript)
-    if parser_key == "tsx" and "tsx" not in _PARSERS:
-        _get_parser("typescript")
-    parser = _get_parser(parser_key) if parser_key != "tsx" else _PARSERS.get("tsx")
+    lang_for_types = "typescript" if parser_key == "tsx" else language
 
-    if parser is None:
-        parser = _get_parser(language)
+    parser = _get_parser(parser_key)
     if parser is None:
         return _fallback_chunk(text, source_file, max_tokens, min_tokens)
 
     try:
         source_bytes = text.encode("utf-8")
         tree = parser.parse(source_bytes)
-        return _chunk_from_tree(tree, text, source_file, language, max_tokens, min_tokens)
+        return _chunk_from_tree(tree, text, source_file, lang_for_types, max_tokens, min_tokens)
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", source_file, e)
         return _fallback_chunk(text, source_file, max_tokens, min_tokens)
@@ -413,3 +541,222 @@ def _fallback_chunk(
             ))
 
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Graph edge extraction
+# ---------------------------------------------------------------------------
+
+def extract_edges(text: str, language: str, filepath: str) -> "list[GraphEdge]":
+    """Extract structural edges from source code via tree-sitter AST.
+
+    Returns a list of GraphEdge — never raises.  Returns [] for unsupported
+    languages, unparseable files, or files with no detectable edges.
+
+    Edge types:
+        "imports"  — import/require/use statements          confidence: EXTRACTED
+        "inherits" — class A extends/inherits B             confidence: EXTRACTED
+        "calls"    — function calls to names defined        confidence: INFERRED
+                     elsewhere (approximate — name-match only)
+
+    The *filepath* is stored on edges as-is (usually a project-relative path).
+    """
+    from rag_server.ports.graph_port import GraphEdge  # avoid circular at module level
+
+    parser_key = "tsx" if filepath.endswith(".tsx") else language
+    parser = _get_parser(parser_key)
+    if parser is None:
+        return []
+
+    try:
+        tree = parser.parse(text.encode("utf-8"))
+    except Exception as e:
+        logger.debug("extract_edges: parse failed for %s: %s", filepath, e)
+        return []
+
+    edges: list = []
+    lang_for_walk = "typescript" if parser_key == "tsx" else language
+
+    _walk_for_edges(tree.root_node, text, filepath, lang_for_walk, edges)
+    return edges
+
+
+def _walk_for_edges(node, text: str, filepath: str, language: str, edges: list) -> None:
+    """Recursive AST walk — fills *edges* in place."""
+    from rag_server.ports.graph_port import GraphEdge
+
+    node_type = node.type
+
+    # ------------------------------------------------------------------
+    # Import edges (EXTRACTED)
+    # ------------------------------------------------------------------
+    if language == "python":
+        if node_type == "import_statement":
+            # import foo.bar  →  target_symbol = "foo.bar"
+            for child in node.children:
+                if child.type in ("dotted_name", "aliased_import"):
+                    name = _node_text(child)
+                    edges.append(GraphEdge(
+                        source_file=filepath, source_symbol="<module>",
+                        target_file="", target_symbol=name,
+                        edge_type="imports", confidence="EXTRACTED",
+                    ))
+
+        elif node_type == "import_from_statement":
+            # from foo import bar  →  target_symbol = "foo"
+            module_name = ""
+            for child in node.children:
+                if child.type == "dotted_name":
+                    module_name = _node_text(child)
+                    break
+            if module_name:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol="<module>",
+                    target_file="", target_symbol=module_name,
+                    edge_type="imports", confidence="EXTRACTED",
+                ))
+
+        elif node_type == "class_definition":
+            # class A(B, C):  →  inherits edges
+            class_name = _first_identifier(node)
+            arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+            if arg_list and class_name:
+                for child in arg_list.children:
+                    if child.type in ("identifier", "attribute"):
+                        base = _node_text(child)
+                        edges.append(GraphEdge(
+                            source_file=filepath, source_symbol=class_name,
+                            target_file="", target_symbol=base,
+                            edge_type="inherits", confidence="EXTRACTED",
+                        ))
+
+    elif language in ("javascript", "typescript"):
+        if node_type in ("import_statement", "import_declaration"):
+            # import X from "module"
+            source = next(
+                (_node_text(c) for c in node.children if c.type == "string"), ""
+            ).strip("'\"")
+            if source:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol="<module>",
+                    target_file="", target_symbol=source,
+                    edge_type="imports", confidence="EXTRACTED",
+                ))
+
+        elif node_type == "call_expression":
+            # require("module")
+            fn = node.child_by_field_name("function")
+            args = node.child_by_field_name("arguments")
+            if fn and _node_text(fn) == "require" and args:
+                for child in args.children:
+                    if child.type == "string":
+                        mod = _node_text(child).strip("'\"")
+                        edges.append(GraphEdge(
+                            source_file=filepath, source_symbol="<module>",
+                            target_file="", target_symbol=mod,
+                            edge_type="imports", confidence="EXTRACTED",
+                        ))
+
+        elif node_type in ("class_declaration", "class_expression"):
+            class_name = _first_identifier(node)
+            heritage = next(
+                (c for c in node.children if c.type == "class_heritage"), None
+            )
+            if heritage and class_name:
+                base = _first_identifier(heritage)
+                if base:
+                    edges.append(GraphEdge(
+                        source_file=filepath, source_symbol=class_name,
+                        target_file="", target_symbol=base,
+                        edge_type="inherits", confidence="EXTRACTED",
+                    ))
+
+    elif language == "go":
+        if node_type == "import_declaration":
+            for child in _walk(node):
+                if child.type == "interpreted_string_literal":
+                    mod = _node_text(child).strip('"')
+                    edges.append(GraphEdge(
+                        source_file=filepath, source_symbol="<module>",
+                        target_file="", target_symbol=mod,
+                        edge_type="imports", confidence="EXTRACTED",
+                    ))
+
+    elif language == "rust":
+        if node_type == "use_declaration":
+            path = next(
+                (_node_text(c) for c in _walk(node) if c.type in ("scoped_identifier", "identifier")),
+                "",
+            )
+            if path:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol="<module>",
+                    target_file="", target_symbol=path,
+                    edge_type="imports", confidence="EXTRACTED",
+                ))
+
+    elif language == "java":
+        if node_type == "import_declaration":
+            name = next(
+                (_node_text(c) for c in node.children if c.type == "scoped_identifier"), ""
+            )
+            if name:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol="<module>",
+                    target_file="", target_symbol=name,
+                    edge_type="imports", confidence="EXTRACTED",
+                ))
+        elif node_type == "class_declaration":
+            class_name = _first_identifier(node)
+            superclass = node.child_by_field_name("superclass")
+            if superclass and class_name:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol=class_name,
+                    target_file="", target_symbol=_first_identifier(superclass) or "",
+                    edge_type="inherits", confidence="EXTRACTED",
+                ))
+
+    elif language == "csharp":
+        if node_type == "using_directive":
+            name = next(
+                (_node_text(c) for c in _walk(node)
+                 if c.type in ("qualified_name", "identifier")), ""
+            )
+            if name:
+                edges.append(GraphEdge(
+                    source_file=filepath, source_symbol="<module>",
+                    target_file="", target_symbol=name,
+                    edge_type="imports", confidence="EXTRACTED",
+                ))
+
+    elif language == "ruby":
+        if node_type == "call" and _first_identifier(node) in ("require", "require_relative"):
+            args = node.child_by_field_name("arguments")
+            if args:
+                for child in args.children:
+                    if child.type == "string":
+                        mod = _node_text(child).strip("'\"")
+                        edges.append(GraphEdge(
+                            source_file=filepath, source_symbol="<module>",
+                            target_file="", target_symbol=mod,
+                            edge_type="imports", confidence="EXTRACTED",
+                        ))
+
+    # Recurse into children
+    for child in node.children:
+        _walk_for_edges(child, text, filepath, language, edges)
+
+
+def _node_text(node) -> str:
+    """Decode a tree-sitter node's source text."""
+    if node.text is None:
+        return ""
+    return node.text.decode("utf-8") if isinstance(node.text, bytes) else str(node.text)
+
+
+def _first_identifier(node) -> str:
+    """Return text of the first identifier child, or ''."""
+    for child in node.children:
+        if child.type in ("identifier", "type_identifier"):
+            return _node_text(child)
+    return ""

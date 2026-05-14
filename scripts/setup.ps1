@@ -227,7 +227,13 @@ function Install-HookEntry {
         if ($e.hooks) {
             foreach ($h in $e.hooks) {
                 if (($h.prompt -and $h.prompt.Contains($Sentinel)) -or ($h.command -and $h.command.Contains($Sentinel))) {
-                    Write-Host "[SKIP] hooks.$HookType - $Label already installed" -ForegroundColor Yellow
+                    # Sentinel found — update matcher if it has changed (e.g. adding Bash to an existing entry)
+                    if ($e.PSObject.Properties["matcher"] -and $Entry.PSObject.Properties["matcher"] -and $e.matcher -ne $Entry.matcher) {
+                        $e.matcher = $Entry.matcher
+                        Write-Host "[OK] hooks.$HookType - updated matcher for $Label ($($Entry.matcher))" -ForegroundColor Green
+                    } else {
+                        Write-Host "[SKIP] hooks.$HookType - $Label already installed" -ForegroundColor Yellow
+                    }
                     return
                 }
             }
@@ -236,6 +242,42 @@ function Install-HookEntry {
     $Settings.hooks.$HookType = @($existing) + @($Entry)
     Write-Host "[OK] hooks.$HookType - appended $Label" -ForegroundColor Green
 }
+
+# Helper: remove hook entries whose command string contains a literal $CLAUDEBOOST_HOME
+# bash variable reference. These were written by older setup versions and fail on any
+# machine where CLAUDEBOOST_HOME hasn't been set in settings.json yet.
+function Remove-StaleVariableHooks {
+    param($Settings)
+    $removed = 0
+    foreach ($hookType in @($Settings.hooks.PSObject.Properties.Name)) {
+        $entries = @($Settings.hooks.$hookType)
+        $cleaned = @()
+        foreach ($entry in $entries) {
+            $isStale = $false
+            if ($entry.hooks) {
+                foreach ($h in @($entry.hooks)) {
+                    if ($h.command -and $h.command -like '*$CLAUDEBOOST_HOME*') {
+                        $preview = $h.command.Substring(0, [Math]::Min(70, $h.command.Length))
+                        Write-Host "[CLEAN] hooks.$hookType - removing stale variable hook: $preview..." -ForegroundColor Yellow
+                        $isStale = $true
+                        $removed++
+                        break
+                    }
+                }
+            }
+            if (-not $isStale) { $cleaned += $entry }
+        }
+        $Settings.hooks.$hookType = $cleaned
+    }
+    if ($removed -gt 0) {
+        Write-Host "[OK] Removed $removed stale `$CLAUDEBOOST_HOME variable hook(s)" -ForegroundColor Green
+    } else {
+        Write-Host "[OK] No stale variable hooks found" -ForegroundColor Green
+    }
+}
+
+Write-Host "`nCleaning up stale variable hooks..." -ForegroundColor Cyan
+Remove-StaleVariableHooks -Settings $settings
 
 # --- SessionStart: workflow routing (original) ---
 $sessionHook = [PSCustomObject]@{
@@ -341,7 +383,7 @@ Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $workspaceHo
 #   CONSULT + other   -> exit 0, stderr nudge (non-blocking reminder)
 $consultGatePath = "$boostHome\scripts\consult-gate.py".Replace("\", "/")
 $consultEditHook = [PSCustomObject]@{
-    matcher = "Edit|Write|MultiEdit"
+    matcher = "Edit|Write|MultiEdit|Bash"
     hooks = @(
         [PSCustomObject]@{
             type = "command"
@@ -350,7 +392,7 @@ $consultEditHook = [PSCustomObject]@{
     )
 }
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $consultEditHook `
-    -Sentinel "consult-gate.py" -Label "CONSULT gate on Edit/Write (command-type)"
+    -Sentinel "consult-gate.py" -Label "CONSULT gate on Edit/Write/Bash (command-type)"
 
 # --- architect-agent PROPOSAL_ONLY contract is handled by agent-spawn-gate.py
 # above (command-type hook). No separate prompt-type hook needed; the old one
@@ -468,6 +510,23 @@ $clearSaveHook = [PSCustomObject]@{
 }
 Install-HookEntry -Settings $settings -HookType "SessionEnd" -Entry $clearSaveHook `
     -Sentinel "session-clear-save.py" -Label "clear handoff save"
+
+# --- UserPromptSubmit: ensure-setup bootstrap (must be first — no CLAUDEBOOST_HOME dependency) ---
+# Self-locating via __file__; fires silently when setup is already done.
+# On a new machine where settings.json was synced but setup.ps1 hasn't run,
+# this detects the missing CLAUDEBOOST_HOME env block and launches setup.ps1 automatically.
+$ensureSetupPath = "$boostHome\scripts\ensure-setup.py".Replace("\", "/")
+$ensureSetupHook = [PSCustomObject]@{
+    hooks = @(
+        [PSCustomObject]@{
+            type    = "command"
+            command = "python `"$ensureSetupPath`""
+            timeout = 10000
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "UserPromptSubmit" -Entry $ensureSetupHook `
+    -Sentinel "ensure-setup.py" -Label "auto-setup bootstrap"
 
 # --- UserPromptSubmit: TTS interrupt (stop playback on user input) ---
 $speakStopPath = "$boostHome\scripts\speak-stop.py".Replace("\", "/")

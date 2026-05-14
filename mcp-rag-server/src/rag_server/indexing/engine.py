@@ -20,7 +20,7 @@ from rag_server.ports.store_port import Chunk, StorePort
 
 logger = logging.getLogger(__name__)
 
-CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}
+CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}  # legacy; project.py is authoritative
 
 
 class IndexingEngine:
@@ -180,8 +180,10 @@ class IndexingEngine:
         index_dir = project_index_dir(project_path)
         index_dir.mkdir(parents=True, exist_ok=True)
 
-        # Per-project store and manifest (separate from main ClaudeBoost index)
+        # Per-project vector store + graph store (separate from main ClaudeBoost index)
         project_store = ChromaStore(persist_dir=str(index_dir / "chroma"))
+        from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+        graph_store = SQLiteGraphStore(index_dir / "graph.db")
         project_manifest_path = index_dir / "manifest.json"
         project_manifest = {}
         if project_manifest_path.exists():
@@ -251,6 +253,7 @@ class IndexingEngine:
                 logger.info("Removing %d stale file(s) from index (not found on disk).", len(stale))
                 for f in stale:
                     project_store.delete_by_source(collection, f)
+                    graph_store.delete_edges_for_file(f)
                     del project_manifest[f]
 
         files_indexed = 0
@@ -281,9 +284,10 @@ class IndexingEngine:
                 continue
 
             project_store.delete_by_source(collection, rel_path)
+            graph_store.delete_edges_for_file(rel_path)
 
             # Always use code chunker for project files
-            from rag_server.indexing.code_chunker import chunk_code
+            from rag_server.indexing.code_chunker import chunk_code, extract_edges
             raw_chunks = chunk_code(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
@@ -292,6 +296,14 @@ class IndexingEngine:
             if not raw_chunks:
                 files_skipped += 1
                 continue
+
+            # Extract and store graph edges (import/inherit/calls)
+            from rag_server.core.project import extension_to_language
+            file_language = extension_to_language(Path(rel_path).suffix)
+            if file_language:
+                edges = extract_edges(content, file_language, rel_path)
+                if edges:
+                    graph_store.add_edges(edges)
 
             texts = [c.content for c in raw_chunks]
             embeddings = self._embedder.embed(texts)

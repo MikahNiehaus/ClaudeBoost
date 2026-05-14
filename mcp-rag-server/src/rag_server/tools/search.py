@@ -23,6 +23,7 @@ def rag_search(
     workspace_path: str | None = None,
     limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = DEFAULT_MIN_SCORE,
+    mode: str = "vector",
 ) -> dict:
     """Execute semantic search across indexed content."""
     if scope not in VALID_SCOPES:
@@ -92,6 +93,12 @@ def rag_search(
                 min_score=min_score,
             )
             all_results.extend(results)
+
+            # Graph mode: augment seed results with structural neighbours
+            if mode == "graph":
+                all_results = _augment_with_graph(
+                    all_results, idx_dir, project_store, limit,
+                )
     else:
         # Standard scopes: knowledge, agents, or all
         if scope == "all":
@@ -130,6 +137,60 @@ def rag_search(
         ],
         "total_found": len(all_results),
         "query_time_ms": elapsed_ms,
+        "mode": mode,
     }
 
     return result
+
+
+def _augment_with_graph(
+    seed_results: list,
+    idx_dir: "Path",
+    project_store,
+    limit: int,
+) -> list:
+    """Expand seed results with structural neighbours from the graph store.
+
+    Fetches depth-1 neighbours for the top seed files and merges them with
+    the vector results.  Returns a deduplicated list capped at *limit*.
+    Silently no-ops if graph.db does not exist or has no edges.
+    """
+    from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+    from rag_server.ports.store_port import SearchResult
+
+    graph_db = idx_dir / "graph.db"
+    if not graph_db.exists():
+        return seed_results
+
+    graph_store = SQLiteGraphStore(graph_db)
+    if not graph_store.has_graph():
+        return seed_results
+
+    seen_sources = {r.metadata.get("source_file", "") for r in seed_results}
+    extra: list[SearchResult] = []
+
+    # Limit graph expansion to top-3 seeds to control token budget
+    for seed in seed_results[:3]:
+        seed_file = seed.metadata.get("source_file", "")
+        if not seed_file:
+            continue
+        neighbours = graph_store.get_neighbours(seed_file, depth=1)
+        for edge in neighbours:
+            # Fetch chunks from the neighbouring file (source or target)
+            neighbour_file = (
+                edge.target_file if edge.source_file == seed_file else edge.source_file
+            )
+            if not neighbour_file or neighbour_file in seen_sources:
+                continue
+            chunks = project_store.get_by_source("codebase", neighbour_file)
+            for chunk in chunks[:2]:  # at most 2 chunks per neighbour file
+                extra.append(SearchResult(
+                    content=chunk.content,
+                    metadata=chunk.metadata,
+                    score=max(0.0, seed.score - 0.15),  # slight penalty vs vector seed
+                ))
+            seen_sources.add(neighbour_file)
+
+    combined = seed_results + extra
+    combined.sort(key=lambda r: r.score, reverse=True)
+    return combined[:limit]

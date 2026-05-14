@@ -92,6 +92,16 @@ async def list_tools() -> list[Tool]:
                         "minimum": 0.0,
                         "maximum": 1.0,
                     },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["vector", "graph"],
+                        "description": (
+                            "Search mode. 'vector' = semantic similarity only (default). "
+                            "'graph' = vector seed + structural neighbours from graph index. "
+                            "Only applies when scope='codebase'. Requires re-indexing with GraphRAG."
+                        ),
+                        "default": "vector",
+                    },
                 },
                 "required": ["query"],
             },
@@ -297,6 +307,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 workspace_path=arguments.get("workspace_path"),
                 limit=arguments.get("limit", DEFAULT_SEARCH_LIMIT),
                 min_score=arguments.get("min_score", DEFAULT_MIN_SCORE),
+                mode=arguments.get("mode", "vector"),
             )
 
         elif name == "rag_scan":
@@ -535,6 +546,43 @@ def _build_context(
                         "tier": "codebase",
                     })
                     tier4_tokens += chunk_tokens
+
+                # --- Tier 4b: Graph structural neighbours (if graph index exists) ---
+                graph_db = idx_dir / "graph.db"
+                if graph_db.exists() and tier4_chunks:
+                    from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+                    graph_store = SQLiteGraphStore(graph_db)
+                    if graph_store.has_graph():
+                        seen_sources = {c["source"] for c in tier4_chunks}
+                        graph_budget = (remaining_budget - tier4_tokens) // 2
+                        graph_tokens = 0
+
+                        for seed_chunk in tier4_chunks[:3]:
+                            seed_file = seed_chunk["source"]
+                            neighbours = graph_store.get_neighbours(seed_file, depth=1)
+                            for edge in neighbours:
+                                nb_file = (
+                                    edge.target_file
+                                    if edge.source_file == seed_file
+                                    else edge.source_file
+                                )
+                                if not nb_file or nb_file in seen_sources:
+                                    continue
+                                nb_chunks = project_store.get_by_source("codebase", nb_file)
+                                for nb in nb_chunks[:2]:
+                                    nb_tokens = nb.metadata.get("token_count", estimate_tokens(nb.content))
+                                    if graph_tokens + nb_tokens > graph_budget:
+                                        break
+                                    tier4_chunks.append({
+                                        "source": nb_file,
+                                        "section": nb.metadata.get("section", ""),
+                                        "content": nb.content,
+                                        "score": max(0.0, seed_chunk["score"] - 0.15),
+                                        "tier": "codebase_graph",
+                                    })
+                                    graph_tokens += nb_tokens
+                                    tier4_tokens += nb_tokens
+                                seen_sources.add(nb_file)
 
     all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier4_chunks
     total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier4_tokens

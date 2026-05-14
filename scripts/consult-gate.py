@@ -9,19 +9,22 @@ This script reads them directly and makes a deterministic call.
 Behavior:
   - AUTO mode    -> exit 0 silently (pass)
   - Exempt paths -> exit 0 silently (pass)
-  - CONSULT mode on non-exempt paths -> exit 0 + stderr reminder (informational,
-    non-blocking). The main agent sees the reminder and decides.
+  - Bash with no file-write patterns -> exit 0 silently (pass)
+  - CONSULT mode on non-exempt file-writing paths -> exit 0 + stderr reminder
+    (informational, non-blocking). The main agent sees the reminder and decides.
 
 Never blocks. It's a nudge, not a gate. Past experience: blocking hooks
 over-fire and grind the session. A visible reminder is enough to keep us
 honest in CONSULT mode.
 
 Reads tool_input from stdin (Claude Code hook protocol): a JSON blob with
-tool_name + tool_input. We just need tool_input.file_path.
+tool_name + tool_input. Handles Edit, Write, MultiEdit (file_path) and
+Bash (command — file-writing heuristic applied first).
 """
 from __future__ import annotations
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +40,21 @@ EXEMPT_FRAGMENTS = [
     "/witness/", "\\witness\\",
     "/crew/", "\\crew\\",
 ]
+
+
+# Bash commands that write files — output redirection or explicit file-creating builtins.
+_BASH_WRITE_RE = re.compile(
+    r'(?<![<>])>{1,2}\s*\S'           # > or >> redirection (not <<<)
+    r'|(?:^|\s)(?:mkdir|touch|tee)\s',  # common file-creating commands
+    re.IGNORECASE,
+)
+_REDIR_PATH_RE = re.compile(r'(?<![<>])>{1,2}\s*([^\s;|&]+)')
+
+
+def _bash_file_path(command: str) -> str:
+    """Extract the output path from a Bash redirection, or '' if none."""
+    m = _REDIR_PATH_RE.search(command)
+    return m.group(1).replace("\\", "/") if m else ""
 
 
 def read_json(path: str | os.PathLike, default):
@@ -64,7 +82,17 @@ def main() -> int:
         payload = {}
 
     tool_input = payload.get("tool_input", {}) or {}
+
+    # Determine the relevant file path.
+    # Edit/Write/MultiEdit: file_path field.
+    # Bash: extract from output redirection; skip silently if command is read-only.
+    bash_command = tool_input.get("command") or ""
     file_path = (tool_input.get("file_path") or tool_input.get("path") or "").replace("\\", "/")
+
+    if not file_path and bash_command:
+        if not _BASH_WRITE_RE.search(bash_command):
+            return 0  # read-only Bash (ls, grep, git log, etc.) — pass silently
+        file_path = _bash_file_path(bash_command)
 
     # Exempt path: pass silently
     if file_path and any(frag.replace("\\", "/") in file_path for frag in EXEMPT_FRAGMENTS):
@@ -82,8 +110,9 @@ def main() -> int:
     # CONSULT mode on non-exempt, non-approved path -> informational nudge.
     # Exit 0 means the tool call proceeds; stderr is shown in the hook result
     # so the agent sees the reminder without being blocked.
+    tool_label = "Bash(file-write)" if bash_command else "Edit/Write"
     print(
-        "[CONSULT nudge] Edit/Write in CONSULT mode on a non-exempt, non-approved path.",
+        f"[CONSULT nudge] {tool_label} in CONSULT mode on a non-exempt, non-approved path.",
         file=sys.stderr,
     )
     print(

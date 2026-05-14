@@ -18,10 +18,26 @@ DEFAULT_EXCLUDES = {
 
 # Language name -> file extensions
 LANGUAGE_EXTENSIONS = {
-    "python": {".py"},
+    "python":     {".py"},
     "javascript": {".js", ".jsx", ".mjs"},
     "typescript": {".ts", ".tsx"},
-    "csharp": {".cs"},
+    "csharp":     {".cs"},
+    "go":         {".go"},
+    "rust":       {".rs"},
+    "java":       {".java"},
+    "c":          {".c", ".h"},
+    "cpp":        {".cpp", ".cc", ".cxx", ".hpp"},
+    "ruby":       {".rb"},
+    "bash":       {".sh", ".bash"},
+    "lua":        {".lua"},
+    "kotlin":     {".kt", ".kts"},
+    "swift":      {".swift"},
+    "php":        {".php"},
+    "css":        {".css", ".scss"},
+    "html":       {".html", ".htm"},
+    "json":       {".json"},
+    "toml":       {".toml"},
+    "yaml":       {".yaml", ".yml"},
 }
 
 # Reverse lookup: extension -> language name
