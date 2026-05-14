@@ -38,38 +38,56 @@ OR ends with: `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.a
 
 > Note: This is a static check on the URL you were given. A live environment probe happens in Phase 1a AFTER navigation, which catches OAuth redirects and hidden prod environments.
 
-**0c — Derive TASK_ID (resume-first).**
+**0c — Derive TASK_ID and workspace root (resume-first).**
 
 Before creating anything, check for an existing workspace. **Ticket workspace takes priority over URL-based workspace.**
+
+**Determine workspace root:**
+
+Check CWD:
+```bash
+pwd
+```
+- If CWD is NOT `$CLAUDEBOOST_HOME`: set `WORKSPACE_ROOT = <cwd>`. Announce: "Project detected: [cwd]."
+- If CWD IS `$CLAUDEBOOST_HOME`: set `WORKSPACE_ROOT = $CLAUDEBOOST_HOME`.
 
 **Step 1 — Ticket workspace check (runs first if TICKET_ID is set):**
 
 If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
+
+First check the registry for a project-scoped workspace:
 ```bash
-ls "$CLAUDEBOOST_HOME/workspace/$TICKET_ID/" 2>/dev/null
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --get "$TICKET_ID" 2>/dev/null
 ```
-If the folder exists → set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
+If it returns a path, use that as `WORKSPACE_ABS`. Set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
+
+Otherwise check `$WORKSPACE_ROOT/workspace/$TICKET_ID/`:
+```bash
+ls "$WORKSPACE_ROOT/workspace/$TICKET_ID/" 2>/dev/null
+```
+If the folder exists → set `TASK_ID = $TICKET_ID`, `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`. Skip Step 2. Proceed to resume-phase detection below.
 
 **Step 2 — URL-based workspace check (runs only if no ticket workspace found):**
 
 ```bash
-ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
+ls "$WORKSPACE_ROOT/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
 ```
 
 (Replace `[HOSTNAME]` and `[PORT]` with the values parsed from `TARGET_URL`.)
 
 If one or more matching workspaces exist:
 - Find the most recent (sort by date suffix descending).
-- Set `TASK_ID` to that folder name.
+- Set `TASK_ID` to that folder name, `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`.
 
 If no matching workspace exists OR `$ARGUMENTS` contains `--fresh`:
 - Derive: `TASK_ID = e2e-[hostname]-[port]-[YYYY-MM-DD]`
 - Example: `e2e-localhost-3000-2026-05-10`
+- Set `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`
 - Proceed to Phase 0d (no resume check needed for a new workspace).
 
 **Resume-phase detection (runs after TASK_ID is set to an existing folder):**
 
-Check which files exist in `workspace/$TASK_ID/`:
+Check which files exist in `$WORKSPACE_ABS/`:
 
 | Files present | Resume at |
 |---|---|
@@ -91,20 +109,35 @@ Detected state: Phase [N] in progress — skipping completed phases.
 Pick a non-colliding snapshot folder name by checking what already exists:
 
 ```bash
-ls "$CLAUDEBOOST_HOME/workspace/$TASK_ID/" 2>/dev/null
+ls "$WORKSPACE_ABS/" 2>/dev/null
 ```
 
 - If no `snapshots` folder exists → use `snapshots`
 - If `snapshots` exists but no `snapshots-e2e` → use `snapshots-e2e`
 - If both exist → use `snapshots-e2e-[YYYY-MM-DD]`
 
-Set `SNAPSHOTS_DIR = workspace/$TASK_ID/<chosen-folder-name>` (relative to `$CLAUDEBOOST_HOME`).
+Set `SNAPSHOTS_DIR = $WORKSPACE_ABS/<chosen-folder-name>`.
 
 ```bash
-mkdir -p "$CLAUDEBOOST_HOME/$SNAPSHOTS_DIR"
+mkdir -p "$SNAPSHOTS_DIR"
 ```
 
 Announce: "Snapshots → `$SNAPSHOTS_DIR/`"
+
+**Register and protect (new workspaces only):**
+
+```bash
+# Register so /restore and /clear-safe can find this workspace
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+
+# Add workspace/ to project .gitignore if writing to a project dir
+if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
+  if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
+    echo 'workspace/' >> "$WORKSPACE_ROOT/.gitignore"
+    echo "Added workspace/ to $WORKSPACE_ROOT/.gitignore"
+  fi
+fi
+```
 
 **0e — Load knowledge via RAG (do this FIRST before any browser action).**
 
@@ -207,7 +240,7 @@ Flag any component that uses a **different HTML structure** than other instances
 
 **1e — Write App Map.**
 
-Write `workspace/$TASK_ID/context.md`:
+Write `$WORKSPACE_ABS/context.md`:
 
 ```markdown
 # App Map — $TARGET_URL
@@ -244,7 +277,7 @@ Write `workspace/$TASK_ID/context.md`:
 
 **PHASE 2 ENTRY GATE — verify before starting:**
 
-Read `workspace/$TASK_ID/context.md`. Confirm it exists and has a non-empty "Pages Discovered" section.
+Read `$WORKSPACE_ABS/context.md`. Confirm it exists and has a non-empty "Pages Discovered" section.
 
 If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed. Print: "Phase 2 blocked: App Map not found. Complete Phase 1 first." Return to Phase 1.
 
@@ -306,7 +339,7 @@ Add a `TC-TICKET-01` test case that directly exercises `ORIGINAL_BUG_DESC`. This
 - If the write side requires a background job, use the **Background Job Verification protocol** in Phase 3.
 - Mark this TC as `[REQUIRED — ticket regression]` in the plan. It cannot be BLOCKED or marked "prior session".
 
-**Write draft plan to disk:** `workspace/$TASK_ID/plan-draft.md`
+**Write draft plan to disk:** `$WORKSPACE_ABS/plan-draft.md`
 
 **2b — Anti-hallucination evaluator.**
 
@@ -326,13 +359,13 @@ Print: "Evaluator removed N test cases as unverified (not found in app discovery
 
 **2c — Write final plan and present to user.**
 
-Write cleaned plan to `workspace/$TASK_ID/plan.md`.
+Write cleaned plan to `$WORKSPACE_ABS/plan.md`.
 
 Show the full plan to the user. Print test count.
 
 **PAUSE HERE — do not start Phase 3 until user responds.**
 
-Ask: "Test plan written to `workspace/$TASK_ID/plan.md`. Found **N test cases** (M removed by evaluator as unverified). Respond **'go'** to start execution, or describe changes."
+Ask: "Test plan written to `$WORKSPACE_ABS/plan.md`. Found **N test cases** (M removed by evaluator as unverified). Respond **'go'** to start execution, or describe changes."
 
 ---
 
@@ -340,7 +373,7 @@ Ask: "Test plan written to `workspace/$TASK_ID/plan.md`. Found **N test cases** 
 
 **⛔ PHASE 3 ENTRY GATE — MANDATORY CHECK BEFORE ANY BROWSER ACTION:**
 
-1. Read `workspace/$TASK_ID/plan.md`.
+1. Read `$WORKSPACE_ABS/plan.md`.
 2. Verify it exists AND contains at least one `- [ ] TC-` line.
 
 If plan.md does NOT exist or has no test cases → **STOP**. Do not proceed to any browser action.
@@ -634,13 +667,22 @@ Print after the pass: "Screenshot audit complete. Evaluator flagged N / M screen
 
 ## Phase 4: Report
 
+**PHASE 4 ENTRY GATE — runs before any report is written:**
+
+Verify the Phase 3 Close screenshot validation evaluator ran this session. If it did NOT run:
+
+1. Run Phase 3 Close now — spawn `evaluator-agent` for screenshot validation before continuing.
+2. Do NOT write the report until the evaluator has returned its verdict.
+
+The orchestrator must NOT self-verify screenshots. "I checked them and they look fine" is not a substitute for the evaluator pass. Apply all RETAKE instructions before proceeding.
+
 **4a — Tally results.**
 
 Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`, NEEDS-RERUN `[S]`.
 
 **4b — Write report.**
 
-Write `workspace/$TASK_ID/report.md`:
+Write `$WORKSPACE_ABS/report.md`:
 
 ```markdown
 # E2E Test Report
@@ -648,7 +690,7 @@ Write `workspace/$TASK_ID/report.md`:
 **URL**: [TARGET_URL]
 **Date**: [date]
 **Scope**: [SCOPE]
-**Plan**: workspace/$TASK_ID/plan.md
+**Plan**: $WORKSPACE_ABS/plan.md
 **Snapshots**: $SNAPSHOTS_DIR/
 
 ## Summary
@@ -698,6 +740,17 @@ Write `workspace/$TASK_ID/report.md`:
 
 Print the Summary table. List all failures with their observed state. List blocked tests with reasons.
 
-End with: "Full report → `workspace/$TASK_ID/report.md`. Screenshots → `$SNAPSHOTS_DIR/`."
+End with: "Full report → `$WORKSPACE_ABS/report.md`. Screenshots → `$SNAPSHOTS_DIR/`."
 
 Call `browser_close`.
+
+---
+
+## Post-Execution Interaction Rules
+
+**If the user asks whether screenshots were independently verified:**
+
+- If Phase 3 Close evaluator ran → confirm and cite the evaluator's RETAKE count.
+- If Phase 3 Close did NOT run → run it now before answering. Do not self-assess screenshot quality.
+
+**Never self-verify.** The evaluator-agent checks annotation presence, annotation placement, and post-action state. These are three distinct checks that the orchestrator cannot objectively answer about its own screenshots — it produced them.

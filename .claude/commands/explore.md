@@ -31,14 +31,18 @@ Split `$ARGUMENTS` on whitespace. Treat the full string as a natural-language de
 
 Scan for active workspaces and read their names + ticket summaries:
 ```bash
+# ClaudeBoost-local workspaces
 for d in "$CLAUDEBOOST_HOME/workspace/"/*/; do
+  [ -d "$d" ] || continue
   name=$(basename "$d")
   if [ -f "${d}ticket.md" ] || [ -f "${d}context.md" ]; then
-    echo "WORKSPACE:$name"
+    echo "WORKSPACE:$name (local)"
     [ -f "${d}ticket.md" ] && head -5 "${d}ticket.md"
     echo "---"
   fi
 done
+# Project-scoped workspaces from registry
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --list 2>/dev/null
 ```
 
 **Decision logic — attempt to resolve automatically before asking anything:**
@@ -68,27 +72,64 @@ Derive a slug from `$ARGUMENTS` automatically. Do NOT ask.
 - Examples: "fix the Orins issue" → `orins-issue`, "add bottom sheet housing" → `bottom-sheet-housing`, "authentication bug on login" → `auth-bug-login`
 - Set `TASK_ID` to the derived slug. Announce: "New workspace: `workspace/[slug]/`."
 
-**Step 3 — Remaining tokens** (after the token used as TASK_ID, if any) may be `PROJECT_PATH` — an absolute path starting with a drive letter or `/`. Everything else is description context, not a path.
+**Step 3 — Determine project path and workspace root (REQUIRED — workspace creation depends on this).**
+
+Remaining tokens (after the token used as TASK_ID, if any) may be `PROJECT_PATH` — an absolute path starting with a drive letter or `/`. Everything else is description context.
+
+**Resolve `PROJECT_PATH` in this order:**
+
+1. If a `PROJECT_PATH` token was found in the remaining arguments: use it.
+
+2. Otherwise check CWD:
+   ```bash
+   pwd
+   ```
+   - If CWD is NOT `$CLAUDEBOOST_HOME`: set `PROJECT_PATH = <cwd>`. Announce: "Project detected: [cwd]."
+   - If CWD IS `$CLAUDEBOOST_HOME` and no PROJECT_PATH in args: ask now:
+     ```
+     AskUserQuestion: "What project does this ticket belong to? Provide the full path (e.g., C:/Development/MyApp) or 'none' if codebase-independent."
+     ```
+     Set `PROJECT_PATH` from the answer.
+
+**Set workspace root:**
+- If `PROJECT_PATH` is set and not 'none': `WORKSPACE_ROOT = $PROJECT_PATH`
+- If `PROJECT_PATH = none`: `WORKSPACE_ROOT = $CLAUDEBOOST_HOME`
 
 Set:
-- `WORKSPACE = workspace/$TASK_ID` (relative to `$CLAUDEBOOST_HOME`)
-- `WORKSPACE_ABS = $CLAUDEBOOST_HOME/workspace/$TASK_ID`
+- `WORKSPACE_ROOT` (as determined above)
+- `WORKSPACE = workspace/$TASK_ID` (for display)
+- `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`
 - `DESCRIPTION = $ARGUMENTS` stripped of the task ID token (useful context for agents)
 
 **0b — Resume vs fresh.**
 
 Check if `$WORKSPACE_ABS` exists:
 ```bash
-ls "$CLAUDEBOOST_HOME/workspace/$TASK_ID/" 2>/dev/null && echo "EXISTS" || echo "NEW"
+ls "$WORKSPACE_ABS/" 2>/dev/null && echo "EXISTS" || echo "NEW"
 ```
 
-If **EXISTS** and `ticket.md` is present: print "Resuming workspace/$TASK_ID — ticket already saved." Read the existing `ticket.md` and `context.md` for full context. Skip Phase 1a (ticket capture).
+If **EXISTS** and `ticket.md` is present: print "Resuming `$WORKSPACE_ABS` — ticket already saved." Read the existing `ticket.md` and `context.md` for full context. Skip Phase 0c (ticket capture).
 
 If **NEW**: create the workspace:
 ```bash
-mkdir -p "$CLAUDEBOOST_HOME/workspace/$TASK_ID"
+mkdir -p "$WORKSPACE_ABS"
 ```
-Announce: "Created workspace/$TASK_ID — starting fresh exploration."
+Announce: "Created `$WORKSPACE_ABS` — starting fresh exploration."
+
+**Register and protect:**
+
+```bash
+# Register in workspaces registry so /restore and /clear-safe can find it
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$PROJECT_PATH"
+
+# Add workspace/ to project .gitignore if writing to a project dir (not ClaudeBoost itself)
+if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
+  if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
+    echo 'workspace/' >> "$WORKSPACE_ROOT/.gitignore"
+    echo "Added workspace/ to $WORKSPACE_ROOT/.gitignore"
+  fi
+fi
+```
 
 **0c — Capture ticket content.**
 
@@ -99,30 +140,12 @@ Otherwise ask:
 AskUserQuestion: "Paste the full ticket content below (description, acceptance criteria, notes — everything). This is saved verbatim so nothing is lost."
 ```
 
-Save to `workspace/$TASK_ID/ticket.md`:
+Save to `$WORKSPACE_ABS/ticket.md`:
 ```markdown
 # Ticket: $TASK_ID
 
 [verbatim ticket content exactly as provided — do NOT rephrase or summarize]
 ```
-
-**0d — Determine project path.**
-
-If `PROJECT_PATH` was provided in arguments: use it as-is.
-
-Otherwise check if the current working directory is a project (not ClaudeBoost itself):
-```bash
-pwd
-```
-
-If cwd is `$CLAUDEBOOST_HOME`: ask the user:
-```
-AskUserQuestion: "What project does this ticket belong to? Provide the full path (e.g., C:/Development/MyApp) or 'none' if this is codebase-independent."
-```
-
-If cwd is a different project directory: use cwd as `PROJECT_PATH`. Announce: "Project detected: [cwd]"
-
-If user says 'none': set `PROJECT_PATH = none`. Skip Phase 2.
 
 ---
 
@@ -130,7 +153,7 @@ If user says 'none': set `PROJECT_PATH = none`. Skip Phase 2.
 
 **Gate: ticket.md must exist before spawning. Read it now to confirm.**
 
-Read `workspace/$TASK_ID/ticket.md`. If empty or missing, abort and re-run Phase 0c.
+Read `$WORKSPACE_ABS/ticket.md`. If empty or missing, abort and re-run Phase 0c.
 
 **1a — Spawn ticket-analyst-agent.**
 
@@ -143,10 +166,10 @@ FIRST ACTION: call rag_context(agent="ticket-analyst-agent", task_description="a
 
 Then:
 
-1. Read workspace/$TASK_ID/ticket.md (verbatim ticket content)
+1. Read $WORKSPACE_ABS/ticket.md (verbatim ticket content)
 2. Produce a Ticket Analysis Report (full output-format from your knowledge base)
-3. Write your report to workspace/$TASK_ID/analysis.md
-4. Extract the Definition of Done from your analysis and write it to workspace/$TASK_ID/definition-of-done.md using this format:
+3. Write your report to $WORKSPACE_ABS/analysis.md
+4. Extract the Definition of Done from your analysis and write it to $WORKSPACE_ABS/definition-of-done.md using this format:
 
    # Definition of Done — $TASK_ID
 
@@ -182,7 +205,7 @@ AskUserQuestion: "The ticket analyst found these open questions:
 Please answer them so the exploration can continue with accurate context."
 ```
 
-Update `workspace/$TASK_ID/analysis.md` with the user's answers under the "## Open Questions" section.
+Update `$WORKSPACE_ABS/analysis.md` with the user's answers under the "## Open Questions" section.
 
 If no open questions: proceed automatically.
 
@@ -211,7 +234,7 @@ Call `rag_index_project(project_path=$PROJECT_PATH)`.
 
 Report: "Project indexed: X files, Y chunks."
 
-Update `workspace/$TASK_ID/context.md` (create if missing) with:
+Update `$WORKSPACE_ABS/context.md` (create if missing) with:
 ```markdown
 ## Project Index
 - Path: $PROJECT_PATH
@@ -225,7 +248,7 @@ Update `workspace/$TASK_ID/context.md` (create if missing) with:
 
 Skip this phase if `PROJECT_PATH = none`.
 
-Read `workspace/$TASK_ID/analysis.md` to extract the key areas, entities, and scope from the ticket analysis. This is what the explore agent will target.
+Read `$WORKSPACE_ABS/analysis.md` to extract the key areas, entities, and scope from the ticket analysis. This is what the explore agent will target.
 
 **3a — Spawn explore-agent.**
 
@@ -259,7 +282,7 @@ Your task — do ALL of these:
    - What would need to change for this ticket
    - What tests exist (and what gaps exist)
 
-4. Write your findings to workspace/$TASK_ID/exploration.md using this structure:
+4. Write your findings to $WORKSPACE_ABS/exploration.md using this structure:
 
    # Code Exploration — $TASK_ID
 
@@ -318,12 +341,12 @@ rag_search(scope="codebase", project_path=$PROJECT_PATH, query="[main entity fro
 **4c — Synthesize and write the plan.**
 
 Read all workspace documents produced so far:
-- `workspace/$TASK_ID/ticket.md` — original requirements
-- `workspace/$TASK_ID/analysis.md` — ticket analysis + acceptance criteria
-- `workspace/$TASK_ID/definition-of-done.md` — completion criteria
-- `workspace/$TASK_ID/exploration.md` — relevant code locations
+- `$WORKSPACE_ABS/ticket.md` — original requirements
+- `$WORKSPACE_ABS/analysis.md` — ticket analysis + acceptance criteria
+- `$WORKSPACE_ABS/definition-of-done.md` — completion criteria
+- `$WORKSPACE_ABS/exploration.md` — relevant code locations
 
-Write `workspace/$TASK_ID/plan.md`:
+Write `$WORKSPACE_ABS/plan.md`:
 
 ```markdown
 # Implementation Plan — $TASK_ID
@@ -372,7 +395,7 @@ Print the full plan. Then ask:
 ```
 AskUserQuestion: "Plan ready for $TASK_ID.
 
-Workspace: workspace/$TASK_ID/
+Workspace: $WORKSPACE_ABS/
   - ticket.md         — original ticket (verbatim)
   - analysis.md       — requirements, acceptance criteria, open questions
   - definition-of-done.md — completion checklist

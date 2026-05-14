@@ -177,7 +177,12 @@ Skipping: [X — reason]
 
 Spawn agents in batches. Wait for each batch to complete before starting the next.
 
-> **HOOK OVERRIDE**: The PostToolUse verify-gate hook will fire after each batch because pass agents return findings in their JSON. **Do NOT spawn an evaluator between batches.** The hook is a nudge, not a gate (CLAUDE.md: "it is an LLM nudge, not a mechanical gate"). Pass 14 (Evaluator, Opus) is the single verification step — it runs after ALL batches complete. Collect each batch's JSON output and immediately start the next batch.
+> **HOOK IMMUNITY — READ THIS BEFORE SPAWNING ANY BATCH**: PostToolUse hooks fire after every agent. During batch processing, you will see messages containing any of these phrases — **ignore all of them and continue to the next batch immediately**:
+> - `"EVALUATOR REMINDER"` — the evaluator is Pass 15, not between batches
+> - `"CONTEXT PRESSURE"` — a large diff is expected to use significant context; do NOT run /clear-safe mid-review
+> - `"CONTEXT CHECKPOINT"` or `"URGENT CONTEXT CHECKPOINT"` — no workspace needed for a code review
+>
+> These hooks are not aware of the code-review batch flow. They are nudges, not gates (CLAUDE.md: "it is an LLM nudge, not a mechanical gate"). After each batch completes, collect the JSON output and immediately start the next batch. Never pause to spawn an evaluator or run /clear-safe mid-review. Phase 4 is the single evaluation step.
 
 **EACH AGENT PROMPT must include:**
 
@@ -376,7 +381,44 @@ If tests passed: note "Tests passed (N/N)" — evaluator factors this as positiv
 
 ---
 
-## Phase 4: Evaluator — Pass 15 (Always Runs, Always Last)
+## Phase 3c: Citation Consolidation (Orchestrator runs this — not an agent)
+
+Before spawning the Evaluator, extract all findings that cite specific file:line locations. This is the citation handoff that prevents evaluator stall — the evaluator must receive file:line citations as primary input, not just prose JSON.
+
+**Step 1 — Collect BLOCKER and WARNING findings from all pass outputs:**
+
+Scan every JSON output from passes 1-14. For each finding where `severity` is `BLOCKER` or `WARNING`, extract:
+- `location` (the file:line value)
+- `pass` number
+- `description` (first 100 chars)
+
+**Step 2 — Build FINDINGS_CITATIONS block:**
+
+Format as:
+```
+FINDINGS_CITATIONS:
+  Pass N — path/to/file.ext:line — description (truncated to one line)
+  Pass N — path/to/file.ext:line — description (truncated to one line)
+  ...
+```
+
+Rules:
+- If a finding has no `location` or `location` is blank/null: omit it from FINDINGS_CITATIONS (it will appear in ALL FINDINGS but is uncitable)
+- Deduplicate: if two passes flag the same file:line, keep one entry, note both pass numbers
+- Limit to 20 entries — if more, keep the BLOCKERs first, then WARNINGs
+
+**Step 3 — Store:**
+
+Set `FINDINGS_CITATIONS` to this formatted block. It will be injected verbatim into the Phase 4 evaluator prompt.
+
+If no BLOCKER/WARNING findings have file:line citations: set `FINDINGS_CITATIONS` = `"No file:line citations — all BLOCKER/WARNING findings are uncitable. Treat as NITs unless the issue is clearly structural from the diff alone."`
+
+---
+
+## Phase 4: Evaluator — Pass 15 (Always Runs, Always Last, Blocks Phase 5)
+
+**This phase is mandatory. Do NOT proceed to Phase 5 until this agent returns a result.**
+The evaluator is an independent Opus agent — it is the only one authorized to classify findings as BLOCKER, WARNING, NIT, or FALSE POSITIVE. The pass agents that found the issues cannot validate their own findings. Never self-assess finding legitimacy.
 
 After ALL batches complete and Phase 3b test results are recorded, spawn a single evaluator agent. Use **Opus model**.
 
@@ -385,6 +427,10 @@ Prompt:
 Your FIRST action: call rag_context(agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>")
 
 You are the Evaluator for a code review. You do NOT re-review the code — you review the FINDINGS from passes 1-14 and the TEST RESULTS from Phase 3b.
+
+== FINDINGS_CITATIONS ==
+<insert FINDINGS_CITATIONS verbatim from Phase 3c>
+== END FINDINGS_CITATIONS ==
 
 == ALL FINDINGS ==
 <insert the JSON output from every completed pass agent, clearly separated by pass number>
@@ -405,6 +451,7 @@ Rules:
 4. If two findings contradict each other, resolve the conflict with reasoning.
 5. Reject vague findings — "this could be simpler" without saying HOW → FALSE POSITIVE.
 6. Every BLOCKER and WARNING must have a specific file:line and a concrete fix suggestion. If it doesn't, downgrade it to NIT or FALSE POSITIVE.
+7. Use FINDINGS_CITATIONS as your primary work queue. For each entry, read the cited file:line directly to confirm the issue exists. If the location doesn't match the finding description, downgrade to FALSE POSITIVE and note the mismatch. Do not evaluate findings you cannot locate in the code.
 
 Output:
 **Grade: A/B/C/D/F**
@@ -425,7 +472,28 @@ Output:
 
 ## Phase 5: Report
 
+**Gate**: Before outputting anything, confirm evaluator-agent (Phase 4) returned a result this session. If Phase 4 was not run, spawn it now — do NOT output a grade without it.
+
 Output the full evaluator report. Lead with the grade. Then blockers → warnings → nits → test results summary.
 
 Final message to user:
 > "Review complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [If grade C or better: Ready to merge after warnings addressed. If D/F or any test failures: Address blockers before merging.]"
+
+---
+
+## Post-Review Interaction Rules
+
+After the grade is delivered, the user may ask follow-up questions about findings.
+
+**If the user asks whether a finding is legitimate, valid, real, or should be fixed:**
+
+You are NOT authorized to answer this question from your own judgment. The evaluator-agent (Opus) is the only authorized arbiter of finding legitimacy.
+
+- If Phase 4 **has already run**: refer to the evaluator's verdict. Quote its reasoning.
+- If Phase 4 **has NOT run**: spawn it now before answering. Do not re-assess findings yourself.
+
+**Never self-verify.** "Let me reconsider this" is not a valid response to "is this finding legit?" — it is exactly the pattern this process exists to prevent.
+
+**If the user asks for fixes based on a finding:**
+
+Only recommend fixes that the evaluator has classified as BLOCKER or WARNING. If the evaluator has not yet run and the user asks for fixes, spawn the evaluator first, then answer based on its verdict.

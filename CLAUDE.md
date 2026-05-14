@@ -41,6 +41,16 @@ Do the work directly when they don't. A one-line fix doesn't need an agent.
 - Context 50-75%: up to 2 agents
 - Context above 75%: 1 agent, sequential
 
+### Agent Return Format
+Every agent response **MUST** end with a `## Summary` block (≤300 words) containing:
+- Findings with `file:line` citations
+- Decision made or action taken
+- Specific next step
+
+The orchestrator reads the `## Summary` block. It does **NOT** re-read the full response body.
+This keeps agent output from bloating the main context window (multi-agent overhead can reach 15× chat tokens — Anthropic research finding).
+Include this instruction in every agent spawn prompt: `"End your response with ## Summary (≤300 words): findings with file:line, action taken, next step."`
+
 ## Verify Gate (Anti-Hallucination)
 
 Applies everywhere: reviews, planning, bug diagnosis, security audits, test planning.
@@ -89,7 +99,7 @@ Never silently leave occurrences untouched because the bug report only mentioned
 
 | Trigger | Action |
 |---------|--------|
-| Ticket pasted | Save verbatim to `workspace/[task-id]/ticket.md`, plan, then delegate |
+| Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
 | Complex feature | Workspace + sweep-then-verify + agents |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
 | New architecture | Spawn architect-agent (Opus) with SOLID review |

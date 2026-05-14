@@ -1,6 +1,6 @@
 ---
 description: Full ClaudeBoost setup and verification — works for fresh installs and git pull updates
-allowed-tools: Bash, Read, Write, Glob
+allowed-tools: Bash, Read, Write, Glob, mcp__rag-server__rag_index, mcp__rag-server__rag_status
 ---
 
 # /setup — ClaudeBoost Setup & Verification
@@ -21,9 +21,20 @@ Safe to re-run anytime — all operations preserve existing user settings.
 echo "CLAUDEBOOST_HOME=$CLAUDEBOOST_HOME"
 ```
 
-If `$CLAUDEBOOST_HOME` is empty, read `~/.claude/settings.json` and extract `env.CLAUDEBOOST_HOME`. Use that path as `$BOOST` for all subsequent steps. If settings.json doesn't exist yet, this is a fresh install — continue with Phase 1.
+If `$CLAUDEBOOST_HOME` is set, proceed to Phase 1.
 
-Announce: `ClaudeBoost home: <path>` (or "Fresh install — no existing config detected")
+If `$CLAUDEBOOST_HOME` is empty:
+
+1. Try extracting from `~/.claude/settings.json`:
+   ```bash
+   python -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/settings.json'))); print(d.get('env',{}).get('CLAUDEBOOST_HOME','MISSING'))" 2>/dev/null || echo "MISSING"
+   ```
+2. If a valid path is returned: run `export CLAUDEBOOST_HOME=<path>` so Phase 1 can use it.
+3. If `MISSING` (settings.json absent, or exists but has no `CLAUDEBOOST_HOME` key): ask the user:
+   > "This appears to be a fresh install. What is the full path to your ClaudeBoost repo?"
+   Then run: `export CLAUDEBOOST_HOME=<user-provided-path>`
+
+Announce: `ClaudeBoost home: <path>`
 
 ---
 
@@ -117,11 +128,11 @@ If FAIL: repair → `pip install edge-tts`, then retry.
 head -3 ~/.claude/CLAUDE.md 2>/dev/null || echo "MISSING"
 ```
 
-If missing: copy from ClaudeBoost:
-```bash
-cp "$CLAUDEBOOST_HOME/CLAUDE.md" ~/.claude/CLAUDE.md && echo "Copied CLAUDE.md"
-```
-Then retry.
+If missing: **do not auto-copy** — the project CLAUDE.md documents ClaudeBoost internals and must not be used as the global user file. Instead, warn the user:
+
+> "~/.claude/CLAUDE.md is missing. Create it with your personal global rules (shell conventions, security standards, coding preferences). See the ClaudeBoost docs for an example of what to include. Once created, re-run /setup to verify."
+
+Mark as WARN (not FAIL) and continue. Do not retry — this requires manual user action.
 
 ---
 
@@ -155,7 +166,7 @@ Step/Check               Result
 ─────────────────────────────────────────
 Re-index ClaudeBoost RAG : OK (N files, M chunks)
 RAG server health        : OK / FAIL (<reason>)
-Required hooks           : OK (6/6) / MISSING: <list>
+Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING

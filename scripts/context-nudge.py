@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -31,6 +32,12 @@ EVALUATOR_THRESHOLD = 2    # agent spawns without evaluator before reminding
 COMPREHENSIVE_INTERVAL = 25  # full behavior checklist every N tool uses
 CLEAR_CONSIDERATION_THRESHOLD = 100   # start suggesting /clear-safe at this tool count
 CLEAR_CONSIDERATION_INTERVAL = 25     # repeat every N uses past threshold
+
+# Context window pressure detection
+# PostToolUse payload may include context_window_usage.input_tokens — used when available.
+# Falls back to tool-count heuristic when the field is absent.
+CONTEXT_WINDOW_SIZE = 200_000   # tokens — default for Claude Sonnet/Opus in Claude Code
+CONTEXT_PCT_WARN = 0.75         # warn when >75% of the window is used (< 25% remaining)
 
 RAG_TOOLS = {
     "mcp__rag-server__rag_search",
@@ -60,6 +67,13 @@ def main() -> int:
 
     tool_name = payload.get("tool_name", "")
 
+    # --- Context window pressure (from hook payload when available) ---
+    ctx_usage = payload.get("context_window_usage") or {}
+    input_tokens = ctx_usage.get("input_tokens", 0)
+    context_pct_used: "float | None" = (
+        input_tokens / CONTEXT_WINDOW_SIZE if input_tokens else None
+    )
+
     # --- Compaction counter ---
     tracker_path = home / "state" / "compaction-tracker.json"
     try:
@@ -88,12 +102,39 @@ def main() -> int:
         behavior["reads_since_rag"] = behavior.get("reads_since_rag", 0) + 1
 
     # Update evaluator counter
+    # Reset only when evaluator Task *completes* with a real verdict, not on spawn.
+    # This prevents a stalled evaluator (37 tokens, no verdict) from clearing the counter.
+    EVALUATOR_VERDICT_KEYWORDS = ("confirmed", "false_positive", "grade:", "blocker", "warning")
     if tool_name == "Task":
         desc = str((payload.get("tool_input") or {}).get("description", "")).lower()
-        if "evaluator" in desc:
+        tool_response_raw = payload.get("tool_response", "") or ""
+        tool_response_lower = str(tool_response_raw).lower()
+
+        is_evaluator = "evaluator" in desc
+        has_verdict = any(kw in tool_response_lower for kw in EVALUATOR_VERDICT_KEYWORDS)
+
+        # Code-review passes have their own evaluator (Pass 15) at the end.
+        # Don't count them toward tasks_since_evaluator — they generate many
+        # agent spawns by design and must not trigger mid-batch evaluator nudges.
+        REVIEW_PASS_MARKERS = ("review pass", "pass 1 —", "pass 2 —", "pass 3 —",
+                               "pass 4 —", "pass 5 —", "pass 6 —", "pass 7 —",
+                               "pass 8 —", "pass 9 —", "pass 10 —", "pass 11 —",
+                               "pass 12 —", "pass 13 —", "pass 14 —",
+                               "simplicity review", "dead code review",
+                               "ticket alignment review", "migration/schema review",
+                               "banned dependencies review")
+        is_review_pass = any(marker in desc for marker in REVIEW_PASS_MARKERS)
+
+        if is_evaluator and has_verdict:
             behavior["tasks_since_evaluator"] = 0
-        else:
+        elif not is_evaluator and not is_review_pass:
             behavior["tasks_since_evaluator"] = behavior.get("tasks_since_evaluator", 0) + 1
+        # is_evaluator but no verdict (stalled/minimal output) → no reset, no increment
+        # is_review_pass → no increment (has its own evaluator at the end)
+
+        # Store recent task response for citation extraction in nudge messages
+        if tool_response_raw:
+            behavior["last_task_response"] = str(tool_response_raw)[:2000]
 
     reads = behavior.get("reads_since_rag", 0)
     tasks = behavior.get("tasks_since_evaluator", 0)
@@ -102,7 +143,16 @@ def main() -> int:
     nudges = []
 
     # --- CHANNEL A: Behavior enforcement (one per turn) ---
-    if reads >= RAG_THRESHOLD and reads % RAG_THRESHOLD == 0:
+    if context_pct_used is not None and context_pct_used >= CONTEXT_PCT_WARN:
+        nudges.append(
+            f"CONTEXT PRESSURE ({int(context_pct_used * 100)}% of window used — "
+            f"{int((1 - context_pct_used) * CONTEXT_WINDOW_SIZE / 1000)}k tokens remain): "
+            "Run /clear-safe NOW — do not start new subtasks. "
+            "Finish the current sentence, update workspace context.md with status + next step, "
+            "then run /clear-safe to save state and clear. "
+            "Only skip if an agent is mid-task; finish it first, then clear immediately after."
+        )
+    elif reads >= RAG_THRESHOLD and reads % RAG_THRESHOLD == 0:
         nudges.append(
             f"RAG REMINDER ({reads} file searches since last RAG call): "
             "STOP reading files. Call rag_search('what you need') FIRST — "
@@ -110,10 +160,26 @@ def main() -> int:
             "Only read files after RAG confirms which ones are relevant."
         )
     elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0:
+        # Extract file:line citations from the most recent agent output so the
+        # evaluator spawn prompt has something concrete to verify against.
+        last_response = behavior.get("last_task_response", "")
+        raw_citations = re.findall(r'[\w./\\-]+\.\w{1,6}:\d+', last_response)
+        unique_citations = list(dict.fromkeys(raw_citations))[:5]
+        if unique_citations:
+            citation_hint = (
+                f" Citations from last agent output: {', '.join(unique_citations)}. "
+                "Include these verbatim in the evaluator spawn prompt description."
+            )
+        else:
+            citation_hint = (
+                " No file:line citations found in last agent output — "
+                "go back and extract specific file:line locations before spawning evaluator."
+            )
         nudges.append(
             f"EVALUATOR REMINDER ({tasks} agent spawns without evaluator): "
             "Spawn evaluator-agent on your findings before acting on them. "
             "Never self-verify — evaluator reads only the cited file:lines."
+            + citation_hint
         )
     elif (
         total >= CLEAR_CONSIDERATION_THRESHOLD

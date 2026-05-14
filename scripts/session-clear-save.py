@@ -65,29 +65,99 @@ def extract_summary(content: str, char_budget: int = 2000) -> str:
     return "\n\n".join(result)
 
 
+def _get_project_workspace_path(home: Path, task_id: str) -> "Path | None":
+    """Look up absolute workspace path from workspaces.json registry."""
+    reg_path = home / "state" / "workspaces.json"
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        entry = reg.get(task_id)
+        if entry and entry.get("workspace_path"):
+            return Path(entry["workspace_path"])
+    except Exception:
+        pass
+    return None
+
+
+def _workspace_context_path(home: Path, task_id: str) -> "Path | None":
+    """Return the context.md path for task_id, checking both local and registry."""
+    local = home / "workspace" / task_id / "context.md"
+    if local.exists():
+        return local
+    proj_ws = _get_project_workspace_path(home, task_id)
+    if proj_ws:
+        p = proj_ws / "context.md"
+        if p.exists():
+            return p
+    return None
+
+
 def detect_active_workspace(home: Path) -> "str | None":
     """Return the task-id of the active workspace, or None.
 
     Priority:
     1. state/active-workspace.json  — set explicitly by /clear-safe
-    2. Most recently modified workspace/*/context.md  — auto-detect fallback
+    2. Most recently modified workspace/*/context.md (local + project-scoped) — auto-detect fallback
+
+    Cross-check: active-workspace.json is only written at /clear-safe time, so it
+    may reflect a PREVIOUS session's workspace. After resolving a Priority 1
+    candidate, compare its context.md mtime against all other workspaces. If
+    another workspace's context.md is more than 30 minutes newer, prefer it —
+    the user most likely switched workspaces without re-running /clear-safe.
     """
     state_path = home / "state" / "active-workspace.json"
+    candidate = None
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
         ws = data.get("workspace", "")
-        if ws and (home / "workspace" / ws / "context.md").exists():
-            return ws
+        if ws and _workspace_context_path(home, ws):
+            candidate = ws
     except Exception:
         pass
 
+    # Collect all context.md paths: local ClaudeBoost workspaces + project-scoped
+    ctx_files: list[Path] = []
     workspace_dir = home / "workspace"
-    if not workspace_dir.exists():
-        return None
-    ctx_files = list(workspace_dir.glob("*/context.md"))
+    if workspace_dir.exists():
+        ctx_files.extend(workspace_dir.glob("*/context.md"))
+
+    # Also include project-scoped workspaces from registry
+    reg_path = home / "state" / "workspaces.json"
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        for task_id, entry in reg.items():
+            wp = entry.get("workspace_path", "")
+            if wp:
+                ctx = Path(wp) / "context.md"
+                if ctx.exists():
+                    ctx_files.append(ctx)
+    except Exception:
+        pass
+
     if not ctx_files:
-        return None
-    return max(ctx_files, key=lambda f: f.stat().st_mtime).parent.name
+        return candidate
+
+    mtime_winner_path = max(ctx_files, key=lambda f: f.stat().st_mtime)
+    # Determine task_id from winner path
+    # Local: home/workspace/<task_id>/context.md → parent.name
+    # Project: <project>/workspace/<task_id>/context.md → parent.name
+    mtime_winner = mtime_winner_path.parent.name
+
+    if candidate is None:
+        return mtime_winner
+
+    # If the mtime winner is meaningfully newer (>30 min), prefer it over the
+    # stored candidate — guards against stale active-workspace.json across sessions.
+    try:
+        candidate_ctx = _workspace_context_path(home, candidate)
+        if candidate_ctx:
+            candidate_mtime = candidate_ctx.stat().st_mtime
+            winner_mtime = mtime_winner_path.stat().st_mtime
+            if mtime_winner != candidate and (winner_mtime - candidate_mtime) > 1800:
+                return mtime_winner
+    except Exception:
+        pass
+
+    return candidate
 
 
 def collect_workspace_memo(
@@ -95,27 +165,44 @@ def collect_workspace_memo(
 ) -> str:
     """Build the workspace memo from context.md files.
 
-    If active_workspace is set, includes only that workspace.
-    Otherwise falls back to all workspaces.
+    If active_workspace is set, includes only that workspace (local or project-scoped).
+    Otherwise falls back to all workspaces (local + registry).
     """
     workspace_dir = home / "workspace"
     workspace_summaries = []
 
-    if workspace_dir.exists():
-        if active_workspace:
-            ctx_file = workspace_dir / active_workspace / "context.md"
-            ctx_files = [ctx_file] if ctx_file.exists() else []
+    if active_workspace:
+        # Check local first, then project-scoped registry
+        local_ctx = workspace_dir / active_workspace / "context.md"
+        if local_ctx.exists():
+            ctx_files = [local_ctx]
         else:
-            ctx_files = sorted(workspace_dir.glob("*/context.md"))
+            proj_path = _get_project_workspace_path(home, active_workspace)
+            proj_ctx = proj_path / "context.md" if proj_path else None
+            ctx_files = [proj_ctx] if proj_ctx and proj_ctx.exists() else []
+    else:
+        ctx_files = sorted(workspace_dir.glob("*/context.md")) if workspace_dir.exists() else []
+        # Also include project-scoped workspaces from registry
+        reg_path = home / "state" / "workspaces.json"
+        try:
+            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+            for task_id, entry in reg.items():
+                wp = entry.get("workspace_path", "")
+                if wp:
+                    ctx = Path(wp) / "context.md"
+                    if ctx.exists() and ctx not in ctx_files:
+                        ctx_files.append(ctx)
+        except Exception:
+            pass
 
-        for ctx_file in ctx_files:
-            task_id = ctx_file.parent.name
-            try:
-                content = ctx_file.read_text(encoding="utf-8")
-                summary = extract_summary(content)
-                workspace_summaries.append(f"### {task_id}\n{summary}")
-            except Exception:
-                workspace_summaries.append(f"### {task_id}\n[unreadable]")
+    for ctx_file in ctx_files:
+        task_id = ctx_file.parent.name
+        try:
+            content = ctx_file.read_text(encoding="utf-8")
+            summary = extract_summary(content)
+            workspace_summaries.append(f"### {task_id}\n{summary}")
+        except Exception:
+            workspace_summaries.append(f"### {task_id}\n[unreadable]")
 
     parts = [
         "# Clear Handoff Memo",

@@ -12,32 +12,66 @@ Write-Host "`n=== ClaudeBoost Setup ===" -ForegroundColor Cyan
 Write-Host "ClaudeBoost home: $boostHome"
 Write-Host "Claude config dir: $claudeDir`n"
 
+# --- 0. Preflight checks ---
+Write-Host "Running preflight checks..." -ForegroundColor Cyan
+$preflightOk = $true
+foreach ($req in @(
+    [PSCustomObject]@{ cmd = "python"; label = "Python 3.9+";     required = $true },
+    [PSCustomObject]@{ cmd = "pip";    label = "pip";             required = $true },
+    [PSCustomObject]@{ cmd = "claude"; label = "Claude Code CLI"; required = $true },
+    [PSCustomObject]@{ cmd = "git";    label = "Git";             required = $false }
+)) {
+    if (Get-Command $req.cmd -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] $($req.label)" -ForegroundColor Green
+    } elseif ($req.required) {
+        Write-Host "[ERROR] $($req.label) not found on PATH — install before re-running /setup." -ForegroundColor Red
+        $preflightOk = $false
+    } else {
+        Write-Host "[WARN] $($req.label) not found — gt commands and workspace commits will not work." -ForegroundColor Yellow
+    }
+}
+if (-not $preflightOk) {
+    Write-Host "`n[FAIL] Required tools missing. Fix the above and re-run /setup." -ForegroundColor Red
+    exit 1
+}
+
 # Ensure ~/.claude exists
 if (-not (Test-Path $claudeDir)) {
     New-Item -ItemType Directory -Path $claudeDir | Out-Null
     Write-Host "Created $claudeDir" -ForegroundColor Yellow
 }
 
-# --- 1. Create/update ~/.claude/mcp.json ---
+# --- 1. Create/update ~/.claude/mcp.json (merge — never overwrite other servers) ---
 $mcpPath = Join-Path $claudeDir "mcp.json"
 $ragCwd = (Join-Path $boostHome "mcp-rag-server").Replace("\", "/")
 
-$mcpConfig = @{
-    mcpServers = @{
-        "rag-server" = @{
-            command = "python"
-            args = @("-m", "rag_server")
-            cwd = $ragCwd
-            env = @{
-                RAG_PROJECT_ROOT = $boostHomePosix
-            }
-        }
-    }
+$ragEntry = [PSCustomObject]@{
+    command = "python"
+    args    = @("-m", "rag_server")
+    cwd     = $ragCwd
+    env     = [PSCustomObject]@{ RAG_PROJECT_ROOT = $boostHomePosix }
 }
 
-$mcpJson = ($mcpConfig | ConvertTo-Json -Depth 4).TrimStart([char]0xFEFF)
-[System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
-Write-Host "[OK] mcp.json - RAG server registered globally" -ForegroundColor Green
+if (Test-Path $mcpPath) {
+    # Merge: read existing, upsert rag-server, preserve all other servers
+    $existingMcp = Get-Content $mcpPath -Raw | ConvertFrom-Json
+    if (-not $existingMcp.PSObject.Properties["mcpServers"]) {
+        $existingMcp | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{})
+    }
+    if ($existingMcp.mcpServers.PSObject.Properties["rag-server"]) {
+        $existingMcp.mcpServers."rag-server" = $ragEntry
+    } else {
+        $existingMcp.mcpServers | Add-Member -NotePropertyName "rag-server" -NotePropertyValue $ragEntry
+    }
+    $mcpJson = $existingMcp | ConvertTo-Json -Depth 6
+    [System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] mcp.json - rag-server merged (existing MCP servers preserved)" -ForegroundColor Green
+} else {
+    $mcpConfig = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ "rag-server" = $ragEntry } }
+    $mcpJson = $mcpConfig | ConvertTo-Json -Depth 6
+    [System.IO.File]::WriteAllText($mcpPath, $mcpJson, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[OK] mcp.json - created with rag-server" -ForegroundColor Green
+}
 
 # --- 1b. Ensure ~/.claude.json also has rag-server with cwd ---
 $claudeJsonPath = Join-Path $env:USERPROFILE ".claude.json"
@@ -58,7 +92,7 @@ if (Test-Path $claudeJsonPath) {
     } else {
         $claudeJson.mcpServers | Add-Member -NotePropertyName "rag-server" -NotePropertyValue $ragEntry
     }
-    $claudeJsonOut = ($claudeJson | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
+    $claudeJsonOut = $claudeJson | ConvertTo-Json -Depth 10
     [System.IO.File]::WriteAllText($claudeJsonPath, $claudeJsonOut, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] .claude.json - RAG server registered with cwd" -ForegroundColor Green
 } else {
@@ -69,7 +103,13 @@ if (Test-Path $claudeJsonPath) {
 $settingsPath = Join-Path $claudeDir "settings.json"
 
 if (Test-Path $settingsPath) {
-    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    try {
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Host "[ERROR] settings.json is malformed JSON — validate or delete it and re-run /setup." -ForegroundColor Red
+        Write-Host "  Path: $settingsPath" -ForegroundColor Red
+        exit 1
+    }
 } else {
     Write-Host "[WARN] settings.json not found - creating minimal config" -ForegroundColor Yellow
     $settings = [PSCustomObject]@{}
@@ -111,12 +151,12 @@ if (-not (Test-Path $stateDir)) {
 }
 $modePath = Join-Path $stateDir "claudeboost-mode.json"
 if (-not (Test-Path $modePath)) {
-    $modeDefault = (@{
+    $modeDefault = @{
         mode = "CONSULT"
         setAt = (Get-Date).ToString("o")
         setBy = "default"
         reason = "ClaudeBoost default"
-    } | ConvertTo-Json).TrimStart([char]0xFEFF)
+    } | ConvertTo-Json
     [System.IO.File]::WriteAllText($modePath, $modeDefault, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/claudeboost-mode.json - seeded CONSULT default" -ForegroundColor Green
 } else {
@@ -131,12 +171,12 @@ if (-not (Test-Path $approvalsPath)) {
 }
 $speakPath = Join-Path $stateDir "speak-state.json"
 if (-not (Test-Path $speakPath)) {
-    $speakDefault = (@{
+    $speakDefault = @{
         enabled = $false
         voice = "en-US-AndrewNeural"
         setAt = (Get-Date).ToString("o")
         setBy = "default"
-    } | ConvertTo-Json).TrimStart([char]0xFEFF)
+    } | ConvertTo-Json
     [System.IO.File]::WriteAllText($speakPath, $speakDefault, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/speak-state.json - seeded TTS disabled default" -ForegroundColor Green
 } else {
@@ -427,8 +467,6 @@ Install-HookEntry -Settings $settings -HookType "UserPromptSubmit" -Entry $speak
     -Sentinel "speak-stop.py" -Label "TTS interrupt (command-type)"
 
 # --- Stop: TTS speak hook (command-type) ---
-# Direct $h.command sentinel check for idempotency — kept from original implementation.
-# Note: Install-HookEntry also handles command-type hooks after the R50 fix.
 $speakHookPath = "$boostHome\scripts\speak-tts.py".Replace("\", "/")
 $speakHook = [PSCustomObject]@{
     hooks = @(
@@ -438,30 +476,12 @@ $speakHook = [PSCustomObject]@{
         }
     )
 }
-$speakInstalled = $false
-if ($settings.hooks.PSObject.Properties["Stop"]) {
-    $existingStop = @($settings.hooks.Stop)
-    foreach ($e in $existingStop) {
-        if ($e.hooks) {
-            foreach ($h in $e.hooks) {
-                if ($h.command -and $h.command.Contains("speak-tts.py")) {
-                    $speakInstalled = $true
-                }
-            }
-        }
-    }
-    if (-not $speakInstalled) {
-        $settings.hooks.Stop = @($existingStop) + @($speakHook)
-        Write-Host "[OK] hooks.Stop - appended TTS speak hook" -ForegroundColor Green
-    } else {
-        Write-Host "[SKIP] hooks.Stop - TTS speak hook already installed" -ForegroundColor Yellow
-    }
-} else {
-    $settings.hooks | Add-Member -NotePropertyName "Stop" -NotePropertyValue @($speakHook)
-    Write-Host "[OK] hooks.Stop - added TTS speak hook" -ForegroundColor Green
-}
+Install-HookEntry -Settings $settings -HookType "Stop" -Entry $speakHook `
+    -Sentinel "speak-tts.py" -Label "TTS speak hook"
 
-$settingsJson = ($settings | ConvertTo-Json -Depth 10).TrimStart([char]0xFEFF)
+$settingsJson = $settings | ConvertTo-Json -Depth 10
+# BOM prevention: WriteAllText with UTF8Encoding.new($false) writes UTF-8 without BOM.
+# (Set-Content -Encoding UTF8 in PowerShell 5.1 adds a BOM that breaks Claude Code JSON parsing.)
 [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 Write-Host "[OK] settings.json - CLAUDEBOOST_HOME env added" -ForegroundColor Green
 

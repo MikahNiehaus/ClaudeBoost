@@ -37,18 +37,43 @@ Check for collision — if that slug already exists, append `-2`, `-3`, etc.:
 ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null
 ```
 
-### 1b — Create workspace
+### 1b — Determine workspace root and create workspace
+
+Check CWD to decide where the workspace lives:
+```bash
+pwd
+```
+- If CWD is NOT `$CLAUDEBOOST_HOME`: `WORKSPACE_ROOT = <cwd>` (project-scoped)
+- If CWD IS `$CLAUDEBOOST_HOME`: `WORKSPACE_ROOT = $CLAUDEBOOST_HOME` (ClaudeBoost meta-work)
+
+Set `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$WORKSPACE_ID`.
 
 ```bash
-mkdir -p "$CLAUDEBOOST_HOME/workspace/$WORKSPACE_ID"
+mkdir -p "$WORKSPACE_ABS"
 ```
 
-Report: "Created workspace `$WORKSPACE_ID`."
+**Register and protect:**
+```bash
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+
+if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
+  if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
+    echo 'workspace/' >> "$WORKSPACE_ROOT/.gitignore"
+  fi
+fi
+```
+
+Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
 
 ### 1c — Save the goal verbatim
 
-Write `workspace/$WORKSPACE_ID/goal.md`:
+Detect input format:
+- **Short description** (≤30 whitespace-delimited words, single-line): write as a one-liner under `**Input**:`
+- **Full ticket** (multi-line, contains headings/bullets/acceptance criteria/Jira-style content): write the entire text verbatim under `## Ticket Input` — do NOT summarize, truncate, or paraphrase
 
+Write `$WORKSPACE_ABS/goal.md`:
+
+**Short description:**
 ```markdown
 # Goal: $WORKSPACE_ID
 
@@ -56,6 +81,69 @@ Write `workspace/$WORKSPACE_ID/goal.md`:
 **Date**: [today]
 **Status**: PLANNING
 ```
+
+**Full ticket (multi-paragraph):**
+```markdown
+# Goal: $WORKSPACE_ID
+
+**Date**: [today]
+**Status**: PLANNING
+
+## Ticket Input
+
+$ARGUMENTS
+```
+
+Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ticket is detected (per CLAUDE.md convention: "Ticket pasted → Save verbatim to `workspace/[task-id]/ticket.md`").
+
+---
+
+## Phase 1.5: Information Sufficiency Gate
+
+Before classifying or searching code, verify the input is actionable.
+
+**Scan `$ARGUMENTS` for image-only or incomplete descriptions:**
+
+Check for these signals:
+
+**Signal A — Image/attachment references:**
+- Image placeholders: `[image]`, `[screenshot]`, `[img]`, `[attachment]`, `image-*.png`, `*.png`, `*.jpg`
+- Jira/Confluence attachment references: `image-20\d{6}-\d{6}.png`, `Attachments:`, `[Image #`
+- Sparse text: after stripping image placeholder tokens, fewer than 15 whitespace-delimited tokens of actual bug/task description remain
+
+**Signal B — Spec quality (applies to full tickets only — multi-paragraph input):**
+Check whether the input contains at least one of:
+- Acceptance criteria: "acceptance criteria", "AC:", "given/when/then", "✅", "[ ]"
+- Observable outcome: "should", "must", "expected", "definition of done", "done when"
+- User-facing behavior: what the user will see/experience after the change
+
+If NONE of these are present in a multi-paragraph ticket, that is a spec quality signal.
+
+**Four outcomes — pick exactly one:**
+
+**STOP** — Signal A detected AND text is sparse (< 15 content tokens after stripping):
+
+> "The description references an image or attachment I can't read — the visible text alone doesn't tell me what to change.
+> Can you paste the image content, describe the specific bug in one sentence, or copy the text from the screenshot?"
+
+Do not search code. Do not create context.md yet. Only proceed once the blank can be filled:
+> "The specific change required is: ___"
+
+**PROCEED + SAVE** — Signal A detected AND sufficient text is present (≥ 15 content tokens):
+
+Save any directly-provided screenshots or images to `$WORKSPACE_ABS/screenshots/`. Name them descriptively (e.g., `before-[feature].png`). Add an `**Attachments**:` entry in `goal.md` listing the saved file(s). Then proceed to Phase 2.
+
+**PROCEED + WARN** — Signal B detected (multi-paragraph ticket with no acceptance criteria or observable outcome):
+
+Proceed to Phase 2, but prepend this note to `plan.md` and report it to the user:
+
+> "⚠ Spec quality note: This ticket has no acceptance criteria or observable outcome defined.
+> The plan may need adjustment once you define success criteria.
+> Consider adding: what the user will see after this change, and when this ticket is 'done'."
+
+Do NOT block. Do NOT ask a question. Warn once and proceed.
+
+**PROCEED** — no signals: proceed immediately — no question or warning needed.
 
 ---
 
@@ -193,6 +281,12 @@ For each work type, select:
 
 Prune ruthlessly — only include what the work genuinely needs.
 
+**Bug Fix scope rule:** If WORK_TYPES includes Bug Fix, every planned change must trace back to
+an explicit statement in the ticket. Any additional issue found during code exploration that is
+NOT in the ticket must be flagged as a separate candidate — not silently included:
+> "While investigating I also found [X] at file:line. Is this in scope for this ticket, or should I open a separate ticket?"
+Never bundle unrequested fixes into the same commit.
+
 ---
 
 ## Phase 4: Ask About Project (if needed)
@@ -212,7 +306,7 @@ If the input already implies a path or clearly describes ClaudeBoost-internal wo
 
 ## Phase 5: Write the Plan
 
-Write `workspace/$WORKSPACE_ID/plan.md` using this template:
+Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ```markdown
 # Workspace Plan — $WORKSPACE_ID
@@ -301,7 +395,7 @@ In order — copy-paste these to execute:
 | [risk] | low/med/high | [concrete mitigation] |
 ```
 
-Write `workspace/$WORKSPACE_ID/context.md`:
+Write `$WORKSPACE_ABS/context.md`:
 ```markdown
 # Workspace: $WORKSPACE_ID
 
@@ -309,7 +403,7 @@ Write `workspace/$WORKSPACE_ID/context.md`:
 PLAN_READY
 
 ## Goal
-[one-line from goal.md]
+[one-line summary — ticket title if full ticket was pasted, otherwise the short description; full content is in goal.md / ticket.md]
 
 ## Next Step
 [Step 1 exact command from plan.md]
@@ -329,9 +423,11 @@ Print the full `plan.md`.
 Then output this block:
 
 ```
-Workspace ready: workspace/$WORKSPACE_ID/
+Workspace ready: $WORKSPACE_ABS/
 
   goal.md     — your goal (verbatim)
+  [ticket.md  — full ticket text (verbatim) — only if full ticket was pasted]
+  [screenshots/ — attached images (N files) — only if screenshots were saved]
   plan.md     — step-by-step ClaudeBoost implementation plan
   context.md  — session state (restored after /clear via handoff)
 

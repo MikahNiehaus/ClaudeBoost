@@ -10,7 +10,21 @@ Does NOT run /clear itself — you confirm and type /clear.
 
 Read `$CLAUDEBOOST_HOME/state/active-workspace.json` (field: `workspace`).
 If the file is missing or the named workspace has no `context.md`, auto-detect:
-find the most recently modified `workspace/*/context.md`.
+find the most recently modified `workspace/*/context.md` — checking both ClaudeBoost-local workspaces AND project-scoped workspaces via the registry:
+
+```bash
+# Check registry for project-scoped workspace paths
+python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --list 2>/dev/null
+```
+
+**Recency cross-check (staleness guard):** `active-workspace.json` is only
+written at `/clear-safe` time, so it may reflect a *previous* session's workspace.
+After resolving a candidate from the file, compare its `context.md` mtime against
+all other `workspace/*/context.md` files. If another workspace is more than
+30 minutes newer, prefer it — the user switched workspaces without re-running
+`/clear-safe`. Show the user both the stored and detected values when they differ:
+> "state/active-workspace.json says **[stored]**, but **[mtime-winner]** is N hours
+> more recent. Using **[mtime-winner]** — correct this before proceeding if wrong."
 
 If no workspace exists at all: skip to Step 4.
 
@@ -94,6 +108,7 @@ Tell the user:
 > Pre-flight complete. Type `/clear` to proceed.
 > State is saved to `state/handoff-latest.json` and will be restored on your first message after clearing.
 > The next session will restore only **[task-id]** context — not all workspaces.
+> Workspace committed to handoff: **[task-id]** — if this is wrong, correct `state/active-workspace.json` before clearing.
 
 If the user says anything other than confirming (asks a question, requests a change):
 answer them and do NOT tell them to /clear yet. Only give the go-ahead once they confirm.
