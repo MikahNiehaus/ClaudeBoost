@@ -134,8 +134,16 @@ def main() -> int:
     has_success = any(sig in text for sig in SUCCESS_SIGNALS)
 
     if has_success:
+        # Check only the structured JSON "error" field — not the full response body.
+        # Raw body scan caused false positives when codebase search returned source
+        # code content containing these strings as Python string literals.
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = {}
+        top_error = (parsed.get("error") or "").lower()
         for err in EMBEDDED_ERRORS:
-            if err in text_lower:
+            if err in top_error:
                 print(
                     f"RAG returned an error embedded in a valid response: \"{err}\". "
                     "Do NOT silently continue. Stop and report this to the user. "

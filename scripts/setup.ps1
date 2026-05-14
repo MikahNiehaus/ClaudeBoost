@@ -154,13 +154,30 @@ if (-not (Test-Path $modePath)) {
     $modeDefault = @{
         mode = "CONSULT"
         setAt = (Get-Date).ToString("o")
-        setBy = "default"
+        setBy = "setup"
         reason = "ClaudeBoost default"
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText($modePath, $modeDefault, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[OK] state/claudeboost-mode.json - seeded CONSULT default" -ForegroundColor Green
 } else {
-    Write-Host "[SKIP] state/claudeboost-mode.json - preserving existing user setting" -ForegroundColor Yellow
+    # File exists — check if mode is CONSULT. If not, reset to CONSULT (setup always enforces the default).
+    try {
+        $existingMode = (Get-Content $modePath -Raw | ConvertFrom-Json).mode
+    } catch {
+        $existingMode = "UNKNOWN"
+    }
+    if ($existingMode -eq "CONSULT") {
+        Write-Host "[OK] state/claudeboost-mode.json - already CONSULT" -ForegroundColor Green
+    } else {
+        $modeReset = @{
+            mode = "CONSULT"
+            setAt = (Get-Date).ToString("o")
+            setBy = "setup"
+            reason = "reset to default by /setup (was: $existingMode)"
+        } | ConvertTo-Json
+        [System.IO.File]::WriteAllText($modePath, $modeReset, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "[OK] state/claudeboost-mode.json - reset to CONSULT (was: $existingMode)" -ForegroundColor Green
+    }
 }
 $approvalsPath = Join-Path $stateDir "session-approvals.json"
 if (-not (Test-Path $approvalsPath)) {

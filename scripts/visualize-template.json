@@ -22,7 +22,10 @@
       "badge_color": "Optional CSS color for the badge background",
       "icon": "Optional emoji icon shown before the title",
       "accent": "Optional left-border CSS color (e.g. '#e74c3c' for danger, '#27ae60' for safe)",
-      "citations": "Optional array of {file, lines, shows} — click-to-copy file references"
+      "citations": "Optional array of {file, lines, shows} — click-to-copy file references",
+      "image": "Optional image — local file path (embedded as base64), URL, or data URI",
+      "image_position": "Where to show the image: 'top' (above title, default) or 'detail' (inside expanded panel only)",
+      "image_alt": "Optional alt text for the image (defaults to card title)"
     }
   },
   "title": "",

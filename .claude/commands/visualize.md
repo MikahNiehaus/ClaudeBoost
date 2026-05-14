@@ -50,9 +50,15 @@ Write:
 - `graph.json` — the raw graph data
 - `visualize.html` — rendered self-contained HTML
 
+**Narration (optional):** If the user asked for audio narration (e.g. `--narrate` or mentioned audio/sound), generate it before rendering:
+```bash
+python "$CLAUDEBOOST_HOME/scripts/visualize-narrate.py" "[output-dir]/graph.json" "[output-dir]"
+```
+This generates `narration.mp3` + `narration-timing.json` in the same directory. The render step below picks them up automatically and embeds them in the HTML.
+
 Render the HTML:
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/visualize-viewer/render.py" "graph.json" "visualize.html"
+python "$CLAUDEBOOST_HOME/scripts/visualize-viewer/render.py" "[output-dir]/graph.json" "[output-dir]/visualize.html"
 ```
 
 ## Step 4: Launch

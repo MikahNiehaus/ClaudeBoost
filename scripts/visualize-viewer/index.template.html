@@ -16,10 +16,23 @@
 <!-- Main content (hidden during scan) -->
 <div id="page" class="page hidden">
 
-  <header class="header">
+  <header class="header" data-section-id="_intro">
     <h1 id="page-title"></h1>
     <p id="page-subtitle" class="subtitle"></p>
   </header>
+
+  <!-- Narration player (only shown when narration is embedded) -->
+  <div id="narration-player" class="narration-player" style="display:none" role="region" aria-label="Narration player">
+    <button id="narr-play" class="narr-btn" aria-label="Play narration" title="Play narration">&#9654;</button>
+    <div class="narr-wave" id="narr-wave" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="narr-seek-wrap">
+      <input type="range" id="narr-seek" class="narr-seek" min="0" max="100" value="0" step="0.1" aria-label="Seek">
+    </div>
+    <span id="narr-section" class="narr-section-label"></span>
+    <span id="narr-time" class="narr-time">0:00&nbsp;/&nbsp;0:00</span>
+  </div>
 
   <div class="layout-wrapper">
     <!-- Side rails (cross-cutting concerns) -->
@@ -36,6 +49,7 @@
 
 <script>
 var DATA = "__DATA_PLACEHOLDER__";
+var NARRATION = "__NARRATION_PLACEHOLDER__";
 </script>
 <script>
 (function() {
@@ -65,6 +79,9 @@ var DATA = "__DATA_PLACEHOLDER__";
     });
     lines.push({ text: '', cls: '' });
     lines.push({ text: '\u25B8 Mapping architecture...', cls: 'dim' });
+    if (NARRATION) {
+      lines.push({ text: '\u25B8 Loading narration...', cls: 'dim' });
+    }
     lines.push({ text: '', cls: '' });
     lines.push({ text: '\u25C9 READY', cls: 'bright' });
 
@@ -106,6 +123,15 @@ var DATA = "__DATA_PLACEHOLDER__";
       if (card.badge_color) badge.style.background = card.badge_color;
       badge.textContent = card.badge;
       el.appendChild(badge);
+    }
+
+    // Top image (shown above title, outside detail panel)
+    if (card.image && card.image_position !== 'detail') {
+      var img = document.createElement('img');
+      img.className = 'card-image';
+      img.src = card.image;
+      img.alt = card.image_alt || card.title || '';
+      el.appendChild(img);
     }
 
     // Icon
@@ -167,6 +193,18 @@ var DATA = "__DATA_PLACEHOLDER__";
         cits.appendChild(span);
       });
       detail.appendChild(cits);
+    }
+
+    // Detail image (shown inside expanded panel)
+    if (card.image && card.image_position === 'detail') {
+      var dimgWrap = document.createElement('div');
+      dimgWrap.style.marginTop = '12px';
+      var dimg = document.createElement('img');
+      dimg.className = 'card-image card-image-detail';
+      dimg.src = card.image;
+      dimg.alt = card.image_alt || card.title || '';
+      dimgWrap.appendChild(dimg);
+      detail.appendChild(dimgWrap);
     }
 
     el.appendChild(detail);
@@ -278,9 +316,9 @@ var DATA = "__DATA_PLACEHOLDER__";
 
     var card = buildCard(rail);
     card.classList.add('rail-card');
+    card.dataset.sectionId = rail.id;
     railEl.appendChild(card);
 
-    // Show the rail
     railEl.classList.add('visible');
   });
 
@@ -292,7 +330,6 @@ var DATA = "__DATA_PLACEHOLDER__";
     if (idx > 0 && layer.flow_label) {
       layersEl.appendChild(buildFlowArrow(layer));
     } else if (idx > 0) {
-      // Small spacer
       var spacer = document.createElement('div');
       spacer.className = 'flow-arrow';
       spacer.innerHTML = '<div class="flow-chevron">\u25BC</div>';
@@ -302,6 +339,7 @@ var DATA = "__DATA_PLACEHOLDER__";
     var section = document.createElement('section');
     section.className = 'layer';
     if (layer.style === 'highlight') section.classList.add('layer-highlight');
+    if (layer.id) section.dataset.sectionId = layer.id;
 
     // Layer header
     var header = document.createElement('div');
@@ -315,14 +353,13 @@ var DATA = "__DATA_PLACEHOLDER__";
     }
     section.appendChild(header);
 
-    // Check for columns layout
+    // Columns layout
     if (layer.columns && layer.columns.length) {
       var columnsRow = document.createElement('div');
       columnsRow.className = 'columns-row';
 
       layer.columns.forEach(function(col, colIdx) {
         if (colIdx > 0) {
-          // Column separator
           var sep = document.createElement('div');
           sep.className = 'column-separator';
           columnsRow.appendChild(sep);
@@ -392,6 +429,115 @@ var DATA = "__DATA_PLACEHOLDER__";
       expandedCard = null;
     }
   });
+
+  // ── Narration player ─────────────────────────────────────────────────────
+  if (NARRATION) {
+    var playerEl = document.getElementById('narration-player');
+    playerEl.style.display = 'flex';
+
+    var narrationAudio = new Audio(NARRATION.audio);
+    var playBtn = document.getElementById('narr-play');
+    var seekEl = document.getElementById('narr-seek');
+    var timeEl = document.getElementById('narr-time');
+    var sectionLabelEl = document.getElementById('narr-section');
+    var activeSection = null;
+
+    function formatMs(ms) {
+      var s = Math.floor(ms / 1000);
+      var m = Math.floor(s / 60);
+      return m + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    function findSection(ms) {
+      var secs = (NARRATION.timing && NARRATION.timing.sections) || [];
+      var found = null;
+      for (var i = 0; i < secs.length; i++) {
+        if (ms >= secs[i].start_ms) found = secs[i];
+      }
+      return found;
+    }
+
+    function clearHighlights() {
+      document.querySelectorAll('.section-active').forEach(function(el) {
+        el.classList.remove('section-active');
+      });
+    }
+
+    function highlightSection(id) {
+      if (id === activeSection) return;
+      activeSection = id;
+      clearHighlights();
+      if (!id) return;
+
+      var target;
+      if (id === '_intro') {
+        target = document.querySelector('[data-section-id="_intro"]');
+      } else {
+        target = document.querySelector('[data-section-id="' + CSS.escape(id) + '"]');
+      }
+
+      if (target) {
+        target.classList.add('section-active');
+        // Smooth scroll — only if section is out of viewport
+        var rect = target.getBoundingClientRect();
+        if (rect.top < 0 || rect.bottom > window.innerHeight) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+    }
+
+    narrationAudio.addEventListener('timeupdate', function() {
+      var ms = narrationAudio.currentTime * 1000;
+      var totalMs = NARRATION.timing.total_ms || (narrationAudio.duration * 1000) || 1;
+      seekEl.value = (ms / totalMs * 100);
+      timeEl.textContent = formatMs(ms) + '\u00a0/\u00a0' + formatMs(totalMs);
+
+      var sec = findSection(ms);
+      if (sec) {
+        var label = sec.label || sec.id.replace(/^_/, '').replace(/-/g, ' ').toUpperCase();
+        sectionLabelEl.textContent = label;
+        highlightSection(sec.id);
+      }
+    });
+
+    narrationAudio.addEventListener('ended', function() {
+      playerEl.classList.remove('is-playing');
+      playBtn.innerHTML = '&#9654;';
+      playBtn.setAttribute('aria-label', 'Play narration');
+      clearHighlights();
+      activeSection = null;
+      sectionLabelEl.textContent = '';
+      seekEl.value = 0;
+      timeEl.textContent = '0:00\u00a0/\u00a0' + formatMs(NARRATION.timing.total_ms || 0);
+    });
+
+    playBtn.addEventListener('click', function() {
+      if (narrationAudio.paused) {
+        narrationAudio.play();
+        playerEl.classList.add('is-playing');
+        playBtn.innerHTML = '&#9646;&#9646;';
+        playBtn.setAttribute('aria-label', 'Pause narration');
+      } else {
+        narrationAudio.pause();
+        playerEl.classList.remove('is-playing');
+        playBtn.innerHTML = '&#9654;';
+        playBtn.setAttribute('aria-label', 'Play narration');
+      }
+    });
+
+    seekEl.addEventListener('input', function() {
+      var totalMs = NARRATION.timing.total_ms || (narrationAudio.duration * 1000) || 1;
+      narrationAudio.currentTime = (parseFloat(seekEl.value) / 100) * totalMs / 1000;
+    });
+
+    // Keyboard: space to play/pause
+    document.addEventListener('keydown', function(e) {
+      if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault();
+        playBtn.click();
+      }
+    });
+  }
 
 })();
 </script>

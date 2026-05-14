@@ -118,6 +118,14 @@
       Research RAG answers "how does X work". Project codebase RAG answers "where is X used
       in this project". Use both when implementing something new in an existing codebase.
     </combine-with-codebase>
+    <score-threshold>
+      rag_search results include a similarity score (0.0–1.0). Treat results by tier:
+      - score >= 0.7  : high confidence — cite directly with file:line or source URL
+      - score 0.6–0.69: moderate confidence — usable, but note uncertainty if citing specifically
+      - score &lt; 0.6   : weak match — do NOT cite as fact; verify by reading the source first
+      Agents MUST NOT cite a file:line or claim a source says something based solely on a
+      result with score below 0.6. Read and confirm the content before citing.
+    </score-threshold>
   </query-strategies>
 
   <workspace-scoping>

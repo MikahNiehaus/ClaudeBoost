@@ -110,6 +110,14 @@ Required: `claudeboost-mode.json`, `session-approvals.json`, `speak-state.json`
 
 If any are missing: re-run `setup.ps1` (it seeds missing files while preserving existing ones), then retry.
 
+Also verify that `claudeboost-mode.json` contains `"mode": "CONSULT"`:
+
+```bash
+python -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
+```
+
+If mode is not `CONSULT`: re-run `setup.ps1` — it now resets any non-CONSULT value back to CONSULT automatically.
+
 ---
 
 ### Check 4 — edge-tts (for /speak)
