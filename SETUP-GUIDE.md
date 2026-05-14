@@ -16,7 +16,7 @@ If you just want the agents, knowledge bases, RAG search, and slash commands:
 ### 1. Clone ClaudeBoost
 
 ```bash
-git clone <your-repo-url> <install-path>
+git clone https://github.com/MikahNiehaus/ClaudeBoost.git <install-path>
 cd <install-path>
 ```
 

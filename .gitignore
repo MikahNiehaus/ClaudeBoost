@@ -6,6 +6,10 @@ state/
 __pycache__/
 *.pyc
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.events.jsonl
+.events.jsonl.lock
+.runtime/
 .env
 .env.*
 *.log
