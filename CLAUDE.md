@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 24 agents (`agents/*.xml`) and 45 knowledge bases (`knowledge/*.xml`).
+You have 25 agents (`agents/*.xml`) and 45 knowledge bases (`knowledge/*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
@@ -128,10 +128,17 @@ Two distinct RAG indexes — always distinguish between them:
 |------|-----------|-------|
 | **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `rag_search scope=agents/knowledge/all`, `rag_index`, `rag_context` |
 | **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `rag_index_project`, `rag_search scope=codebase`, `/index-project` |
+| **GraphRAG** | Structural code graph (imports, inherits, calls) stored in `graph.db` alongside Project RAG | `rag_search scope=codebase mode=graph` — auto-built at index time, auto-augments `rag_context` Tier 4b |
 
 When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
 When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.
-`rag_context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG.
+`rag_context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG (vector), tier 4b pulls structural graph neighbours when a graph index exists.
+
+**GraphRAG usage:**
+- `rag_search scope=codebase mode=graph` — vector seed + structural neighbours (files that import/inherit from seed files)
+- `rag_search scope=codebase mode=vector` — semantic only (default, backwards compatible)
+- Graph index is built automatically during `rag_index_project` — no extra step needed
+- Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
 
 ## TTS (Text-to-Speech)
 

@@ -170,4 +170,49 @@
       no longer maintained. Do not reuse research from a different task's workspace.
     </anti-pattern>
   </anti-patterns>
+
+  <codebase-search-modes>
+    <description>
+      rag_search scope=codebase has two modes. Choose based on what you need to find.
+    </description>
+
+    <mode name="vector" default="true">
+      <usage>rag_search(scope="codebase", query="...", project_path="...")</usage>
+      <what-it-finds>Semantically similar code — functions, classes, and comments whose
+      meaning is close to your query. Best for: "find the payment processing logic",
+      "where is user authentication handled".</what-it-finds>
+    </mode>
+
+    <mode name="graph">
+      <usage>rag_search(scope="codebase", query="...", project_path="...", mode="graph")</usage>
+      <what-it-finds>Vector seeds PLUS structural neighbours — files that import from,
+      inherit from, or are called by the seed files. Best for: understanding a module's
+      callers/dependencies, finding everything that changes when you modify a file,
+      tracing a data flow across file boundaries.</what-it-finds>
+      <how-it-works>
+        1. Runs normal vector search to get seed results
+        2. Looks up each seed file in graph.db (SQLite, built at index time by rag_index_project)
+        3. Fetches depth-1 structural neighbours (imports, inherits edges)
+        4. Merges and deduplicates; neighbour chunks scored slightly below their seed
+      </how-it-works>
+      <edge-types>
+        <edge type="imports" confidence="EXTRACTED">import/require/use statements parsed directly from AST</edge>
+        <edge type="inherits" confidence="EXTRACTED">class A extends/inherits B, parsed from AST</edge>
+      </edge-types>
+      <requires>Project must have been indexed with rag_index_project (graph.db built automatically).
+      If graph.db does not exist, mode=graph silently falls back to vector results.</requires>
+      <when-to-prefer>
+        - "What files import this module?" → mode=graph
+        - "Show me everything that changes when I modify class Foo" → mode=graph
+        - "Find callers of this function across the codebase" → mode=graph
+        - "What does this function do?" → mode=vector (semantic is better here)
+      </when-to-prefer>
+    </mode>
+
+    <tier-4b-auto-augmentation>
+      rag_context automatically applies graph augmentation to Tier 4 (codebase) results
+      when a graph index exists for the project. This is transparent — no extra parameter
+      needed. Structural neighbours of the top-3 vector seeds are appended within a token budget.
+    </tier-4b-auto-augmentation>
+  </codebase-search-modes>
 </knowledge-base>
