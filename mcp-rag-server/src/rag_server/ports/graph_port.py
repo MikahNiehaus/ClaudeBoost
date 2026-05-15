@@ -53,3 +53,13 @@ class GraphStorePort(ABC):
     def has_graph(self) -> bool:
         """Return True if at least one edge has been stored."""
         ...
+
+    @abstractmethod
+    def resolve_target_files(self, file_map: dict[str, str]) -> int:
+        """Resolve target_file='' edges using the project file map.
+
+        *file_map* maps module-name variants to project-relative file paths,
+        e.g. {"foo.bar": "foo/bar.py", "foo/bar": "foo/bar.py"}.
+        Updates edges in-place. Returns the count of edges resolved.
+        """
+        ...

@@ -23,6 +23,97 @@ logger = logging.getLogger(__name__)
 CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}  # legacy; project.py is authoritative
 
 
+def _build_file_map(rel_paths: list[str]) -> dict[str, str]:
+    """Build a lookup table from module-name variants to project-relative file paths.
+
+    For each indexed file we generate the key forms that might appear in import statements:
+    - Python: "foo/bar.py" → keys "foo.bar", "foo/bar", "foo/bar.py"
+    - Python __init__: "foo/bar/__init__.py" → keys "foo/bar", "foo.bar"
+    - JS/TS: "foo/bar.ts" → keys "foo/bar", "foo.bar"
+    - JS/TS index: "foo/index.ts" → keys "foo", "foo/index"
+
+    **Suffix keys for src-layout projects**: for Python and JS/TS files, we also
+    generate keys for every trailing sub-path, so that a file at
+    "mcp-rag-server/src/rag_server/ports/graph_port.py" matches the import
+    "rag_server.ports.graph_port" (which starts mid-path). First-wins on collision
+    (deeper/more-specific paths are registered first, then broader suffix keys fill
+    gaps only if no more-specific key already claimed the slot).
+
+    Returns a dict mapping each key to the canonical rel_path.
+    """
+    file_map: dict[str, str] = {}
+
+    # Pass 1: full-path keys (most specific — registered first, never overwritten).
+    for rel_path in rel_paths:
+        p = Path(rel_path)
+        suffix = p.suffix.lower()
+        stem = p.stem
+        no_ext = rel_path[: -len(suffix)] if suffix else rel_path
+        parts = no_ext.split("/")  # forward-slash normalised
+
+        if suffix == ".py":
+            if stem == "__init__":
+                pkg_slash = "/".join(parts[:-1])  # drop "__init__" component
+                if pkg_slash:
+                    file_map.setdefault(pkg_slash, rel_path)
+                    file_map.setdefault(pkg_slash.replace("/", "."), rel_path)
+            else:
+                file_map.setdefault(no_ext, rel_path)
+                file_map.setdefault(no_ext.replace("/", "."), rel_path)
+                file_map.setdefault(rel_path, rel_path)
+        elif suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs"}:
+            if stem in {"index", "index.d"}:
+                parent_slash = "/".join(parts[:-1])
+                if parent_slash:
+                    file_map.setdefault(parent_slash, rel_path)
+                file_map.setdefault(no_ext, rel_path)
+            else:
+                file_map.setdefault(no_ext, rel_path)
+                file_map.setdefault(no_ext.replace("/", "."), rel_path)
+        else:
+            file_map.setdefault(rel_path, rel_path)
+            file_map.setdefault(no_ext, rel_path)
+
+    # Pass 2: suffix keys for src-layout / sub-package imports.
+    # For "a/b/c/d.py" add "b/c/d", "c/d", "d" (slash + dotted) only if slot is empty.
+    for rel_path in rel_paths:
+        p = Path(rel_path)
+        suffix = p.suffix.lower()
+        stem = p.stem
+        no_ext = rel_path[: -len(suffix)] if suffix else rel_path
+        parts = no_ext.split("/")
+
+        if suffix == ".py":
+            if stem == "__init__":
+                pkg_parts = parts[:-1]  # drop "__init__"
+                for start in range(1, len(pkg_parts)):
+                    sub = "/".join(pkg_parts[start:])
+                    if sub:
+                        file_map.setdefault(sub, rel_path)
+                        file_map.setdefault(sub.replace("/", "."), rel_path)
+            else:
+                for start in range(1, len(parts)):
+                    sub = "/".join(parts[start:])
+                    if sub:
+                        file_map.setdefault(sub, rel_path)
+                        file_map.setdefault(sub.replace("/", "."), rel_path)
+        elif suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs"}:
+            if stem in {"index", "index.d"}:
+                pkg_parts = parts[:-1]
+                for start in range(1, len(pkg_parts)):
+                    sub = "/".join(pkg_parts[start:])
+                    if sub:
+                        file_map.setdefault(sub, rel_path)
+            else:
+                for start in range(1, len(parts)):
+                    sub = "/".join(parts[start:])
+                    if sub:
+                        file_map.setdefault(sub, rel_path)
+                        file_map.setdefault(sub.replace("/", "."), rel_path)
+
+    return file_map
+
+
 class IndexingEngine:
     """Indexes files into the vector store with incremental support."""
 
@@ -342,6 +433,16 @@ class IndexingEngine:
                     "Progress: %d/%d files (%.1f files/sec, ~%ds remaining)",
                     files_indexed, len(file_paths), rate, int(remaining),
                 )
+
+        # Resolve graph edge target_files now that all files are indexed.
+        # Edges are stored with target_file="" during the loop because we process
+        # one file at a time and can't know where an import target lives until
+        # the full manifest is complete. This pass fills them in.
+        all_rel_paths = list(project_manifest.keys())
+        file_map = _build_file_map(all_rel_paths)
+        resolved_count = graph_store.resolve_target_files(file_map)
+        if resolved_count:
+            logger.info("Graph edge resolution: %d target_file entries resolved", resolved_count)
 
         # Save project manifest
         project_manifest_path.write_text(

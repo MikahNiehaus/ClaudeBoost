@@ -30,6 +30,52 @@ CREATE INDEX IF NOT EXISTS idx_target_file ON edges (target_file);
 """
 
 
+def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, str]) -> str:
+    """Try to map *target_symbol* to a project-relative file path.
+
+    Tries keys in priority order:
+    1. Exact key match (already in file_map).
+    2. Dotted → slash form  (foo.bar → foo/bar).
+    3. Slash → dotted form  (foo/bar → foo.bar).
+    4. Relative import resolved against source_file directory.
+    Returns empty string if no match.
+    """
+    if not target_symbol:
+        return ""
+
+    # 1. Exact match
+    if target_symbol in file_map:
+        return file_map[target_symbol]
+
+    # 2. Dotted → slash
+    slash_form = target_symbol.replace(".", "/")
+    if slash_form in file_map:
+        return file_map[slash_form]
+
+    # 3. Slash → dotted
+    dot_form = target_symbol.replace("/", ".")
+    if dot_form in file_map:
+        return file_map[dot_form]
+
+    # 4. Relative import (starts with . or ..)
+    if target_symbol.startswith("."):
+        source_dir = "/".join(source_file.split("/")[:-1])
+        # Strip leading dots to count levels up
+        stripped = target_symbol.lstrip(".")
+        levels_up = len(target_symbol) - len(stripped) - 1  # -1 for the first dot = same dir
+        parts = source_dir.split("/") if source_dir else []
+        if levels_up > 0:
+            parts = parts[:-levels_up] if levels_up <= len(parts) else []
+        rel_slash = "/".join(parts + [stripped.replace(".", "/")]) if stripped else "/".join(parts)
+        if rel_slash in file_map:
+            return file_map[rel_slash]
+        rel_dot = rel_slash.replace("/", ".")
+        if rel_dot in file_map:
+            return file_map[rel_dot]
+
+    return ""
+
+
 class SQLiteGraphStore(GraphStorePort):
     """Stores and queries code graph edges in a local SQLite database."""
 
@@ -110,3 +156,32 @@ class SQLiteGraphStore(GraphStorePort):
         with self._connect() as conn:
             count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         return count > 0
+
+    def resolve_target_files(self, file_map: dict[str, str]) -> int:
+        """Update target_file='' edges whose target_symbol resolves via file_map.
+
+        file_map keys are module-name variants (dotted, slash-separated, with/without
+        extension). For each unresolved edge, we try several normalisation strategies
+        before giving up and leaving target_file empty.
+        """
+        with self._connect() as conn:
+            unresolved = conn.execute(
+                "SELECT id, target_symbol, source_file FROM edges WHERE target_file = ''"
+            ).fetchall()
+
+        if not unresolved:
+            return 0
+
+        updates: list[tuple[str, int]] = []
+        for row in unresolved:
+            resolved = _resolve_symbol(row["target_symbol"], row["source_file"], file_map)
+            if resolved:
+                updates.append((resolved, row["id"]))
+
+        if updates:
+            with self._connect() as conn:
+                conn.executemany(
+                    "UPDATE edges SET target_file = ? WHERE id = ?",
+                    updates,
+                )
+        return len(updates)
