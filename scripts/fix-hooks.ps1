@@ -1,4 +1,4 @@
-# fix-hooks.ps1 — Emergency hook repair
+# fix-hooks.ps1 - Emergency hook repair
 #
 # Removes hook entries that are known to block Claude Code prompts:
 #   1. Commands containing a literal $CLAUDEBOOST_HOME bash variable reference
@@ -9,7 +9,7 @@
 # Run this BEFORE setup.ps1 when Claude Code is completely blocked:
 #   powershell -ExecutionPolicy Bypass -File "C:\Development\ClaudeBoost\scripts\fix-hooks.ps1"
 #
-# No prerequisites — does NOT require CLAUDEBOOST_HOME, Python, or Claude Code.
+# No prerequisites - does NOT require CLAUDEBOOST_HOME, Python, or Claude Code.
 
 $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
 
@@ -17,7 +17,7 @@ Write-Host "`n=== ClaudeBoost Hook Repair ===" -ForegroundColor Cyan
 Write-Host "Settings: $settingsPath`n"
 
 if (-not (Test-Path $settingsPath)) {
-    Write-Host "[OK] settings.json not found — fresh install, nothing to fix." -ForegroundColor Green
+    Write-Host "[OK] settings.json not found - fresh install, nothing to fix." -ForegroundColor Green
     exit 0
 }
 
@@ -30,7 +30,7 @@ try {
 }
 
 if (-not $settings.PSObject.Properties["hooks"]) {
-    Write-Host "[OK] No hooks block found — nothing to fix." -ForegroundColor Green
+    Write-Host "[OK] No hooks block found - nothing to fix." -ForegroundColor Green
     exit 0
 }
 
@@ -90,7 +90,7 @@ if (Test-Path $sentinelPath) {
 }
 
 if ($removed -eq 0) {
-    Write-Host "[OK] No stale hooks found — nothing to fix." -ForegroundColor Green
+    Write-Host "[OK] No stale hooks found - nothing to fix." -ForegroundColor Green
     exit 0
 }
 

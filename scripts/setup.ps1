@@ -264,6 +264,7 @@ function Remove-StaleVariableHooks {
     param($Settings)
     $removed = 0
     foreach ($hookType in @($Settings.hooks.PSObject.Properties.Name)) {
+        if ([string]::IsNullOrEmpty($hookType)) { continue }
         $entries    = @($Settings.hooks.$hookType)
         $newEntries = @()
         foreach ($entry in $entries) {
