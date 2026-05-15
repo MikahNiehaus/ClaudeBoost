@@ -1,3 +1,7 @@
+---
+description: Compliance gate check — run mandatory pre-task compliance verification before proceeding
+---
+
 # Compliance Gate Check
 
 Run this mandatory compliance gate before proceeding with any task.

@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08  
-**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 45 knowledge XMLs, 24 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 45 knowledge XMLs, 32 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 

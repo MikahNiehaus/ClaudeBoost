@@ -149,7 +149,7 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ST-07 | `rag_search("OWASP SQL injection", scope="knowledge")` | security.xml in top 3 |
 | ST-08 | `rag_search("playwright browser testing", scope="agents")` | playwright.xml or e2e-testing.xml in top 3 |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
-| ST-10 | `rag_status` | ClaudeBoost chunks > 700, project chunks > 300 |
+| ST-10 | `rag_status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `rag_status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via `rag_index_project` output instead |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
 
@@ -162,7 +162,7 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | WT-03 | `$WORKSPACE_ABS/context.md` exists | File present |
 | WT-04 | context.md Status field | Not stuck on PLAN_READY if work has started (should be IN_PROGRESS or COMPLETE) |
 | WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
-| WT-06 | Project RAG indexed (if project path exists) | `rag_status` shows project chunks > 100 |
+| WT-06 | Project RAG indexed (if project path exists) | `rag_index_project` output from Phase 1 shows files_indexed > 0 (note: `rag_status` does not report project chunks) |
 | WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
 | WT-08 | Tests planned → test files exist | If plan includes a test-agent step, at least one test file is present |
 
@@ -171,7 +171,7 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ID | Check | Pass condition |
 |----|-------|----------------|
 | PT-01 | README exists | File present at project root |
-| PT-02 | Project RAG indexed | `rag_status` shows project chunks > 100 |
+| PT-02 | Project RAG indexed | `rag_index_project` output from Phase 1 shows files_indexed > 0 (note: `rag_status` does not report project chunks) |
 | PT-03 | Raw SQL string concatenation | Zero occurrences (grep for string-concatenated query patterns) |
 | PT-04 | Secrets in source | Zero hardcoded API keys, passwords, tokens in non-.env source files |
 | PT-05 | logger.error in catch blocks | Sample 10 catch blocks via grep; flag any missing error logging (INFO, not FAIL) |

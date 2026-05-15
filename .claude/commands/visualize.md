@@ -1,3 +1,7 @@
+---
+description: Interactive Architecture Board — generate a visual project architecture map that opens in the browser
+---
+
 # Interactive Architecture Board
 
 Generate an interactive visual board of the project's architecture — boxes for components, lines showing connections, click to drill into details. Opens in a browser tab.

@@ -1,3 +1,7 @@
+---
+description: Pre-flight verified context clear — saves workspace state before /clear so the next session can restore it
+---
+
 # /clear-safe — Pre-flight verified context clear
 
 Verifies workspace state is captured, shows exactly what survives the clear, and

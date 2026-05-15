@@ -128,7 +128,7 @@ Two distinct RAG indexes — always distinguish between them:
 |------|-----------|-------|
 | **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `rag_search scope=agents/knowledge/all`, `rag_index`, `rag_context` |
 | **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `rag_index_project`, `rag_search scope=codebase`, `/index-project` |
-| **GraphRAG** | Structural code graph (imports, inherits, calls) stored in `graph.db` alongside Project RAG | `rag_search scope=codebase mode=graph` — auto-built at index time, auto-augments `rag_context` Tier 4b |
+| **GraphRAG** | Structural code graph (imports, inherits) stored in `graph.db` alongside Project RAG | `rag_search scope=codebase mode=graph` — auto-built at index time, auto-augments `rag_context` Tier 4b |
 
 When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
 When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.

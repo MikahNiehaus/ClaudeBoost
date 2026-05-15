@@ -204,7 +204,6 @@
       <when-to-prefer>
         - "What files import this module?" → mode=graph
         - "Show me everything that changes when I modify class Foo" → mode=graph
-        - "Find callers of this function across the codebase" → mode=graph
         - "What does this function do?" → mode=vector (semantic is better here)
       </when-to-prefer>
     </mode>
