@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0",
     "chromadb>=0.5",
+    "chroma-hnswlib>=0.7.6",
     "sentence-transformers>=3.0",
     "watchdog>=4.0",
     "pathspec>=0.12",
