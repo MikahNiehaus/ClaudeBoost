@@ -267,9 +267,10 @@ Context:
 Your task — do ALL of these:
 
 1. Semantic search (use rag_search scope="codebase" project_path="$PROJECT_PATH"):
-   - Query 1: "[key entity or feature from ticket] implementation"
-   - Query 2: "[main action from ticket] handler controller service"
-   - Query 3: "[affected area] tests spec"
+   - Query 1 (vector): "[key entity or feature from ticket] implementation"
+   - Query 2 (vector): "[main action from ticket] handler controller service"
+   - Query 3 (vector): "[affected area] tests spec"
+   - Query 4 (graph): repeat Query 1 with mode="graph" to surface structural neighbours — files that import, inherit from, or are called by the seed results. This reveals callers, middlewares, and cross-file dependencies not visible through semantic similarity alone.
 
 2. Targeted Glob + Grep to find:
    - Entry points (routes, controllers, handlers) relevant to the ticket
@@ -336,7 +337,9 @@ rag_search(scope="knowledge", query="testing strategy coverage acceptance criter
 If `PROJECT_PATH` is not none:
 ```
 rag_search(scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3)
+rag_search(scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3, mode="graph")
 ```
+Run both modes: vector finds semantically similar patterns, graph surfaces files that import or inherit from the seed files — revealing where these patterns propagate across the codebase.
 
 **4c — Synthesize and write the plan.**
 

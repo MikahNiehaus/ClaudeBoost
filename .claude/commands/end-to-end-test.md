@@ -207,9 +207,9 @@ Only continue past this probe if ALL checks pass.
 Run these 3 searches before crawling the UI (gives you a head start on what to expect):
 
 ```
-rag_search(scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6)
-rag_search(scope="codebase", project_path=<cwd>, query="authentication login session user roles", limit=5)
-rag_search(scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5)
+rag_search(scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6, mode="graph")
+rag_search(scope="codebase", project_path=<cwd>, query="authentication login session user roles", limit=5, mode="graph")
+rag_search(scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5, mode="graph")
 ```
 
 Extract from results: known route paths, entity names, auth mechanism, form structures.
@@ -589,7 +589,7 @@ Legitimate uses: async background jobs, webhooks to external services, audit log
 NOT legitimate: UI shows a success toast or list update — use the UI instead.
 
 Protocol:
-1. `rag_search(scope="codebase")` to find the server-side function handling the operation
+1. `rag_search(scope="codebase", query="[operation] handler controller service")` to find the server-side function handling the operation. Add `mode="graph"` if you need to trace which module calls this function (i.e., finding the caller chain, not just the function itself).
 2. `Read` the target file
 3. Insert: `console.log('[E2E-TEMP] TC-NNN: [description]');` after the operation
 4. Perform the browser action
@@ -606,7 +606,7 @@ Legitimate uses: cron jobs, Hangfire/Sidekiq/Quartz workers, service-bus consume
 NOT legitimate: UI shows a success toast, list update, or status badge — use the UI instead. Also NOT a replacement for temp-logging when a synchronous server-side function needs verification.
 
 Protocol:
-1. `rag_search(scope="codebase", query="[job class name] job worker execute schedule")` — find the job class and the table/column it writes.
+1. `rag_search(scope="codebase", query="[job class name] job worker execute schedule", mode="graph")` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job) alongside the class itself.
 2. `Read` the job class file. Identify:
    - What DB table/column the job writes (the "write side" — this is what must be verified)
    - Any dev/admin endpoint that can trigger the job manually (e.g., `/admin/jobs/trigger`, `/api/internal/run-job`, a dev-only controller action)

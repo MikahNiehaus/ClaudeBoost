@@ -129,6 +129,12 @@ Summarize what changed in one sentence. Then:
 rag_search(scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5)
 ```
 
+If the changes touch multiple interconnected files (e.g., a service + its callers, or a base class + subclasses), also run:
+```
+rag_search(scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5, mode="graph")
+```
+mode=graph surfaces structural neighbours (what imports/inherits from the changed files) — useful for assessing change impact scope.
+
 Read 2-3 of the most-changed files using the Read tool to understand context and patterns. Do NOT skip this — agents need to be primed with precise instructions, not generic ones.
 
 **1d — Ticket context:**
@@ -190,6 +196,7 @@ Spawn agents in batches. Wait for each batch to complete before starting the nex
 Your FIRST two actions (in order, no exceptions):
 1. Call rag_context(agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>")
 2. Call rag_search(scope="codebase", project_path="<cwd>", query="<a targeted query relevant to this pass>", limit=5)
+   — If your pass involves patterns, conventions, callers, or change impact (passes 4, 5, 6, 9), additionally call with mode="graph" to surface structural neighbours (files that import/inherit from the changed files).
 
 Then review ONLY the diff below for your assigned pass. Do not review anything outside your pass scope.
 
