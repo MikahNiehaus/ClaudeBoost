@@ -186,7 +186,7 @@ class IndexingEngine:
         graph_store = SQLiteGraphStore(index_dir / "graph.db")
         project_manifest_path = index_dir / "manifest.json"
         project_manifest = {}
-        if project_manifest_path.exists():
+        if not force and project_manifest_path.exists():
             project_manifest = json.loads(
                 project_manifest_path.read_text(encoding="utf-8")
             )

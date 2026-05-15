@@ -14,15 +14,14 @@ ClaudeBoost/
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
-├── HOW-IT-WORKS.md      Architecture documentation
-└── SETUP-GUIDE.md       Windows installation guide
+└── docs/                Reference documentation
 ```
 
 ## Quick Start
 
 ### 1. Install Gas Town (optional but recommended)
 
-See [SETUP-GUIDE.md](SETUP-GUIDE.md) for full Windows installation including Go, Dolt, and GT.
+See [SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for full Windows installation including Go, Dolt, and GT.
 
 ### 2. Install ClaudeBoost Extensions
 
@@ -110,7 +109,7 @@ context engineering, verify gate, scope governance, rule enforcement, and more.
 
 ## How It Works
 
-See [HOW-IT-WORKS.md](HOW-IT-WORKS.md) for the full architecture, directives,
+See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the full architecture, directives,
 formulas, plugins, and Gas Town integration details.
 
 ## Works Standalone

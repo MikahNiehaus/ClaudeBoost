@@ -44,7 +44,7 @@ Run lenses filtered by FOCUS. Every finding MUST cite `file:line` — no citatio
 
 | FOCUS value | Lenses to run |
 |-------------|--------------|
-| `docs` | Count accuracy: stated counts in CLAUDE.md, README.md, SETUP-GUIDE.md, CLAUDEBOOST-REFERENCE.md vs actual file counts |
+| `docs` | Count accuracy: stated counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
 | `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (knowledge-base file attrs) |
 | `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs that state a number |
@@ -65,7 +65,7 @@ Run ALL tests regardless of FOCUS. All tests are read-only.
 |----|-------|----------------|
 | ST-01 | `ls agents/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
 | ST-02 | `ls knowledge/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
-| ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches section 5 in CLAUDEBOOST-REFERENCE.md |
+| ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches section 5 in docs/CLAUDEBOOST-REFERENCE.md |
 | ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
 | ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
 | ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |

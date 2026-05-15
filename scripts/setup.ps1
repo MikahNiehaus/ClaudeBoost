@@ -243,40 +243,64 @@ function Install-HookEntry {
     Write-Host "[OK] hooks.$HookType - appended $Label" -ForegroundColor Green
 }
 
-# Helper: remove hook entries whose command string contains a literal $CLAUDEBOOST_HOME
-# bash variable reference. These were written by older setup versions and fail on any
-# machine where CLAUDEBOOST_HOME hasn't been set in settings.json yet.
+# Helper: detect stale hook commands.
+# Stale = (1) contains literal $CLAUDEBOOST_HOME bash variable, or
+#         (2) references an absolute python script path that no longer exists on disk.
+function Test-HookCommandStale {
+    param([string] $Command)
+    if ($Command -like '*$CLAUDEBOOST_HOME*') { return $true }
+    $m = [regex]::Match($Command, 'python\s+"([^"]+\.py)"')
+    if ($m.Success) {
+        $scriptPath = $m.Groups[1].Value -replace '/', '\'
+        if (-not (Test-Path $scriptPath)) { return $true }
+    }
+    return $false
+}
+
+# Helper: remove stale individual hooks from all entries.
+# Filters at the individual hook level — healthy sibling hooks in the same entry are preserved.
+# Removes the entry key entirely only if ALL hooks within it were stale.
 function Remove-StaleVariableHooks {
     param($Settings)
     $removed = 0
     foreach ($hookType in @($Settings.hooks.PSObject.Properties.Name)) {
-        $entries = @($Settings.hooks.$hookType)
-        $cleaned = @()
+        $entries    = @($Settings.hooks.$hookType)
+        $newEntries = @()
         foreach ($entry in $entries) {
-            $isStale = $false
             if ($entry.hooks) {
+                $healthyHooks = @()
                 foreach ($h in @($entry.hooks)) {
-                    if ($h.command -and $h.command -like '*$CLAUDEBOOST_HOME*') {
-                        $preview = $h.command.Substring(0, [Math]::Min(70, $h.command.Length))
-                        Write-Host "[CLEAN] hooks.$hookType - removing stale variable hook: $preview..." -ForegroundColor Yellow
-                        $isStale = $true
+                    if ($h.command -and (Test-HookCommandStale ([string]$h.command))) {
+                        $preview = ([string]$h.command).Substring(0, [Math]::Min(70, ([string]$h.command).Length))
+                        Write-Host "[CLEAN] hooks.$hookType - removing stale hook: $preview..." -ForegroundColor Yellow
                         $removed++
-                        break
+                    } else {
+                        $healthyHooks += $h
                     }
                 }
+                if ($healthyHooks.Count -gt 0) {
+                    $entry.hooks = $healthyHooks
+                    $newEntries += $entry
+                }
+                # Entry entirely dropped only if all its hooks were stale
+            } else {
+                $newEntries += $entry
             }
-            if (-not $isStale) { $cleaned += $entry }
         }
-        $Settings.hooks.$hookType = $cleaned
+        if ($newEntries.Count -gt 0) {
+            $Settings.hooks.$hookType = $newEntries
+        } else {
+            $Settings.hooks.PSObject.Properties.Remove($hookType)
+        }
     }
     if ($removed -gt 0) {
-        Write-Host "[OK] Removed $removed stale `$CLAUDEBOOST_HOME variable hook(s)" -ForegroundColor Green
+        Write-Host "[OK] Removed $removed stale hook(s)" -ForegroundColor Green
     } else {
-        Write-Host "[OK] No stale variable hooks found" -ForegroundColor Green
+        Write-Host "[OK] No stale hooks found" -ForegroundColor Green
     }
 }
 
-Write-Host "`nCleaning up stale variable hooks..." -ForegroundColor Cyan
+Write-Host "`nCleaning up stale hooks..." -ForegroundColor Cyan
 Remove-StaleVariableHooks -Settings $settings
 
 # --- SessionStart: workflow routing (original) ---
@@ -512,15 +536,19 @@ Install-HookEntry -Settings $settings -HookType "SessionEnd" -Entry $clearSaveHo
     -Sentinel "session-clear-save.py" -Label "clear handoff save"
 
 # --- UserPromptSubmit: ensure-setup bootstrap (must be first — no CLAUDEBOOST_HOME dependency) ---
+# Copied to ~/.claude/ensure-setup.py so the hook path is stable across machines:
+# $HOME always resolves to the correct user directory regardless of username or OS path.
 # Self-locating via __file__; fires silently when setup is already done.
-# On a new machine where settings.json was synced but setup.ps1 hasn't run,
-# this detects the missing CLAUDEBOOST_HOME env block and launches setup.ps1 automatically.
-$ensureSetupPath = "$boostHome\scripts\ensure-setup.py".Replace("\", "/")
+$ensureSetupSrc  = Join-Path $boostHome "scripts\ensure-setup.py"
+$ensureSetupDest = Join-Path $claudeDir "ensure-setup.py"
+Copy-Item -Path $ensureSetupSrc -Destination $ensureSetupDest -Force
+Write-Host "[OK] ensure-setup.py copied to $ensureSetupDest" -ForegroundColor Green
+
 $ensureSetupHook = [PSCustomObject]@{
     hooks = @(
         [PSCustomObject]@{
             type    = "command"
-            command = "python `"$ensureSetupPath`""
+            command = 'python "$HOME/.claude/ensure-setup.py"'
             timeout = 10000
         }
     )

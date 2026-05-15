@@ -10,14 +10,21 @@ echo  ===========
 echo  Run this once after cloning to get fully set up.
 echo.
 echo  What this does:
-echo    1. Runs PowerShell setup (installs RAG server, hooks, MCP config)
-echo    2. Opens Claude Code and runs /setup to verify everything
+echo    1. Clears any stale hooks from a previous install (safe on fresh install)
+echo    2. Runs PowerShell setup (installs RAG server, hooks, MCP config)
+echo    3. Opens Claude Code and runs /setup to verify everything
 echo.
 pause
 
-:: ── Step 1: PowerShell setup ──────────────────────────────────────────────
+:: ── Step 1: Clear stale hooks (idempotent — safe on fresh install) ──────────
 echo.
-echo [1/2] Running setup...
+echo [1/3] Clearing stale hooks...
+echo.
+powershell -ExecutionPolicy Bypass -File "%BOOST_DIR%\scripts\fix-hooks.ps1"
+
+:: ── Step 2: PowerShell setup ─────────────────────────────────────────────────
+echo.
+echo [2/3] Running setup...
 echo.
 powershell -ExecutionPolicy Bypass -File "%BOOST_DIR%\scripts\setup.ps1"
 
@@ -28,9 +35,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: ── Step 2: Open Claude Code with /setup to verify ────────────────────────
+:: ── Step 3: Open Claude Code with /setup to verify ───────────────────────────
 echo.
-echo [2/2] Opening Claude Code...
+echo [3/3] Opening Claude Code...
 echo       Claude will run /setup automatically to verify all systems.
 echo.
 cd /d "%BOOST_DIR%"
