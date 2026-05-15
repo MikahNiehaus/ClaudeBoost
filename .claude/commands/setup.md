@@ -161,6 +161,21 @@ If MISSING: re-run `setup.ps1` — it now creates the statusLine on fresh instal
 
 ---
 
+### Check 7 — Global slash commands synced
+
+Project `.claude/commands/` only load when Claude Code's cwd is inside the ClaudeBoost repo. `setup.ps1` mirrors every command to `~/.claude/commands/` so all skills (`/workspace`, `/explore`, `/audit`, etc.) are available in **every** Claude instance regardless of directory. Verify the global dir has the full set:
+
+```bash
+SRC=$(ls "$CLAUDEBOOST_HOME/.claude/commands/"*.md 2>/dev/null | wc -l)
+DST=$(ls ~/.claude/commands/*.md 2>/dev/null | wc -l)
+echo "project=$SRC global=$DST"
+comm -23 <(ls "$CLAUDEBOOST_HOME/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
+```
+
+If the `comm` output lists any files (commands present in the repo but missing globally), re-run `setup.ps1` — section 2b syncs them. Then **restart any other Claude instances** for them to pick up the new commands (the command list is read at startup).
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -179,6 +194,7 @@ State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING
 statusLine               : OK / MISSING (restart Claude Code after setup.ps1)
+Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 
 ─────────────────────────────────────────
 ```

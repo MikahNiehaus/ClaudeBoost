@@ -143,6 +143,33 @@ if ($settings.PSObject.Properties["statusLine"]) {
     Write-Host "[OK] statusLine - created ClaudeBoost status bar" -ForegroundColor Green
 }
 
+# --- 2b. Sync slash commands to global ~/.claude/commands (repo is source of truth) ---
+# Project .claude/commands only load when cwd is inside the ClaudeBoost repo.
+# Mirroring them to the global dir makes every command available in every Claude instance.
+$cmdSrc = Join-Path $boostHome ".claude\commands"
+$cmdDst = Join-Path $claudeDir "commands"
+if (Test-Path $cmdSrc) {
+    if (-not (Test-Path $cmdDst)) {
+        New-Item -ItemType Directory -Path $cmdDst | Out-Null
+    }
+    $cmdNew = 0; $cmdUpd = 0; $cmdSame = 0
+    foreach ($srcFile in Get-ChildItem -Path $cmdSrc -Filter *.md -File) {
+        $dstFile = Join-Path $cmdDst $srcFile.Name
+        if (-not (Test-Path $dstFile)) {
+            Copy-Item $srcFile.FullName $dstFile -Force
+            $cmdNew++
+        } elseif ((Get-FileHash $srcFile.FullName).Hash -ne (Get-FileHash $dstFile).Hash) {
+            Copy-Item $srcFile.FullName $dstFile -Force
+            $cmdUpd++
+        } else {
+            $cmdSame++
+        }
+    }
+    Write-Host "[OK] slash commands synced to global - $cmdNew new, $cmdUpd updated, $cmdSame unchanged" -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] slash commands - source dir not found: $cmdSrc" -ForegroundColor Yellow
+}
+
 # --- 2a. Seed state directory (CONSULT mode + session approvals) ---
 $stateDir = Join-Path $boostHome "state"
 if (-not (Test-Path $stateDir)) {
