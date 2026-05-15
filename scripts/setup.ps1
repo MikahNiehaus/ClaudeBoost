@@ -666,3 +666,8 @@ Write-Host "  2. Run /boost to verify all systems"
 Write-Host "  3. Run /speak on to enable text-to-speech"
 Write-Host "  4. (Optional) Rebuild Gas Town with 'make build' if gt errors occur"
 Write-Host ""
+Write-Host "Troubleshooting:" -ForegroundColor Yellow
+Write-Host "  If Claude Code is completely blocked (UserPromptSubmit hook error):"
+Write-Host "  Run fix-hooks.ps1 first, then re-run setup.ps1:"
+Write-Host "    powershell -ExecutionPolicy Bypass -File `"$boostHome\scripts\fix-hooks.ps1`""
+Write-Host ""
