@@ -1,100 +1,195 @@
 ---
-argument-hint: [focus — docs | enforcement | xml | counts | rag | all]
-description: Run ClaudeBoost self-improvement audit — reindex, audit, self-test, fix, verify, loop
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__rag-server__rag_context, mcp__rag-server__rag_index, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, mcp__rag-server__rag_status
+argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | xml | counts | rag | rules | memory | all]
+description: Self-improvement audit — ClaudeBoost internals (default), any workspace, or any project path
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion, mcp__rag-server__rag_context, mcp__rag-server__rag_index, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, mcp__rag-server__rag_status
 ---
 
-# /self-improve — ClaudeBoost Self-Improvement Audit Loop
+# /self-improve — Dynamic Self-Improvement Audit
 
 Arguments: **$ARGUMENTS**
-(Format: `[focus]` — one of `docs`, `enforcement`, `xml`, `counts`, `rag`, `all`. Default: `all`)
+Format: `[target] [focus]`
+
+- **target** (optional):
+  - Omitted or `self` → **SELF mode**: ClaudeBoost internals audit (original behavior)
+  - A workspace ID (e.g. `add-dark-mode-2026-05-14`) → **WORKSPACE mode**: audit that workspace's implementation
+  - An absolute path (e.g. `C:/Development/MyApp`) → **PROJECT mode**: audit any project codebase
+- **focus** (optional, default: `all`):
+  - SELF mode: `docs | enforcement | xml | counts | rag | rules | memory | all`
+  - WORKSPACE mode: `code | security | tests | quality | docs | all`
+  - PROJECT mode: `code | security | tests | quality | docs | all`
 
 ---
 
-## Phase 0: Setup
+## Phase 0: Parse + Setup
 
-**0a — Parse arguments.**
-Split `$ARGUMENTS`. First token = `FOCUS`. Valid values: `docs`, `enforcement`, `xml`, `counts`, `rag`, `rules`, `memory`, `all`. Default to `all` if omitted or unrecognized.
+**0a — Detect MODE and parse arguments.**
 
-**0b — Read current round state.**
-Read `workspace/self-improvement/context.md`. Find the current round number N in the round log. The next round is N+1.
+Split `$ARGUMENTS` on whitespace. Examine the first token:
 
-If `workspace/self-improvement/context.md` does not exist, N = 0.
+- Empty or `self` → `MODE = SELF`
+- Contains `/` or `\` or starts with a drive letter (e.g. `C:`) → `MODE = PROJECT`, `PROJECT_PATH = first token`
+- Otherwise, check: does `$CLAUDEBOOST_HOME/workspace/<first-token>/` exist?
+  ```bash
+  ls "$CLAUDEBOOST_HOME/workspace/<first-token>/" 2>/dev/null
+  ```
+  - If yes → `MODE = WORKSPACE`, `WORKSPACE_ID = first token`, `WORKSPACE_ABS = $CLAUDEBOOST_HOME/workspace/$WORKSPACE_ID`
+  - If no → assume it's a partial path or typo; ask:
+    ```
+    AskUserQuestion: "I couldn't find workspace '<first-token>'. Did you mean a workspace ID (I can list available ones), a project path (provide the full absolute path), or ClaudeBoost self-audit (say 'self')?"
+    ```
 
-Announce: `Starting self-improvement round R[N+1], focus: $FOCUS`
+Second token (or first token if no target was given) → `FOCUS`. Valid values per mode listed above. Default: `all`.
+
+Announce: `Starting self-improve — MODE: [SELF|WORKSPACE|PROJECT], Target: [target or "ClaudeBoost"], Focus: [FOCUS]`
+
+**0b — Call rag_context.**
+
+```
+rag_context(
+  agent="reviewer-agent",
+  task_description="self-improvement audit in [MODE] mode on [target], focus: [FOCUS]",
+  max_tokens=5000
+)
+```
+
+**0c — Read round state (find N).**
+
+- **SELF**: read `$CLAUDEBOOST_HOME/workspace/self-improvement/context.md` — find last `### R[N]` entry. If file missing, N = 0.
+- **WORKSPACE**: read `$WORKSPACE_ABS/context.md` — look for `## Self-Improve Log` section, count entries. If section missing, N = 0.
+- **PROJECT**: read `$PROJECT_PATH/workspace/.self-improve-log.md` if it exists. If missing, N = 0.
+
+Announce: `Round R[N+1]`
 
 ---
 
-## Phase 1: Reindex (Mandatory Every Round)
+## Phase 1: Index
 
-Call both in sequence — do NOT skip:
-
+**SELF mode:**
 1. `rag_index(force=true, scope=all)` — rebuilds ClaudeBoost RAG (agents + knowledge)
 2. `rag_index_project(project_path=$CLAUDEBOOST_HOME, force=true)` — rebuilds project RAG (codebase)
 
-The PostToolUse hook on `rag_index_project` writes `state/last-indexed-head.json` automatically.
-
 Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
+
+**WORKSPACE mode:**
+1. Read `$WORKSPACE_ABS/goal.md` and `$WORKSPACE_ABS/plan.md`.
+2. Extract `**Project**:` line from plan.md — this is the project path the workspace is working on.
+3. If a valid project path is found:
+   - `rag_index_project(project_path=$PROJECT_PATH, force=true)`
+   - Report: "Indexed Y files (project: $PROJECT_PATH)"
+4. If no project path found or path is "N/A":
+   - Skip project indexing. Note: "No project path in workspace plan — code audit will use grep/glob only."
+
+**PROJECT mode:**
+1. `rag_index_project(project_path=$PROJECT_PATH, force=true)`
+2. Report: "Indexed Y files (project: $PROJECT_PATH)"
 
 ---
 
 ## Phase 2: Audit
 
-Run lenses filtered by FOCUS. Every finding MUST cite `file:line` — no citation = drop the finding.
+Every finding **MUST** cite `file:line` — no citation = drop the finding.
+Use `rag_search` to locate files before reading them. Never guess file paths.
 
-| FOCUS value | Lenses to run |
-|-------------|--------------|
-| `docs` | Count accuracy: stated counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
+### SELF mode lenses
+
+| FOCUS | Lenses to run |
+|-------|--------------|
+| `docs` | Count accuracy: stated agent/knowledge/command counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
-| `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (knowledge-base file attrs) |
-| `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs that state a number |
-| `rag` | RAG search spot-checks (see Phase 3 ST-07/08) + rag_status chunk count health |
-| `rules` | CLAUDE.md rule staleness: for each Hard Rule and behavioral rule in CLAUDE.md (both global and project), verify at least one `file:line` in the codebase still reflects it; flag rules whose patterns no longer appear anywhere in the codebase |
-| `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; for each linked file, check its `last_modified` date; flag entries older than 60 days for user review — stale memories mislead more than no memory |
+| `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
+| `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
+| `rag` | RAG search spot-checks (see Phase 3 ST-07/08) + `rag_status` chunk count health |
+| `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
+| `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
 | `all` | All of the above |
 
-Use `rag_search` to find relevant files before reading them. Do not guess file paths.
+### WORKSPACE mode lenses
+
+First, determine the **workspace scope** (what files the workspace touched):
+1. Read `$WORKSPACE_ABS/plan.md` — extract all `**Output artifact**:` lines to build a file list.
+2. `rag_search(scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10)` — find related files.
+3. Only audit files in scope. Do not audit the entire project.
+
+| FOCUS | Lenses to run |
+|-------|--------------|
+| `code` | Does the implementation follow the plan steps? Are planned output artifacts present? Any obvious code quality issues (hardcoded values, missing error handling at system boundaries, duplicate logic)? Cite file:line for every flag. |
+| `security` | OWASP top 10 scan on files in workspace scope. Focus on new endpoints, data flows, and user input handling. Use knowledge/security.xml via rag_search. |
+| `tests` | Are tests present for new/changed code? For each output artifact that is a source file, check whether a corresponding test file exists. List gaps. |
+| `quality` | Consistency with project conventions: naming, error handling, logging (logger.error in catch blocks), no secrets in source. |
+| `docs` | Are new functions/APIs documented? Is `$WORKSPACE_ABS/context.md` Status field current? Is plan.md still accurate? |
+| `all` | All of the above |
+
+### PROJECT mode lenses
+
+Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate files. Never guess.
+
+| FOCUS | Lenses to run |
+|-------|--------------|
+| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use rag_search to find largest/most-referenced files and spot-check them. Cite file:line. |
+| `security` | OWASP top 10 scan across project entry points and data flows. Grep for raw SQL string concatenation, eval() on user input, secrets in source. |
+| `tests` | Find source files with no corresponding test file. Report ratio of tested vs untested modules. |
+| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via rag_search. |
+| `docs` | README present and complete? Public API surface documented? Undocumented exports? |
+| `all` | All of the above |
 
 ---
 
-## Phase 3: Non-Destructive Self-Tests
+## Phase 3: Self-Tests
 
-Run ALL tests regardless of FOCUS. All tests are read-only.
+### SELF mode tests (run all)
 
 | ID | Check | Pass condition |
 |----|-------|----------------|
 | ST-01 | `ls agents/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
 | ST-02 | `ls knowledge/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
-| ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches section 5 in docs/CLAUDEBOOST-REFERENCE.md |
+| ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches CLAUDEBOOST-REFERENCE.md section 5 |
 | ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
 | ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
 | ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |
-| ST-07 | `rag_search("OWASP SQL injection", scope="knowledge")` | security.xml appears in top 3 |
+| ST-07 | `rag_search("OWASP SQL injection", scope="knowledge")` | security.xml in top 3 |
 | ST-08 | `rag_search("playwright browser testing", scope="agents")` | playwright.xml or e2e-testing.xml in top 3 |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
 | ST-10 | `rag_status` | ClaudeBoost chunks > 700, project chunks > 300 |
-| ST-11 | Read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; for each linked `.md` file, check its last-modified date | No linked memory file is older than 60 days without a user-confirmed reason; flag (not fail) entries older than 60 days for review |
-| ST-12 | For each Hard Rule listed in `CLAUDE.md` (jQuery ban, logger.error, parameterized queries), grep the codebase for at least one supporting occurrence | Each rule has at least one file:line citation OR is documented as aspirational |
+| ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
+| ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
 
-Report each ST-XX as PASS or FAIL (with observed vs expected on failure).
-For ST-11 and ST-12, report as INFO (not FAIL) when flagging — these are review prompts, not blockers.
+### WORKSPACE mode tests (run all)
 
-**PHASE 3 GATE:** If more than 3 self-tests FAIL (INFO items do not count), STOP. Print: "Self-test gate: N failures detected. Fix ST failures before proceeding to audit." Investigate the failures before continuing.
+| ID | Check | Pass condition |
+|----|-------|----------------|
+| WT-01 | `$WORKSPACE_ABS/goal.md` exists | File present |
+| WT-02 | `$WORKSPACE_ABS/plan.md` exists | File present |
+| WT-03 | `$WORKSPACE_ABS/context.md` exists | File present |
+| WT-04 | context.md Status field | Not stuck on PLAN_READY if work has started (should be IN_PROGRESS or COMPLETE) |
+| WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
+| WT-06 | Project RAG indexed (if project path exists) | `rag_status` shows project chunks > 100 |
+| WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
+| WT-08 | Tests planned → test files exist | If plan includes a test-agent step, at least one test file is present |
+
+### PROJECT mode tests (run all)
+
+| ID | Check | Pass condition |
+|----|-------|----------------|
+| PT-01 | README exists | File present at project root |
+| PT-02 | Project RAG indexed | `rag_status` shows project chunks > 100 |
+| PT-03 | Raw SQL string concatenation | Zero occurrences (grep for string-concatenated query patterns) |
+| PT-04 | Secrets in source | Zero hardcoded API keys, passwords, tokens in non-.env source files |
+| PT-05 | logger.error in catch blocks | Sample 10 catch blocks via grep; flag any missing error logging (INFO, not FAIL) |
+
+**PHASE 3 GATE:** If more than 3 tests FAIL (INFO items don't count), STOP. Print: "Self-test gate: N failures. Fix before proceeding." Diagnose before continuing.
 
 ---
 
 ## Phase 4: Pre-Fix Gate
 
-For each finding from Phase 2 with a `file:line` citation:
-
-Spawn a fresh `evaluator-agent` (Sonnet) with ONLY:
+For each finding from Phase 2 with a `file:line` citation, spawn a fresh `evaluator-agent` (Sonnet) with ONLY:
 - The finding text
 - The cited `file:line` reference
 - No other context from this session
 
-Evaluator confirms: **CONFIRMED** (finding is real) or **UNVERIFIED** (not found at cited location).
+Evaluator returns: **CONFIRMED** (finding is real at that location) or **UNVERIFIED** (not found).
 
-Drop all UNVERIFIED findings. Only proceed with CONFIRMED findings.
+Drop all UNVERIFIED findings.
 
 Print: "Pre-fix gate: N confirmed, M dropped as unverified."
 
@@ -109,48 +204,75 @@ Apply minimal targeted changes for CONFIRMED findings only.
 Rules:
 - One finding = one fix. Do not bundle unrelated changes.
 - No scope creep — do not improve surrounding code while fixing.
+- WORKSPACE mode: never modify `goal.md` or `plan.md` — only the implementation files listed as artifacts.
 - Document each fix: "Fixed: [finding] at [file:line]"
 
 ---
 
 ## Phase 6: Post-Fix Verify
 
-1. Re-run self-tests from Phase 3 — all must pass.
-2. Spawn fresh evaluator-agent on each changed file:
+1. Re-run the Phase 3 tests for this mode — all must pass.
+2. Spawn fresh `evaluator-agent` on each changed file:
    - Pass: file path + the change made
    - Evaluator returns: CORRECT or NEEDS_IMPROVEMENT
-3. If NEEDS_IMPROVEMENT: rework the fix, re-run evaluator.
+3. If NEEDS_IMPROVEMENT: rework, re-run evaluator.
 
 ---
 
 ## Phase 7: Document + Loop
 
-**7a — Update context.md.**
+**7a — Write round log to the right location.**
 
-Append to `workspace/self-improvement/context.md`:
+| MODE | Log target |
+|------|-----------|
+| SELF | Append to `$CLAUDEBOOST_HOME/workspace/self-improvement/context.md` (create if missing) |
+| WORKSPACE | Append to `$WORKSPACE_ABS/context.md` under a `## Self-Improve Log` section (create section if missing) |
+| PROJECT | Append to `$PROJECT_PATH/workspace/.self-improve-log.md` (create file if missing) |
 
+Log entry format:
 ```
 ### R[N+1] — [date]
-**Focus:** $FOCUS
-**Self-tests:** N/10 passed
-**Findings:** N confirmed, M dropped
+**Mode:** [SELF | WORKSPACE | PROJECT]
+**Target:** [workspace ID or project path or "ClaudeBoost"]
+**Focus:** [FOCUS]
+**Tests:** N passed / M total
+**Findings:** N confirmed, M dropped as unverified
 **Fixes applied:**
-- [list each fix with file:line]
-**Status:** CLEAN (no findings) | FIXED (N findings resolved)
+- [list each fix with file:line, or "none"]
+**Status:** CLEAN | FIXED
 ```
+
+Also update `$WORKSPACE_ABS/context.md` Status field to COMPLETE if all WT tests pass (WORKSPACE mode only).
 
 **7b — Loop control.**
 
-- If any confirmed findings were fixed: print "Changes made — starting R[N+2]" → return to Phase 1
-- If zero confirmed findings: print "R[N+1] clean — self-improvement complete for this run"
+- If any confirmed findings were fixed: print "Changes made — starting R[N+2]" → return to Phase 1.
+- If zero confirmed findings: print "R[N+1] clean — self-improvement complete."
 
 ---
 
 ## Non-Destructive Guarantee
 
-All self-tests are read-only. State files written:
-- `state/last-indexed-head.json` (via rag_index_project PostToolUse hook — automatic)
-- `workspace/self-improvement/context.md` (round log append only)
+All tests are read-only. The only writes are:
+- **SELF**: `workspace/self-improvement/context.md` (round log, append only)
+- **WORKSPACE**: appends to `$WORKSPACE_ABS/context.md` (never modifies goal.md or plan.md)
+- **PROJECT**: `$PROJECT_PATH/workspace/.self-improve-log.md` (round log, append only)
 
-No source files are modified during testing. No app data is created or deleted.
-The browser-based `/end-to-end-test` is separate — not used here (ClaudeBoost has no web UI).
+Source files modified only in Phase 5 (Fix), only for CONFIRMED findings, only within the appropriate scope.
+
+---
+
+## Usage Examples
+
+```
+/self-improve                              # ClaudeBoost self-audit (original behavior)
+/self-improve self                         # Same as above, explicit
+/self-improve self counts                  # Check only agent/knowledge/command counts
+
+/self-improve add-auth-2026-05-14          # Audit workspace 'add-auth-2026-05-14'
+/self-improve add-auth-2026-05-14 security # Security-only audit of that workspace
+/self-improve add-auth-2026-05-14 tests    # Check test coverage for that workspace
+
+/self-improve C:/Development/MyApp         # Audit entire project
+/self-improve C:/Development/MyApp quality # Quality-only audit of the project
+```
