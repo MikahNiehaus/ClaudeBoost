@@ -1,0 +1,398 @@
+<knowledge-base name="fw-uikit" version="1.0">
+<triggers>UIKit, uikit, .swift UIKit, UIViewController, UITableView, UICollectionView, UINavigationController, UITabBarController, UIStackView, NSLayoutConstraint, safeAreaLayoutGuide, UITableViewDataSource, UITableViewDelegate, UICollectionViewDiffableDataSource, UICollectionViewCompositionalLayout, Coordinator pattern, AppDelegate, SceneDelegate, prepareForReuse, viewDidLoad, import UIKit, UILabel, UIButton, UIImageView, AnyCancellable, Combine UIKit, iOS 12, Mac Catalyst</triggers>
+<overview>UIKit guardrails, patterns, and best practices for iOS 12+, Swift 5.0+. Covers MVVM + Coordinator architecture, programmatic Auto Layout, thin view controllers, Combine bindings, UITableView / UICollectionView with Diffable Data Sources, Compositional Layout, delegation pattern, memory management, and XCTest view controller testing. Applies to .swift files using UIKit.</overview>
+
+<core-principles>
+  <principle name="MVVM + Coordinator">Separate view logic (ViewController), presentation logic (ViewModel), and navigation (Coordinator). View controllers are configured by view models and do not contain business logic.</principle>
+  <principle name="Programmatic UI">Build views in code with Auto Layout constraints. Avoid storyboards in team projects — they create merge conflicts and hide layout logic.</principle>
+  <principle name="Thin View Controllers">View controllers call setupUI(), setupConstraints(), and setupBindings() in viewDidLoad. All other logic lives in view models, services, or coordinators.</principle>
+  <principle name="Protocol-Oriented Delegation">Use delegate protocols for callbacks between components. Always declare delegate properties as weak to prevent retain cycles.</principle>
+  <principle name="Memory Safety">Use [weak self] in all escaping closures and Combine sinks. Cancel subscriptions in deinit. Call prepareForReuse() to reset cell state.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="UK-001" severity="BLOCKER">
+    <rule>Always set translatesAutoresizingMaskIntoConstraints = false before activating Auto Layout constraints on a programmatic view.</rule>
+    <bad><![CDATA[view.addSubview(label)
+label.topAnchor.constraint(equalTo: view.topAnchor).isActive = true // crashes if not set]]></bad>
+    <good><![CDATA[label.translatesAutoresizingMaskIntoConstraints = false
+view.addSubview(label)
+NSLayoutConstraint.activate([...])]]></good>
+  </guardrail>
+
+  <guardrail id="UK-002" severity="BLOCKER">
+    <rule>Declare all delegate properties as weak var to prevent retain cycles.</rule>
+    <bad><![CDATA[var delegate: AddUserViewControllerDelegate?]]></bad>
+    <good><![CDATA[weak var delegate: AddUserViewControllerDelegate?]]></good>
+  </guardrail>
+
+  <guardrail id="UK-003" severity="BLOCKER">
+    <rule>Use [weak self] in all escaping closures and all Combine .sink calls.</rule>
+    <bad><![CDATA[viewModel.$users.sink { users in self.tableView.reloadData() }]]></bad>
+    <good><![CDATA[viewModel.$users.sink { [weak self] _ in self?.tableView.reloadData() }
+    .store(in: &cancellables)]]></good>
+  </guardrail>
+
+  <guardrail id="UK-004" severity="BLOCKER">
+    <rule>Use required init?(coder:) with fatalError("init(coder:) has not been implemented") in all programmatic-only view controllers.</rule>
+    <good><![CDATA[required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }]]></good>
+  </guardrail>
+
+  <guardrail id="UK-005" severity="HIGH">
+    <rule>Keep view controllers under 200 lines. Extract views, cells, helpers, and extensions into separate files.</rule>
+  </guardrail>
+
+  <guardrail id="UK-006" severity="HIGH">
+    <rule>Never put networking or business logic in view controllers. Call view model methods; observe published state.</rule>
+  </guardrail>
+
+  <guardrail id="UK-007" severity="HIGH">
+    <rule>Pin to safeAreaLayoutGuide for top and bottom content edges — never to the plain view edges.</rule>
+    <good><![CDATA[tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)]]></good>
+  </guardrail>
+
+  <guardrail id="UK-008" severity="HIGH">
+    <rule>Always override prepareForReuse() in table and collection view cells. Reset all dynamic content and cancel image loads.</rule>
+    <good><![CDATA[override func prepareForReuse() {
+    super.prepareForReuse()
+    nameLabel.text = nil
+    avatarImageView.image = nil
+    imageLoadTask?.cancel()
+}]]></good>
+  </guardrail>
+
+  <guardrail id="UK-009" severity="HIGH">
+    <rule>Use NSLayoutConstraint.activate([]) to batch-activate constraints. Never activate constraints one by one with isActive = true.</rule>
+  </guardrail>
+
+  <guardrail id="UK-010" severity="MEDIUM">
+    <rule>Use final class for all view controllers and cells unless explicitly designed for subclassing.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[MyApp/
+├── MyApp.xcodeproj
+├── MyApp/
+│   ├── Application/
+│   │   ├── AppDelegate.swift
+│   │   ├── SceneDelegate.swift
+│   │   └── AppCoordinator.swift
+│   ├── Features/
+│   │   ├── Authentication/
+│   │   │   ├── Controllers/       # LoginViewController.swift
+│   │   │   ├── ViewModels/        # LoginViewModel.swift
+│   │   │   ├── Views/             # LoginFormView.swift
+│   │   │   └── Coordinator/       # AuthCoordinator.swift
+│   │   ├── Home/
+│   │   │   ├── Controllers/
+│   │   │   ├── ViewModels/
+│   │   │   ├── Views/
+│   │   │   └── Cells/             # UserCell.swift
+│   │   └── Profile/
+│   ├── Core/
+│   │   ├── Network/
+│   │   ├── Storage/
+│   │   ├── Extensions/
+│   │   └── Utilities/
+│   ├── Shared/
+│   │   ├── Views/                 # PrimaryButton, EmptyStateView
+│   │   ├── Cells/                 # Reusable cells
+│   │   └── Protocols/             # Shared protocols
+│   └── Resources/
+│       ├── Assets.xcassets
+│       └── Localizable.strings
+├── MyAppTests/
+└── MyAppUITests/]]></example>
+  <notes>
+    <note>Group by feature, not by type — Controllers/ and ViewModels/ live inside each feature folder</note>
+    <note>Core/ for infrastructure: networking, storage, utilities</note>
+    <note>Shared/ for reusable UI components used across features</note>
+    <note>One primary type per file; file named after the type</note>
+  </notes>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Base View Controller">
+    <description>BaseViewController establishing the three-method lifecycle pattern and shared error presentation.</description>
+    <example><![CDATA[import UIKit
+
+class BaseViewController: UIViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupUI()
+        setupConstraints()
+        setupBindings()
+    }
+
+    func setupUI()          { view.backgroundColor = .systemBackground }
+    func setupConstraints() { /* Override in subclasses */ }
+    func setupBindings()    { /* Override in subclasses */ }
+
+    func showError(_ error: Error) {
+        let alert = UIAlertController(
+            title: "Error",
+            message: error.localizedDescription,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Feature View Controller with Combine">
+    <description>Thin ViewController binding to a ViewModel via Combine @Published properties.</description>
+    <example><![CDATA[import UIKit
+import Combine
+
+final class UserListViewController: BaseViewController {
+    private let viewModel: UserListViewModel
+    private var cancellables = Set<AnyCancellable>()
+    weak var coordinator: UserCoordinator?
+
+    private lazy var tableView: UITableView = {
+        let table = UITableView(frame: .zero, style: .plain)
+        table.translatesAutoresizingMaskIntoConstraints = false
+        table.register(UserCell.self, forCellReuseIdentifier: UserCell.identifier)
+        table.delegate   = self
+        table.dataSource = self
+        table.rowHeight          = UITableView.automaticDimension
+        table.estimatedRowHeight = 80
+        return table
+    }()
+
+    init(viewModel: UserListViewModel = UserListViewModel()) {
+        self.viewModel = viewModel
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func setupUI() {
+        super.setupUI()
+        title = "Users"
+        view.addSubview(tableView)
+    }
+
+    override func setupConstraints() {
+        NSLayoutConstraint.activate([
+            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    override func setupBindings() {
+        viewModel.$users
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.tableView.reloadData() }
+            .store(in: &cancellables)
+
+        viewModel.$error
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in self?.showError(error) }
+            .store(in: &cancellables)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        viewModel.loadUsers()
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="MVVM View Model with Combine">
+    <description>ViewModel with @Published properties, async/await service calls, and MainActor UI updates.</description>
+    <example><![CDATA[import Foundation
+import Combine
+
+final class UserListViewModel {
+    @Published private(set) var users: [User]  = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var error: Error?
+
+    private let userService: UserServiceProtocol
+
+    init(userService: UserServiceProtocol = UserService()) {
+        self.userService = userService
+    }
+
+    func loadUsers() {
+        isLoading = true; error = nil
+        Task { @MainActor in
+            do { users = try await userService.fetchUsers() }
+            catch { self.error = error }
+            isLoading = false
+        }
+    }
+
+    func deleteUser(at index: Int) {
+        let user = users[index]
+        users.remove(at: index)
+        Task {
+            do { try await userService.deleteUser(id: user.id) }
+            catch { await MainActor.run { users.insert(user, at: index); self.error = error } }
+        }
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Diffable Data Source">
+    <description>Modern UICollectionView with DiffableDataSource and CellRegistration (iOS 14+).</description>
+    <example><![CDATA[import UIKit
+
+enum Section { case main }
+typealias DataSource = UICollectionViewDiffableDataSource<Section, Photo>
+typealias Snapshot   = NSDiffableDataSourceSnapshot<Section, Photo>
+
+private func setupDataSource() {
+    let registration = UICollectionView.CellRegistration<PhotoCell, Photo> { cell, _, photo in
+        cell.configure(with: photo)
+    }
+    dataSource = DataSource(collectionView: collectionView) { cv, indexPath, photo in
+        cv.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: photo)
+    }
+}
+
+private func applySnapshot(photos: [Photo], animating: Bool = true) {
+    var snapshot = Snapshot()
+    snapshot.appendSections([.main])
+    snapshot.appendItems(photos)
+    dataSource.apply(snapshot, animatingDifferences: animating)
+}]]></example>
+  </pattern>
+
+  <pattern name="Compositional Layout Grid">
+    <description>Three-column photo grid using NSCollectionLayoutItem/Group/Section (iOS 13+).</description>
+    <example><![CDATA[private func createGridLayout() -> UICollectionViewLayout {
+    let itemSize = NSCollectionLayoutSize(
+        widthDimension:  .fractionalWidth(1/3),
+        heightDimension: .fractionalWidth(1/3)
+    )
+    let item = NSCollectionLayoutItem(layoutSize: itemSize)
+    item.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
+
+    let groupSize = NSCollectionLayoutSize(
+        widthDimension:  .fractionalWidth(1.0),
+        heightDimension: .fractionalWidth(1/3)
+    )
+    let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, subitems: [item])
+    return UICollectionViewCompositionalLayout(section: NSCollectionLayoutSection(group: group))
+}]]></example>
+  </pattern>
+
+  <pattern name="Coordinator Pattern">
+    <description>Coordinator protocol and AppCoordinator managing auth vs main flow transitions.</description>
+    <example><![CDATA[import UIKit
+
+protocol Coordinator: AnyObject {
+    var childCoordinators: [Coordinator] { get set }
+    var navigationController: UINavigationController { get set }
+    func start()
+}
+
+extension Coordinator {
+    func addChild(_ coordinator: Coordinator)    { childCoordinators.append(coordinator) }
+    func removeChild(_ coordinator: Coordinator) { childCoordinators.removeAll { $0 === coordinator } }
+}
+
+final class AppCoordinator: Coordinator {
+    var childCoordinators: [Coordinator] = []
+    var navigationController: UINavigationController
+    private let authManager: AuthManager
+
+    init(navigationController: UINavigationController, authManager: AuthManager = .shared) {
+        self.navigationController = navigationController
+        self.authManager = authManager
+    }
+
+    func start() {
+        authManager.isAuthenticated ? showMainFlow() : showAuthFlow()
+    }
+
+    private func showAuthFlow() {
+        let coord = AuthCoordinator(navigationController: navigationController)
+        coord.delegate = self
+        addChild(coord); coord.start()
+    }
+
+    private func showMainFlow() {
+        let coord = MainTabCoordinator(navigationController: navigationController)
+        addChild(coord); coord.start()
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Custom Cell">
+    <description>UITableViewCell built programmatically with Auto Layout and prepareForReuse reset.</description>
+    <example><![CDATA[import UIKit
+
+final class UserCell: UITableViewCell {
+    static let identifier = "UserCell"
+
+    private let nameLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .preferredFont(forTextStyle: .headline)
+        return label
+    }()
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        setupUI()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setupUI() {
+        contentView.addSubview(nameLabel)
+        NSLayoutConstraint.activate([
+            nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            nameLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+        ])
+    }
+
+    func configure(with user: User) { nameLabel.text = user.name }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        nameLabel.text = nil
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands>
+    <cmd purpose="Build for simulator">xcodebuild -scheme MyApp -sdk iphonesimulator build</cmd>
+    <cmd purpose="Run tests">xcodebuild test -scheme MyApp -destination 'platform=iOS Simulator,name=iPhone 15'</cmd>
+    <cmd purpose="Format code">swift format .</cmd>
+    <cmd purpose="Lint">swiftlint</cmd>
+    <cmd purpose="Auto-fix lint issues">swiftlint --fix</cmd>
+  </commands>
+</tooling>
+
+<quick-reference>
+  <item key="layout">translatesAutoresizingMaskIntoConstraints = false before adding constraints</item>
+  <item key="constraints">NSLayoutConstraint.activate([]) batch activation</item>
+  <item key="safe area">Pin to safeAreaLayoutGuide for top/bottom edges</item>
+  <item key="delegate">weak var delegate — always weak to prevent retain cycles</item>
+  <item key="closures">[weak self] in all escaping closures and Combine sinks</item>
+  <item key="cell reuse">prepareForReuse() resets all dynamic content</item>
+  <item key="programmatic init">required init?(coder:) { fatalError(...) }</item>
+  <item key="lifecycle">viewDidLoad -> setupUI() -> setupConstraints() -> setupBindings()</item>
+  <item key="modern collection">DiffableDataSource + CellRegistration (iOS 14+)</item>
+  <item key="navigation">Coordinator pattern — VCs never push/present themselves</item>
+  <item key="VC size">Under 200 lines; extract views and extensions to separate files</item>
+  <item key="testing">loadViewIfNeeded() triggers viewDidLoad; inject mock ViewModel via init</item>
+</quick-reference>
+
+</knowledge-base>

@@ -1,0 +1,370 @@
+<knowledge-base name="fw-gin" version="1.0">
+<triggers>Gin, gin-gonic, github.com/gin-gonic/gin, gin.Engine, gin.Context, gin.RouterGroup, gin.HandlerFunc, Go REST API, go web framework, .go gin, gin middleware, gin routing</triggers>
+<overview>Gin 1.9+ guardrails, patterns, and best practices for Go REST APIs and microservices. Covers application factory pattern, route versioning, middleware (auth, CORS, logging), request binding with go-playground/validator, standardized error responses, and graceful shutdown. Loaded automatically when agents work on Gin-based .go files.</overview>
+
+<core-principles>
+  <principle name="Application Factory">Use a factory function to create the router; do not call gin.Default() in production without explicitly managing its middleware.</principle>
+  <principle name="Layered Architecture">handler -> service -> repository. Handlers parse requests and write responses only. Business logic belongs in services.</principle>
+  <principle name="Explicit Middleware">Use gin.New() and attach middleware explicitly. Never rely on gin.Default() defaults in production.</principle>
+  <principle name="Consistent Responses">All endpoints return the same JSON envelope. Never leak internal errors to clients.</principle>
+  <principle name="Graceful Shutdown">Always implement OS signal handling and a configurable shutdown timeout.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="GIN-001" severity="BLOCKER">
+    <rule>Use gin.New() (not gin.Default()) in production and attach middleware explicitly.</rule>
+    <bad><![CDATA[r := gin.Default() // implicit Logger + Recovery — not production-safe]]></bad>
+    <good><![CDATA[r := gin.New()
+r.Use(gin.Recovery())
+r.Use(middleware.Logger())
+r.Use(middleware.CORS())]]></good>
+  </guardrail>
+
+  <guardrail id="GIN-002" severity="BLOCKER">
+    <rule>Use ShouldBindJSON (not BindJSON) so you control the error response yourself.</rule>
+    <bad><![CDATA[if err := c.BindJSON(&req); err != nil { return } // writes 400 automatically, no control]]></bad>
+    <good><![CDATA[if err := c.ShouldBindJSON(&req); err != nil {
+    c.JSON(http.StatusBadRequest, model.NewErrorResponse(err.Error()))
+    return
+}]]></good>
+  </guardrail>
+
+  <guardrail id="GIN-003" severity="BLOCKER">
+    <rule>Never store business logic in handlers. Handlers call services; services contain logic.</rule>
+  </guardrail>
+
+  <guardrail id="GIN-004" severity="BLOCKER">
+    <rule>Never return raw internal error messages to clients. Map domain errors to safe HTTP responses.</rule>
+    <good><![CDATA[default:
+    c.JSON(http.StatusInternalServerError, model.NewErrorResponse("internal server error"))]]></good>
+  </guardrail>
+
+  <guardrail id="GIN-005" severity="HIGH">
+    <rule>Set gin.ReleaseMode in production environments.</rule>
+    <good><![CDATA[if cfg.Environment == "production" {
+    gin.SetMode(gin.ReleaseMode)
+}]]></good>
+  </guardrail>
+
+  <guardrail id="GIN-006" severity="HIGH">
+    <rule>Configure ReadTimeout, WriteTimeout, and IdleTimeout on the http.Server. Never use http.ListenAndServe without timeouts.</rule>
+  </guardrail>
+
+  <guardrail id="GIN-007" severity="HIGH">
+    <rule>Group routes with versioning (/api/v1). Apply auth middleware at the group level, not per-route.</rule>
+  </guardrail>
+
+  <guardrail id="GIN-008" severity="HIGH">
+    <rule>Use dependency injection for all handlers. No global state.</rule>
+  </guardrail>
+
+  <guardrail id="GIN-009" severity="HIGH">
+    <rule>Always include pagination for list endpoints. Never return unbounded collections.</rule>
+  </guardrail>
+
+  <guardrail id="GIN-010" severity="MEDIUM">
+    <rule>Use binding tags (required, email, min, max, omitempty) on all request DTOs. Use pointer fields for optional partial-update fields.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure><![CDATA[
+myproject/
+├── cmd/
+│   └── api/
+│       └── main.go           # Entry point, server setup, graceful shutdown
+├── internal/
+│   ├── config/
+│   │   └── config.go         # Configuration from env vars
+│   ├── handler/
+│   │   ├── handler.go        # Handler registry struct
+│   │   ├── user.go           # User handlers
+│   │   └── auth.go           # Auth handlers
+│   ├── middleware/
+│   │   ├── auth.go           # JWT/Bearer auth middleware
+│   │   ├── cors.go           # CORS middleware
+│   │   └── logger.go         # Request logging middleware
+│   ├── model/
+│   │   ├── user.go           # Domain model + request/response DTOs
+│   │   └── response.go       # Standardized response wrappers
+│   ├── repository/
+│   │   ├── repository.go     # Repository registry (interfaces)
+│   │   └── user.go           # User repository implementation
+│   ├── service/
+│   │   ├── service.go        # Service registry (interfaces)
+│   │   └── user.go           # User business logic
+│   └── router/
+│       └── router.go         # Route definitions and grouping
+├── pkg/
+│   ├── validator/
+│   │   └── validator.go
+│   └── response/
+│       └── response.go
+├── migrations/
+├── .env.example
+├── go.mod
+└── Makefile
+
+Layer responsibilities:
+- handler/     HTTP concerns only: parse request, call service, write response
+- service/     Business logic, validation, orchestration
+- repository/  Data access, database queries
+- model/       Domain types, request/response DTOs, validation tags
+- middleware/  Cross-cutting: auth, logging, CORS, rate limiting
+- router/      Route registration, grouping, middleware attachment
+]]></project-structure>
+
+<patterns>
+
+  <pattern name="Router Setup">
+    <description>Use gin.New(), attach global middleware, then create versioned route groups.</description>
+    <example><![CDATA[func Setup(handlers *handler.Handlers, mw *middleware.Middleware) *gin.Engine {
+    r := gin.New()
+    r.Use(gin.Recovery())
+    r.Use(middleware.Logger())
+    r.Use(middleware.CORS())
+
+    r.GET("/health", func(c *gin.Context) {
+        c.JSON(200, gin.H{"status": "ok"})
+    })
+
+    v1 := r.Group("/api/v1")
+    {
+        auth := v1.Group("/auth")
+        {
+            auth.POST("/login", handlers.Auth.Login)
+            auth.POST("/refresh", handlers.Auth.Refresh)
+        }
+
+        users := v1.Group("/users")
+        {
+            users.POST("", handlers.User.CreateUser)
+            users.Use(mw.Auth())
+            users.GET("", handlers.User.GetUsers)
+            users.GET("/me", handlers.User.GetCurrentUser)
+            users.GET("/:id", handlers.User.GetUser)
+            users.PATCH("/:id", handlers.User.UpdateUser)
+            users.DELETE("/:id", mw.AdminOnly(), handlers.User.DeleteUser)
+        }
+    }
+    return r
+}]]></example>
+  </pattern>
+
+  <pattern name="Auth Middleware (JWT Bearer)">
+    <example><![CDATA[func (m *Middleware) Auth() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        header := c.GetHeader("Authorization")
+        if header == "" {
+            c.AbortWithStatusJSON(http.StatusUnauthorized,
+                model.NewErrorResponse("missing authorization header"))
+            return
+        }
+        parts := strings.Split(header, " ")
+        if len(parts) != 2 || parts[0] != "Bearer" {
+            c.AbortWithStatusJSON(http.StatusUnauthorized,
+                model.NewErrorResponse("invalid authorization header"))
+            return
+        }
+        claims, err := m.authService.ValidateToken(parts[1])
+        if err != nil {
+            c.AbortWithStatusJSON(http.StatusUnauthorized,
+                model.NewErrorResponse("invalid token"))
+            return
+        }
+        c.Set("user_id", claims.UserID)
+        c.Set("is_admin", claims.IsAdmin)
+        c.Next()
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Request Binding and Validation">
+    <example><![CDATA[// Create request — all fields required
+type CreateUserRequest struct {
+    Email     string `json:"email" binding:"required,email"`
+    Password  string `json:"password" binding:"required,min=8"`
+    FirstName string `json:"first_name" binding:"required,min=1,max=100"`
+    LastName  string `json:"last_name" binding:"required,min=1,max=100"`
+}
+
+// Update request — optional fields use pointer types
+type UpdateUserRequest struct {
+    FirstName *string `json:"first_name" binding:"omitempty,min=1,max=100"`
+    LastName  *string `json:"last_name" binding:"omitempty,min=1,max=100"`
+    IsActive  *bool   `json:"is_active"`
+}
+
+func (h *UserHandler) CreateUser(c *gin.Context) {
+    var req model.CreateUserRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, model.NewErrorResponse(err.Error()))
+        return
+    }
+    user, err := h.userService.Create(c.Request.Context(), &req)
+    if err != nil {
+        handleServiceError(c, err)
+        return
+    }
+    c.JSON(http.StatusCreated, model.NewSuccessResponse(user.ToResponse()))
+}]]></example>
+  </pattern>
+
+  <pattern name="Standardized Response Models">
+    <example><![CDATA[type Response struct {
+    Success bool        `json:"success"`
+    Message string      `json:"message,omitempty"`
+    Data    interface{} `json:"data,omitempty"`
+    Error   string      `json:"error,omitempty"`
+}
+
+type PaginatedResponse struct {
+    Success bool        `json:"success"`
+    Data    interface{} `json:"data"`
+    Meta    *PageMeta   `json:"meta"`
+}
+
+type PageMeta struct {
+    Page       int   `json:"page"`
+    PerPage    int   `json:"per_page"`
+    Total      int64 `json:"total"`
+    TotalPages int   `json:"total_pages"`
+}
+
+func NewSuccessResponse(data interface{}) *Response {
+    return &Response{Success: true, Data: data}
+}
+
+func NewErrorResponse(message string) *Response {
+    return &Response{Success: false, Error: message}
+}]]></example>
+  </pattern>
+
+  <pattern name="Domain Error Mapping">
+    <example><![CDATA[var (
+    ErrUserNotFound       = errors.New("user not found")
+    ErrUserAlreadyExists  = errors.New("user already exists")
+    ErrInvalidCredentials = errors.New("invalid credentials")
+)
+
+func handleServiceError(c *gin.Context, err error) {
+    switch {
+    case errors.Is(err, service.ErrUserNotFound):
+        c.JSON(http.StatusNotFound, model.NewErrorResponse(err.Error()))
+    case errors.Is(err, service.ErrUserAlreadyExists):
+        c.JSON(http.StatusConflict, model.NewErrorResponse(err.Error()))
+    case errors.Is(err, service.ErrInvalidCredentials):
+        c.JSON(http.StatusUnauthorized, model.NewErrorResponse(err.Error()))
+    default:
+        c.JSON(http.StatusInternalServerError, model.NewErrorResponse("internal server error"))
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Server with Graceful Shutdown">
+    <example><![CDATA[func main() {
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+    if cfg.Environment == "production" {
+        gin.SetMode(gin.ReleaseMode)
+    }
+    db, err := initDB(cfg.DatabaseURL)
+    if err != nil {
+        log.Fatalf("Failed to connect to database: %v", err)
+    }
+    repos := repository.NewRepositories(db)
+    services := service.NewServices(repos, cfg)
+    handlers := handler.NewHandlers(services)
+    r := router.Setup(handlers, middleware.NewMiddleware(cfg))
+
+    srv := &http.Server{
+        Addr:         ":" + cfg.Port,
+        Handler:      r,
+        ReadTimeout:  15 * time.Second,
+        WriteTimeout: 15 * time.Second,
+        IdleTimeout:  60 * time.Second,
+    }
+    go func() {
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("Server failed: %v", err)
+        }
+    }()
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil {
+        log.Fatalf("Server forced to shutdown: %v", err)
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands><![CDATA[
+# Initialize project
+go mod init myproject
+go mod tidy
+
+# Run development server
+go run cmd/api/main.go
+
+# Build binary
+go build -o bin/api cmd/api/main.go
+
+# Run tests
+go test ./...
+go test -v -cover ./...
+
+# Run with race detection
+go test -race ./...
+
+# Lint
+golangci-lint run
+
+# Generate Swagger docs (with swaggo)
+swag init -g cmd/api/main.go
+
+# Database migrations (golang-migrate)
+migrate -path migrations -database "$DATABASE_URL" up
+migrate -path migrations -database "$DATABASE_URL" down
+  ]]></commands>
+</tooling>
+
+<dependencies><![CDATA[
+github.com/gin-gonic/gin v1.9.1
+github.com/golang-jwt/jwt/v5 v5.0.0
+golang.org/x/crypto v0.14.0
+gorm.io/gorm v1.25.5
+gorm.io/driver/postgres v1.5.4
+github.com/joho/godotenv v1.5.1
+github.com/stretchr/testify v1.8.4
+github.com/swaggo/gin-swagger v1.6.0
+github.com/swaggo/swag v1.16.2
+]]></dependencies>
+
+<quick-reference>
+  <item key="router init">gin.New() + explicit middleware, never gin.Default() in production</item>
+  <item key="binding">ShouldBindJSON for JSON; binding tags on struct fields</item>
+  <item key="optional fields">Pointer types + omitempty binding tag</item>
+  <item key="release mode">gin.SetMode(gin.ReleaseMode) in production</item>
+  <item key="error mapping">errors.Is / errors.As in handler; domain errors in service</item>
+  <item key="pagination">DefaultQuery for page/per_page; NewPaginatedResponse helper</item>
+  <item key="timeouts">ReadTimeout 15s, WriteTimeout 15s, IdleTimeout 60s on http.Server</item>
+  <item key="shutdown">signal.Notify SIGINT/SIGTERM; context.WithTimeout 30s</item>
+  <item key="context">c.Request.Context() when calling services; c.Set/c.Get for request-scoped values</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Gin Documentation" url="https://gin-gonic.com/docs/"/>
+  <ref name="Gin GitHub" url="https://github.com/gin-gonic/gin"/>
+  <ref name="GORM Documentation" url="https://gorm.io/docs/"/>
+  <ref name="Go Project Layout" url="https://github.com/golang-standards/project-layout"/>
+</external-references>
+
+</knowledge-base>

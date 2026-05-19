@@ -1,0 +1,383 @@
+<knowledge-base name="fw-django" version="1.0">
+<triggers>Django, django, .py, manage.py, settings.py, urls.py, models.py, views.py, admin.py, serializers.py, djangorestframework, DRF, rest_framework, django-cors-headers, django-filter, simplejwt, pytest-django, factory_boy, Celery, celery</triggers>
+<overview>Framework guardrails, patterns, and best practices for Django 5+. Loaded automatically when agents work on Django projects. Applies to Django REST Framework, Django Channels, Python 3.10+.</overview>
+
+<core-principles>
+  <principle name="Batteries Included">Leverage Django's built-in features before adding third-party packages. Django ships with auth, admin, ORM, CSRF, and more.</principle>
+  <principle name="DRY">Don't Repeat Yourself — use abstract models, mixins, and shared utilities.</principle>
+  <principle name="Fat Models Thin Views">Keep business logic in models and services, not views. Views handle HTTP, nothing else.</principle>
+  <principle name="Explicit Over Implicit">Use clear URL patterns, explicit imports, named relationships.</principle>
+  <principle name="Security by Default">CSRF, XSS protection, SQL injection prevention are built in — do not disable them.</principle>
+</core-principles>
+
+<when-to-use>
+  <good-fit>
+    <item>Full-stack web applications with templates</item>
+    <item>Admin interface needed out of the box</item>
+    <item>Content management systems</item>
+    <item>Session-based authentication</item>
+    <item>ORM with built-in migrations</item>
+  </good-fit>
+  <consider-alternatives>
+    <item>Pure APIs with async-first needs (FastAPI)</item>
+    <item>Minimal framework overhead (Flask)</item>
+    <item>Real-time heavy workloads without Channels</item>
+  </consider-alternatives>
+</when-to-use>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Never hardcode SECRET_KEY. Use python-decouple or environment variables. Hardcoded secrets will leak in version control.</rule>
+    <bad><![CDATA[SECRET_KEY = "django-insecure-abc123"  # committed to git]]></bad>
+    <good><![CDATA[from decouple import config
+SECRET_KEY = config("SECRET_KEY")]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Never use raw SQL with string formatting. The ORM uses parameterized queries. If raw SQL is required, use cursor.execute("SELECT ... WHERE id = %s", [user_id]).</rule>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use |safe template filter with user-provided data. Django templates auto-escape by default; |safe disables this protection.</rule>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Always define AUTH_USER_MODEL before the first migration. Changing it afterward requires data migrations and schema changes.</rule>
+  </guardrail>
+
+  <guardrail id="G-005" severity="HIGH">
+    <rule>Always use select_related() for ForeignKey/OneToOne and prefetch_related() for ManyToMany/reverse FK. Never allow N+1 queries in views or serializers.</rule>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Use @transaction.atomic for multi-step writes. A failure mid-way must not leave the database in a partial state.</rule>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Never use CORS_ALLOW_ALL_ORIGINS = True in production. Use explicit CORS_ALLOWED_ORIGINS list.</rule>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Never call Model.objects.all() without pagination or a limit. Unbounded queries can load millions of rows.</rule>
+  </guardrail>
+
+  <guardrail id="G-009" severity="MEDIUM">
+    <rule>Always define __str__ on every model. Without it, admin and debug output show unhelpful object representations.</rule>
+  </guardrail>
+
+  <guardrail id="G-010" severity="MEDIUM">
+    <rule>Use TextChoices/IntegerChoices for status fields. Never use raw strings or integers for enumerable values.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <directory path="manage.py" purpose="Django management command entry point"/>
+  <directory path="pyproject.toml" purpose="Project config, dependencies, tool settings"/>
+  <directory path="config/settings/base.py" purpose="Shared settings"/>
+  <directory path="config/settings/dev.py" purpose="Development overrides (debug, local DB)"/>
+  <directory path="config/settings/prod.py" purpose="Production hardening (HTTPS, HSTS, cookies)"/>
+  <directory path="config/urls.py" purpose="Root URL configuration"/>
+  <directory path="config/wsgi.py" purpose="WSGI entry point"/>
+  <directory path="config/asgi.py" purpose="ASGI entry point (Channels)"/>
+  <directory path="apps/" purpose="All Django applications"/>
+  <directory path="apps/core/models.py" purpose="Abstract base models (TimeStampedModel, UUIDModel)"/>
+  <directory path="apps/core/mixins.py" purpose="Shared model/view mixins"/>
+  <directory path="apps/[app]/services.py" purpose="Business logic — no HTTP knowledge"/>
+  <directory path="apps/[app]/serializers.py" purpose="DRF serializers"/>
+  <directory path="apps/[app]/tests/" purpose="Co-located tests: test_models.py, test_views.py, test_services.py"/>
+  <directory path="templates/" purpose="HTML templates"/>
+  <directory path="static/" purpose="Static assets (CSS, JS)"/>
+  <note>Split settings into base.py, dev.py, prod.py. Group apps under apps/. Place business logic in services.py, not in views.</note>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Abstract Base Models">
+    <example><![CDATA[# apps/core/models.py
+from django.db import models
+import uuid
+
+
+class TimeStampedModel(models.Model):
+    """Abstract base with created/updated timestamps."""
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class UUIDModel(models.Model):
+    """Abstract base with UUID primary key."""
+    id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+
+    class Meta:
+        abstract = True]]></example>
+  </pattern>
+
+  <pattern name="Custom User Model">
+    <description>Always create a custom user model before the first migration. Extend AbstractUser (not AbstractBaseUser unless full control is needed).</description>
+    <example><![CDATA[# apps/users/models.py
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from apps.core.models import TimeStampedModel, UUIDModel
+
+
+class User(AbstractUser, UUIDModel, TimeStampedModel):
+    email = models.EmailField(unique=True)
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["username"]
+
+    class Meta:
+        db_table = "users"
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["email"])]
+
+    def __str__(self) -> str:
+        return self.email]]></example>
+  </pattern>
+
+  <pattern name="Class-Based Views">
+    <example><![CDATA[from django.views.generic import ListView
+from django.db.models import Q
+from .models import Product
+
+
+class ProductListView(ListView):
+    model = Product
+    template_name = "products/list.html"
+    context_object_name = "products"
+    paginate_by = 20
+
+    def get_queryset(self):
+        qs = Product.objects.filter(
+            status=Product.Status.PUBLISHED
+        )
+        search = self.request.GET.get("q")
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+            )
+        return qs.select_related("category")]]></example>
+  </pattern>
+
+  <pattern name="Avoiding N+1 Queries">
+    <example><![CDATA[# BAD: N+1 queries
+for product in Product.objects.all():
+    print(product.category.name)  # Extra query per product
+
+# GOOD: Single JOIN query
+for product in Product.objects.select_related("category"):
+    print(product.category.name)  # No extra queries
+
+# GOOD: ManyToMany — separate prefetch query
+for product in Product.objects.prefetch_related("tags"):
+    for tag in product.tags.all():  # no extra queries
+        print(tag.name)]]></example>
+  </pattern>
+
+  <pattern name="Atomic Transactions">
+    <example><![CDATA[from django.db import transaction
+
+@transaction.atomic
+def transfer_stock(source_id, dest_id, qty):
+    source = Product.objects.select_for_update().get(id=source_id)
+    dest = Product.objects.select_for_update().get(id=dest_id)
+    source.stock -= qty
+    dest.stock += qty
+    source.save(update_fields=["stock"])
+    dest.save(update_fields=["stock"])]]></example>
+  </pattern>
+
+  <pattern name="Admin Configuration">
+    <example><![CDATA[from django.contrib import admin
+from .models import Product
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = ["name", "category", "price", "status"]
+    list_filter = ["status", "category", "created_at"]
+    search_fields = ["name", "description"]
+    prepopulated_fields = {"slug": ("name",)}
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["-created_at"]
+
+    fieldsets = (
+        (None, {"fields": ("name", "slug", "description")}),
+        ("Pricing", {"fields": ("price", "stock")}),
+        ("Classification", {"fields": ("category", "status")}),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )]]></example>
+  </pattern>
+
+  <pattern name="DRF ViewSet">
+    <example><![CDATA[from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.select_related("category")
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return ProductCreateSerializer
+        return ProductSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def publish(self, request, pk=None):
+        product = self.get_object()
+        product.status = Product.Status.PUBLISHED
+        product.save(update_fields=["status"])
+        return Response({"status": "published"})]]></example>
+  </pattern>
+
+  <pattern name="DRF Settings">
+    <example><![CDATA[REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_PAGINATION_CLASS": (
+        "rest_framework.pagination.PageNumberPagination"
+    ),
+    "PAGE_SIZE": 20,
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "100/hour",
+        "user": "1000/hour",
+    },
+}]]></example>
+  </pattern>
+
+  <pattern name="pytest Fixtures">
+    <example><![CDATA[# conftest.py
+import pytest
+from rest_framework.test import APIClient
+from apps.users.models import User
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def user(db):
+    return User.objects.create_user(
+        username="testuser",
+        email="test@example.com",
+        password="testpass123",
+    )
+
+
+@pytest.fixture
+def authenticated_client(api_client, user):
+    api_client.force_authenticate(user=user)
+    return api_client]]></example>
+  </pattern>
+
+</patterns>
+
+<settings-checklist>
+  <item>Never hardcode SECRET_KEY — use python-decouple or environment variables</item>
+  <item>Split settings: base.py (shared), dev.py (debug), prod.py (secure)</item>
+  <item>Always define AUTH_USER_MODEL before first migration</item>
+  <item>Set DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"</item>
+  <item>Use ALLOWED_HOSTS in production (never ["*"])</item>
+</settings-checklist>
+
+<model-checklist>
+  <item>Always define __str__ on every model</item>
+  <item>Always set class Meta with db_table, ordering, and indexes</item>
+  <item>Use abstract base models for shared fields (TimeStampedModel, UUIDModel)</item>
+  <item>Use TextChoices/IntegerChoices for status fields (not raw strings)</item>
+  <item>Add related_name to all ForeignKey and OneToOneField relationships</item>
+  <item>Use on_delete explicitly: CASCADE, PROTECT, SET_NULL, SET_DEFAULT</item>
+  <item>Add database indexes for frequently queried fields</item>
+</model-checklist>
+
+<security-checklist>
+  <item>CSRF: Enabled by default for forms; use @csrf_exempt sparingly</item>
+  <item>XSS: Django templates auto-escape by default; never use |safe with user data</item>
+  <item>SQL Injection: ORM uses parameterized queries; never use raw SQL with string formatting</item>
+  <item>Clickjacking: X-Frame-Options middleware enabled by default</item>
+  <item>HTTPS: Set SECURE_SSL_REDIRECT = True in production</item>
+  <item>HSTS: Set SECURE_HSTS_SECONDS in production</item>
+  <item>Cookies: Set SESSION_COOKIE_SECURE = True and CSRF_COOKIE_SECURE = True</item>
+  <item>CORS: Use django-cors-headers with explicit allowed origins (never CORS_ALLOW_ALL_ORIGINS in production)</item>
+</security-checklist>
+
+<testing>
+  <framework>pytest with pytest-django</framework>
+  <coverage-target>80% for business logic</coverage-target>
+  <rules>
+    <rule>Use pytest with pytest-django (not Django's built-in test runner)</rule>
+    <rule>Mark database tests with @pytest.mark.django_db</rule>
+    <rule>Use factory-boy or fixtures for test data</rule>
+    <rule>Use APIClient for DRF endpoint testing</rule>
+    <rule>Test file naming: test_models.py, test_views.py, test_services.py</rule>
+  </rules>
+</testing>
+
+<commands><![CDATA[# Development
+python manage.py runserver
+python manage.py shell_plus          # django-extensions
+
+# Migrations
+python manage.py makemigrations
+python manage.py migrate
+python manage.py showmigrations
+
+# Testing
+pytest
+pytest -v --cov=apps --cov-report=html
+pytest apps/products/ -k "test_create"
+
+# Static files
+python manage.py collectstatic
+
+# Celery
+celery -A config worker -l info
+celery -A config beat -l info]]></commands>
+
+<dependencies>
+  <base>Django&gt;=5.0, djangorestframework, django-cors-headers, django-filter, djangorestframework-simplejwt, python-decouple, psycopg2-binary, whitenoise</base>
+  <dev>pytest, pytest-django, pytest-cov, factory-boy, django-debug-toolbar, django-extensions, ruff, mypy, django-stubs</dev>
+</dependencies>
+
+<quick-reference>
+  <item key="secret key">python-decouple config() or os.environ; never hardcode</item>
+  <item key="N+1">select_related() for FK/O2O; prefetch_related() for M2M/reverse FK</item>
+  <item key="transactions">@transaction.atomic for multi-step writes; select_for_update() for locking</item>
+  <item key="user model">Always AUTH_USER_MODEL before first migration; extend AbstractUser</item>
+  <item key="ORM queries">Never all() without limits; use only()/defer() for partial columns</item>
+  <item key="DRF views">ModelViewSet for CRUD; thin endpoints, logic in services.py</item>
+  <item key="security">|safe never with user data; CORS_ALLOW_ALL_ORIGINS never in prod</item>
+  <item key="models">__str__ always; class Meta always; TextChoices for enums</item>
+  <item key="testing">@pytest.mark.django_db; APIClient; factory-boy for data</item>
+  <item key="settings">base/dev/prod split; ALLOWED_HOSTS explicit; HTTPS flags in prod</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Django Documentation" url="https://docs.djangoproject.com/"/>
+  <ref name="Django REST Framework" url="https://www.django-rest-framework.org/"/>
+  <ref name="Two Scoops of Django" url="https://www.feldroy.com/books/two-scoops-of-django-3-x"/>
+  <ref name="Django Best Practices" url="https://django-best-practices.readthedocs.io/"/>
+</external-references>
+
+</knowledge-base>

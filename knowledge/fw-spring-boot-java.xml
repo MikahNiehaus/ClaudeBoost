@@ -1,0 +1,423 @@
+<knowledge-base name="fw-spring-boot-java" version="1.0">
+<triggers>Spring Boot, Spring Boot Java, spring-boot, SpringBootApplication, @RestController, @Service, @Repository, @Entity, JpaRepository, pom.xml, mvnw, spring.jpa, Hibernate, JPA, @Transactional, @Valid, @PreAuthorize, ProblemDetail, Flyway, Liquibase, Testcontainers, MockMvc, MapStruct, @RequiredArgsConstructor, Lombok, .java spring, jakarta, Spring Security, SpringDoc, OpenAPI</triggers>
+<overview>Spring Boot 3.x / Java 17+ guardrails, patterns, and best practices for enterprise REST APIs and microservices. Covers layered architecture (Controller/Service/Repository), constructor injection, DTO records with Bean Validation, JPA entities, Flyway migrations, Spring Security (stateless JWT), GlobalExceptionHandler with ProblemDetail (RFC 7807), Testcontainers integration tests, and OpenAPI documentation. Loaded automatically when agents work on Spring Boot Java projects.</overview>
+
+<core-principles>
+  <principle name="Convention Over Configuration">Leverage Spring Boot auto-configuration. Override only when necessary.</principle>
+  <principle name="Layered Architecture">Controller -> Service -> Repository with clear separation. Controllers handle HTTP only; Services contain all business logic and transactions; Repositories handle data access.</principle>
+  <principle name="DTOs at Boundaries">Never expose JPA entities in API responses. Use Java records as DTOs.</principle>
+  <principle name="Constructor Injection">Use @RequiredArgsConstructor or explicit constructors. Never @Autowired on fields.</principle>
+  <principle name="Externalized Config">All configuration via application.yml with profile-specific overrides. Secrets via environment variables.</principle>
+  <principle name="Database Migrations">Schema changes through Flyway or Liquibase only. Never ddl-auto=update in production.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="SBJ-001" severity="BLOCKER">
+    <rule>Never use @Autowired on fields. Use constructor injection with @RequiredArgsConstructor or explicit constructors.</rule>
+    <bad><![CDATA[@Autowired
+private UserRepository userRepository; // field injection — BLOCKER]]></bad>
+    <good><![CDATA[@Service
+@RequiredArgsConstructor
+public class UserServiceImpl implements UserService {
+    private final UserRepository userRepository;
+}]]></good>
+  </guardrail>
+
+  <guardrail id="SBJ-002" severity="BLOCKER">
+    <rule>Never expose JPA entities in API responses. Always map to DTO records before returning from service layer.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-003" severity="BLOCKER">
+    <rule>Never use ddl-auto=update in production. Use Flyway or Liquibase migrations.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-004" severity="BLOCKER">
+    <rule>Always annotate request body parameters with @Valid on controllers.</rule>
+    <good><![CDATA[public ResponseEntity<UserResponse> createUser(@Valid @RequestBody UserRequest request)]]></good>
+  </guardrail>
+
+  <guardrail id="SBJ-005" severity="BLOCKER">
+    <rule>Keep spring.jpa.open-in-view=false. Lazy loading must occur within a transaction.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-006" severity="HIGH">
+    <rule>Use @Transactional(readOnly = true) at the service class level and @Transactional on write methods individually.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-007" severity="HIGH">
+    <rule>Return ProblemDetail (RFC 7807) from all exception handlers. Never return custom error formats.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-008" severity="HIGH">
+    <rule>Use @PageableDefault for list endpoints. Never return unbounded collections.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-009" severity="HIGH">
+    <rule>Use @OneConfiguration class per concern (SecurityConfig, WebConfig, CacheConfig). Never put multiple concerns in one @Configuration class.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-010" severity="MEDIUM">
+    <rule>Use MapStruct for entity-DTO mapping. Never write manual mapping boilerplate.</rule>
+  </guardrail>
+
+  <guardrail id="SBJ-011" severity="MEDIUM">
+    <rule>Use Testcontainers for integration tests. Never use H2 as a production substitute for a real database.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure><![CDATA[
+myproject/
+├── src/main/java/com/example/myproject/
+│   ├── MyProjectApplication.java        # @SpringBootApplication entry point
+│   ├── config/
+│   │   ├── SecurityConfig.java          # Spring Security filter chain
+│   │   └── WebConfig.java               # CORS, interceptors, converters
+│   ├── controller/
+│   │   └── UserController.java          # REST endpoints
+│   ├── service/
+│   │   ├── UserService.java             # Interface
+│   │   └── impl/
+│   │       └── UserServiceImpl.java     # Implementation
+│   ├── repository/
+│   │   └── UserRepository.java          # JpaRepository interface
+│   ├── model/
+│   │   ├── entity/
+│   │   │   └── User.java               # JPA entity
+│   │   └── dto/
+│   │       ├── UserRequest.java         # Input record with validation
+│   │       └── UserResponse.java        # Output record
+│   ├── exception/
+│   │   ├── GlobalExceptionHandler.java  # @RestControllerAdvice
+│   │   └── ResourceNotFoundException.java
+│   └── mapper/
+│       └── UserMapper.java              # MapStruct interface
+├── src/main/resources/
+│   ├── application.yml
+│   ├── application-dev.yml
+│   ├── application-prod.yml
+│   └── db/migration/
+│       └── V1__create_users_table.sql   # Flyway migration
+├── src/test/java/com/example/myproject/
+│   ├── controller/
+│   │   └── UserControllerTest.java      # MockMvc tests
+│   ├── service/
+│   │   └── UserServiceTest.java         # Mockito unit tests
+│   └── integration/
+│       └── UserIntegrationTest.java     # Testcontainers
+├── pom.xml
+└── Dockerfile
+]]></project-structure>
+
+<patterns>
+
+  <pattern name="Controller">
+    <example><![CDATA[@RestController
+@RequestMapping("/api/v1/users")
+@RequiredArgsConstructor
+@Tag(name = "Users", description = "User management APIs")
+public class UserController {
+    private final UserService userService;
+
+    @PostMapping
+    @Operation(summary = "Create a new user")
+    @ApiResponse(responseCode = "201", description = "User created")
+    @ApiResponse(responseCode = "409", description = "Email conflict")
+    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody UserRequest request) {
+        UserResponse response = userService.createUser(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
+        return ResponseEntity.ok(userService.getUserById(id));
+    }
+
+    @GetMapping
+    public ResponseEntity<Page<UserResponse>> getAllUsers(
+            @PageableDefault(size = 20, sort = "id") Pageable pageable) {
+        return ResponseEntity.ok(userService.getAllUsers(pageable));
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
+        userService.deleteUser(id);
+        return ResponseEntity.noContent().build();
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Service">
+    <example><![CDATA[@Service
+@RequiredArgsConstructor
+@Slf4j
+@Transactional(readOnly = true)
+public class UserServiceImpl implements UserService {
+    private final UserRepository userRepository;
+    private final UserMapper userMapper;
+    private final PasswordEncoder passwordEncoder;
+
+    @Override
+    @Transactional
+    public UserResponse createUser(UserRequest request) {
+        if (userRepository.existsByEmail(request.email())) {
+            throw new DuplicateResourceException("User", "email", request.email());
+        }
+        User user = userMapper.toEntity(request);
+        user.setPassword(passwordEncoder.encode(request.password()));
+        User saved = userRepository.save(user);
+        return userMapper.toResponse(saved);
+    }
+
+    @Override
+    public UserResponse getUserById(Long id) {
+        return userRepository.findById(id)
+            .map(userMapper::toResponse)
+            .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
+    }
+
+    @Override
+    public Page<UserResponse> getAllUsers(Pageable pageable) {
+        return userRepository.findAll(pageable).map(userMapper::toResponse);
+    }
+
+    @Override
+    @Transactional
+    public void deleteUser(Long id) {
+        if (!userRepository.existsById(id)) {
+            throw new ResourceNotFoundException("User", "id", id);
+        }
+        userRepository.deleteById(id);
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Repository">
+    <example><![CDATA[@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+    boolean existsByEmail(String email);
+    List<User> findByActiveTrue();
+    Page<User> findByRole(User.Role role, Pageable pageable);
+
+    @Query("SELECT u FROM User u WHERE u.active = true AND u.role = :role")
+    List<User> findActiveUsersByRole(@Param("role") User.Role role);
+}
+// Prefer Spring Data derived queries for simple lookups.
+// Use @Query with JPQL for joins and complex filters.
+// Always return Optional for single-entity lookups.]]></example>
+  </pattern>
+
+  <pattern name="JPA Entity">
+    <example><![CDATA[@Entity
+@Table(name = "users")
+@Getter @Setter
+@NoArgsConstructor @AllArgsConstructor @Builder
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private Role role = Role.USER;
+
+    @CreationTimestamp @Column(updatable = false)
+    private LocalDateTime createdAt;
+
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
+
+    public enum Role { USER, ADMIN }
+}]]></example>
+  </pattern>
+
+  <pattern name="DTO Records with Validation">
+    <example><![CDATA[@Builder
+public record UserRequest(
+    @NotBlank(message = "Email is required")
+    @Email(message = "Invalid email format")
+    String email,
+
+    @NotBlank(message = "Password is required")
+    @Size(min = 8, max = 100)
+    String password,
+
+    @NotBlank(message = "Name is required")
+    @Size(min = 2, max = 100)
+    String name
+) {}
+
+@Builder
+public record UserResponse(
+    Long id,
+    String email,
+    String name,
+    String role,
+    LocalDateTime createdAt
+) {}]]></example>
+  </pattern>
+
+  <pattern name="GlobalExceptionHandler (ProblemDetail)">
+    <example><![CDATA[@RestControllerAdvice
+@Slf4j
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ProblemDetail handleNotFound(ResourceNotFoundException ex) {
+        log.warn("Resource not found: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setTitle("Resource Not Found");
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> errors = new HashMap<>();
+        ex.getBindingResult().getAllErrors().forEach(error -> {
+            String field = ((FieldError) error).getField();
+            errors.put(field, error.getDefaultMessage());
+        });
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Validation failed");
+        problem.setTitle("Validation Error");
+        problem.setProperty("timestamp", Instant.now());
+        problem.setProperty("errors", errors);
+        return problem;
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ProblemDetail handleUnexpected(Exception ex) {
+        log.error("Unexpected error", ex);
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
+        problem.setTitle("Internal Server Error");
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Security Configuration (Stateless JWT)">
+    <example><![CDATA[@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf(AbstractHttpConfigurer::disable)
+            .sessionManagement(session ->
+                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api-docs/**", "/swagger-ui/**").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/users").permitAll()
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/users/**").hasRole("ADMIN")
+                .anyRequest().authenticated())
+            .build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Integration Test (Testcontainers + MockMvc)">
+    <example><![CDATA[@SpringBootTest
+@AutoConfigureMockMvc
+@Testcontainers
+class UserIntegrationTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+
+    @Autowired private MockMvc mockMvc;
+    @Autowired private ObjectMapper objectMapper;
+
+    @Test
+    void shouldCreateUserViaApi() throws Exception {
+        var request = new UserRequest("test@example.com", "Pass123!", "Test");
+        mockMvc.perform(post("/api/v1/users")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.email").value("test@example.com"));
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands><![CDATA[
+./mvnw clean package
+./mvnw spring-boot:run
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
+./mvnw test
+./mvnw verify
+./mvnw spotless:apply
+./mvnw checkstyle:check
+./mvnw spring-boot:build-image
+./mvnw -Pnative native:compile
+  ]]></commands>
+</tooling>
+
+<best-practices>
+  <do>Constructor injection (@RequiredArgsConstructor)</do>
+  <do>@Transactional(readOnly=true) at class level, @Transactional on write methods</do>
+  <do>DTOs (records) for API input/output</do>
+  <do>MapStruct for entity-DTO mapping</do>
+  <do>Pagination for all list endpoints (@PageableDefault)</do>
+  <do>ProblemDetail (RFC 7807) for all error responses</do>
+  <do>Flyway/Liquibase for migrations</do>
+  <do>Testcontainers for integration tests</do>
+  <do>open-in-view=false</do>
+  <do>JPA batch inserts (hibernate.jdbc.batch_size) instead of individual saves in loops</do>
+  <dont>@Autowired on fields</dont>
+  <dont>Expose JPA entities in responses</dont>
+  <dont>ddl-auto=update in production</dont>
+  <dont>H2 as production substitute</dont>
+  <dont>Unbounded collection returns</dont>
+</best-practices>
+
+<quick-reference>
+  <item key="entry point">@SpringBootApplication on main class; runApplication in Kotlin</item>
+  <item key="injection">@RequiredArgsConstructor + final fields; never @Autowired fields</item>
+  <item key="validation">@Valid on @RequestBody; Bean Validation annotations on record components</item>
+  <item key="transactions">readOnly=true at class, @Transactional on writes</item>
+  <item key="errors">ProblemDetail via @RestControllerAdvice</item>
+  <item key="pagination">Page, Slice, Pageable; @PageableDefault(size=20)</item>
+  <item key="security">SessionCreationPolicy.STATELESS; BCryptPasswordEncoder(12)</item>
+  <item key="testing">MockMvc + Testcontainers + @DynamicPropertySource</item>
+  <item key="config">application.yml profiles; ${ENV_VAR:default} syntax</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Spring Boot Documentation" url="https://docs.spring.io/spring-boot/docs/current/reference/html/"/>
+  <ref name="Spring Data JPA" url="https://docs.spring.io/spring-data/jpa/docs/current/reference/html/"/>
+  <ref name="Spring Security" url="https://docs.spring.io/spring-security/reference/"/>
+  <ref name="MapStruct" url="https://mapstruct.org/documentation/stable/reference/html/"/>
+  <ref name="Testcontainers" url="https://testcontainers.com/"/>
+</external-references>
+
+</knowledge-base>

@@ -1,0 +1,309 @@
+<knowledge-base name="fw-echo" version="1.0">
+<triggers>Echo, echo framework, labstack/echo, github.com/labstack/echo, echo.Context, echo.HandlerFunc, echo.MiddlewareFunc, echoMw, echo.New, Go REST API, go echo, .go echo</triggers>
+<overview>Echo v4+ guardrails, patterns, and best practices for Go REST APIs. Covers application setup, route grouping with versioning, built-in and custom middleware, context usage, request binding with go-playground/validator, custom validators, consistent JSON response envelopes, domain error mapping, and graceful shutdown. Loaded automatically when agents work on Echo-based .go files.</overview>
+
+<core-principles>
+  <principle name="Layered Architecture">handler -> service -> repository. Handlers are thin HTTP adapters; business logic is in services only.</principle>
+  <principle name="Custom Validator at Startup">Register a custom validator on e.Validator at application startup. Always Bind then Validate as separate steps.</principle>
+  <principle name="Built-in Middleware First">Prefer Echo's built-in middleware (Recover, Logger, RequestID, CORS, Gzip, RateLimiter, Secure) before writing custom alternatives.</principle>
+  <principle name="Consistent Responses">Return the same JSON envelope on every endpoint. Never expose internal errors to clients.</principle>
+  <principle name="Graceful Shutdown">Always implement e.Shutdown(ctx) with signal handling.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="ECH-001" severity="BLOCKER">
+    <rule>Always Bind then Validate as two separate steps. Never skip Validate after Bind.</rule>
+    <bad><![CDATA[if err := c.Bind(&req); err != nil { return err }
+// No c.Validate call — validation skipped]]></bad>
+    <good><![CDATA[if err := c.Bind(&req); err != nil {
+    return c.JSON(http.StatusBadRequest, model.ErrorResponse(err.Error()))
+}
+if err := c.Validate(&req); err != nil {
+    return err // custom validator returns HTTPError
+}]]></good>
+  </guardrail>
+
+  <guardrail id="ECH-002" severity="BLOCKER">
+    <rule>Register custom validator on e.Validator at startup. Raw go-playground/validator errors must not reach clients.</rule>
+    <good><![CDATA[e.Validator = validator.NewCustomValidator()]]></good>
+  </guardrail>
+
+  <guardrail id="ECH-003" severity="BLOCKER">
+    <rule>Never store business logic in handlers. Never import echo in service or repository layers.</rule>
+  </guardrail>
+
+  <guardrail id="ECH-004" severity="BLOCKER">
+    <rule>Never expose internal errors to clients. Map domain errors to HTTP status codes in handlers only.</rule>
+  </guardrail>
+
+  <guardrail id="ECH-005" severity="HIGH">
+    <rule>Set e.HideBanner = true in production.</rule>
+  </guardrail>
+
+  <guardrail id="ECH-006" severity="HIGH">
+    <rule>Register Recover() first in middleware chain to catch panics in all subsequent handlers.</rule>
+  </guardrail>
+
+  <guardrail id="ECH-007" severity="HIGH">
+    <rule>Use c.Request().Context() when passing context to services or repositories.</rule>
+    <bad><![CDATA[userService.GetByID(c, id) // passing echo context to service]]></bad>
+    <good><![CDATA[userService.GetByID(c.Request().Context(), id)]]></good>
+  </guardrail>
+
+  <guardrail id="ECH-008" severity="HIGH">
+    <rule>Type-assert values from c.Get() with an ok check. Never assume the type without checking.</rule>
+    <good><![CDATA[userID, ok := c.Get("user_id").(uint)
+if !ok {
+    return echo.NewHTTPError(http.StatusUnauthorized, "missing user context")
+}]]></good>
+  </guardrail>
+
+  <guardrail id="ECH-009" severity="HIGH">
+    <rule>Use pointer fields for optional partial-update request structs.</rule>
+  </guardrail>
+
+  <guardrail id="ECH-010" severity="MEDIUM">
+    <rule>Configurable middleware functions return echo.MiddlewareFunc (a function that takes and returns echo.HandlerFunc).</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure><![CDATA[
+myproject/
+├── cmd/
+│   └── api/
+│       └── main.go           # Entry point
+├── internal/
+│   ├── config/
+│   │   └── config.go
+│   ├── handler/
+│   │   ├── handler.go        # Handler container
+│   │   ├── user.go
+│   │   └── auth.go
+│   ├── middleware/
+│   │   ├── auth.go           # JWT middleware
+│   │   └── custom.go         # Custom middleware
+│   ├── model/
+│   │   ├── user.go
+│   │   └── response.go
+│   ├── repository/
+│   │   ├── repository.go
+│   │   └── user.go
+│   ├── service/
+│   │   ├── service.go
+│   │   └── user.go
+│   └── validator/
+│       └── validator.go      # Custom go-playground/validator wrapper
+├── pkg/
+│   └── response/
+│       └── response.go
+├── migrations/
+├── .env.example
+├── go.mod
+└── Makefile
+
+Layer responsibilities:
+- handler/     HTTP: parse, validate, call service, write response
+- service/     Business logic — no echo or HTTP imports
+- repository/  Data access; accepts context.Context
+- model/       Domain structs, request/response DTOs
+- middleware/  Custom echo middleware functions
+- validator/   Custom validation rules
+]]></project-structure>
+
+<patterns>
+
+  <pattern name="Application Setup">
+    <example><![CDATA[e := echo.New()
+e.HideBanner = true
+e.Validator = validator.NewCustomValidator()
+
+e.Use(echoMw.Recover())
+e.Use(echoMw.Logger())
+e.Use(echoMw.RequestID())
+e.Use(echoMw.CORSWithConfig(echoMw.CORSConfig{
+    AllowOrigins: cfg.CORSOrigins,
+    AllowMethods: []string{http.MethodGet, http.MethodPost,
+        http.MethodPut, http.MethodPatch, http.MethodDelete},
+    AllowHeaders: []string{echo.HeaderOrigin,
+        echo.HeaderContentType, echo.HeaderAccept,
+        echo.HeaderAuthorization},
+}))]]></example>
+  </pattern>
+
+  <pattern name="Route Groups and Versioning">
+    <example><![CDATA[func setupRoutes(e *echo.Echo, h *handler.Handlers, authMw *middleware.AuthMiddleware) {
+    e.GET("/health", func(c echo.Context) error {
+        return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+    })
+
+    v1 := e.Group("/api/v1")
+
+    auth := v1.Group("/auth")
+    auth.POST("/login", h.Auth.Login)
+    auth.POST("/register", h.Auth.Register)
+    auth.POST("/refresh", h.Auth.Refresh)
+
+    users := v1.Group("/users")
+    users.POST("", h.User.Create)
+    users.Use(authMw.Authenticate)
+    users.GET("", h.User.GetAll)
+    users.GET("/me", h.User.GetCurrent)
+    users.GET("/:id", h.User.GetByID)
+    users.PUT("/:id", h.User.Update)
+    users.DELETE("/:id", h.User.Delete, authMw.RequireAdmin)
+}]]></example>
+  </pattern>
+
+  <pattern name="Built-in Middleware Reference">
+    <description>Use these before writing custom alternatives.</description>
+    <example><![CDATA[
+| Middleware        | Purpose                       |
+|-------------------|-------------------------------|
+| Recover()         | Catch panics, return 500      |
+| Logger()          | Request logging               |
+| RequestID()       | Unique request IDs            |
+| CORS()            | Cross-origin requests         |
+| Gzip()            | Response compression          |
+| RateLimiter()     | Rate limiting                 |
+| Secure()          | Security headers              |
+| BodyLimit()       | Request size limits           |
+    ]]></example>
+  </pattern>
+
+  <pattern name="Custom Validator">
+    <example><![CDATA[type CustomValidator struct {
+    validator *validator.Validate
+}
+
+func NewCustomValidator() *CustomValidator {
+    v := validator.New()
+    v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+        name := strings.SplitN(fld.Tag.Get("json"), ",", 2)[0]
+        if name == "-" { return "" }
+        return name
+    })
+    return &CustomValidator{validator: v}
+}
+
+func (cv *CustomValidator) Validate(i interface{}) error {
+    if err := cv.validator.Struct(i); err != nil {
+        return echo.NewHTTPError(http.StatusBadRequest, formatValidationErrors(err))
+    }
+    return nil
+}]]></example>
+  </pattern>
+
+  <pattern name="Request Binding">
+    <example><![CDATA[type CreateUserRequest struct {
+    Email     string `json:"email" validate:"required,email"`
+    Password  string `json:"password" validate:"required,min=8"`
+    FirstName string `json:"first_name" validate:"required,min=1,max=100"`
+    LastName  string `json:"last_name" validate:"required,min=1,max=100"`
+}
+
+func (h *UserHandler) Create(c echo.Context) error {
+    var req CreateUserRequest
+    if err := c.Bind(&req); err != nil {
+        return c.JSON(http.StatusBadRequest, model.ErrorResponse(err.Error()))
+    }
+    if err := c.Validate(&req); err != nil {
+        return err
+    }
+    user, err := h.userService.Create(c.Request().Context(), &req)
+    if err != nil {
+        if errors.Is(err, service.ErrUserNotFound) {
+            return c.JSON(http.StatusNotFound, model.ErrorResponse(err.Error()))
+        }
+        return c.JSON(http.StatusInternalServerError, model.ErrorResponse(err.Error()))
+    }
+    return c.JSON(http.StatusOK, model.SuccessResponse(user.ToResponse()))
+}]]></example>
+  </pattern>
+
+  <pattern name="Response Envelope">
+    <example><![CDATA[type Response struct {
+    Success bool        `json:"success"`
+    Data    interface{} `json:"data,omitempty"`
+    Error   string      `json:"error,omitempty"`
+}
+
+func SuccessResponse(data interface{}) *Response {
+    return &Response{Success: true, Data: data}
+}
+
+func ErrorResponse(msg string) *Response {
+    return &Response{Success: false, Error: msg}
+}
+// Delete: c.NoContent(http.StatusNoContent)
+// Paginated: include "meta" with page/total counts]]></example>
+  </pattern>
+
+  <pattern name="Custom Middleware with Config">
+    <example><![CDATA[type RateLimitConfig struct {
+    Rate  int
+    Burst int
+}
+
+func RateLimitMiddleware(cfg RateLimitConfig) echo.MiddlewareFunc {
+    limiter := rate.NewLimiter(rate.Limit(cfg.Rate), cfg.Burst)
+    return func(next echo.HandlerFunc) echo.HandlerFunc {
+        return func(c echo.Context) error {
+            if !limiter.Allow() {
+                return c.JSON(http.StatusTooManyRequests,
+                    model.ErrorResponse("rate limit exceeded"))
+            }
+            return next(c)
+        }
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands><![CDATA[
+go mod init myproject
+go mod tidy
+go run cmd/api/main.go
+go build -o bin/api cmd/api/main.go
+go test ./...
+go test -v -cover ./...
+go test -race ./...
+golangci-lint run
+migrate -path migrations -database "$DATABASE_URL" up
+migrate -path migrations -database "$DATABASE_URL" down
+  ]]></commands>
+</tooling>
+
+<dependencies><![CDATA[
+github.com/labstack/echo/v4
+github.com/go-playground/validator/v10
+github.com/golang-jwt/jwt/v5
+github.com/joho/godotenv
+gorm.io/gorm
+gorm.io/driver/postgres
+golang.org/x/crypto
+github.com/stretchr/testify
+]]></dependencies>
+
+<quick-reference>
+  <item key="setup">e.HideBanner=true; e.Validator=custom; Recover first</item>
+  <item key="binding">c.Bind then c.Validate — always both steps</item>
+  <item key="context">c.Request().Context() to services; c.Get/c.Set for request-scoped values</item>
+  <item key="errors">Return errors from handlers; centralized via echo.HTTPErrorHandler</item>
+  <item key="middleware">Return echo.MiddlewareFunc for configurable middleware</item>
+  <item key="response">Consistent Response envelope; c.NoContent for deletes</item>
+  <item key="shutdown">e.Shutdown(ctx) with 30s timeout</item>
+  <item key="rate limiting">BodyLimit() for oversized requests; built-in RateLimiter()</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Echo Documentation" url="https://echo.labstack.com/"/>
+  <ref name="Echo GitHub" url="https://github.com/labstack/echo"/>
+  <ref name="go-playground/validator" url="https://github.com/go-playground/validator"/>
+  <ref name="GORM Documentation" url="https://gorm.io/docs/"/>
+</external-references>
+
+</knowledge-base>

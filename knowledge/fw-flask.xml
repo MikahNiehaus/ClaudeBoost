@@ -1,0 +1,407 @@
+<knowledge-base name="fw-flask" version="1.0">
+<triggers>Flask, flask, .py, Blueprint, create_app, flask_sqlalchemy, Flask-SQLAlchemy, Flask-Migrate, Flask-JWT-Extended, Flask-Marshmallow, Flask-CORS, marshmallow, Jinja2, jinja2, gunicorn, WSGI, wsgi, flask run, flask db</triggers>
+<overview>Framework guardrails, patterns, and best practices for Flask 3.0+. Loaded automatically when agents work on Flask projects. Applies to REST APIs, microservices, and server-rendered web applications using Python 3.10+.</overview>
+
+<core-principles>
+  <principle name="Application Factory">Always use the factory pattern (create_app()). Never use a global app = Flask(__name__) at module level — it prevents testing and multi-config deployments.</principle>
+  <principle name="Blueprints for Modularity">Organize routes into blueprints registered in the factory. Each resource (users, auth, products) gets its own blueprint.</principle>
+  <principle name="Thin Endpoints">Business logic goes in services (no Flask imports). Endpoints only handle HTTP: parse request, call service, return response.</principle>
+  <principle name="Centralized Extensions">All Flask extension instances live in extensions.py. Initialize with init_app(app) in the factory.</principle>
+  <principle name="Schema Validation">Use Marshmallow schemas for all serialization and validation. Never trust raw request.json without schema validation.</principle>
+</core-principles>
+
+<when-to-use>
+  <good-fit>
+    <item>Microservices or small-to-medium APIs</item>
+    <item>Flexibility to choose your own ORM, auth, etc.</item>
+    <item>Rapid prototyping</item>
+    <item>Explicit over implicit behavior preferred</item>
+  </good-fit>
+  <consider-alternatives>
+    <item>Async support needed (use FastAPI or Quart)</item>
+    <item>Batteries-included (use Django)</item>
+    <item>High-performance async is critical (use FastAPI)</item>
+  </consider-alternatives>
+</when-to-use>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Never use a global app = Flask(__name__) at module level. Always use the application factory pattern (create_app()).</rule>
+    <bad><![CDATA[# app.py — global instance, cannot be tested with different configs
+app = Flask(__name__)
+db = SQLAlchemy(app)]]></bad>
+    <good><![CDATA[# app/__init__.py — factory pattern
+def create_app(config_name: str = "development") -> Flask:
+    app = Flask(__name__)
+    app.config.from_object(config[config_name])
+    db.init_app(app)
+    return app]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Never store plaintext passwords. Always hash with werkzeug.security.generate_password_hash before saving.</rule>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use environment variables with fallback secrets in production. Use os.environ["SECRET_KEY"] (raises KeyError) not os.getenv("SECRET_KEY", "fallback").</rule>
+    <bad><![CDATA[class ProductionConfig(Config):
+    SECRET_KEY = os.getenv("SECRET_KEY", "change-in-production")  # fallback leaks]]></bad>
+    <good><![CDATA[class ProductionConfig(Config):
+    SECRET_KEY = os.environ["SECRET_KEY"]  # raises KeyError if missing]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Validate all user input with Marshmallow schemas before processing. Never access request.json fields without schema validation.</rule>
+  </guardrail>
+
+  <guardrail id="G-005" severity="HIGH">
+    <rule>Register error handlers for all error types in the factory via register_error_handlers(). Never let unhandled exceptions return HTML 500 from a JSON API.</rule>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Use Flask-Migrate (Alembic) for all schema changes. Never modify the database schema manually in production.</rule>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Configure CORS restrictively in production. Never use CORS_ORIGINS="*" in production configuration.</rule>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Set secure cookie options in production: SESSION_COOKIE_SECURE, SESSION_COOKIE_HTTPONLY, SESSION_COOKIE_SAMESITE.</rule>
+  </guardrail>
+
+  <guardrail id="G-009" severity="MEDIUM">
+    <rule>Use Flask-JWT-Extended for authentication. Never implement custom JWT parsing by hand.</rule>
+  </guardrail>
+
+  <guardrail id="G-010" severity="MEDIUM">
+    <rule>Use SQLAlchemy ORM for all database access. Never use raw SQL string concatenation.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <directory path="app/__init__.py" purpose="Application factory (create_app() only)"/>
+  <directory path="app/config.py" purpose="Configuration classes (base, development, testing, production)"/>
+  <directory path="app/extensions.py" purpose="All Flask extension instances (db, migrate, ma, jwt, cors)"/>
+  <directory path="app/models/base.py" purpose="Base model class with mixins"/>
+  <directory path="app/models/user.py" purpose="User model"/>
+  <directory path="app/api/__init__.py" purpose="API blueprint registration"/>
+  <directory path="app/api/users.py" purpose="User endpoints"/>
+  <directory path="app/api/auth.py" purpose="Auth endpoints"/>
+  <directory path="app/services/user_service.py" purpose="Business logic (no Flask imports)"/>
+  <directory path="app/schemas/user.py" purpose="Marshmallow schemas"/>
+  <directory path="app/utils/errors.py" purpose="Custom exceptions and error handlers"/>
+  <directory path="app/utils/decorators.py" purpose="Auth and role decorators"/>
+  <directory path="migrations/" purpose="Alembic migrations (via Flask-Migrate)"/>
+  <directory path="tests/conftest.py" purpose="Fixtures: app, client, db_session"/>
+  <directory path="run.py" purpose="Entry point"/>
+  <note>app/__init__.py contains create_app() only. app/services/ has no Flask imports. app/schemas/ holds Marshmallow validation.</note>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Application Factory">
+    <description>The factory creates and configures the app, registers extensions and blueprints, and sets up error handlers.</description>
+    <example><![CDATA["""Flask application factory."""
+from flask import Flask
+
+from app.config import config
+from app.extensions import db, migrate, ma, jwt, cors
+
+
+def create_app(config_name: str = "development") -> Flask:
+    """Create and configure the Flask application."""
+    app = Flask(__name__)
+    app.config.from_object(config[config_name])
+
+    register_extensions(app)
+    register_blueprints(app)
+    register_error_handlers(app)
+    register_commands(app)
+
+    return app
+
+
+def register_extensions(app: Flask) -> None:
+    db.init_app(app)
+    migrate.init_app(app, db)
+    ma.init_app(app)
+    jwt.init_app(app)
+    cors.init_app(app)
+
+
+def register_blueprints(app: Flask) -> None:
+    from app.api import api_bp
+    app.register_blueprint(api_bp, url_prefix="/api/v1")
+
+
+def register_error_handlers(app: Flask) -> None:
+    from app.utils.errors import (
+        handle_app_error, handle_validation_error,
+        handle_not_found, handle_internal_error,
+    )
+    from marshmallow import ValidationError
+
+    app.register_error_handler(ValidationError, handle_validation_error)
+    app.register_error_handler(404, handle_not_found)
+    app.register_error_handler(500, handle_internal_error)
+
+
+def register_commands(app: Flask) -> None:
+    from app.commands import seed_db
+    app.cli.add_command(seed_db)]]></example>
+  </pattern>
+
+  <pattern name="Configuration Classes">
+    <example><![CDATA["""Application configuration."""
+import os
+from datetime import timedelta
+from typing import Type
+
+
+class Config:
+    """Base configuration."""
+    SECRET_KEY = os.getenv("SECRET_KEY", "change-in-production")
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+    }
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", SECRET_KEY)
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/myapp_dev"
+    )
+    SQLALCHEMY_ECHO = True
+
+
+class TestingConfig(Config):
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/myapp_test"
+    )
+
+
+class ProductionConfig(Config):
+    DEBUG = False
+    SQLALCHEMY_DATABASE_URI = os.environ["DATABASE_URL"]
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+
+
+config: dict[str, Type[Config]] = {
+    "development": DevelopmentConfig,
+    "testing": TestingConfig,
+    "production": ProductionConfig,
+}]]></example>
+  </pattern>
+
+  <pattern name="Extensions File">
+    <example><![CDATA["""Flask extensions initialization."""
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_marshmallow import Marshmallow
+from flask_jwt_extended import JWTManager
+from flask_cors import CORS
+
+db = SQLAlchemy()
+migrate = Migrate()
+ma = Marshmallow()
+jwt = JWTManager()
+cors = CORS()]]></example>
+  </pattern>
+
+  <pattern name="Blueprint Registration">
+    <description>Each resource gets its own blueprint. Import routes inside the blueprint init to register them without circular imports.</description>
+    <example><![CDATA["""API blueprint registration."""
+from flask import Blueprint
+
+api_bp = Blueprint("api", __name__)
+
+# Import routes to register them with the blueprint
+from app.api import users, auth  # noqa: F401, E402]]></example>
+  </pattern>
+
+  <pattern name="Custom Exception Hierarchy and Error Handlers">
+    <example><![CDATA["""Custom exceptions and error handlers."""
+from flask import jsonify
+
+
+class AppError(Exception):
+    """Base application error."""
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+class NotFoundError(AppError):
+    def __init__(self, message: str = "Resource not found"):
+        super().__init__(message, status_code=404)
+
+
+class UnauthorizedError(AppError):
+    def __init__(self, message: str = "Unauthorized"):
+        super().__init__(message, status_code=401)
+
+
+class ForbiddenError(AppError):
+    def __init__(self, message: str = "Forbidden"):
+        super().__init__(message, status_code=403)
+
+
+class ConflictError(AppError):
+    def __init__(self, message: str = "Conflict"):
+        super().__init__(message, status_code=409)
+
+
+def handle_validation_error(error):
+    return jsonify({"error": "Validation error", "details": error.messages}), 400
+
+
+def handle_app_error(error: AppError):
+    return jsonify({"error": error.message}), error.status_code
+
+
+def handle_not_found(error):
+    return jsonify({"error": "Not found"}), 404
+
+
+def handle_internal_error(error):
+    return jsonify({"error": "Internal server error"}), 500]]></example>
+  </pattern>
+
+  <pattern name="Jinja2 Template Base">
+    <description>Use template inheritance for server-rendered pages. Jinja2 autoescape is on by default — never disable it.</description>
+    <example><![CDATA[{# app/templates/base.html #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}My App{% endblock %}</title>
+</head>
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</body>
+</html>]]></example>
+  </pattern>
+
+  <pattern name="CLI Commands">
+    <example><![CDATA["""Custom CLI commands."""
+import click
+from flask.cli import with_appcontext
+from app.extensions import db
+
+
+@click.command("seed-db")
+@with_appcontext
+def seed_db():
+    """Seed database with initial data."""
+    # Create initial records
+    db.session.commit()
+    click.echo("Database seeded.")]]></example>
+  </pattern>
+
+</patterns>
+
+<blueprint-rest-conventions>
+  <item>GET /resources — list with pagination → get_resources()</item>
+  <item>GET /resources/&lt;id&gt; — get single resource → get_resource(id)</item>
+  <item>POST /resources — create resource → create_resource()</item>
+  <item>PATCH /resources/&lt;id&gt; — partial update → update_resource(id)</item>
+  <item>DELETE /resources/&lt;id&gt; — delete resource → delete_resource(id)</item>
+</blueprint-rest-conventions>
+
+<extensions-reference>
+  <extension name="Flask-SQLAlchemy" purpose="ORM and database integration"/>
+  <extension name="Flask-Migrate" purpose="Alembic database migrations"/>
+  <extension name="Flask-Marshmallow" purpose="Serialization and validation"/>
+  <extension name="Flask-JWT-Extended" purpose="JWT authentication"/>
+  <extension name="Flask-CORS" purpose="Cross-origin resource sharing"/>
+  <extension name="Flask-Limiter" purpose="Rate limiting"/>
+  <extension name="Flask-Caching" purpose="Response and data caching"/>
+  <extension name="Flask-Mail" purpose="Email sending"/>
+</extensions-reference>
+
+<testing>
+  <framework>pytest with Flask test client</framework>
+  <coverage-target>80% for business logic</coverage-target>
+  <rules>
+    <rule>Use pytest with Flask test client</rule>
+    <rule>Use fixtures for test data and app context</rule>
+    <rule>Test both success and error cases for every endpoint</rule>
+    <rule>Mock external services; never call real APIs in tests</rule>
+    <rule>Use a separate test database (TestingConfig)</rule>
+  </rules>
+</testing>
+
+<commands><![CDATA[# Set environment variables
+export FLASK_APP=run.py
+export FLASK_ENV=development
+
+# Initialize and run migrations
+flask db init
+flask db migrate -m "Initial migration"
+flask db upgrade
+
+# Seed database
+flask seed-db
+
+# Run development server
+flask run
+
+# Run with Gunicorn (production)
+gunicorn -w 4 -b 0.0.0.0:5000 "app:create_app('production')"
+
+# Run tests
+pytest
+pytest -v --cov=app --cov-report=html
+
+# Lint and format
+ruff check .
+mypy app/]]></commands>
+
+<dependencies>
+  <base>Flask&gt;=3.0.0, Flask-SQLAlchemy&gt;=3.1.0, Flask-Migrate&gt;=4.0.0, Flask-Marshmallow&gt;=0.15.0, Flask-JWT-Extended&gt;=4.6.0, Flask-CORS&gt;=4.0.0, marshmallow-sqlalchemy&gt;=0.29.0, psycopg2-binary&gt;=2.9.9, python-dotenv&gt;=1.0.0, gunicorn&gt;=21.0.0</base>
+  <dev>pytest&gt;=7.4.0, pytest-flask&gt;=1.2.0, pytest-cov&gt;=4.1.0, ruff&gt;=0.1.0, mypy&gt;=1.5.0</dev>
+</dependencies>
+
+<quick-reference>
+  <item key="factory">Always create_app(); never global app = Flask(__name__)</item>
+  <item key="extensions">All instances in extensions.py; init_app(app) in factory</item>
+  <item key="blueprints">One blueprint per resource; url_prefix="/api/v1"</item>
+  <item key="services">Business logic in services/; no Flask imports in service files</item>
+  <item key="validation">Marshmallow schemas for all input/output; never raw request.json</item>
+  <item key="errors">Custom AppError hierarchy; register_error_handlers() in factory</item>
+  <item key="passwords">werkzeug.security.generate_password_hash; never plaintext</item>
+  <item key="secrets">os.environ["KEY"] in production (raises on missing); never fallback strings</item>
+  <item key="CORS">Explicit origins in production; never "*"</item>
+  <item key="migrations">Flask-Migrate (Alembic) for all schema changes; never manual DDL</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Flask Documentation" url="https://flask.palletsprojects.com/"/>
+  <ref name="Flask-SQLAlchemy" url="https://flask-sqlalchemy.palletsprojects.com/"/>
+  <ref name="Flask-Migrate" url="https://flask-migrate.readthedocs.io/"/>
+  <ref name="Flask-JWT-Extended" url="https://flask-jwt-extended.readthedocs.io/"/>
+  <ref name="Marshmallow" url="https://marshmallow.readthedocs.io/"/>
+  <ref name="SQLAlchemy" url="https://www.sqlalchemy.org/"/>
+</external-references>
+
+</knowledge-base>

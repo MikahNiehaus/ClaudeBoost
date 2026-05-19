@@ -1,0 +1,456 @@
+<knowledge-base name="lang-csharp" version="1.0">
+<triggers>C#, csharp, .cs, .csx, .csproj, .sln, .NET, dotnet, ASP.NET Core, ASP.NET, Entity Framework, EF Core, xUnit, NUnit, MSTest, NSubstitute, Moq, FluentAssertions, LINQ, Blazor, Minimal API, MediatR, AutoMapper, Dapper, Directory.Build.props, editorconfig, nullable, async await, CancellationToken, IServiceCollection, records, pattern matching</triggers>
+<overview>Language-specific idioms, guardrails, and patterns for C# 12+ and .NET 8+. Loaded automatically when agents work on .cs, .csx, or .csproj files. Covers nullable reference types, async/await patterns, LINQ, records, pattern matching, dependency injection, and testing with xUnit, NSubstitute, and FluentAssertions for ASP.NET Core, console apps, and libraries.</overview>
+
+<core-principles>
+  <principle name="Type Safety">Enable nullable reference types project-wide. Treat nullable warnings as errors. Nullability is a compile-time contract.</principle>
+  <principle name="Immutability First">Prefer records, `readonly`, and `init` properties for data types. Mutable state is opt-in.</principle>
+  <principle name="Async All The Way">Use async/await end-to-end. Never block on async code with .Result or .Wait().</principle>
+  <principle name="Dependency Injection">Constructor injection via IServiceCollection. No service locator pattern. No static access to dependencies.</principle>
+  <principle name="Fail Fast">Validate inputs at boundaries using guard clauses and ArgumentException. Never allow invalid state to propagate.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Never call .Result or .Wait() on a Task. This causes deadlocks in ASP.NET Core and Blazor. Use await end-to-end.</rule>
+    <bad><![CDATA[// Deadlock in ASP.NET Core — the async context is blocked
+var user = _userService.GetUserAsync(id).Result;
+_orderService.SaveAsync(order).Wait();]]></bad>
+    <good><![CDATA[var user = await _userService.GetUserAsync(id);
+await _orderService.SaveAsync(order);]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Always accept a CancellationToken in async methods that perform I/O. Pass it through to all downstream calls.</rule>
+    <bad><![CDATA[public async Task<User> GetUserAsync(int id)
+{
+    return await _dbContext.Users.FindAsync(id);  // no cancellation support
+}]]></bad>
+    <good><![CDATA[public async Task<User> GetUserAsync(
+    int id, CancellationToken cancellationToken = default)
+{
+    return await _dbContext.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
+        ?? throw new NotFoundException(nameof(User), id);
+}]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never put side effects inside LINQ queries (no mutations, no I/O, no logging). LINQ is for projection and filtering only.</rule>
+    <bad><![CDATA[// Side effect inside LINQ — execution timing is unpredictable
+var results = items.Select(i => { i.Processed = true; return i; });
+var names = users.Select(u => { _logger.Log(u.Id); return u.Name; });]]></bad>
+    <good><![CDATA[var results = items.ToList();
+results.ForEach(i => i.Processed = true);
+
+var names = users.Select(u => u.Name).ToList();]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Enable nullable reference types in every .csproj. Never suppress nullable warnings with `#pragma warning disable` without a documented justification.</rule>
+    <good><![CDATA[<!-- In Directory.Build.props or each .csproj -->
+<PropertyGroup>
+  <Nullable>enable</Nullable>
+  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+</PropertyGroup>]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="BLOCKER">
+    <rule>Materialize LINQ queries before returning them from a method. Never return IQueryable or deferred IEnumerable from service/repository methods — callers cannot control execution context.</rule>
+    <bad><![CDATA[public IEnumerable<User> GetActiveUsers()
+    => _dbContext.Users.Where(u => u.IsActive);  // deferred — executes outside the scope]]></bad>
+    <good><![CDATA[public async Task<IReadOnlyList<User>> GetActiveUsersAsync(CancellationToken ct = default)
+    => await _dbContext.Users
+        .AsNoTracking()
+        .Where(u => u.IsActive)
+        .ToListAsync(ct);]]></good>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Suffix all async method names with `Async`: GetUserAsync, SaveOrderAsync, ProcessPaymentAsync.</rule>
+    <bad><![CDATA[public async Task<User> GetUser(int id) { ... }]]></bad>
+    <good><![CDATA[public async Task<User> GetUserAsync(int id, CancellationToken ct = default) { ... }]]></good>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Use `is not null` over `!= null` for null checks. Use `??` for defaults and `?.` for conditional access. Prefer null-coalescing over explicit null checks.</rule>
+    <bad><![CDATA[if (user != null)
+{
+    name = user.Name;
+}]]></bad>
+    <good><![CDATA[if (user is not null)
+{
+    name = user.Name;
+}
+
+// Or more concisely:
+name = user?.Name ?? "Unknown";]]></good>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Use AsNoTracking() for all read-only EF Core queries. Tracking adds overhead and can cause stale data issues when the same DbContext processes multiple reads.</rule>
+    <bad><![CDATA[var users = await _dbContext.Users
+    .Where(u => u.IsActive)
+    .ToListAsync(ct);  // tracked unnecessarily]]></bad>
+    <good><![CDATA[var users = await _dbContext.Users
+    .AsNoTracking()
+    .Where(u => u.IsActive)
+    .ToListAsync(ct);]]></good>
+  </guardrail>
+
+  <guardrail id="G-009" severity="HIGH">
+    <rule>Use `Any()` instead of `Count() > 0`. Count() may enumerate the entire collection; Any() short-circuits.</rule>
+    <bad><![CDATA[if (orders.Count() > 0) { ... }
+if (users.Where(u => u.IsActive).Count() != 0) { ... }]]></bad>
+    <good><![CDATA[if (orders.Any()) { ... }
+if (users.Any(u => u.IsActive)) { ... }]]></good>
+  </guardrail>
+
+  <guardrail id="G-010" severity="HIGH">
+    <rule>Use `ConfigureAwait(false)` in library code (not in ASP.NET Core controller actions). Library code must not capture the synchronization context.</rule>
+    <note>In ASP.NET Core apps there is no synchronization context, so ConfigureAwait(false) is not required in controller or service code there. It is required in library code targeting multiple frameworks.</note>
+  </guardrail>
+
+  <guardrail id="G-011" severity="HIGH">
+    <rule>Use `ValueTask&lt;T&gt;` for hot paths that frequently complete synchronously. Use `Task&lt;T&gt;` as the default; only switch to ValueTask after profiling.</rule>
+  </guardrail>
+
+  <guardrail id="G-012" severity="MEDIUM">
+    <rule>Use file-scoped namespaces (`namespace MyApp.Services;`) in all new files. This reduces nesting and matches the .editorconfig warning.</rule>
+    <bad><![CDATA[namespace MyApp.Services
+{
+    public class OrderService { }
+}]]></bad>
+    <good><![CDATA[namespace MyApp.Services;
+
+public class OrderService { }]]></good>
+  </guardrail>
+
+  <guardrail id="G-013" severity="MEDIUM">
+    <rule>Run `dotnet format` before every commit. Configure `.editorconfig` and `Directory.Build.props` at the solution root so all projects share the same style settings.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <directory path="MySolution.sln" purpose="Solution file"/>
+  <directory path="src/MySolution.Api/" purpose="ASP.NET Core host, entry point, controllers, middleware, Program.cs"/>
+  <directory path="src/MySolution.Application/" purpose="Use cases, CQRS commands/queries, interfaces, application services"/>
+  <directory path="src/MySolution.Domain/" purpose="Entities, value objects, domain events, domain exceptions — zero external dependencies"/>
+  <directory path="src/MySolution.Infrastructure/" purpose="EF Core, external services, file I/O — implements Application interfaces"/>
+  <directory path="tests/MySolution.UnitTests/" purpose="Unit tests — one project per src project is fine"/>
+  <directory path="tests/MySolution.IntegrationTests/" purpose="API + database integration tests with WebApplicationFactory"/>
+  <directory path="tests/MySolution.ArchTests/" purpose="Architecture rule tests (optional, using NetArchTest or ArchUnitNET)"/>
+  <directory path="Directory.Build.props" purpose="Shared build properties for all projects (Nullable, TreatWarningsAsErrors, analyzers)"/>
+  <directory path=".editorconfig" purpose="Consistent formatting and style rules across the team"/>
+  <note>Domain has zero external dependencies. Application depends only on Domain. Infrastructure depends on Application and Domain. Api is the composition root and depends on all. Test projects mirror the src/ structure.</note>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Records for Immutable Data" context="DTOs, value objects, domain events, query results">
+    <description>Records provide value equality, immutability, and concise syntax. Use `with` for nondestructive mutation. Use readonly record struct for high-performance value types.</description>
+    <example><![CDATA[// Positional record for DTOs
+public sealed record OrderSummary(int Id, decimal Total, OrderStatus Status);
+
+// Record with validation (use constructor body)
+public sealed record EmailAddress
+{
+    public string Value { get; }
+
+    public EmailAddress(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        if (!value.Contains('@'))
+            throw new ArgumentException("Invalid email format.", nameof(value));
+        Value = value;
+    }
+}
+
+// readonly record struct — no heap allocation, stack-allocated value type
+public readonly record struct Coordinate(double Latitude, double Longitude);
+
+// Nondestructive mutation
+var shipped = original with { Status = OrderStatus.Shipped };]]></example>
+  </pattern>
+
+  <pattern name="Guard Clauses and Nullable Contracts" context="Service and repository constructors, method boundaries">
+    <description>Validate at the entry point. Use ArgumentException static helpers (.NET 6+) for concise guards. Throw immediately — do not propagate invalid state.</description>
+    <example><![CDATA[public sealed class OrderService
+{
+    private readonly IOrderRepository _repository;
+
+    public OrderService(IOrderRepository repository)
+    {
+        _repository = repository ?? throw new ArgumentNullException(nameof(repository));
+    }
+
+    public async Task<OrderSummary> GetSummaryAsync(
+        int orderId, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(orderId);
+
+        var order = await _repository.GetByIdAsync(orderId, ct)
+            ?? throw new NotFoundException(nameof(Order), orderId);
+
+        return new OrderSummary(order.Id, order.Total, order.Status);
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Pattern Matching" context="Domain logic, discount rules, state transitions, type dispatch">
+    <description>Switch expressions with property, relational, and type patterns replace long if-else chains. The compiler warns if a case is missing.</description>
+    <example><![CDATA[// Property patterns
+public decimal CalculateDiscount(Customer customer) => customer switch
+{
+    { MembershipLevel: "Gold", YearsActive: > 5 } => 0.20m,
+    { MembershipLevel: "Gold" } => 0.15m,
+    { MembershipLevel: "Silver" } => 0.10m,
+    { TotalOrders: > 100 } => 0.05m,
+    _ => 0m,
+};
+
+// Relational patterns
+public string ClassifyTemperature(double temp) => temp switch
+{
+    < 0 => "Freezing",
+    >= 0 and < 15 => "Cold",
+    >= 15 and < 25 => "Moderate",
+    >= 25 and < 35 => "Warm",
+    >= 35 => "Hot",
+};
+
+// Type patterns
+public static string Describe(object value) => value switch
+{
+    int n when n < 0 => $"Negative integer: {n}",
+    int n => $"Positive integer: {n}",
+    string { Length: 0 } => "Empty string",
+    string s => $"String of length {s.Length}",
+    null => "null",
+    _ => $"Unknown: {value.GetType().Name}",
+};]]></example>
+  </pattern>
+
+  <pattern name="Async Streams" context="Streaming large result sets — logs, reports, event feeds">
+    <description>IAsyncEnumerable&lt;T&gt; produces items lazily. Use [EnumeratorCancellation] for proper cancellation support. Consume with await foreach.</description>
+    <example><![CDATA[// Producing
+public async IAsyncEnumerable<LogEntry> StreamLogsAsync(
+    DateTime since,
+    [EnumeratorCancellation] CancellationToken ct = default)
+{
+    await foreach (var batch in _logSource.ReadBatchesAsync(since, ct))
+    {
+        foreach (var entry in batch.Entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return entry;
+        }
+    }
+}
+
+// Consuming
+await foreach (var log in StreamLogsAsync(DateTime.UtcNow.AddHours(-1), ct))
+{
+    Console.WriteLine($"[{log.Timestamp}] {log.Message}");
+}]]></example>
+  </pattern>
+
+  <pattern name="Dependency Injection Registration" context="Program.cs or ServiceCollectionExtensions classes">
+    <description>Register services as extension methods on IServiceCollection. Constructor injection only — no service locator, no static access.</description>
+    <example><![CDATA[// Extension method pattern for clean Program.cs
+public static IServiceCollection AddApplicationServices(
+    this IServiceCollection services)
+{
+    services.AddScoped<IOrderRepository, OrderRepository>();
+    services.AddScoped<IOrderService, OrderService>();
+    services.AddSingleton<IClock, SystemClock>();
+    services.AddHttpClient<IPaymentGateway, StripePaymentGateway>(client =>
+    {
+        client.BaseAddress = new Uri("https://api.stripe.com/");
+        client.Timeout = TimeSpan.FromSeconds(10);
+    });
+
+    return services;
+}
+
+// Constructor injection (no service locator)
+public sealed class OrderService : IOrderService
+{
+    private readonly IOrderRepository _repository;
+    private readonly IClock _clock;
+
+    public OrderService(IOrderRepository repository, IClock clock)
+    {
+        _repository = repository;
+        _clock = clock;
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<testing>
+  <framework>xUnit with NSubstitute (mocking) and FluentAssertions</framework>
+  <coverage-target>80% business logic, 60% overall</coverage-target>
+
+  <rules>
+    <rule>Framework: xUnit (preferred); NUnit or MSTest are acceptable but pick one per solution</rule>
+    <rule>Mocking: NSubstitute or Moq — pick one per project and stay consistent</rule>
+    <rule>Assertions: FluentAssertions for readable, descriptive assertions</rule>
+    <rule>Test naming: MethodName_Scenario_ExpectedResult</rule>
+    <rule>Use [Theory] with [InlineData] for parameterized / data-driven tests</rule>
+    <rule>One assertion concept per test (multiple Should calls for the same concept are fine)</rule>
+    <rule>Use WebApplicationFactory for integration tests — do not spin up a real server</rule>
+  </rules>
+
+  <pattern name="Unit Test with NSubstitute"><![CDATA[public sealed class OrderServiceTests
+{
+    private readonly IOrderRepository _repository = Substitute.For<IOrderRepository>();
+    private readonly IClock _clock = Substitute.For<IClock>();
+    private readonly OrderService _sut;
+
+    public OrderServiceTests()
+    {
+        _sut = new OrderService(_repository, _clock);
+    }
+
+    [Fact]
+    public async Task GetSummaryAsync_ExistingOrder_ReturnsSummary()
+    {
+        // Arrange
+        var order = new Order { Id = 1, Total = 99.99m, Status = OrderStatus.Pending };
+        _repository.GetByIdAsync(1, Arg.Any<CancellationToken>()).Returns(order);
+
+        // Act
+        var result = await _sut.GetSummaryAsync(1);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Id.Should().Be(1);
+        result.Total.Should().Be(99.99m);
+        result.Status.Should().Be(OrderStatus.Pending);
+    }
+
+    [Fact]
+    public async Task GetSummaryAsync_MissingOrder_ThrowsNotFoundException()
+    {
+        _repository.GetByIdAsync(99, Arg.Any<CancellationToken>())
+            .Returns((Order?)null);
+
+        var act = () => _sut.GetSummaryAsync(99);
+
+        await act.Should().ThrowAsync<NotFoundException>()
+            .WithMessage("*Order*99*");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public async Task GetSummaryAsync_InvalidId_ThrowsArgumentException(int invalidId)
+    {
+        var act = () => _sut.GetSummaryAsync(invalidId);
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+    }
+}]]></pattern>
+
+  <pattern name="Integration Test with WebApplicationFactory"><![CDATA[public sealed class OrdersApiTests : IClassFixture<WebApplicationFactory<Program>>
+{
+    private readonly HttpClient _client;
+
+    public OrdersApiTests(WebApplicationFactory<Program> factory)
+    {
+        _client = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<DbContextOptions<AppDbContext>>();
+                services.AddDbContext<AppDbContext>(opts =>
+                    opts.UseInMemoryDatabase("TestDb"));
+            });
+        }).CreateClient();
+    }
+
+    [Fact]
+    public async Task GetOrder_ReturnsOk_WhenOrderExists()
+    {
+        var response = await _client.GetAsync("/api/orders/1");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<OrderSummary>();
+        body.Should().NotBeNull();
+        body!.Id.Should().Be(1);
+    }
+}]]></pattern>
+
+</testing>
+
+<tooling>
+  <tool name="dotnet restore" purpose="Restore NuGet packages"/>
+  <tool name="dotnet build --no-restore" purpose="Build without re-restoring"/>
+  <tool name="dotnet test --no-build --verbosity normal" purpose="Run all tests"/>
+  <tool name="dotnet test --collect:'XPlat Code Coverage'" purpose="Run tests with coverage collection"/>
+  <tool name="dotnet format" purpose="Auto-format code to .editorconfig rules"/>
+  <tool name="dotnet list package --vulnerable" purpose="Audit packages for known CVEs before adding new ones"/>
+  <tool name="dotnet publish -c Release -o ./publish" purpose="Publish for deployment"/>
+</tooling>
+
+<build-config>
+  <description>Shared Directory.Build.props for all projects in the solution.</description>
+  <example><![CDATA[<!-- Directory.Build.props -->
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers"
+                      Version="8.0.0" PrivateAssets="all" />
+    <PackageReference Include="SonarAnalyzer.CSharp"
+                      Version="9.32.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>]]></example>
+
+  <description>Key .editorconfig settings for C# projects.</description>
+  <example><![CDATA[# .editorconfig
+[*.cs]
+indent_style = space
+indent_size = 4
+dotnet_sort_system_directives_first = true
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_prefer_switch_expression = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_prefer_simple_using_statement = true:suggestion
+dotnet_style_prefer_is_null_check_over_reference_equality_method = true:warning]]></example>
+</build-config>
+
+<quick-reference>
+  <item key="nullable">Enable globally in Directory.Build.props; never suppress without justification</item>
+  <item key=".Result / .Wait()">Forbidden — await end-to-end; these cause deadlocks</item>
+  <item key="CancellationToken">Required in all async I/O method signatures</item>
+  <item key="async naming">All async methods must end in Async</item>
+  <item key="LINQ side effects">Forbidden inside LINQ queries — project and filter only</item>
+  <item key="AsNoTracking">Required for all read-only EF Core queries</item>
+  <item key="Any vs Count">Use Any() not Count() > 0 — short-circuits enumeration</item>
+  <item key="records">Use for DTOs and value objects; with-expression for nondestructive mutation</item>
+  <item key="pattern matching">Switch expressions with property/relational/type patterns over if-else chains</item>
+  <item key="dependency injection">Constructor injection only; no service locator or static dependencies</item>
+  <item key="null checks">Use `is not null` over `!= null`; `??` for defaults; `?.` for conditional access</item>
+  <item key="file-scoped namespaces">Mandatory for new files — reduces nesting</item>
+  <item key="testing">xUnit + NSubstitute + FluentAssertions; WebApplicationFactory for integration tests</item>
+  <item key="coverage">80% business logic minimum, 60% overall</item>
+  <item key="tooling">dotnet format before every commit; dotnet list package --vulnerable before adding deps</item>
+</quick-reference>
+
+</knowledge-base>

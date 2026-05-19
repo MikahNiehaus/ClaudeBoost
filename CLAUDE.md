@@ -20,7 +20,14 @@ Two paths, not five mandatory steps:
 
 **Simple task?** Just do it. No workspace, no ceremony.
 
-**Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this")
+**Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this", or touches >5 files)
+
+Scope tiers:
+- **5–10 files (FEATURE)**: workspace + subtasks
+- **>10 files (COMPLEX)**: workspace + plan + agent delegation
+- **>15 source files or new subsystem (COMPLEX+)**: create a PRD first (`/create-prd`)
+
+Steps:
 1. Create `workspace/[task-id]/` — announce with one line
 2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
 3. Spawn the right agent(s)
@@ -40,6 +47,9 @@ Do the work directly when they don't. A one-line fix doesn't need an agent.
 - Context below 50%: up to 3 agents
 - Context 50-75%: up to 2 agents
 - Context above 75%: 1 agent, sequential
+
+### Language & Framework Guides
+Language and framework knowledge files (`knowledge/lang-*.xml`, `knowledge/fw-*.xml`) are indexed in RAG and load automatically when relevant. Including the language or framework name in a spawn prompt's `task_description` improves match quality — e.g. `"fix bug in TypeScript React component"` will pull in both the TypeScript and React guides.
 
 ### Agent Return Format
 Every agent response **MUST** end with a `## Summary` block (≤300 words) containing:
@@ -115,6 +125,13 @@ Only on workspace tasks (complex work). Simple tasks: just deliver.
 ### Alternatives Analysis
 Ask: "Would a reasonable person pick a different approach?"
 Yes: document alternatives and rationale. No: just do it.
+
+### Per-Folder CLAUDE.md
+Create a `CLAUDE.md` in any significant subdirectory with:
+- Purpose of the folder
+- Conventions specific to that folder
+- Key patterns or constraints
+Claude Code auto-loads these when working in subdirectories.
 
 ## Gas Town Compatibility
 

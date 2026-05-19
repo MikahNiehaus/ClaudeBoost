@@ -1,0 +1,351 @@
+<knowledge-base name="fw-sinatra" version="1.0">
+<triggers>Sinatra, sinatra, sinatra/base, sinatra-contrib, sinatra/namespace, sinatra/json, sinatra/reloader, Sinatra::Base, Sinatra::Namespace, Rack, config.ru, rack-test, .rb, Gemfile sinatra, rackup, puma sinatra, microservice ruby, lightweight API ruby, before filter sinatra</triggers>
+<overview>Sinatra 3.x guardrails, modular application patterns, routing DSL, helpers, middleware, error handling, and testing. Applies to microservices, REST APIs, webhooks, and lightweight Ruby web applications. Use modular style (Sinatra::Base subclass) for all production apps; classic style only for scripts and prototypes.</overview>
+
+<core-principles>
+  <principle name="Modular Style for Production">Subclass Sinatra::Base rather than using classic top-level DSL. Modular style isolates settings, prevents global state contamination, and supports multiple apps in one process.</principle>
+  <principle name="Thin Routes">Routes are HTTP dispatch — nothing more. Business logic belongs in service objects under app/services/ with no Sinatra imports.</principle>
+  <principle name="Puma in Production">Always run behind Puma. Never use the default WEBrick server in production.</principle>
+  <principle name="Environment from ENV">All secrets and environment-specific config come from environment variables loaded by dotenv. Never hardcode credentials.</principle>
+  <principle name="Rack Middleware for Cross-Cutting Concerns">Authentication, CORS, rate limiting, and logging are Rack middleware — not inline route logic.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="SIN-001" severity="BLOCKER">
+    <rule>Never hardcode secrets. Load all secrets and DSN strings from ENV via dotenv. Raise in production if a required secret is absent.</rule>
+    <bad><![CDATA[set :session_secret, "hardcoded-secret-do-not-do-this"]]></bad>
+    <good><![CDATA[set :session_secret, ENV.fetch('SESSION_SECRET')]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-002" severity="BLOCKER">
+    <rule>Use parameterized queries via ActiveRecord or Sequel. Never concatenate user input into SQL strings.</rule>
+    <bad><![CDATA[DB["SELECT * FROM users WHERE email = '#{params[:email]}'"].all]]></bad>
+    <good><![CDATA[User.where(email: params[:email]).first]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-003" severity="BLOCKER">
+    <rule>Use classic style only for scripts and prototypes. All production applications must use Sinatra::Base subclasses.</rule>
+    <bad><![CDATA[# app.rb — classic style in production
+get '/' do
+  "Hello World"
+end]]></bad>
+    <good><![CDATA[class App < Sinatra::Base
+  get '/' do
+    'Hello World'
+  end
+end]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-004" severity="HIGH">
+    <rule>Implement authentication checks in before filters scoped to path prefixes, not duplicated per route.</rule>
+    <good><![CDATA[before '/api/*' do
+  content_type :json
+  authenticate_token!
+end]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-005" severity="HIGH">
+    <rule>Configure CORS restrictively. Never use wildcard (*) origins in production.</rule>
+  </guardrail>
+
+  <guardrail id="SIN-006" severity="HIGH">
+    <rule>Always halt with a status code and a JSON body on error. Never let exceptions bubble to the default Sinatra error page in production.</rule>
+    <good><![CDATA[error ActiveRecord::RecordNotFound do
+  status 404
+  json error: 'Resource not found'
+end]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-007" severity="HIGH">
+    <rule>Parse JSON request bodies through a helper that rescues JSON::ParserError and halts 400. Never call JSON.parse directly in route blocks.</rule>
+    <good><![CDATA[def json_params
+  @json_params ||= begin
+    body = request.body.read
+    body.empty? ? {} : JSON.parse(body, symbolize_names: true)
+  rescue JSON::ParserError
+    halt 400, json(error: 'Invalid JSON')
+  end
+end]]></good>
+  </guardrail>
+
+  <guardrail id="SIN-008" severity="MEDIUM">
+    <rule>Use sinatra-contrib extensions (sinatra/json, sinatra/namespace, sinatra/reloader) rather than reimplementing them.</rule>
+  </guardrail>
+
+  <guardrail id="SIN-009" severity="MEDIUM">
+    <rule>Disable show_exceptions in production to avoid leaking stack traces to clients.</rule>
+    <good><![CDATA[configure :production do
+  disable :show_exceptions
+  enable  :raise_errors
+end]]></good>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[myapp/
+├── config.ru                  # Rack entry point
+├── Gemfile
+├── Rakefile                   # Database tasks
+├── app/
+│   ├── main.rb                # Sinatra::Base application class
+│   ├── routes/                # Route modules — one per resource
+│   │   ├── auth.rb
+│   │   ├── users.rb
+│   │   └── posts.rb
+│   ├── models/                # ActiveRecord / Sequel models
+│   │   ├── user.rb
+│   │   └── post.rb
+│   ├── services/              # Business logic — no Sinatra imports
+│   │   └── user_service.rb
+│   └── helpers/               # Reusable helper modules
+│       ├── auth_helper.rb
+│       └── response_helper.rb
+├── config/
+│   ├── database.yml
+│   └── environment.rb         # Boot: dotenv, bundler, DB setup
+├── db/
+│   └── migrations/
+├── public/
+├── views/
+└── spec/
+    ├── spec_helper.rb
+    ├── routes/
+    └── models/]]></example>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Application Class">
+    <description>Wire helpers, routes, error handlers, and configuration in one Sinatra::Base subclass.</description>
+    <example><![CDATA[# app/main.rb
+require 'sinatra/base'
+require 'sinatra/json'
+require 'sinatra/namespace'
+
+class App < Sinatra::Base
+  register Sinatra::Namespace
+
+  configure do
+    set :server,         :puma
+    set :root,           File.dirname(__FILE__)
+    set :views,          proc { File.join(root, '..', 'views') }
+    enable :sessions
+    set :session_secret, ENV.fetch('SESSION_SECRET')
+  end
+
+  configure :development do
+    require 'sinatra/reloader'
+    register Sinatra::Reloader
+    enable :logging
+  end
+
+  configure :production do
+    disable :show_exceptions
+    enable  :raise_errors
+  end
+
+  # Auto-load helpers and routes
+  Dir[File.join(__dir__, 'helpers', '*.rb')].each { |f| require f }
+  helpers AuthHelper, ResponseHelper
+
+  Dir[File.join(__dir__, 'routes', '*.rb')].each { |f| require f }
+  register Routes::Users
+  register Routes::Auth
+
+  get('/health') { json status: 'ok', timestamp: Time.now.iso8601 }
+  not_found      { json error: 'Not found' }
+  error          { json error: 'Internal server error' }
+end]]></example>
+  </pattern>
+
+  <pattern name="Route Module">
+    <description>One module per resource. Register via self.registered(app) and use Sinatra::Namespace for path grouping.</description>
+    <example><![CDATA[# app/routes/users.rb
+module Routes
+  module Users
+    def self.registered(app)
+      app.namespace '/api/v1/users' do
+        get    { json users: User.all.map(&:to_h) }
+        get '/:id' do
+          json user: User.find(params[:id]).to_h
+        end
+
+        post do
+          user = User.create!(json_params)
+          status 201
+          json user: user.to_h
+        rescue ActiveRecord::RecordInvalid => e
+          status 422
+          json errors: e.record.errors.full_messages
+        end
+
+        put '/:id' do
+          user = User.find(params[:id])
+          user.update!(json_params)
+          json user: user.to_h
+        rescue ActiveRecord::RecordInvalid => e
+          status 422
+          json errors: e.record.errors.full_messages
+        end
+
+        delete '/:id' do
+          User.find(params[:id]).destroy
+          status 204
+        end
+      end
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Auth and Response Helpers">
+    <example><![CDATA[# app/helpers/auth_helper.rb
+module AuthHelper
+  def current_user
+    @current_user ||= User.find_by(id: session[:user_id]) if session[:user_id]
+  end
+
+  def require_login!
+    halt 401, json(error: 'Unauthorized') unless current_user
+  end
+
+  def require_admin!
+    require_login!
+    halt 403, json(error: 'Forbidden') unless current_user.admin?
+  end
+
+  def authenticate_token!
+    token = request.env['HTTP_AUTHORIZATION']&.sub('Bearer ', '')
+    halt 401, json(error: 'Missing token') unless token
+    payload = JWT.decode(token, ENV.fetch('JWT_SECRET'), true, algorithm: 'HS256').first
+    @current_user = User.find_by(id: payload['user_id'])
+    halt 401, json(error: 'Invalid token') unless @current_user
+  rescue JWT::DecodeError
+    halt 401, json(error: 'Invalid token')
+  end
+end
+
+# app/helpers/response_helper.rb
+module ResponseHelper
+  def paginate(collection, per_page: 20)
+    page  = (params[:page] || 1).to_i
+    per   = (params[:per_page] || per_page).to_i.clamp(1, 100)
+    total = collection.count
+    items = collection.offset((page - 1) * per).limit(per)
+    { items: items, meta: { page: page, per_page: per, total: total } }
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Error Handlers">
+    <example><![CDATA[# In App class — catches exceptions globally
+error ActiveRecord::RecordNotFound do
+  status 404
+  json error: 'Resource not found'
+end
+
+error ActiveRecord::RecordInvalid do |e|
+  status 422
+  json errors: e.record.errors.full_messages
+end
+
+error JSON::ParserError do
+  status 400
+  json error: 'Invalid JSON'
+end
+
+not_found { json error: 'Not found' }
+error     { json error: 'Internal server error' }]]></example>
+  </pattern>
+
+  <pattern name="Rack Entry Point">
+    <example><![CDATA[# config.ru
+require 'bundler/setup'
+Bundler.require(:default, ENV.fetch('RACK_ENV', 'development'))
+require_relative 'config/environment'
+require_relative 'app/main'
+run App]]></example>
+  </pattern>
+
+  <pattern name="RSpec Route Test">
+    <example><![CDATA[# spec/routes/users_spec.rb
+require 'spec_helper'
+
+RSpec.describe 'Users API' do
+  include Rack::Test::Methods
+
+  def app = App
+
+  let!(:user) { create(:user) }
+
+  describe 'GET /api/v1/users' do
+    it 'returns 200 with user list' do
+      get '/api/v1/users'
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body['users']).to be_an(Array)
+    end
+  end
+
+  describe 'POST /api/v1/users' do
+    it 'creates a user and returns 201' do
+      post '/api/v1/users',
+           { email: 'new@example.com', name: 'New User', password: 'secret' }.to_json,
+           'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(201)
+    end
+
+    it 'returns 422 for missing fields' do
+      post '/api/v1/users', {}.to_json, 'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(422)
+    end
+  end
+end]]></example>
+  </pattern>
+
+</patterns>
+
+<commands>
+  <cmd purpose="Install dependencies">bundle install</cmd>
+  <cmd purpose="Development server">bundle exec rackup -p 4567</cmd>
+  <cmd purpose="Production server">bundle exec puma -C config/puma.rb</cmd>
+  <cmd purpose="Run tests">bundle exec rspec</cmd>
+  <cmd purpose="Tests with docs">bundle exec rspec --format documentation</cmd>
+  <cmd purpose="DB create">bundle exec rake db:create</cmd>
+  <cmd purpose="DB migrate">bundle exec rake db:migrate</cmd>
+  <cmd purpose="DB rollback">bundle exec rake db:rollback</cmd>
+  <cmd purpose="Console">bundle exec pry -r ./config/environment</cmd>
+</commands>
+
+<dependencies>
+  <dep name="sinatra" version="~> 3.x" purpose="Web framework DSL"/>
+  <dep name="sinatra-contrib" purpose="Extensions: json, namespace, reloader"/>
+  <dep name="puma" purpose="Production application server"/>
+  <dep name="rake" purpose="Task runner for DB migrations"/>
+  <dep name="dotenv" purpose="Environment variable loading"/>
+  <dep name="activerecord" purpose="ORM (or sequel as alternative)"/>
+  <dep name="pg" purpose="PostgreSQL adapter"/>
+  <dep name="bcrypt" purpose="Password hashing"/>
+  <dep name="jwt" purpose="JSON Web Token authentication"/>
+  <dep name="rspec" purpose="Test framework"/>
+  <dep name="rack-test" purpose="HTTP request helpers for Rack apps"/>
+  <dep name="database_cleaner-active_record" purpose="DB cleanup between tests"/>
+  <dep name="factory_bot" purpose="Test data factories"/>
+</dependencies>
+
+<quick-reference>
+  <item key="production style">Sinatra::Base subclass — never classic style in production</item>
+  <item key="route modules">One module per resource, registered via self.registered(app)</item>
+  <item key="helpers">AuthHelper, ResponseHelper — included via helpers DSL</item>
+  <item key="JSON body">json_params helper wrapping JSON.parse with rescue halt 400</item>
+  <item key="early exit">halt 401/403/404/422 with json body — stops execution immediately</item>
+  <item key="filters">before '/api/*' do ... end for scoped cross-cutting logic</item>
+  <item key="error handlers">error ExceptionClass do ... end — never leak stack traces</item>
+  <item key="secrets">ENV.fetch('KEY') — raises KeyError if missing, not silent nil</item>
+  <item key="test pattern">Rack::Test::Methods + def app = App; test success + error paths</item>
+  <item key="CORS">Restrictive configuration via Rack middleware — never wildcard in production</item>
+</quick-reference>
+
+</knowledge-base>

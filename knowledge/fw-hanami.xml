@@ -1,0 +1,426 @@
+<knowledge-base name="fw-hanami" version="1.0">
+<triggers>Hanami, hanami, hanami/action, hanami/view, hanami/router, hanami new, Hanami::App, Hanami::Action, Hanami::View, Hanami::Routes, Hanami::Settings, ROM, rom-rb, rom-sql, dry-rb, dry-types, dry-monads, dry-validation, Dry::Monads, Success, Failure, Deps, slices, .rb, Gemfile hanami, clean architecture ruby, DDD ruby</triggers>
+<overview>Hanami 2.x guardrails, clean architecture patterns, slice-based bounded contexts, dependency injection via Deps[], ROM persistence, dry-rb integration, and testing. Applies to web apps and APIs requiring strict separation between delivery (actions/views) and domain (operations/repositories). Operations return Dry::Monads::Result — never raise for domain errors.</overview>
+
+<core-principles>
+  <principle name="Clean Architecture Layers">Actions/views are delivery. Operations are business logic. Repositories are data access. Each layer references only the layer below it — never upward.</principle>
+  <principle name="Slices as Bounded Contexts">Each slice (slices/api/, slices/admin/) is an isolated module with its own actions, views, and auto-registration namespace. Cross-slice calls go through shared lib/.</principle>
+  <principle name="Dependency Injection via Deps">Use include Deps["operations.users.create"] for DI. No globals, no singletons, no class-level state.</principle>
+  <principle name="Monadic Results">Operations return Success(value) or Failure(errors) from dry-monads. Actions pattern-match on the result — they never rescue domain exceptions.</principle>
+  <principle name="ROM for Persistence">Relations define schema and query scopes. Repositories expose commands and named finders. Actions never call relations directly.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="HAN-001" severity="BLOCKER">
+    <rule>Operations must return Dry::Monads::Result (Success/Failure). Never raise for domain-level errors — raise only for unexpected infrastructure failures.</rule>
+    <bad><![CDATA[def call(params)
+  raise "Email taken" if user_repo.find_by_email(params[:email])
+  # ...
+end]]></bad>
+    <good><![CDATA[def call(params)
+  return Failure(email: ["already taken"]) if user_repo.find_by_email(params[:email])
+  # ...
+  Success(user)
+end]]></good>
+  </guardrail>
+
+  <guardrail id="HAN-002" severity="BLOCKER">
+    <rule>Always validate request params in the action's params block and check request.params.valid? before delegating to an operation.</rule>
+    <good><![CDATA[params do
+  required(:user).hash do
+    required(:email).filled(:string)
+    required(:password).filled(:string, min_size?: 8)
+  end
+end
+
+def handle(request, response)
+  unless request.params.valid?
+    response.render(view, errors: request.params.errors)
+    return
+  end
+  # delegate to operation
+end]]></good>
+  </guardrail>
+
+  <guardrail id="HAN-003" severity="BLOCKER">
+    <rule>Use parameterized queries via ROM relations. Never interpolate user data into SQL strings.</rule>
+  </guardrail>
+
+  <guardrail id="HAN-004" severity="BLOCKER">
+    <rule>Store all secrets in Settings (config/settings.rb) loaded from ENV. Never reference ENV directly in actions, operations, or repositories.</rule>
+    <good><![CDATA[# config/settings.rb
+setting :jwt_secret, constructor: Types::String
+
+# In services/providers — read via settings.jwt_secret
+]]></good>
+  </guardrail>
+
+  <guardrail id="HAN-005" severity="HIGH">
+    <rule>Actions must be thin. Delegate all business logic to operations via Deps injection. An action handle method should be under 15 lines.</rule>
+  </guardrail>
+
+  <guardrail id="HAN-006" severity="HIGH">
+    <rule>Use combine for eager loading in ROM relations. Never load associations inside loops — it causes N+1 queries.</rule>
+    <good><![CDATA[def with_posts = combine(:posts)
+# usage: users.active.with_posts.to_a]]></good>
+  </guardrail>
+
+  <guardrail id="HAN-007" severity="HIGH">
+    <rule>Always paginate query results. Never call .to_a on an unscoped relation — unbounded loads crash under real data volumes.</rule>
+    <good><![CDATA[users.active.order { created_at.desc }.limit(per_page).offset((page - 1) * per_page).to_a]]></good>
+  </guardrail>
+
+  <guardrail id="HAN-008" severity="HIGH">
+    <rule>Always call Hanami.logger.error(exception) in operation rescue blocks before returning Failure. Silent failures make debugging impossible.</rule>
+  </guardrail>
+
+  <guardrail id="HAN-009" severity="HIGH">
+    <rule>Repositories wrap ROM relations — actions and operations must never call relations directly. The repository is the data access boundary.</rule>
+  </guardrail>
+
+  <guardrail id="HAN-010" severity="MEDIUM">
+    <rule>Register external services as providers in config/providers/. Never instantiate third-party clients inline in operations.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[myapp/
+├── app/                          # Main (web) slice
+│   ├── action.rb                 # Base action class
+│   ├── view.rb                   # Base view class
+│   ├── actions/                  # One class per endpoint
+│   │   └── users/
+│   │       ├── index.rb
+│   │       ├── show.rb
+│   │       └── create.rb
+│   ├── views/
+│   │   └── users/
+│   │       ├── index.rb
+│   │       └── show.rb
+│   └── templates/
+│       ├── layouts/app.html.erb
+│       └── users/
+│           ├── index.html.erb
+│           └── show.html.erb
+├── slices/
+│   └── api/
+│       ├── action.rb             # API base action (format :json, JWT auth)
+│       └── actions/
+│           └── v1/
+│               └── users/
+│                   ├── index.rb
+│                   └── create.rb
+├── config/
+│   ├── app.rb                    # Application configuration
+│   ├── routes.rb
+│   ├── settings.rb               # Settings schema from ENV
+│   └── providers/                # Service provider registration
+├── db/
+│   ├── migrate/
+│   └── seeds.rb
+├── lib/
+│   └── myapp/
+│       ├── entities/             # ROM structs (value objects)
+│       ├── repositories/         # Data access wrappers
+│       ├── operations/           # Business logic (dry-monads)
+│       ├── services/             # Infrastructure services
+│       └── types.rb              # Custom dry-types
+├── spec/
+│   ├── spec_helper.rb
+│   ├── actions/
+│   ├── operations/
+│   └── repositories/
+├── Gemfile
+└── config.ru]]></example>
+
+  <layer-table>
+    <row><layer>Actions</layer><knows>Operations, views, params</knows><never>Repositories, ROM relations directly</never></row>
+    <row><layer>Views</layer><knows>Exposed data, template helpers</knows><never>Actions, operations</never></row>
+    <row><layer>Operations</layer><knows>Repositories, services, monads</knows><never>Actions, views, request/response objects</never></row>
+    <row><layer>Repositories</layer><knows>ROM relations, entities</knows><never>Operations, actions</never></row>
+    <row><layer>Services</layer><knows>External APIs, config</knows><never>Actions, views</never></row>
+  </layer-table>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Application Configuration">
+    <example><![CDATA[# config/app.rb
+require "hanami"
+
+module MyApp
+  class App < Hanami::App
+    config.actions.default_response_format = :html
+    config.actions.content_security_policy[:default_src] = "'self'"
+
+    config.sessions = :cookie, {
+      key: "_myapp_session",
+      secret: settings.session_secret,
+      expire_after: 60 * 60 * 24 * 7,
+    }
+  end
+end
+
+# config/settings.rb
+module MyApp
+  class Settings < Hanami::Settings
+    setting :database_url,   constructor: Types::String
+    setting :session_secret, constructor: Types::String
+    setting :jwt_secret,     constructor: Types::String
+    setting :redis_url,      constructor: Types::String.optional
+    setting :log_level, default: "info",
+      constructor: Types::String.enum("debug", "info", "warn", "error")
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Routes">
+    <example><![CDATA[# config/routes.rb
+module MyApp
+  class Routes < Hanami::Routes
+    root to: "home.index"
+
+    scope "users" do
+      get  "/",    to: "users.index"
+      get  "/new", to: "users.new"
+      post "/",    to: "users.create"
+      get  "/:id", to: "users.show"
+      patch "/:id", to: "users.update"
+      delete "/:id", to: "users.destroy"
+    end
+
+    slice :api, at: "/api" do
+      scope "v1" do
+        get  "/users",     to: "v1.users.index"
+        post "/users",     to: "v1.users.create"
+        get  "/users/:id", to: "v1.users.show"
+      end
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Web Action">
+    <example><![CDATA[# app/actions/users/create.rb
+module MyApp
+  module Actions
+    module Users
+      class Create < MyApp::Action
+        include Deps["operations.users.create"]
+
+        params do
+          required(:user).hash do
+            required(:email).filled(:string)
+            required(:name).filled(:string)
+            required(:password).filled(:string, min_size?: 8)
+          end
+        end
+
+        def handle(request, response)
+          unless request.params.valid?
+            response.render(view, errors: request.params.errors)
+            return
+          end
+
+          result = create.call(request.params[:user])
+
+          if result.success?
+            response.flash[:success] = "User created"
+            response.redirect_to routes.path(:users_show, id: result.value!.id)
+          else
+            response.render(view, errors: result.failure)
+          end
+        end
+      end
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="API Slice Base Action">
+    <example><![CDATA[# slices/api/action.rb
+module API
+  class Action < Hanami::Action
+    format :json
+
+    handle_exception ROM::TupleCountMismatchError => :handle_not_found
+    handle_exception StandardError                => :handle_error
+
+    private
+
+    def authenticate!
+      token = request.get_header("HTTP_AUTHORIZATION")&.sub("Bearer ", "")
+      halt 401, { error: "Missing token" }.to_json unless token
+      payload = JWT.decode(token, Hanami.app["settings"].jwt_secret,
+                           true, algorithm: "HS256").first
+      @current_user = user_repo.find(payload["user_id"])
+      halt 401, { error: "Invalid token" }.to_json unless @current_user
+    rescue JWT::DecodeError
+      halt 401, { error: "Invalid token" }.to_json
+    end
+
+    def handle_not_found(_req, res, _ex)
+      res.status = 404
+      res.body   = { error: "Not found" }.to_json
+    end
+
+    def handle_error(_req, res, ex)
+      Hanami.logger.error(ex)
+      res.status = 500
+      res.body   = { error: "Internal server error" }.to_json
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="ROM Relation and Repository">
+    <example><![CDATA[# lib/myapp/persistence/relations/users.rb
+module MyApp
+  module Persistence
+    module Relations
+      class Users < ROM::Relation[:sql]
+        schema(:users, infer: true) do
+          associations do
+            has_many :posts
+          end
+        end
+
+        def by_id(id)   = where(id: id)
+        def by_email(e) = where(email: e.downcase)
+        def active       = where(active: true)
+        def with_posts   = combine(:posts)
+      end
+    end
+  end
+end
+
+# lib/myapp/repositories/user_repo.rb
+module MyApp
+  module Repositories
+    class UserRepo < ROM::Repository[:users]
+      include Deps[container: "persistence.rom"]
+
+      commands :create, update: :by_pk, delete: :by_pk
+
+      def find(id)             = users.by_id(id).one
+      def find_by_email(email) = users.by_email(email).one
+      def all_active            = users.active.to_a
+      def count                 = users.count
+
+      def all_paginated(page:, per_page:)
+        users.active
+          .order { created_at.desc }
+          .limit(per_page)
+          .offset((page - 1) * per_page)
+          .to_a
+      end
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Operation">
+    <example><![CDATA[# lib/myapp/operations/users/create.rb
+require "dry/monads"
+
+module MyApp
+  module Operations
+    module Users
+      class Create
+        include Dry::Monads[:result]
+        include Deps["repositories.user_repo", "services.password_hasher"]
+
+        def call(params)
+          return Failure(email: ["already taken"]) if user_repo.find_by_email(params[:email])
+
+          user = user_repo.create(
+            email:           params[:email].downcase.strip,
+            name:            params[:name].strip,
+            password_digest: password_hasher.hash(params[:password]),
+            created_at:      Time.now,
+            updated_at:      Time.now,
+          )
+
+          Success(user)
+        rescue => e
+          Hanami.logger.error(e)
+          Failure(base: ["An unexpected error occurred"])
+        end
+      end
+    end
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="ROM Migration">
+    <example><![CDATA[# db/migrate/20240115000001_create_users.rb
+ROM::SQL.migration do
+  change do
+    create_table :users do
+      primary_key :id
+      column :email,           String,    null: false, unique: true
+      column :name,            String,    null: false
+      column :password_digest, String,    null: false
+      column :role,            String,    default: "user"
+      column :active,          TrueClass, default: true
+      column :created_at,      DateTime,  null: false
+      column :updated_at,      DateTime,  null: false
+    end
+
+    add_index :users, :email, unique: true
+  end
+end]]></example>
+  </pattern>
+
+</patterns>
+
+<commands>
+  <cmd purpose="New application">gem install hanami &amp;&amp; hanami new myapp &amp;&amp; cd myapp</cmd>
+  <cmd purpose="Development server">bundle exec hanami server</cmd>
+  <cmd purpose="Console">bundle exec hanami console</cmd>
+  <cmd purpose="Generate slice">bundle exec hanami generate slice api</cmd>
+  <cmd purpose="Generate action">bundle exec hanami generate action web.users.index</cmd>
+  <cmd purpose="Generate relation">bundle exec hanami generate relation users</cmd>
+  <cmd purpose="DB create">bundle exec hanami db create</cmd>
+  <cmd purpose="DB migrate">bundle exec hanami db migrate</cmd>
+  <cmd purpose="DB seed">bundle exec hanami db seed</cmd>
+  <cmd purpose="Run tests">bundle exec rspec</cmd>
+  <cmd purpose="Tests with docs">bundle exec rspec --format documentation</cmd>
+</commands>
+
+<dependencies>
+  <dep name="hanami" version="~> 2.1" purpose="Framework core"/>
+  <dep name="hanami-router" purpose="Routing"/>
+  <dep name="hanami-controller" purpose="Action handling"/>
+  <dep name="hanami-view" purpose="View rendering"/>
+  <dep name="puma" version="~> 6.0" purpose="Application server"/>
+  <dep name="rom" version="~> 5.3" purpose="Persistence — Object Mapper"/>
+  <dep name="rom-sql" version="~> 3.6" purpose="SQL adapter for ROM"/>
+  <dep name="pg" purpose="PostgreSQL adapter"/>
+  <dep name="dry-types" purpose="Type system"/>
+  <dep name="dry-monads" purpose="Result/Maybe monads"/>
+  <dep name="dry-validation" purpose="Validation contracts"/>
+  <dep name="bcrypt" version="~> 3.1" purpose="Password hashing"/>
+  <dep name="jwt" version="~> 2.7" purpose="JSON Web Token auth"/>
+  <dep name="rspec" purpose="Test framework"/>
+  <dep name="rack-test" purpose="HTTP integration tests"/>
+  <dep name="database_cleaner-sequel" purpose="DB cleanup between tests"/>
+  <dep name="factory_bot" purpose="Test data factories"/>
+</dependencies>
+
+<quick-reference>
+  <item key="slices">Bounded contexts — each slice is isolated with its own actions/views</item>
+  <item key="DI">include Deps["key"] — no globals, no singletons</item>
+  <item key="operations">Return Success/Failure — never raise for domain errors</item>
+  <item key="actions">Validate params block, check .valid?, delegate to operation, pattern-match result</item>
+  <item key="repositories">ROM::Repository subclass — only data access, no business logic</item>
+  <item key="N+1 prevention">combine(:assoc) for eager loading in ROM relations</item>
+  <item key="pagination">limit/offset in repository — never unbounded .to_a</item>
+  <item key="secrets">Settings class from ENV — never ENV[] directly in app code</item>
+  <item key="error logging">Hanami.logger.error(e) in every rescue block</item>
+  <item key="API auth">halt 401/403 in authenticate! method called from before hook in base action</item>
+</quick-reference>
+
+</knowledge-base>

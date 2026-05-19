@@ -1,0 +1,445 @@
+<knowledge-base name="lang-ruby" version="1.0">
+<triggers>Ruby, .rb, .rake, .gemspec, Gemfile, Gemfile.lock, Rakefile, Rails, ActiveRecord, RSpec, Minitest, FactoryBot, RuboCop, Bundler, Zeitwerk, Sinatra, Hanami, Grape, dry-rb, Sorbet, RBS, SimpleCov</triggers>
+<overview>Language-specific idioms, guardrails, and patterns for Ruby 3.2+. Loaded automatically when agents work on .rb, .rake, or .gemspec files. Applies to gems, web applications, APIs, and CLIs. Covers frozen string literals, blocks/procs, metaprogramming guardrails, modern pattern matching, enumerable idioms, and testing with RSpec and FactoryBot.</overview>
+
+<core-principles>
+  <principle name="Least Surprise">Code should behave as readers expect. Prefer clarity over cleverness.</principle>
+  <principle name="Everything is an Object">Leverage Ruby's object model. Primitives are objects with methods.</principle>
+  <principle name="Convention Over Configuration">Follow established naming and structure conventions.</principle>
+  <principle name="Duck Typing with Confidence">Rely on behavior, not class checks. Validate at system boundaries.</principle>
+  <principle name="Blocks Everywhere">Use blocks for resource management, iteration, and DSLs.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Every `.rb` file must start with `# frozen_string_literal: true`. This prevents accidental string mutation and improves performance. Use `+""` or `.dup` when mutable strings are genuinely required.</rule>
+    <bad><![CDATA[# Missing frozen_string_literal comment
+class UserService
+  NAME = "service"
+end]]></bad>
+    <good><![CDATA[# frozen_string_literal: true
+
+class UserService
+  NAME = "service"
+  MUTABLE = +"mutable string"  # intentionally mutable
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Never use bare `rescue` (rescues all exceptions including system errors). Always rescue specific exception classes.</rule>
+    <bad><![CDATA[def charge(account, amount)
+  account.debit(amount)
+rescue
+  # catches SignalException, NoMemoryError, etc.
+  nil
+end]]></bad>
+    <good><![CDATA[def charge(account, amount)
+  account.debit(amount)
+rescue InsufficientFundsError => e
+  raise PaymentError, "card declined: #{e.message}"
+rescue Stripe::CardError => e
+  logger.error("Stripe error for account=#{account.id}: #{e.message}")
+  raise PaymentError, "payment gateway error"
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use `eval` with string arguments. Use the block form of `class_eval` or `module_eval` when dynamic method definition is unavoidable.</rule>
+    <bad><![CDATA[eval("def #{method_name}; #{body}; end") # arbitrary code execution]]></bad>
+    <good><![CDATA[MyClass.class_eval do
+  define_method(method_name) { |*args| implementation.call(*args) }
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Always pair `method_missing` with `respond_to_missing?`. Without it, `respond_to?` and other reflection methods return incorrect results.</rule>
+    <bad><![CDATA[def method_missing(name, *args)
+  find_by_attribute(name.to_s, args.first) if name.to_s.start_with?("find_by_")
+end
+# respond_to_missing? not defined — breaks respond_to?, method(), etc.]]></bad>
+    <good><![CDATA[def method_missing(name, *args)
+  if name.to_s.start_with?("find_by_")
+    find_by_attribute(name.to_s.delete_prefix("find_by_"), args.first)
+  else
+    super
+  end
+end
+
+def respond_to_missing?(name, include_private = false)
+  name.to_s.start_with?("find_by_") || super
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="BLOCKER">
+    <rule>Run `bundle audit` before merging. Commit `Gemfile.lock` for applications; omit for gems. Never use `gem "name"` without a version constraint in production code.</rule>
+    <bad><![CDATA[gem "rails"        # no version — gets whatever is latest]]></bad>
+    <good><![CDATA[gem "rails", "~> 7.1"   # pessimistic constraint — allows patch/minor up to 8.0]]></good>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Run `rubocop` before every commit. Zero offenses required in CI. Use `bundle exec rubocop -a` to auto-fix safe cops.</rule>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Prefer guard clauses over nested conditionals. A method that returns early is easier to read than deeply nested branches.</rule>
+    <bad><![CDATA[def process(user)
+  if user
+    if user.active?
+      do_something(user) if user.verified?
+    end
+  end
+end]]></bad>
+    <good><![CDATA[def process(user)
+  return unless user
+  return unless user.active?
+  return unless user.verified?
+
+  do_something(user)
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Use `define_method` sparingly. Prefer explicit method definitions for readability and static analysis. Never use metaprogramming in hot paths.</rule>
+  </guardrail>
+
+  <guardrail id="G-009" severity="HIGH">
+    <rule>Prefer `Module#prepend` over `alias_method` chains. `prepend` inserts the module before the class in the inheritance chain and is easier to follow.</rule>
+  </guardrail>
+
+  <guardrail id="G-010" severity="HIGH">
+    <rule>Validate duck-typed inputs at system boundaries (public methods, service entry points). Use `respond_to?` or Sorbet/RBS type signatures. Fail fast with a descriptive `TypeError` or `ArgumentError`.</rule>
+    <bad><![CDATA[def serialize(obj)
+  obj.to_h  # may raise NoMethodError deep inside — hard to debug
+end]]></bad>
+    <good><![CDATA[def serialize(obj)
+  raise TypeError, "expected #to_h, got #{obj.class}" unless obj.respond_to?(:to_h)
+  obj.to_h
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-011" severity="HIGH">
+    <rule>Use `{}` for single-line blocks, `do...end` for multi-line. Prefer `block_given?` + `yield` over explicit `&block` parameter unless the proc must be stored.</rule>
+    <bad><![CDATA[def each(&block)
+  items.each { |i| block.call(i) }  # unnecessary explicit block object
+end]]></bad>
+    <good><![CDATA[def each
+  items.each { |i| yield i } if block_given?
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-012" severity="MEDIUM">
+    <rule>Use lambdas (`->`) for strict arity checking and when the proc should return from itself. Use procs only for flexible arity or block-like behavior.</rule>
+  </guardrail>
+
+  <guardrail id="G-013" severity="MEDIUM">
+    <rule>Use `ensure` for cleanup (file handles, connections). Never use `rescue` for control flow — it is for exception handling.</rule>
+    <bad><![CDATA[def read_file(path)
+  f = File.open(path)
+  f.read
+rescue
+  f&.close  # wrong — rescue is not a finally block
+end]]></bad>
+    <good><![CDATA[def read_file(path)
+  File.open(path) { |f| f.read }
+  # or with explicit ensure:
+  # f = File.open(path)
+  # f.read
+  # ensure
+  #   f&.close
+end]]></good>
+  </guardrail>
+
+  <guardrail id="G-014" severity="MEDIUM">
+    <rule>Custom errors must inherit from `StandardError` (not `Exception`). Provide a `#message` with actionable information. Define an error hierarchy per domain.</rule>
+    <good><![CDATA[class PaymentError < StandardError; end
+class InsufficientFundsError < PaymentError; end]]></good>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <description>Gem and application layouts following Ruby conventions.</description>
+
+  <gem-layout><![CDATA[mygem/
+├── lib/
+│   ├── mygem.rb              # Entry point, require dependencies
+│   └── mygem/
+│       ├── version.rb        # VERSION constant
+│       ├── client.rb         # Core logic
+│       └── errors.rb         # Custom error classes
+├── spec/
+│   ├── spec_helper.rb
+│   └── mygem/
+│       └── client_spec.rb
+├── Gemfile
+├── mygem.gemspec
+└── Rakefile]]></gem-layout>
+
+  <application-layout><![CDATA[myapp/
+├── app/
+│   ├── models/               # Domain objects
+│   ├── services/             # Business logic (POROs)
+│   └── validators/           # Input validation
+├── config/
+├── db/migrate/               # Database migrations
+├── lib/tasks/                # Rake tasks
+├── spec/
+│   ├── spec_helper.rb
+│   ├── models/
+│   └── services/
+├── Gemfile
+├── Gemfile.lock
+└── Rakefile]]></application-layout>
+
+  <rules>
+    <rule>Service objects for business logic — single public method `#call`</rule>
+    <rule>One class per file; file name matches class name in snake_case</rule>
+    <rule>No global mutable state; use dependency injection or configuration objects</rule>
+    <rule>Test files mirror source: `lib/foo/bar.rb` -> `spec/foo/bar_spec.rb`</rule>
+  </rules>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Guard clauses" context="Any method with conditional early returns">
+    <example><![CDATA[# frozen_string_literal: true
+
+def process(user)
+  return unless user
+  return unless user.active?
+  return unless user.verified?
+
+  do_something(user)
+end]]></example>
+  </pattern>
+
+  <pattern name="Enumerable and lazy evaluation" context="Collection transformations — prefer over imperative loops">
+    <example><![CDATA[# Chain Enumerable methods over manual loops
+users.select(&:active?).map(&:email).sort
+
+# Lazy evaluation for large or infinite collections
+File.open("huge.log").each_line.lazy
+  .select { |line| line.include?("ERROR") }
+  .map    { |line| parse_error(line) }
+  .first(10)
+
+# each_with_object for building hashes
+totals = orders.each_with_object(Hash.new(0)) do |order, sums|
+  sums[order.category] += order.amount
+end
+
+# Point-free style with Symbol#to_proc
+names = users.map(&:name)]]></example>
+  </pattern>
+
+  <pattern name="Pattern matching (Ruby 3.x)" context="Destructuring hashes, arrays, and API responses">
+    <example><![CDATA[case response
+in { status: 200, body: { data: Array => items } }
+  process_items(items)
+in { status: 404 }
+  handle_not_found
+in { status: (500..) }
+  handle_server_error
+end
+
+# Pin operator for variable binding
+expected_id = 42
+case record
+in { id: ^expected_id, name: String => name }
+  puts "Found: #{name}"
+end]]></example>
+  </pattern>
+
+  <pattern name="Frozen string literals and immutability" context="All Ruby files">
+    <example><![CDATA[# frozen_string_literal: true
+
+name = "hello"
+# name << " world"  # => FrozenError in Ruby 3.x
+
+# Use +'' or .dup when mutation is needed
+mutable = +"hello"
+mutable << " world"  # => "hello world"
+
+VALID_STATUSES = %w[pending active suspended].freeze
+CONFIG_DEFAULTS = { timeout: 30, retries: 3 }.freeze]]></example>
+  </pattern>
+
+  <pattern name="Custom errors with hierarchy" context="Domain services — define before writing business logic">
+    <example><![CDATA[# frozen_string_literal: true
+
+class PaymentError < StandardError; end
+class InsufficientFundsError < PaymentError; end
+
+def charge(account, amount)
+  raise InsufficientFundsError, "account #{account.id} needs #{amount}" if account.balance < amount
+
+  account.debit(amount)
+rescue Stripe::CardError => e
+  Rails.logger.error("Payment failed for account=#{account.id}: #{e.message}")
+  raise PaymentError, "card declined: #{e.message}"
+end]]></example>
+  </pattern>
+
+  <pattern name="Metaprogramming with method_missing" context="Only when explicit methods are impractical — always pair with respond_to_missing?">
+    <example><![CDATA[# frozen_string_literal: true
+
+class DynamicFinder
+  def method_missing(method_name, *args)
+    if method_name.to_s.start_with?("find_by_")
+      attribute = method_name.to_s.delete_prefix("find_by_")
+      find_by_attribute(attribute, args.first)
+    else
+      super
+    end
+  end
+
+  def respond_to_missing?(method_name, include_private = false)
+    method_name.to_s.start_with?("find_by_") || super
+  end
+
+  private
+
+  def find_by_attribute(attribute, value)
+    collection.find { |item| item.public_send(attribute) == value }
+  end
+end]]></example>
+  </pattern>
+
+  <pattern name="Ractor for true parallelism (Ruby 3.x)" context="CPU-bound parallel work — only with Ractor-safe (shareable) objects">
+    <example><![CDATA[workers = 4.times.map do
+  Ractor.new do
+    loop do
+      task = Ractor.receive
+      Ractor.yield expensive_computation(task)
+    end
+  end
+end
+
+tasks.each_with_index { |task, i| workers[i % workers.size].send(task) }
+results = workers.map(&:take)]]></example>
+  </pattern>
+
+</patterns>
+
+<testing>
+  <framework>RSpec (primary); Minitest as alternative</framework>
+  <coverage-target>80% business logic, 60% overall (use simplecov)</coverage-target>
+  <rules>
+    <rule>`describe` for class/method; `context` for scenario (prefix with "when" or "with")</rule>
+    <rule>`let` for lazy data; `let!` only when eager evaluation is required</rule>
+    <rule>`subject` for the object under test; `described_class` over hardcoded class names</rule>
+    <rule>Prefer `instance_double` over generic `double` for type safety</rule>
+    <rule>Use shared examples for behavior shared across classes</rule>
+    <rule>Use `webmock` or `vcr` for HTTP stubbing — no real network in unit tests</rule>
+    <rule>All bug fixes include a regression test</rule>
+    <rule>Test edge cases: nil, empty string, empty array, boundary values</rule>
+  </rules>
+
+  <pattern name="RSpec with FactoryBot and doubles"><![CDATA[# frozen_string_literal: true
+
+RSpec.describe PaymentService do
+  subject(:service) { described_class.new(gateway: gateway) }
+
+  let(:gateway) { instance_double(PaymentGateway) }
+  let(:account) { build(:account, balance: 100.0) }
+
+  describe "#charge" do
+    context "when account has sufficient funds" do
+      before { allow(gateway).to receive(:process).and_return(true) }
+
+      it "debits the account" do
+        expect { service.charge(account, 50.0) }
+          .to change { account.balance }.from(100.0).to(50.0)
+      end
+    end
+
+    context "when account has insufficient funds" do
+      it "raises InsufficientFundsError" do
+        expect { service.charge(account, 200.0) }
+          .to raise_error(InsufficientFundsError, /needs 200/)
+      end
+    end
+  end
+end]]></pattern>
+
+  <pattern name="FactoryBot definition"><![CDATA[FactoryBot.define do
+  factory :user do
+    sequence(:email) { |n| "user#{n}@example.com" }
+    name  { "Test User" }
+    active { true }
+
+    trait(:admin)    { role { "admin" } }
+    trait(:inactive) { active { false } }
+  end
+end]]></pattern>
+</testing>
+
+<tooling>
+  <tool name="bundler" purpose="Install dependencies" command="bundle install"/>
+  <tool name="rspec" purpose="Run tests through Bundler" command="bundle exec rspec"/>
+  <tool name="rubocop" purpose="Lint" command="bundle exec rubocop"/>
+  <tool name="rubocop" purpose="Auto-fix safe cops" command="bundle exec rubocop -a"/>
+  <tool name="rake" purpose="Default task" command="bundle exec rake"/>
+  <tool name="bundle-audit" purpose="Check for vulnerable gems" command="bundle audit"/>
+  <tool name="bundle" purpose="Show outdated gems" command="bundle outdated"/>
+</tooling>
+
+<rubocop-config>
+  <description>Baseline .rubocop.yml for Ruby 3.2+ projects.</description>
+  <example><![CDATA[# .rubocop.yml
+require:
+  - rubocop-rspec
+  - rubocop-performance
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.2
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+Metrics/MethodLength:
+  Max: 20
+Metrics/CyclomaticComplexity:
+  Max: 10]]></example>
+</rubocop-config>
+
+<bundler-gemfile>
+  <description>Gemfile template with pinned versions and group separation.</description>
+  <example><![CDATA[# Gemfile
+source "https://rubygems.org"
+ruby "~> 3.2"
+
+gem "dry-struct",  "~> 1.6"
+gem "zeitwerk",    "~> 2.6"
+
+group :development, :test do
+  gem "rspec",       "~> 3.13"
+  gem "rubocop",     "~> 1.60", require: false
+  gem "factory_bot", "~> 6.4"
+end
+
+group :test do
+  gem "simplecov", require: false
+  gem "webmock",   "~> 3.19"
+end]]></example>
+</bundler-gemfile>
+
+<quick-reference>
+  <item key="frozen_string_literal"># frozen_string_literal: true at top of every .rb file</item>
+  <item key="rescue">Always rescue specific exceptions — never bare rescue</item>
+  <item key="eval">String eval is banned — use define_method or block form of class_eval</item>
+  <item key="method_missing">Must always be paired with respond_to_missing?</item>
+  <item key="guard clauses">Prefer over nested conditionals — return early</item>
+  <item key="blocks">{ } for single-line, do...end for multi-line; yield over &block when not stored</item>
+  <item key="lambdas vs procs">Lambda: strict arity, returns from lambda; Proc: flexible, returns from enclosing method</item>
+  <item key="enumerable">Chain select/map/reduce over manual loops; lazy for large collections</item>
+  <item key="pattern matching">Use case/in with Ruby 3.x for hash/array destructuring</item>
+  <item key="errors">Inherit from StandardError; hierarchy per domain; ensure for cleanup</item>
+  <item key="metaprogramming">Sparingly; never in hot paths; always document why</item>
+  <item key="rubocop">Zero offenses required in CI; run before every commit</item>
+  <item key="bundler">Pessimistic version constraints (~>); bundle audit in CI</item>
+  <item key="coverage">80% business logic minimum, 60% overall with simplecov</item>
+  <item key="instance_double">Prefer over generic double for type-safe mocks in RSpec</item>
+</quick-reference>
+
+</knowledge-base>

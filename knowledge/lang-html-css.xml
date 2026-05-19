@@ -1,0 +1,297 @@
+<knowledge-base name="lang-html-css" version="1.0">
+<triggers>HTML, CSS, SCSS, LESS, Sass, .html, .htm, .css, .scss, .sass, .less, stylelint, htmlhint, prettier, lighthouse, axe, pa11y, BEM, WCAG, accessibility, responsive design, flexbox, grid, container queries, cascade layers, dark mode, semantic HTML</triggers>
+<overview>Language-specific guardrails and patterns for HTML and CSS. Loaded when agents work on .html, .htm, .css, .scss, or .less files. Applies to HTML5, CSS3, SCSS/LESS, responsive design, and WCAG 2.1 AA accessibility.</overview>
+
+<core-principles>
+  <principle name="Semantic First">Use HTML elements for their meaning, not their appearance; style with CSS.</principle>
+  <principle name="Accessible by Default">Every page must be navigable by keyboard, screen reader, and assistive technology.</principle>
+  <principle name="Progressive Enhancement">Build a solid HTML foundation, then layer on CSS and JavaScript.</principle>
+  <principle name="Mobile First">Design for the smallest viewport, then enhance with min-width media queries.</principle>
+  <principle name="Performance Budget">Minimize render-blocking resources; prefer system fonts, modern image formats, and critical CSS inlining.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Every img must have an alt attribute. Decorative images use alt="". Missing alt is a WCAG 2.1 Level A failure.</rule>
+    <bad><![CDATA[<img src="hero.jpg" />]]></bad>
+    <good><![CDATA[<img src="hero.jpg" alt="Dashboard overview showing sales trends" />
+<img src="divider.png" alt="" role="presentation" />]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>All form inputs must have associated label elements (for/id pairing or aria-label). Never use placeholder as a label substitute.</rule>
+    <good><![CDATA[<label for="email">Email</label>
+<input id="email" type="email" required autocomplete="email"
+       aria-describedby="email-hint" />
+<p id="email-hint" class="hint">We will never share your email.</p>]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use outline: none on interactive elements without providing a replacement focus indicator. Keyboard users depend on visible focus.</rule>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Use button for actions and a for navigation. Never use div onclick or span onclick for interactive elements.</rule>
+    <bad><![CDATA[<div onclick="submit()">Submit</div>]]></bad>
+    <good><![CDATA[<button type="submit">Submit</button>
+<a href="/dashboard">Dashboard</a>]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="HIGH">
+    <rule>Color contrast: 4.5:1 for normal text, 3:1 for large text (18px+ bold or 24px+). Do not rely on color alone to convey information.</rule>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Headings must follow a logical outline. Never skip heading levels for styling purposes. Use h1-h6 to reflect document structure.</rule>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Never use !important outside utility class overrides. Fix specificity conflicts instead.</rule>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Max 3 levels of nesting in CSS (native or preprocessor). Deep nesting creates brittle specificity chains.</rule>
+  </guardrail>
+
+  <guardrail id="G-009" severity="HIGH">
+    <rule>No inline styles unless dynamically computed by JavaScript. Style belongs in CSS files.</rule>
+  </guardrail>
+
+  <guardrail id="G-010" severity="HIGH">
+    <rule>Use custom properties (CSS variables) for all theme values: colors, spacing, typography, border radii. Never hardcode theme values in component rules.</rule>
+  </guardrail>
+
+  <guardrail id="G-011" severity="MEDIUM">
+    <rule>Animate only transform and opacity to avoid layout reflows and paint invalidation.</rule>
+  </guardrail>
+
+  <guardrail id="G-012" severity="MEDIUM">
+    <rule>Set explicit width/height or aspect-ratio on media elements to prevent Cumulative Layout Shift (CLS).</rule>
+  </guardrail>
+
+  <guardrail id="G-013" severity="MEDIUM">
+    <rule>Mobile-first: write base styles for small viewports, add complexity with min-width media queries. Use rem/em for sizing; reserve px for borders and fine details only.</rule>
+  </guardrail>
+
+</guardrails>
+
+<semantic-html>
+  <rules>
+    <rule>Use main once per page; header, footer, nav, aside for landmarks</rule>
+    <rule>Use article for self-contained content; section for thematic groups with a heading</rule>
+    <rule>Use figure/figcaption for captioned media; time datetime="..." for dates</rule>
+    <rule>Use ul, ol, dl for groups of related items — not div sequences</rule>
+    <rule>Include a skip-to-content link as the first focusable element on every page</rule>
+  </rules>
+  <example><![CDATA[<a href="#main" class="skip-link">Skip to main content</a>
+
+<article>
+  <header>
+    <h2>Deploying with Zero Downtime</h2>
+    <time datetime="2025-03-15">March 15, 2025</time>
+  </header>
+  <section aria-labelledby="prereqs">
+    <h3 id="prereqs">Prerequisites</h3>
+    <ul>
+      <li>Container runtime (Docker or Podman)</li>
+      <li>Load balancer with health checks</li>
+    </ul>
+  </section>
+</article>]]></example>
+  <aria-patterns><![CDATA[<!-- Dynamic updates -->
+<div aria-live="polite" id="status-message"></div>
+
+<!-- Alerts (immediate announcement) -->
+<div role="alert">Form submission failed. Please check your input.</div>
+
+<!-- Disclosure widgets -->
+<button aria-expanded="false" aria-controls="menu-items">Menu</button>
+<ul id="menu-items" hidden>...</ul>
+
+<!-- Form with accessible description -->
+<form aria-labelledby="signup-heading">
+  <h2 id="signup-heading">Create Account</h2>
+  <label for="email">Email</label>
+  <input id="email" type="email" required autocomplete="email"
+         aria-describedby="email-hint" />
+  <p id="email-hint" class="hint">We will never share your email.</p>
+  <button type="submit">Create Account</button>
+</form>]]></aria-patterns>
+</semantic-html>
+
+<css-architecture>
+  <description>Use @layer for specificity control and predictable cascade. One component per file. BEM or utility-first — pick one and stay consistent.</description>
+  <example><![CDATA[@layer reset, base, layout, components, utilities;
+
+@layer base {
+  :root {
+    --color-primary: oklch(55% 0.22 265);
+    --color-surface: oklch(98% 0.005 265);
+    --color-text:    oklch(20% 0.02 265);
+    --space-sm:      0.5rem;
+    --space-md:      1rem;
+    --space-lg:      2rem;
+    --radius-md:     0.5rem;
+    --font-body:     system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; }
+}
+
+@layer components {
+  .card           { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-md); }
+  .card__title    { font-size: 1.25rem; color: var(--color-text); }
+  .card--featured { border: 2px solid var(--color-primary); }
+}
+
+@layer utilities {
+  .visually-hidden {
+    clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px;
+    overflow: hidden; position: absolute; white-space: nowrap; width: 1px;
+  }
+}]]></example>
+</css-architecture>
+
+<patterns>
+
+  <pattern name="Grid (2D) vs Flexbox (1D)">
+    <description>Use CSS Grid for page layouts with rows and columns; use Flexbox for single-axis alignment.</description>
+    <example><![CDATA[/* Grid: 2D page layout */
+.page {
+  display: grid;
+  grid-template:
+    "header header" auto
+    "sidebar main"  1fr
+    "footer footer" auto
+    / 16rem 1fr;
+  min-height: 100dvh;
+}
+
+/* Flexbox: 1D navigation */
+.nav         { display: flex; align-items: center; gap: var(--space-md); }
+.nav__logo   { margin-right: auto; }]]></example>
+  </pattern>
+
+  <pattern name="Container Queries">
+    <description>Component-level responsiveness based on parent container width, not viewport width.</description>
+    <example><![CDATA[.card-container { container-type: inline-size; container-name: card; }
+
+@container card (min-width: 30rem) {
+  .card { flex-direction: row; align-items: center; }
+}]]></example>
+  </pattern>
+
+  <pattern name="The :has() Selector">
+    <example><![CDATA[.field:has(input:focus)                  { outline: 2px solid var(--color-primary); }
+.card:has(img)                           { padding: 0; }
+form:has(:invalid) button[type="submit"] { opacity: 0.5; pointer-events: none; }]]></example>
+  </pattern>
+
+  <pattern name="Dark Mode and User Preferences">
+    <example><![CDATA[:root { color-scheme: light dark; --color-bg: oklch(98% 0.005 265); }
+@media (prefers-color-scheme: dark) { :root { --color-bg: oklch(15% 0.02 265); } }
+[data-theme="dark"]                  { --color-bg: oklch(15% 0.02 265); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}]]></example>
+  </pattern>
+
+  <pattern name="Fluid Typography">
+    <example><![CDATA[/* Scales between 1rem at 320px viewport and 1.5rem at 1440px */
+.body-text { font-size: clamp(1rem, 0.5rem + 1.5vw, 1.5rem); }]]></example>
+  </pattern>
+
+  <pattern name="Responsive Images">
+    <description>Use picture with format fallbacks. Set explicit dimensions to prevent layout shift.</description>
+    <example><![CDATA[<picture>
+  <source srcset="hero.avif" type="image/avif" />
+  <source srcset="hero.webp" type="image/webp" />
+  <img src="hero.jpg" alt="Dashboard overview" width="1200" height="630"
+       loading="lazy" decoding="async" />
+</picture>]]></example>
+  </pattern>
+
+</patterns>
+
+<accessibility-checklist>
+  <category name="Perceivable">
+    <item>All images have descriptive alt (or alt="" for decorative)</item>
+    <item>Color contrast: 4.5:1 body text, 3:1 large text</item>
+    <item>Information not conveyed by color alone</item>
+    <item>Text resizable to 200% without content loss</item>
+    <item>Captions for video; transcripts for audio</item>
+  </category>
+  <category name="Operable">
+    <item>All functionality keyboard-accessible (Tab, Enter, Escape, arrows)</item>
+    <item>Logical focus order; visible focus indicators</item>
+    <item>No keyboard traps; modals return focus on close</item>
+    <item>Skip navigation link as first focusable element</item>
+    <item>Touch targets at least 44x44px</item>
+  </category>
+  <category name="Understandable">
+    <item>html lang="..." set correctly</item>
+    <item>Form inputs have visible labels and descriptive error messages</item>
+    <item>Consistent navigation across pages</item>
+  </category>
+  <category name="Robust">
+    <item>Valid HTML (W3C validator)</item>
+    <item>ARIA roles, states, and properties match widget behavior</item>
+    <item>Tested with screen reader (VoiceOver, NVDA, or JAWS)</item>
+    <item>Tested with 200% browser zoom</item>
+  </category>
+</accessibility-checklist>
+
+<tooling>
+  <commands><![CDATA[npx stylelint "**/*.css"                       # CSS lint
+npx stylelint "**/*.css" --fix                 # CSS lint auto-fix
+npx htmlhint "**/*.html"                       # HTML validation
+npx prettier --check "**/*.{html,css,scss}"    # Format check
+npx prettier --write "**/*.{html,css,scss}"    # Format fix
+npx lighthouse http://localhost:3000 --output html --view  # Performance audit
+npx @axe-core/cli http://localhost:3000        # Accessibility check
+npx pa11y http://localhost:3000               # Accessibility test]]></commands>
+  <stylelint-config><![CDATA[{
+  "extends": ["stylelint-config-standard"],
+  "rules": {
+    "declaration-no-important": true,
+    "selector-max-specificity": "0,3,0",
+    "max-nesting-depth": 3,
+    "color-function-notation": "modern",
+    "selector-class-pattern": "^[a-z][a-z0-9]*(__[a-z0-9-]+)?(--[a-z0-9-]+)?$"
+  }
+}]]></stylelint-config>
+  <responsive-breakpoints>
+    <breakpoint label="mobile baseline">320px — base styles, no media query</breakpoint>
+    <breakpoint label="tablet">768px — min-width: 768px</breakpoint>
+    <breakpoint label="desktop">1024px — min-width: 1024px</breakpoint>
+    <breakpoint label="wide">1440px — min-width: 1440px</breakpoint>
+    <note>Also test with 200% browser zoom applied at each breakpoint.</note>
+  </responsive-breakpoints>
+</tooling>
+
+<quick-reference>
+  <item key="img alt">ALWAYS — decorative: alt=""; informative: descriptive text</item>
+  <item key="form labels">ALWAYS associate with for/id; never use placeholder as label</item>
+  <item key="focus">NEVER outline: none without replacement; keyboard users depend on it</item>
+  <item key="actions vs nav">button for actions; a for navigation; never div onclick</item>
+  <item key="color contrast">4.5:1 normal text; 3:1 large text (18px+ bold or 24px+)</item>
+  <item key="headings">Logical outline; never skip levels for styling</item>
+  <item key="!important">Only in utility classes; fix specificity instead</item>
+  <item key="nesting">Max 3 levels (CSS or preprocessor)</item>
+  <item key="custom properties">All theme values — colors, spacing, typography, radii</item>
+  <item key="animations">Only transform and opacity to avoid reflows</item>
+  <item key="mobile-first">Base styles for small screens; min-width queries for larger</item>
+  <item key="grid vs flexbox">Grid = 2D layouts; Flexbox = 1D alignment</item>
+  <item key="images">picture + srcset (avif/webp/jpg); explicit width/height; lazy loading</item>
+  <item key="dark mode">prefers-color-scheme media query + data-theme attribute toggle</item>
+  <item key="@layer">reset, base, layout, components, utilities — prevents specificity wars</item>
+</quick-reference>
+
+</knowledge-base>

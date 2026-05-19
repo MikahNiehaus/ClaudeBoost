@@ -1,0 +1,252 @@
+<knowledge-base name="lang-shell" version="1.0">
+<triggers>shell, bash, sh, zsh, .sh, .bash, .zsh, Makefile, CI/CD, pipeline, script, shellcheck, shfmt, bats, shellspec, cron, automation, set -euo pipefail, shebang, posix</triggers>
+<overview>Language-specific guardrails and patterns for Shell/Bash scripting. Loaded when agents work on .sh, .bash, or .zsh files, Makefiles, or CI/CD pipeline scripts. Applies to Bash 4+, POSIX sh, and automation scripts.</overview>
+
+<core-principles>
+  <principle name="Strict Mode Always">Every script starts with set -euo pipefail to fail fast on errors.</principle>
+  <principle name="Quote Everything">All variable expansions must be double-quoted to prevent word splitting and globbing.</principle>
+  <principle name="Explicit Over Implicit">Use [[ ]] for conditionals, local for function variables, named constants for magic values.</principle>
+  <principle name="Fail Loudly">Never swallow errors silently; use trap for cleanup and meaningful exit codes.</principle>
+  <principle name="ShellCheck Clean">All scripts pass shellcheck with zero warnings before commit.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Every script must start with #!/usr/bin/env bash followed immediately by set -euo pipefail.</rule>
+    <good><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+[[ "${TRACE:-}" == "1" ]] && set -x]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Always double-quote variable expansions: "$var", "$@", "${arr[@]}", "$(command)". Never omit quotes except in arithmetic contexts.</rule>
+    <bad><![CDATA[grep -r $pattern $directory
+for arg in $@; do process $arg; done]]></bad>
+    <good><![CDATA[grep -r "$pattern" "$directory"
+for arg in "$@"; do process "$arg"; done]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use eval. Use arrays for dynamic command building instead.</rule>
+    <bad><![CDATA[eval "$user_input"]]></bad>
+    <good><![CDATA[cmd=(curl --silent --fail)
+[[ -n "${TOKEN:-}" ]] && cmd+=(--header "Authorization: Bearer $TOKEN")
+"${cmd[@]}" "$url"]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Never hardcode secrets in script files. No hardcoded /tmp paths — use mktemp and trap for cleanup.</rule>
+    <bad><![CDATA[password="hunter2"
+tmpfile="/tmp/myapp.tmp"]]></bad>
+    <good><![CDATA[# Read from environment or secret manager
+tmpfile="$(mktemp)" || exit 1
+trap 'rm -f "$tmpfile"' EXIT]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="HIGH">
+    <rule>All scripts must pass shellcheck with zero warnings before commit. Suppress only with a justification comment citing the SC code.</rule>
+    <good><![CDATA[# shellcheck disable=SC2034  # Variable used by sourced script
+unused_looking_var="value"]]></good>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>All variables inside functions must be declared local. Use local -r for constants.</rule>
+    <good><![CDATA[process_file() {
+    local file="$1"
+    local -r max_lines=1000
+    local line_count
+    line_count="$(wc -l < "$file")"
+    if (( line_count > max_lines )); then
+        echo "Warning: $file exceeds $max_lines lines" >&2
+    fi
+}]]></good>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Errors must go to stderr. Exit codes: 0 = success, 1 = general error, 2 = usage error. Never use set +e — restructure logic instead.</rule>
+    <good><![CDATA[echo "Error: message" >&2
+critical_cmd || { echo "Failed" >&2; exit 1; }]]></good>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Never use for file in $(find ...) — breaks on spaces. Use null-delimited read with find -print0 instead.</rule>
+    <bad><![CDATA[for file in $(find "$dir" -name "*.log"); do process "$file"; done]]></bad>
+    <good><![CDATA[while IFS= read -r -d '' file; do
+    process "$file"
+done < <(find "$dir" -type f -name "*.log" -print0)]]></good>
+  </guardrail>
+
+  <guardrail id="G-009" severity="MEDIUM">
+    <rule>Use command -v instead of which for executable checks. Use $(command) instead of backticks. Use printf over echo for portable output.</rule>
+  </guardrail>
+
+  <guardrail id="G-010" severity="MEDIUM">
+    <rule>POSIX scripts must not use bash-specific features ([[ ]], arrays, local). Use #!/bin/sh shebang for POSIX-only scripts.</rule>
+  </guardrail>
+
+</guardrails>
+
+<script-structure>
+  <description>Standard structure for production shell scripts.</description>
+  <example><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+
+# ── Configuration (with defaults) ─────────────────────
+LOG_LEVEL="${LOG_LEVEL:-info}"
+OUTPUT_DIR="${OUTPUT_DIR:-./output}"
+
+# ── Functions ──────────────────────────────────────────
+usage() {
+    printf 'Usage: %s [OPTIONS]\n' "$SCRIPT_NAME"
+    printf '  -h  Show this help\n'
+    exit 2
+}
+
+cleanup() {
+    local exit_code=$?
+    rm -f "${tmpfile:-}"
+    exit "$exit_code"
+}
+
+main() {
+    while getopts ":h" opt; do
+        case "$opt" in
+            h) usage ;;
+            *) usage ;;
+        esac
+    done
+    shift $(( OPTIND - 1 ))
+
+    printf 'Starting %s\n' "$SCRIPT_NAME"
+}
+
+# ── Traps & Entry ─────────────────────────────────────
+trap cleanup EXIT
+trap 'echo "Interrupted" >&2; exit 130' INT TERM
+main "$@"]]></example>
+</script-structure>
+
+<patterns>
+
+  <pattern name="Parameter Expansion">
+    <example><![CDATA[db_host="${DB_HOST:-localhost}"               # Default value
+api_key="${API_KEY:?Error: API_KEY required}"  # Required (fail if unset)
+
+filename="archive.tar.gz"
+name="${filename%%.*}"         # "archive"    (longest suffix removal)
+ext="${filename#*.}"           # "tar.gz"     (shortest prefix removal)
+path="/usr/local/bin/tool"
+dir="${path%/*}"               # "/usr/local/bin"
+base="${path##*/}"             # "tool"
+upper="${var^^}"               # UPPERCASE (Bash 4+)
+lower="${var,,}"               # lowercase (Bash 4+)]]></example>
+  </pattern>
+
+  <pattern name="Trap for Cleanup">
+    <example><![CDATA[cleanup() {
+    local exit_code=$?
+    rm -f "$tmpfile"
+    exit "$exit_code"         # Preserve original exit code
+}
+trap cleanup EXIT
+trap 'echo "Interrupted" >&2; exit 130' INT TERM]]></example>
+  </pattern>
+
+  <pattern name="Arrays (Avoid eval)">
+    <example><![CDATA[declare -a files=()
+files+=("first.txt" "second.txt")
+for file in "${files[@]}"; do echo "$file"; done
+
+# Build commands safely with arrays
+cmd=(curl --silent --fail)
+[[ -n "${TOKEN:-}" ]] && cmd+=(--header "Authorization: Bearer $TOKEN")
+"${cmd[@]}" "$url"]]></example>
+  </pattern>
+
+  <pattern name="Here Documents">
+    <example><![CDATA[cat <<EOF                     # Interpolated
+Hello, $USER at $(hostname)
+EOF
+
+cat <<'EOF'                   # Literal (no expansion)
+This $variable stays literal.
+EOF]]></example>
+  </pattern>
+
+  <pattern name="Process Substitution">
+    <example><![CDATA[diff <(sort file1.txt) <(sort file2.txt)]]></example>
+  </pattern>
+
+  <pattern name="Safe Temp Files">
+    <example><![CDATA[tmpfile="$(mktemp)" || exit 1
+trap 'rm -f "$tmpfile"' EXIT
+umask 077  # Before creating sensitive files]]></example>
+  </pattern>
+
+  <pattern name="Safe File Iteration (handles spaces and special characters)">
+    <example><![CDATA[while IFS= read -r -d '' file; do
+    process "$file"
+done < <(find "$dir" -type f -name "*.log" -print0)
+
+# Simple globs (Bash 4+)
+shopt -s nullglob globstar
+for file in "$dir"/**/*.sh; do process "$file"; done]]></example>
+  </pattern>
+
+</patterns>
+
+<testing>
+  <framework>bats-core (preferred) or shellspec</framework>
+  <coverage-target>80% library functions, 60% scripts</coverage-target>
+  <example><![CDATA[# test/deploy.bats
+setup()    { export TMPDIR="$(mktemp -d)"; }
+teardown() { rm -rf "$TMPDIR"; }
+
+@test "deploy requires environment argument" {
+    run ./deploy.sh
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "deploy creates output directory" {
+    run ./deploy.sh staging
+    [ "$status" -eq 0 ]
+    [ -d "$TMPDIR/output" ]
+}]]></example>
+  <rules>
+    <rule>Test files in test/ or spec/ directory</rule>
+    <rule>Test names describe behavior: "deploy requires environment argument"</rule>
+    <rule>Use setup/teardown for temp dirs and fixtures</rule>
+    <rule>Each test must be independent</rule>
+  </rules>
+</testing>
+
+<tooling>
+  <commands><![CDATA[shellcheck script.sh                        # Single file lint
+find . -name "*.sh" -exec shellcheck {} +   # Lint all scripts
+shfmt -w -i 4 -bn script.sh                 # Format in place (4-space indent)
+shfmt -d -i 4 script.sh                     # Check only (diff output)
+bats test/                                  # Run tests
+bash -n script.sh                           # Syntax check (no execution)]]></commands>
+</tooling>
+
+<quick-reference>
+  <item key="shebang">#!/usr/bin/env bash — not #!/bin/bash</item>
+  <item key="strict mode">set -euo pipefail — immediately after shebang</item>
+  <item key="quoting">Double-quote all expansions; single-quote literals</item>
+  <item key="eval">NEVER — use arrays for dynamic command building</item>
+  <item key="secrets">Never in script files; read from environment or secret managers</item>
+  <item key="temp files">mktemp + trap EXIT; never hardcode /tmp paths</item>
+  <item key="function vars">Always local; use local -r for constants</item>
+  <item key="find + loop">find -print0 + while IFS= read -r -d ''; never for in $(find)</item>
+  <item key="errors">To stderr (>&2); meaningful exit codes (0/1/2)</item>
+  <item key="portability">command -v not which; $() not backticks; printf not echo</item>
+  <item key="shellcheck">Zero warnings before commit; suppress with SC code comment</item>
+  <item key="testing">bats-core; setup/teardown per test; test/ or spec/ directory</item>
+</quick-reference>
+
+</knowledge-base>

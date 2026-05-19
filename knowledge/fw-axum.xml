@@ -1,0 +1,342 @@
+<knowledge-base name="fw-axum" version="1.0">
+<triggers>Axum, axum, axum::Router, axum::extract, axum::handler, axum::middleware, axum::response, IntoResponse, FromRequestParts, FromRequest, AppState, State, Json, Path, Query, Extension, TypedHeader, Tower, tower, tower-http, TraceLayer, CorsLayer, CompressionLayer, TimeoutLayer, tokio, Tokio, async_trait, thiserror, sqlx, .rs, Rust web, axum-test, create_router, AppError, AppResult</triggers>
+<overview>Axum 0.7+ guardrails, Tower middleware composition, type-safe extractors, router patterns, state management, error handling, and testing for Rust web APIs. Loaded automatically when agents work on .rs files importing axum.</overview>
+
+<core-principles>
+  <principle name="Tower-First">Axum is built on Tower. Embrace Service, Layer, and middleware composition. tower-http provides production-ready layers (tracing, CORS, compression, timeouts).</principle>
+  <principle name="Type-Safe Extraction">Use compile-time extractors for all request data. Never manually parse headers or bodies.</principle>
+  <principle name="Async Throughout">All handlers are async functions. Never block the Tokio runtime thread — use spawn_blocking for CPU-heavy work.</principle>
+  <principle name="Modular Routing">Compose routers with merge and nest. Separate public from protected route groups before applying middleware.</principle>
+  <principle name="Structured Errors">Implement IntoResponse for the AppError enum. Return appropriate HTTP status codes with consistent JSON bodies.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="AX-001" severity="BLOCKER">
+    <rule>Never block the Tokio async runtime. Never call std::thread::sleep, synchronous file I/O, or CPU-intensive operations directly in async handlers. Use tokio::time::sleep and tokio::task::spawn_blocking.</rule>
+    <bad><![CDATA[async fn slow_handler() -> String {
+    std::thread::sleep(Duration::from_secs(1)); // BLOCKER: blocks runtime thread
+    compute_something_heavy() // BLOCKER: starves other tasks
+}]]></bad>
+    <good><![CDATA[async fn slow_handler() -> String {
+    tokio::time::sleep(Duration::from_secs(1)).await; // yields to runtime
+
+    let result = tokio::task::spawn_blocking(|| compute_something_heavy()).await.unwrap();
+    result
+}]]></good>
+  </guardrail>
+
+  <guardrail id="AX-002" severity="BLOCKER">
+    <rule>Always implement IntoResponse for the AppError type. Never return plain strings or unwrapped Results from handlers. All errors must produce structured JSON with appropriate HTTP status codes.</rule>
+  </guardrail>
+
+  <guardrail id="AX-003" severity="BLOCKER">
+    <rule>Never leak internal error details (database errors, stack traces, SQL) to API clients. Log with tracing::error! server-side and return a generic message in the response body.</rule>
+    <bad><![CDATA[AppError::Database(err) => {
+    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response() // leaks DB internals
+}]]></bad>
+    <good><![CDATA[AppError::Database(err) => {
+    tracing::error!("Database error: {:?}", err); // log internally
+    (StatusCode::INTERNAL_SERVER_ERROR,
+     Json(json!({"error": "Database error"}))).into_response() // sanitized client message
+}]]></good>
+  </guardrail>
+
+  <guardrail id="AX-004" severity="HIGH">
+    <rule>Keep handlers under 15 lines. Extract all request data via extractor parameters, delegate business logic to services, return the response. No business logic in handler functions.</rule>
+  </guardrail>
+
+  <guardrail id="AX-005" severity="HIGH">
+    <rule>AppState must implement Clone (Axum requirement). Use sqlx::PgPool directly (it is Arc-wrapped internally). Wrap mutable shared state in Arc&lt;tokio::sync::RwLock&lt;T&gt;&gt;. Never use std::sync::Mutex in async code.</rule>
+  </guardrail>
+
+  <guardrail id="AX-006" severity="HIGH">
+    <rule>Call .with_state(state) last, after all routes and layers are registered. State registration must be the final operation on the Router.</rule>
+  </guardrail>
+
+  <guardrail id="AX-007" severity="HIGH">
+    <rule>Always add TimeoutLayer to prevent slow requests from exhausting connection pool resources.</rule>
+  </guardrail>
+
+  <guardrail id="AX-008" severity="HIGH">
+    <rule>Implement FromRequestParts (not FromRequest) for extractors that only need headers or state. Use FromRequest only when consuming the body.</rule>
+  </guardrail>
+
+  <guardrail id="AX-009" severity="MEDIUM">
+    <rule>Layer ordering matters: outermost layer runs first on request, last on response. Always apply CORS before TraceLayer to include CORS headers in traced responses.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <description>Layered Rust project: main.rs thin entry point, routes compose handlers, handlers are thin, services hold logic, repositories isolate DB.</description>
+  <example><![CDATA[myproject/
+├── Cargo.toml
+├── src/
+│   ├── main.rs                # Entry point: env, tracing, bind, serve
+│   ├── lib.rs                 # Module declarations
+│   ├── config.rs              # Configuration loading (env-based)
+│   ├── routes/
+│   │   ├── mod.rs             # create_router() — composes all routes + middleware
+│   │   ├── users.rs           # User-related route definitions
+│   │   └── health.rs          # Health check route
+│   ├── handlers/
+│   │   ├── mod.rs
+│   │   └── users.rs           # Handler functions (extract, call service, respond)
+│   ├── models/
+│   │   ├── mod.rs
+│   │   └── user.rs            # Domain types, DTOs, validation
+│   ├── services/
+│   │   ├── mod.rs
+│   │   └── user_service.rs    # Business logic layer
+│   ├── repositories/
+│   │   ├── mod.rs
+│   │   └── user_repository.rs # Database access via sqlx
+│   ├── extractors/
+│   │   ├── mod.rs
+│   │   └── auth.rs            # Custom extractors (AuthUser, Claims)
+│   ├── middleware/
+│   │   ├── mod.rs
+│   │   └── logging.rs         # Custom Tower middleware
+│   └── errors/
+│       ├── mod.rs
+│       └── app_error.rs       # AppError enum + IntoResponse + AppResult alias
+├── tests/
+│   └── integration_tests.rs
+└── migrations/]]></example>
+  <notes>
+    <note>Handlers are thin: extract → call service → return response. Max ~15 lines.</note>
+    <note>Services contain business logic; they call repositories only.</note>
+    <note>Repositories handle database access only — no business logic.</note>
+    <note>AppError is defined once and implements IntoResponse.</note>
+  </notes>
+</project-structure>
+
+<dependencies>
+  <example><![CDATA[[dependencies]
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "timeout"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+validator = { version = "0.16", features = ["derive"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+config = "0.14"
+dotenvy = "0.15"
+
+[dev-dependencies]
+axum-test = "14.0"
+mockall = "0.12"]]></example>
+</dependencies>
+
+<entry-point>
+  <example><![CDATA[#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "myproject=debug,tower_http=debug".into()))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let config = config::Config::load()?;
+    let pool = sqlx::PgPool::connect(&config.database_url).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    let state = AppState::new(pool, config.clone());
+    let app = routes::create_router(state);
+
+    let listener = tokio::net::TcpListener::bind(
+        SocketAddr::from(([0, 0, 0, 0], config.port))
+    ).await?;
+    tracing::info!("Listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c().await.expect("Failed to install CTRL+C handler");
+    tracing::info!("Shutdown signal received");
+}]]></example>
+</entry-point>
+
+<routing>
+  <description>Compose public and protected route groups. Apply auth middleware to protected group only. Attach layers and state last.</description>
+  <example><![CDATA[pub fn create_router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    let public_routes = Router::new()
+        .route("/health", get(handlers::health::health_check))
+        .route("/api/v1/auth/register", post(handlers::users::register))
+        .route("/api/v1/auth/login", post(handlers::users::login));
+
+    let protected_routes = Router::new()
+        .route("/api/v1/users", get(handlers::users::list_users))
+        .route("/api/v1/users/:id", get(handlers::users::get_user))
+        .route("/api/v1/users/:id", put(handlers::users::update_user))
+        .route("/api/v1/users/:id", delete(handlers::users::delete_user))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            app_middleware::auth::auth_middleware,
+        ));
+
+    Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
+        .layer(TraceLayer::new_for_http())
+        .layer(CompressionLayer::new())
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(cors)
+        .with_state(state) // LAST — after all routes and layers
+}]]></example>
+</routing>
+
+<handlers>
+  <description>Thin async functions: receive extractors, call service, return AppResult.</description>
+  <example><![CDATA[pub async fn register(
+    State(state): State<AppState>,
+    Json(dto): Json<CreateUserDto>,
+) -> AppResult<(StatusCode, Json<AuthResponse>)> {
+    let service = UserService::new(state.pool, state.config);
+    let response = service.register(dto).await?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub async fn list_users(
+    State(state): State<AppState>,
+    Query(pagination): Query<PaginationQuery>,
+    _auth_user: AuthUser, // extraction enforces auth even if unused in handler
+) -> AppResult<Json<Vec<UserResponse>>> {
+    let service = UserService::new(state.pool, state.config);
+    let users = service.list_users(pagination.page, pagination.per_page).await?;
+    Ok(Json(users))
+}]]></example>
+</handlers>
+
+<custom-extractor>
+  <description>Custom AuthUser extractor implementing FromRequestParts — used for JWT validation without consuming the body.</description>
+  <example><![CDATA[pub struct AuthUser {
+    pub user_id: Uuid,
+    pub email: String,
+    pub role: String,
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_| AppError::Unauthorized("Missing authorization header".into()))?;
+
+        let claims = verify_token(bearer.token(), &state.config.jwt_secret)?;
+
+        Ok(AuthUser {
+            user_id: claims.sub,
+            email: claims.email,
+            role: claims.role,
+        })
+    }
+}]]></example>
+</custom-extractor>
+
+<error-handling>
+  <description>AppError enum implements IntoResponse. Use thiserror for definitions. Define AppResult alias at crate level.</description>
+  <example><![CDATA[#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Conflict: {0}")]
+    Conflict(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
+    #[error("Internal server error")]
+    Internal(#[from] anyhow::Error),
+    #[error("Database error")]
+    Database(#[from] sqlx::Error),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match &self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
+            AppError::Internal(err) => {
+                tracing::error!("Internal error: {:?}", err);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+            }
+            AppError::Database(err) => {
+                tracing::error!("Database error: {:?}", err);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Database error".into())
+            }
+        };
+
+        (status, Json(json!({
+            "success": false,
+            "error": { "code": status.as_u16(), "message": message }
+        }))).into_response()
+    }
+}
+
+pub type AppResult<T> = Result<T, AppError>;]]></example>
+</error-handling>
+
+<tooling>
+  <commands>
+    <cmd purpose="Start server">cargo run</cmd>
+    <cmd purpose="Watch mode">cargo watch -x run</cmd>
+    <cmd purpose="Debug logging">RUST_LOG=debug cargo run</cmd>
+    <cmd purpose="Production build">cargo build --release</cmd>
+    <cmd purpose="Fast type-check">cargo check</cmd>
+    <cmd purpose="Format">cargo fmt</cmd>
+    <cmd purpose="Lint with deny">cargo clippy -- -D warnings</cmd>
+    <cmd purpose="Vulnerability check">cargo audit</cmd>
+    <cmd purpose="All tests">cargo test</cmd>
+    <cmd purpose="Integration tests only">cargo test --test integration_tests</cmd>
+    <cmd purpose="Run migrations">sqlx migrate run</cmd>
+    <cmd purpose="New migration">sqlx migrate add create_users</cmd>
+  </commands>
+</tooling>
+
+<quick-reference>
+  <item key="handlers">Thin async functions: extract → call service → return AppResult; max ~15 lines</item>
+  <item key="state">AppState implements Clone; use sqlx::PgPool (Arc-wrapped); RwLock for mutable shared state</item>
+  <item key="extractors">FromRequestParts for headers/state; FromRequest for body; custom extractors return AppError</item>
+  <item key="routing">merge for flat composition; nest for path prefixes; .with_state(state) last</item>
+  <item key="layers">TraceLayer + CompressionLayer + TimeoutLayer + CorsLayer on every production router</item>
+  <item key="errors">One AppError enum; IntoResponse impl; log internal errors; sanitize client messages</item>
+  <item key="async">Never block runtime; use tokio::time::sleep and spawn_blocking for blocking work</item>
+  <item key="testing">axum-test for integration; mockall for unit; separate test database</item>
+</quick-reference>
+
+</knowledge-base>

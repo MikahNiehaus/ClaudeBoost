@@ -1,0 +1,354 @@
+<knowledge-base name="fw-fiber" version="1.0">
+<triggers>Fiber, gofiber, github.com/gofiber/fiber, fiber.App, fiber.Ctx, fiber.Handler, fiber.Config, fiber.Map, Fasthttp, go fiber framework, Express Go, .go fiber, fiber middleware, fiber routing</triggers>
+<overview>Fiber v2.50+ guardrails, patterns, and best practices for high-performance Go REST APIs. Built on Fasthttp, Fiber provides an Express-like API with zero memory allocation in hot paths. Covers application setup, dependency injection, route grouping, JWT middleware, role-based access, generic body validation, response helpers, custom error handler, and graceful shutdown. Loaded automatically when agents work on Fiber-based .go files.</overview>
+
+<core-principles>
+  <principle name="Fasthttp Foundation">Fiber uses Fasthttp, not net/http. fiber.Ctx is not compatible with net/http interfaces. Use c.Context() to get a context.Context for service calls.</principle>
+  <principle name="Layered Architecture">handler -> service -> repository. Handlers are thin: parse, validate, delegate, respond. No business logic in handlers.</principle>
+  <principle name="Custom Error Handler">Configure a single ErrorHandler on fiber.Config for consistent error responses across the entire application.</principle>
+  <principle name="Explicit Middleware Stack">Add middleware to the app in order: requestid, logger, recover, cors, helmet, limiter.</principle>
+  <principle name="Graceful Shutdown">Use app.ShutdownWithContext(ctx) with a 30s timeout and close database connections after shutdown.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="FIB-001" severity="BLOCKER">
+    <rule>Always configure a custom ErrorHandler on fiber.Config. Never rely on the default HTML error page.</rule>
+    <good><![CDATA[app := fiber.New(fiber.Config{
+    ErrorHandler: customErrorHandler,
+})]]></good>
+  </guardrail>
+
+  <guardrail id="FIB-002" severity="BLOCKER">
+    <rule>Never store business logic in handlers. Handlers call services only.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-003" severity="BLOCKER">
+    <rule>Never expose stack traces or internal error details to clients. customErrorHandler returns only safe messages.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-004" severity="BLOCKER">
+    <rule>Validate all inputs via go-playground/validator. Never process a request body without validation.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-005" severity="HIGH">
+    <rule>Use helmet middleware for security headers in all production deployments.</rule>
+    <good><![CDATA[app.Use(helmet.New())]]></good>
+  </guardrail>
+
+  <guardrail id="FIB-006" severity="HIGH">
+    <rule>Use limiter middleware with per-IP key generation to prevent abuse.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-007" severity="HIGH">
+    <rule>Use c.Context() (not c.UserContext) when passing context.Context to services and repositories.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-008" severity="HIGH">
+    <rule>Apply auth middleware at the group level, not per-route. Use RequireRole for fine-grained access.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-009" severity="HIGH">
+    <rule>Use dependency injection throughout. No global state; wire layers in main.go.</rule>
+  </guardrail>
+
+  <guardrail id="FIB-010" severity="MEDIUM">
+    <rule>Enable Prefork in production for multi-core utilization. Configure read/write/idle timeouts on fiber.Config.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure><![CDATA[
+myapi/
+├── cmd/
+│   └── api/
+│       └── main.go
+├── internal/
+│   ├── config/
+│   │   └── config.go
+│   ├── handler/
+│   │   ├── handler.go
+│   │   ├── user_handler.go
+│   │   └── health_handler.go
+│   ├── middleware/
+│   │   ├── auth.go
+│   │   ├── logger.go
+│   │   └── recover.go
+│   ├── model/
+│   │   ├── user.go
+│   │   └── dto.go
+│   ├── repository/
+│   │   ├── repository.go
+│   │   └── user_repository.go
+│   ├── service/
+│   │   ├── service.go
+│   │   ├── user_service.go
+│   │   └── auth_service.go
+│   └── router/
+│       └── router.go
+├── pkg/
+│   ├── validator/
+│   │   └── validator.go
+│   └── response/
+│       └── response.go
+├── go.mod
+└── README.md
+
+Layer responsibilities:
+- handler/     HTTP: BodyParser, ValidateBody, call service, respond
+- service/     Business logic; accepts context.Context only
+- repository/  Data access; returns domain errors
+- model/       Domain types and DTOs with validation tags
+- middleware/  Fiber middleware functions
+- router/      Route registration with versioning
+]]></project-structure>
+
+<patterns>
+
+  <pattern name="Application Setup with Graceful Shutdown">
+    <example><![CDATA[func main() {
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+    db, err := config.NewDatabase(cfg)
+    if err != nil {
+        log.Fatalf("Failed to connect to database: %v", err)
+    }
+    app := fiber.New(fiber.Config{
+        AppName:      cfg.AppName,
+        ReadTimeout:  cfg.ReadTimeout,
+        WriteTimeout: cfg.WriteTimeout,
+        IdleTimeout:  cfg.IdleTimeout,
+        BodyLimit:    cfg.BodyLimit,
+        Prefork:      cfg.Prefork,
+        ErrorHandler: customErrorHandler,
+    })
+    app.Use(requestid.New())
+    app.Use(middleware.Logger())
+    app.Use(middleware.Recover())
+    app.Use(cors.New(cors.Config{
+        AllowOrigins:     cfg.CORSAllowOrigins,
+        AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+        AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+        AllowCredentials: true,
+    }))
+    app.Use(helmet.New())
+    app.Use(limiter.New(limiter.Config{
+        Max:        cfg.RateLimitMax,
+        Expiration: cfg.RateLimitExpiration,
+        KeyGenerator: func(c *fiber.Ctx) string { return c.IP() },
+        LimitReached: func(c *fiber.Ctx) error {
+            return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+                "error": "Rate limit exceeded",
+            })
+        },
+    }))
+    repos := repository.NewRepositories(db)
+    services := service.NewServices(repos, cfg)
+    handlers := handler.NewHandlers(services)
+    router.Setup(app, handlers, services.Auth)
+
+    go func() {
+        if err := app.Listen(":" + cfg.Port); err != nil {
+            log.Fatalf("Failed to start server: %v", err)
+        }
+    }()
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    if err := app.ShutdownWithContext(ctx); err != nil {
+        log.Fatalf("Server forced to shutdown: %v", err)
+    }
+    sqlDB, _ := db.DB()
+    sqlDB.Close()
+}
+
+func customErrorHandler(c *fiber.Ctx, err error) error {
+    code := fiber.StatusInternalServerError
+    message := "Internal Server Error"
+    if e, ok := err.(*fiber.Error); ok {
+        code = e.Code
+        message = e.Message
+    }
+    return c.Status(code).JSON(fiber.Map{
+        "error":   message,
+        "code":    code,
+        "request": c.Locals("requestid"),
+    })
+}]]></example>
+  </pattern>
+
+  <pattern name="Routing and Grouping">
+    <example><![CDATA[func Setup(app *fiber.App, h *handler.Handlers, authService service.AuthService) {
+    app.Get("/health", h.Health.Health)
+    app.Get("/ready", h.Health.Ready)
+
+    v1 := app.Group("/api/v1")
+
+    auth := v1.Group("/auth")
+    auth.Post("/login", h.User.Login)
+    auth.Post("/register", h.User.Create)
+
+    authProtected := auth.Group("", middleware.Auth(authService))
+    authProtected.Get("/profile", h.User.GetProfile)
+
+    users := v1.Group("/users", middleware.Auth(authService))
+    users.Get("/", h.User.GetAll)
+    users.Get("/:id", h.User.GetByID)
+    users.Put("/:id", h.User.Update)
+    users.Delete("/:id", middleware.RequireRole("admin"), h.User.Delete)
+}]]></example>
+  </pattern>
+
+  <pattern name="Auth Middleware (JWT Bearer)">
+    <example><![CDATA[func Auth(authService service.AuthService) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        authHeader := c.Get("Authorization")
+        if authHeader == "" {
+            return fiber.NewError(fiber.StatusUnauthorized, "Missing authorization header")
+        }
+        parts := strings.SplitN(authHeader, " ", 2)
+        if len(parts) != 2 || parts[0] != "Bearer" {
+            return fiber.NewError(fiber.StatusUnauthorized, "Invalid authorization format")
+        }
+        claims, err := authService.ValidateToken(parts[1])
+        if err != nil {
+            return fiber.NewError(fiber.StatusUnauthorized, "Invalid token")
+        }
+        c.Locals("userID", claims.UserID)
+        c.Locals("userEmail", claims.Email)
+        c.Locals("userRole", claims.Role)
+        return c.Next()
+    }
+}
+
+func RequireRole(roles ...string) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        userRole, ok := c.Locals("userRole").(string)
+        if !ok {
+            return fiber.NewError(fiber.StatusForbidden, "Access denied")
+        }
+        for _, role := range roles {
+            if userRole == role { return c.Next() }
+        }
+        return fiber.NewError(fiber.StatusForbidden, "Insufficient permissions")
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Generic Body Validator">
+    <example><![CDATA[func ValidateBody[T any](c *fiber.Ctx, v *CustomValidator) (*T, error) {
+    var body T
+    if err := c.BodyParser(&body); err != nil {
+        return nil, fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+    }
+    if err := v.Validate(&body); err != nil {
+        return nil, err
+    }
+    return &body, nil
+}
+
+type CreateUserRequest struct {
+    Email    string `json:"email" validate:"required,email,max=255"`
+    Password string `json:"password" validate:"required,min=8,max=72"`
+    Name     string `json:"name" validate:"required,min=2,max=100"`
+}]]></example>
+  </pattern>
+
+  <pattern name="Response Helpers">
+    <example><![CDATA[func Success(c *fiber.Ctx, data interface{}) error {
+    return c.JSON(fiber.Map{"success": true, "data": data})
+}
+
+func Created(c *fiber.Ctx, data interface{}) error {
+    return c.Status(fiber.StatusCreated).JSON(fiber.Map{"success": true, "data": data})
+}
+
+func Error(c *fiber.Ctx, code int, message string) error {
+    return c.Status(code).JSON(fiber.Map{"success": false, "error": message})
+}
+
+func Paginated(c *fiber.Ctx, data interface{}, page, pageSize int, total int64) error {
+    totalPages := int(total) / pageSize
+    if int(total)%pageSize > 0 { totalPages++ }
+    return c.JSON(fiber.Map{
+        "success": true,
+        "data":    data,
+        "meta": fiber.Map{
+            "page": page, "page_size": pageSize,
+            "total_items": total, "total_pages": totalPages,
+        },
+    })
+}]]></example>
+  </pattern>
+
+  <pattern name="Handler with Error Mapping">
+    <example><![CDATA[func (h *UserHandler) Create(c *fiber.Ctx) error {
+    req, err := validator.ValidateBody[model.CreateUserRequest](c, h.validator)
+    if err != nil {
+        if _, ok := err.(*fiber.Error); ok { return err }
+        return response.ValidationError(c, err)
+    }
+    user, err := h.service.Create(c.Context(), req)
+    if err != nil {
+        if errors.Is(err, service.ErrUserAlreadyExists) {
+            return response.Error(c, fiber.StatusConflict, "User already exists")
+        }
+        return err // falls through to custom error handler
+    }
+    return response.Created(c, user.ToResponse())
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands><![CDATA[
+go run cmd/api/main.go
+go build -o bin/api cmd/api/main.go
+CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/api cmd/api/main.go
+go test ./...
+go test -cover ./...
+go test -race ./...
+swag init -g cmd/api/main.go
+migrate -path migrations -database "$DATABASE_URL" up
+migrate -path migrations -database "$DATABASE_URL" down 1
+golangci-lint run
+  ]]></commands>
+</tooling>
+
+<dependencies><![CDATA[
+github.com/gofiber/fiber/v2
+github.com/gofiber/swagger
+gorm.io/gorm
+gorm.io/driver/postgres
+github.com/go-playground/validator/v10
+github.com/golang-jwt/jwt/v5
+golang.org/x/crypto
+github.com/stretchr/testify
+github.com/swaggo/swag
+]]></dependencies>
+
+<quick-reference>
+  <item key="error handler">fiber.Config{ErrorHandler: customErrorHandler} — always set</item>
+  <item key="body parse">c.BodyParser(&body) then ValidateBody generic helper</item>
+  <item key="context">c.Context() for context.Context to services</item>
+  <item key="locals">c.Locals("key", value) to share between middleware and handlers</item>
+  <item key="errors">fiber.NewError(code, message) for HTTP errors; falls to ErrorHandler</item>
+  <item key="security">helmet.New() + limiter + CORS with explicit origins</item>
+  <item key="performance">Prefork=true in production; connection pool 25 max open</item>
+  <item key="shutdown">app.ShutdownWithContext(ctx) + sqlDB.Close()</item>
+  <item key="pagination">Paginated response helper with meta object</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Fiber Documentation" url="https://docs.gofiber.io/"/>
+  <ref name="Fiber GitHub" url="https://github.com/gofiber/fiber"/>
+  <ref name="Fasthttp" url="https://github.com/valyala/fasthttp"/>
+  <ref name="Fiber Recipes" url="https://github.com/gofiber/recipes"/>
+</external-references>
+
+</knowledge-base>

@@ -1,0 +1,361 @@
+<knowledge-base name="lang-kotlin" version="1.0">
+<triggers>Kotlin, .kt, .kts, build.gradle.kts, settings.gradle.kts, Coroutines, kotlinx, MockK, ktlint, detekt, Kover, Android, Ktor, Spring Boot Kotlin, data class, sealed class, value class, inline class, Flow, StateFlow, SharedFlow, suspend</triggers>
+<overview>Language-specific idioms, guardrails, and patterns for Kotlin 1.9+. Loaded automatically when agents work on .kt or .kts files. Covers null safety, coroutines with structured concurrency, data classes, sealed interfaces, scope functions, value classes, and testing with JUnit 5 and MockK. Applies to JVM 17+, Android, and server-side Kotlin.</overview>
+
+<core-principles>
+  <principle name="Null Safety">Leverage the type system to eliminate null pointer exceptions at compile time. Nullable types only at API boundaries.</principle>
+  <principle name="Conciseness">Use data classes, scope functions, and destructuring to reduce boilerplate without sacrificing readability.</principle>
+  <principle name="Coroutines for Concurrency">Structured concurrency with coroutines, not raw threads. GlobalScope is forbidden in production.</principle>
+  <principle name="Immutability by Default">Prefer `val` over `var`. Prefer read-only collections (`List`, `Map`, `Set`) over mutable variants.</principle>
+  <principle name="Interop Awareness">Write idiomatic Kotlin while maintaining clean Java interop boundaries where required.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Never use the not-null assertion operator `!!` in production code. It throws KotlinNullPointerException with no useful context.</rule>
+    <bad><![CDATA[val length = name!!.length  // crashes at runtime with no useful message]]></bad>
+    <good><![CDATA[// Safe call with fallback
+val length = name?.length ?: 0
+
+// Explicit contract with descriptive error
+val validName = requireNotNull(name) { "User name must not be null for ID=$id" }]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Never use GlobalScope in production code. It leaks coroutines and bypasses structured concurrency lifecycle management.</rule>
+    <bad><![CDATA[GlobalScope.launch { fetchData() }  // unstructured, leaks on cancellation]]></bad>
+    <good><![CDATA[coroutineScope {
+    val user = async { userService.getUser(id) }
+    val orders = async { orderService.getOrders(id) }
+    UserWithOrders(user.await(), orders.await())
+}]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never swallow CancellationException. Always rethrow it. Catching CancellationException prevents coroutine cancellation from propagating correctly.</rule>
+    <bad><![CDATA[try {
+    suspendingCall()
+} catch (e: Exception) {
+    logger.error("Failed", e)  // swallows CancellationException — coroutine never cancels
+}]]></bad>
+    <good><![CDATA[try {
+    suspendingCall()
+} catch (e: CancellationException) {
+    throw e  // always rethrow
+} catch (e: Exception) {
+    logger.error("Failed", e)
+}]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>Use withContext(Dispatchers.IO) for blocking I/O inside coroutines. Never call blocking operations on the default dispatcher.</rule>
+    <bad><![CDATA[suspend fun readFile(path: String): String {
+    return File(path).readText()  // blocks the coroutine dispatcher thread
+}]]></bad>
+    <good><![CDATA[suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
+    File(path).readText()
+}]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="HIGH">
+    <rule>Prefer `val` over `var`. Mutable state must be justified. Immutable bindings prevent accidental reassignment and make data flow explicit.</rule>
+    <bad><![CDATA[var count = 0
+var result = fetchUser(id)  // 'result' never reassigned — should be val]]></bad>
+    <good><![CDATA[val count = items.size
+val result = fetchUser(id)]]></good>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Use `requireNotNull()` or `checkNotNull()` with descriptive messages instead of `!!`. These throw IllegalArgumentException / IllegalStateException with useful context.</rule>
+    <good><![CDATA[val userId = requireNotNull(input.userId) { "userId is required in CreateUserRequest" }
+val session = checkNotNull(context.session) { "Session must be initialized before calling process()" }]]></good>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Set timeouts on all external calls using withTimeout or withTimeoutOrNull. Unbound external calls can block coroutine dispatchers indefinitely.</rule>
+    <good><![CDATA[val result = withTimeoutOrNull(5_000L) {
+    externalApi.fetchUser(id)
+} ?: throw ServiceUnavailableException("User service timed out after 5s")]]></good>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Keep extension functions in dedicated files per type (StringExtensions.kt, DateExtensions.kt). Do not add extensions to Any or other overly generic types.</rule>
+    <bad><![CDATA[fun Any.toJson(): String = ...  // too generic — pollutes all types]]></bad>
+    <good><![CDATA[// StringExtensions.kt
+fun String.toSlug(): String = lowercase().replace(Regex("[^a-z0-9]+"), "-")]]></good>
+  </guardrail>
+
+  <guardrail id="G-009" severity="MEDIUM">
+    <rule>Run `ktlint` and `detekt` before every commit. These are non-optional. ktlint enforces formatting; detekt catches complexity, code smells, and unsafe casts.</rule>
+    <note>Configure via `build.gradle.kts` plugins block; see Tooling section for commands.</note>
+  </guardrail>
+
+  <guardrail id="G-010" severity="MEDIUM">
+    <rule>Nullable types belong only at API boundaries (deserialization, Java interop). Internal Kotlin code should be non-nullable wherever possible.</rule>
+    <bad><![CDATA[data class User(val name: String?, val email: String?)  // why nullable internally?]]></bad>
+    <good><![CDATA[data class User(val name: String, val email: String)  // validate at boundary before construction]]></good>
+  </guardrail>
+
+  <guardrail id="G-011" severity="MEDIUM">
+    <rule>Prefer read-only collection interfaces (List, Map, Set) in function signatures and data classes. Return mutable collections only when the caller must mutate.</rule>
+    <bad><![CDATA[fun getUsers(): MutableList<User>]]></bad>
+    <good><![CDATA[fun getUsers(): List<User>]]></good>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <directory path="domain/" purpose="Business logic, entities, use cases — zero framework dependencies (pure Kotlin)"/>
+  <directory path="domain/model/" purpose="Data classes, sealed classes, value classes"/>
+  <directory path="domain/repository/" purpose="Repository interfaces (contracts, no implementation)"/>
+  <directory path="domain/usecase/" purpose="Business operations — single-responsibility use cases"/>
+  <directory path="data/" purpose="Data layer — implements domain repository interfaces"/>
+  <directory path="data/repository/" purpose="Repository implementations"/>
+  <directory path="data/remote/" purpose="API clients, DTOs for external services"/>
+  <directory path="data/local/" purpose="Database DAOs, local storage"/>
+  <directory path="presentation/" purpose="UI controllers or API endpoint handlers"/>
+  <directory path="build.gradle.kts" purpose="Gradle Kotlin DSL build script"/>
+  <directory path="settings.gradle.kts" purpose="Module declarations"/>
+  <note>domain/ has zero external dependencies. data/ depends on domain/. presentation/ depends on domain/ but never imports from data/ directly. No circular module dependencies.</note>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Data Classes and Value Classes" context="Domain models, IDs, typed primitives">
+    <description>Data classes for multi-field domain objects. Value classes for type-safe wrappers with zero runtime overhead (JVM inlining).</description>
+    <example><![CDATA[data class User(
+    val id: UserId,
+    val email: Email,
+    val name: String,
+    val role: Role = Role.VIEWER,
+) {
+    init {
+        require(name.isNotBlank()) { "User name must not be blank" }
+    }
+}
+
+// Value class: zero runtime overhead, prevents passing wrong string in wrong position
+@JvmInline
+value class UserId(val value: String) {
+    init { require(value.isNotBlank()) { "UserId must not be blank" } }
+}]]></example>
+  </pattern>
+
+  <pattern name="Sealed Interfaces for Result Types" context="Domain operations that can succeed or fail in known ways">
+    <description>Sealed interfaces model closed outcome hierarchies. when expressions are exhaustive — compiler enforces all cases are handled.</description>
+    <example><![CDATA[sealed interface Result<out T> {
+    data class Success<T>(val data: T) : Result<T>
+    data class Failure(val error: AppError) : Result<Nothing>
+}
+
+sealed class AppError(val message: String) {
+    data class NotFound(val resource: String, val id: String) :
+        AppError("$resource with ID $id not found")
+    data class Validation(val field: String, val reason: String) :
+        AppError("Validation failed for $field: $reason")
+    data class Unauthorized(val detail: String = "Authentication required") :
+        AppError(detail)
+}
+
+fun <T> Result<T>.getOrThrow(): T = when (this) {
+    is Result.Success -> data
+    is Result.Failure -> throw error.toException()
+}]]></example>
+  </pattern>
+
+  <pattern name="Scope Functions" context="Object configuration, nullable transforms, side effects">
+    <description>Use the right scope function for the right job. apply for configuration, also for side effects, let for nullable transforms.</description>
+    <example><![CDATA[// apply: configure builder-style and return the object
+val request = HttpRequest.Builder().apply {
+    url(endpoint)
+    header("Authorization", "Bearer $token")
+    timeout(Duration.ofSeconds(30))
+}.build()
+
+// also: non-mutating side effect (logging, events) — chain continues with original value
+val savedUser = userRepository.save(newUser).also { user ->
+    logger.info("Created user: ${user.id}")
+}
+
+// let: nullable transform or scoped variable
+val displayName = user?.name?.let { name ->
+    if (name.length > 20) name.take(17) + "..." else name
+} ?: "Anonymous"]]></example>
+  </pattern>
+
+  <pattern name="Scope Functions Quick Reference" context="Choosing the right scope function">
+    <description>Reference table for let, run, with, apply, also.</description>
+    <example><![CDATA[| Function | Context | Returns      | Primary use                        |
+|----------|---------|-------------|-------------------------------------|
+| let      | it      | Lambda result| Nullable transforms, scoped vars    |
+| run      | this    | Lambda result| Compute value using object context  |
+| with     | this    | Lambda result| Operate on non-null object          |
+| apply    | this    | Object itself| Configure/build an object           |
+| also     | it      | Object itself| Side effects (logging, events)      |]]></example>
+  </pattern>
+
+  <pattern name="Structured Concurrency" context="Any concurrent or parallel async work">
+    <description>Always bound coroutines to a scope. Use async/await for parallel work. supervisorScope when child failures must not cancel siblings.</description>
+    <example><![CDATA[// Parallel fetch — both run concurrently, both must succeed
+suspend fun getUserWithOrders(id: UserId): UserWithOrders = coroutineScope {
+    val user = async { userService.getUser(id) }
+    val orders = async { orderService.getOrders(id) }
+    UserWithOrders(user.await(), orders.await())
+}
+
+// supervisorScope — one child failure does not cancel others
+suspend fun fetchDashboard(id: UserId): Dashboard = supervisorScope {
+    val user = async { userService.getUser(id) }
+    val notifications = async {
+        runCatching { notificationService.get(id) }.getOrDefault(emptyList())
+    }
+    Dashboard(user.await(), notifications.await())
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<testing>
+  <framework>JUnit 5 with MockK (Kotlin-idiomatic mocking, coroutine support) and AssertJ</framework>
+  <coverage-target>80% business logic, 60% overall</coverage-target>
+
+  <rules>
+    <rule>Test files: `*Test.kt` under `src/test/kotlin/` — mirror source package structure</rule>
+    <rule>Use JUnit 5 with @Test, @Nested, @DisplayName</rule>
+    <rule>Use MockK for mocking (not Mockito — MockK handles suspend functions natively)</rule>
+    <rule>Use `runTest` from `kotlinx-coroutines-test` for all suspend function tests</rule>
+    <rule>Use `@ParameterizedTest` with `@MethodSource` for table-driven test cases</rule>
+    <rule>Coverage target: 80% business logic, 60% overall (enforced via Kover)</rule>
+  </rules>
+
+  <pattern name="Unit Test with Coroutines"><![CDATA[class UserServiceTest {
+    private val userRepository = mockk<UserRepository>()
+    private val eventBus = mockk<EventBus>(relaxed = true)
+    private val service = UserService(userRepository, eventBus)
+
+    @Nested
+    @DisplayName("createUser")
+    inner class CreateUser {
+        @Test
+        fun `creates user with valid input`() = runTest {
+            coEvery { userRepository.save(any()) } returns mockUser
+            val result = service.createUser(validInput)
+
+            assertThat(result).isInstanceOf(Result.Success::class.java)
+            coVerify { userRepository.save(any()) }
+            coVerify { eventBus.publish(any<UserCreatedEvent>()) }
+        }
+
+        @Test
+        fun `fails with blank name`() = runTest {
+            val result = service.createUser(blankNameInput)
+
+            assertThat(result).isInstanceOf(Result.Failure::class.java)
+            coVerify(exactly = 0) { userRepository.save(any()) }
+        }
+    }
+}]]></pattern>
+
+  <pattern name="Parameterized Tests"><![CDATA[companion object {
+    @JvmStatic
+    fun emailCases() = listOf(
+        Arguments.of("user@example.com", true),
+        Arguments.of("invalid-email", false),
+        Arguments.of("", false),
+    )
+}
+
+@ParameterizedTest(name = "email \"{0}\" valid={1}")
+@MethodSource("emailCases")
+fun `validates email format`(email: String, expected: Boolean) {
+    val result = runCatching { Email(email) }
+    assertThat(result.isSuccess).isEqualTo(expected)
+}]]></pattern>
+
+</testing>
+
+<tooling>
+  <tool name="./gradlew build" purpose="Compile + test + all checks"/>
+  <tool name="./gradlew test" purpose="Run all unit tests"/>
+  <tool name="./gradlew test --tests '*.UserServiceTest'" purpose="Run a specific test class"/>
+  <tool name="./gradlew koverReport" purpose="Generate Kover coverage report"/>
+  <tool name="./gradlew ktlintCheck" purpose="Check Kotlin formatting"/>
+  <tool name="./gradlew ktlintFormat" purpose="Auto-fix Kotlin formatting"/>
+  <tool name="./gradlew detekt" purpose="Run detekt static analysis"/>
+  <tool name="./gradlew dependencies" purpose="Show full dependency tree"/>
+</tooling>
+
+<build-config>
+  <description>Recommended build.gradle.kts configuration with ktlint, detekt, and Kover.</description>
+  <example><![CDATA[// build.gradle.kts
+plugins {
+    kotlin("jvm") version "1.9.22"
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.0"
+    id("io.gitlab.arturbosch.detekt") version "1.23.4"
+    id("org.jetbrains.kotlinx.kover") version "0.7.5"
+}
+
+kotlin { jvmToolchain(17) }
+
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+    testImplementation(kotlin("test"))
+    testImplementation("io.mockk:mockk:1.13.9")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+    testImplementation("org.assertj:assertj-core:3.25.1")
+}
+
+detekt {
+    config.setFrom("detekt.yml")
+    buildUponDefaultConfig = true
+}
+
+kover {
+    verify { rule { minBound(80) } }
+}]]></example>
+
+  <description>Recommended detekt.yml thresholds.</description>
+  <example><![CDATA[# detekt.yml
+complexity:
+  LongMethod:
+    threshold: 50
+  CyclomaticComplexMethod:
+    threshold: 10
+  LargeClass:
+    threshold: 300
+  LongParameterList:
+    functionThreshold: 5
+    constructorThreshold: 8
+style:
+  ForbiddenComment:
+    values:
+      - "TODO(?!\\(#\\d+\\))"  # TODOs require an issue reference
+  MagicNumber:
+    ignoreNumbers: ["-1", "0", "1", "2"]
+  MaxLineLength:
+    maxLineLength: 120
+potential-bugs:
+  UnsafeCast:
+    active: true]]></example>
+</build-config>
+
+<quick-reference>
+  <item key="!!">Forbidden in production — use ?., ?:, requireNotNull(), checkNotNull()</item>
+  <item key="GlobalScope">Forbidden — use coroutineScope{} or supervisorScope{} for structured concurrency</item>
+  <item key="CancellationException">Always rethrow — never swallow in a catch(Exception) block</item>
+  <item key="Dispatchers.IO">Required for all blocking I/O inside coroutines</item>
+  <item key="val vs var">Default to val; var requires justification</item>
+  <item key="nullable types">Only at API boundaries (deserialization, Java interop); internal code non-nullable</item>
+  <item key="data class">Use for multi-field domain objects; value class for type-safe single-value wrappers</item>
+  <item key="sealed interface">Use for closed outcome hierarchies; enables exhaustive when expressions</item>
+  <item key="scope functions">apply=configure, also=side-effects, let=nullable-transform, run=compute-from-context, with=non-null-block</item>
+  <item key="extension functions">In dedicated files per receiver type; never on Any</item>
+  <item key="collections">Return List/Map/Set (read-only); MutableList only when caller must mutate</item>
+  <item key="testing">MockK for mocking (not Mockito); runTest for suspend functions; coEvery/coVerify for coroutine mocks</item>
+  <item key="coverage">80% business logic minimum via Kover</item>
+  <item key="tooling">ktlint + detekt mandatory before every commit</item>
+</quick-reference>
+
+</knowledge-base>

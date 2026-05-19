@@ -1,0 +1,398 @@
+<knowledge-base name="fw-micronaut" version="1.0">
+<triggers>Micronaut, micronaut, @Singleton, @Controller, @Inject, @JdbcRepository, @MongoRepository, @MicronautTest, @Serdeable, @ConfigurationProperties, @Factory, @Requires, @ExecuteOn, @Transactional, PageableRepository, @DateCreated, @DateUpdated, @MappedEntity, micronaut-data, micronaut-security, micronaut-http, jakarta.inject, .java, .kt, Micronaut Data, Micronaut Security, GraalVM native, nativeCompile, dockerBuildNative</triggers>
+<overview>Micronaut 4.x guardrails, compile-time DI patterns, HTTP controllers, data repositories, configuration, error handling, and testing. Applies to microservices, serverless, and CLI apps targeting Java 21+. Loaded automatically when agents work on Micronaut .java or .kt projects.</overview>
+
+<core-principles>
+  <principle name="Compile-Time DI">All dependency injection is resolved at compile time — no reflection at runtime. This enables native image support and sub-100ms startup.</principle>
+  <principle name="GraalVM Native">First-class native image support for fast startup and minimal memory footprint in containers and serverless.</principle>
+  <principle name="Reactive by Default">Built-in reactive programming with non-blocking I/O; use @ExecuteOn(BLOCKING) only when needed.</principle>
+  <principle name="Cloud-Native">Service discovery, distributed tracing, and config management are first-class features.</principle>
+  <principle name="Standard Library">Use jakarta.inject annotations, not Spring-specific ones.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="MN-001" severity="BLOCKER">
+    <rule>Use constructor injection exclusively. Field injection is not compile-time verifiable and breaks native image builds. Never use @Autowired.</rule>
+    <bad><![CDATA[@Singleton
+public class UserServiceImpl implements UserService {
+    @Inject  // BLOCKER: field injection — not compile-time verifiable
+    private UserRepository userRepository;
+}]]></bad>
+    <good><![CDATA[@Singleton
+@RequiredArgsConstructor
+public class UserServiceImpl implements UserService {
+    private final UserRepository userRepository;  // constructor injection
+    private final UserMapper userMapper;
+}]]></good>
+  </guardrail>
+
+  <guardrail id="MN-002" severity="BLOCKER">
+    <rule>Never use reflection-based libraries (Jackson polymorphism, dynamic proxies) without explicit GraalVM reflect-config. Prefer @Serdeable and compile-time serialization.</rule>
+  </guardrail>
+
+  <guardrail id="MN-003" severity="BLOCKER">
+    <rule>Never expose domain entities directly in API responses. Always use @Serdeable record DTOs and a MapStruct mapper.</rule>
+  </guardrail>
+
+  <guardrail id="MN-004" severity="BLOCKER">
+    <rule>Never hardcode secrets, API keys, or passwords. Reference via ${ENV_VAR:default} in application.yml.</rule>
+  </guardrail>
+
+  <guardrail id="MN-005" severity="HIGH">
+    <rule>Apply @ExecuteOn(TaskExecutors.BLOCKING) on controllers or service methods that perform JDBC or other blocking I/O. Never block reactive threads without this annotation.</rule>
+  </guardrail>
+
+  <guardrail id="MN-006" severity="HIGH">
+    <rule>Use @Transactional at the service layer, not the repository layer. Use @Transactional(readOnly = true) for read-only operations.</rule>
+  </guardrail>
+
+  <guardrail id="MN-007" severity="HIGH">
+    <rule>Use Flyway or Liquibase for schema migrations. Never use schema-generate: create in any non-throwaway environment.</rule>
+  </guardrail>
+
+  <guardrail id="MN-008" severity="HIGH">
+    <rule>Paginate all list endpoints. Never return unbounded collections — extend PageableRepository and accept a Pageable parameter.</rule>
+  </guardrail>
+
+  <guardrail id="MN-009" severity="HIGH">
+    <rule>Add Jakarta validation annotations (@NotBlank, @Email, @Size) to all DTO fields. Apply @Validated at the controller class level.</rule>
+  </guardrail>
+
+  <guardrail id="MN-010" severity="MEDIUM">
+    <rule>Use @Requires for conditional bean loading per environment (dev/production). Keep environment-specific beans separate from core beans.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <description>Standard Micronaut project layout with compile-time DI, repositories, and DTOs.</description>
+  <example><![CDATA[myapp/
+├── src/main/
+│   ├── java/com/example/
+│   │   ├── Application.java           # Entry point with @OpenAPIDefinition
+│   │   ├── config/                    # @Factory, @ConfigurationProperties beans
+│   │   ├── controller/                # @Controller classes (@Validated)
+│   │   ├── service/                   # Business logic interfaces
+│   │   │   └── impl/                  # Service implementations (@Singleton)
+│   │   ├── repository/                # @JdbcRepository interfaces
+│   │   ├── domain/                    # @MappedEntity classes
+│   │   ├── dto/                       # @Serdeable record DTOs
+│   │   ├── mapper/                    # MapStruct @Mapper (componentModel = "jsr330")
+│   │   └── exception/                 # Custom exceptions + ExceptionHandler impls
+│   └── resources/
+│       ├── application.yml            # Main config (+ -dev.yml, -prod.yml overrides)
+│       ├── db/migration/              # Flyway SQL files
+│       └── logback.xml
+├── src/test/java/com/example/        # Unit + @MicronautTest integration tests
+├── build.gradle                      # Micronaut Gradle plugin
+└── settings.gradle]]></example>
+  <notes>
+    <note>service/impl/ separates interface from implementation for testability</note>
+    <note>dto/ uses @Serdeable records — immutable and native-compatible</note>
+    <note>mapper/ bridges domain entities to DTOs via MapStruct with jsr330 component model</note>
+    <note>exception/ bundles custom exceptions with their ExceptionHandler implementations</note>
+  </notes>
+</project-structure>
+
+<di-patterns>
+
+  <pattern name="Singleton Bean (Constructor Injection)">
+    <example><![CDATA[@Singleton
+@RequiredArgsConstructor
+public class UserServiceImpl implements UserService {
+    private final UserRepository userRepository;
+    private final UserMapper userMapper;
+    private final PasswordEncoder passwordEncoder;
+    // All resolved at compile time — no reflection
+}]]></example>
+  </pattern>
+
+  <pattern name="Factory for Third-Party Objects">
+    <example><![CDATA[@Factory
+public class SecurityBeans {
+    @Singleton
+    public BCryptPasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Conditional Beans">
+    <example><![CDATA[@Singleton
+@Requires(env = "production")
+public class ProductionEmailService implements EmailService { }
+
+@Singleton
+@Requires(env = "dev")
+public class MockEmailService implements EmailService { }]]></example>
+  </pattern>
+
+</di-patterns>
+
+<controller-pattern>
+  <description>Thin controller: validate, delegate to service, return HttpResponse. Use @ExecuteOn(BLOCKING) for JDBC work.</description>
+  <example><![CDATA[@Controller("/api/users")
+@Validated
+@RequiredArgsConstructor
+@ExecuteOn(TaskExecutors.BLOCKING)
+@Secured(SecurityRule.IS_AUTHENTICATED)
+@Tag(name = "Users", description = "User management endpoints")
+public class UserController {
+
+    private final UserService userService;
+
+    @Post
+    @Status(HttpStatus.CREATED)
+    @Operation(summary = "Create a new user")
+    @ApiResponse(responseCode = "201", description = "User created")
+    @ApiResponse(responseCode = "409", description = "Email already exists")
+    public HttpResponse<UserResponse> createUser(@Body @Valid UserRequest request) {
+        UserResponse user = userService.createUser(request);
+        return HttpResponse.created(user)
+            .headers(h -> h.location(URI.create("/api/users/" + user.id())));
+    }
+
+    @Get("/{id}")
+    @Operation(summary = "Get user by ID")
+    public UserResponse getUserById(@PathVariable Long id) {
+        return userService.getUserById(id);
+    }
+
+    @Get
+    @Operation(summary = "List users with pagination")
+    public PageResponse<UserResponse> getAllUsers(
+            @QueryValue(defaultValue = "0") int page,
+            @QueryValue(defaultValue = "20") int size) {
+        return userService.getAllUsers(page, size);
+    }
+
+    @Delete("/{id}")
+    @Status(HttpStatus.NO_CONTENT)
+    @Secured({"ROLE_ADMIN"})
+    public void deleteUser(@PathVariable Long id) {
+        userService.deleteUser(id);
+    }
+}]]></example>
+</controller-pattern>
+
+<data-patterns>
+
+  <pattern name="Domain Entity">
+    <example><![CDATA[@Serdeable
+@MappedEntity("users")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class User {
+    @Id
+    @GeneratedValue(GeneratedValue.Type.AUTO)
+    private Long id;
+
+    @Column("email")
+    private String email;
+
+    @Column("password_hash")
+    private String passwordHash;
+
+    @DateCreated
+    @Column("created_at")
+    private Instant createdAt;
+
+    @DateUpdated
+    @Column("updated_at")
+    private Instant updatedAt;
+}]]></example>
+  </pattern>
+
+  <pattern name="Repository">
+    <example><![CDATA[@JdbcRepository(dialect = Dialect.POSTGRES)
+public interface UserRepository extends PageableRepository<User, Long> {
+
+    Optional<User> findByEmail(String email);
+
+    boolean existsByEmail(String email);
+
+    List<User> findByActiveTrue();
+
+    Page<User> findByRole(String role, Pageable pageable);
+
+    @Query("UPDATE User u SET u.active = :active WHERE u.id = :id")
+    void updateActiveStatus(Long id, boolean active);
+}]]></example>
+  </pattern>
+
+  <pattern name="DTO Records">
+    <example><![CDATA[@Serdeable
+public record UserRequest(
+    @NotBlank @Email @Size(max = 255) String email,
+    @NotBlank @Size(min = 8, max = 100) String password,
+    @NotBlank @Size(max = 100) String firstName,
+    @NotBlank @Size(max = 100) String lastName
+) {}
+
+@Serdeable
+public record UserResponse(
+    Long id, String email, String firstName, String lastName,
+    Boolean active, Instant createdAt, Instant updatedAt
+) {}
+
+@Serdeable
+public record PageResponse<T>(
+    List<T> content, int page, int size,
+    long totalElements, int totalPages, boolean first, boolean last
+) {
+    public static <T> PageResponse<T> of(List<T> content, int page, int size, long total) {
+        int totalPages = (int) Math.ceil((double) total / size);
+        return new PageResponse<>(content, page, size, total, totalPages,
+            page == 0, page >= totalPages - 1);
+    }
+}]]></example>
+  </pattern>
+
+</data-patterns>
+
+<configuration>
+  <description>application.yml with environment-specific overrides. Reference secrets via ${ENV_VAR:default}.</description>
+  <example><![CDATA[micronaut:
+  application:
+    name: myapp
+  server:
+    port: 8080
+  security:
+    authentication: bearer
+    token:
+      jwt:
+        signatures:
+          secret:
+            generator:
+              secret: ${JWT_SECRET}
+              jws-algorithm: HS256
+    intercept-url-map:
+      - pattern: /health/**
+        access: [isAnonymous()]
+      - pattern: /api/**
+        access: [isAuthenticated()]
+
+datasources:
+  default:
+    url: jdbc:postgresql://localhost:5432/myapp
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+
+flyway:
+  datasources:
+    default:
+      enabled: true
+      locations: classpath:db/migration
+
+endpoints:
+  health: { enabled: true, sensitive: false }
+  prometheus: { enabled: true, sensitive: false }]]></example>
+</configuration>
+
+<error-handling>
+  <description>Implement ExceptionHandler for each exception type. Return RFC 7807 Problem Details format.</description>
+  <example><![CDATA[@Singleton
+@Produces
+@Requires(classes = {ResourceNotFoundException.class, ExceptionHandler.class})
+public class ResourceNotFoundExceptionHandler
+    implements ExceptionHandler<ResourceNotFoundException, HttpResponse<ErrorResponse>> {
+
+    @Override
+    public HttpResponse<ErrorResponse> handle(HttpRequest request, ResourceNotFoundException ex) {
+        ErrorResponse error = ErrorResponse.of(404, "Not Found", ex.getMessage(), request.getPath());
+        return HttpResponse.notFound(error);
+    }
+}]]></example>
+</error-handling>
+
+<testing>
+  <stack>@MicronautTest (embedded server), @MockBean, Mockito, Testcontainers + TestPropertyProvider</stack>
+  <rules>
+    <rule>Use @MicronautTest for integration tests — starts embedded server with full DI</rule>
+    <rule>Use @MockBean for replacing DI beans in integration tests</rule>
+    <rule>Use @ExtendWith(MockitoExtension.class) for pure unit tests</rule>
+    <rule>Use TestPropertyProvider to inject dynamic Testcontainer config before server start</rule>
+    <rule>Name tests to describe behavior: shouldCreateUserWhenEmailIsUnique</rule>
+  </rules>
+  <example><![CDATA[@ExtendWith(MockitoExtension.class)
+@DisplayName("UserService")
+class UserServiceTest {
+
+    @Mock private UserRepository userRepository;
+    @Mock private UserMapper userMapper;
+    private UserServiceImpl userService;
+
+    @BeforeEach
+    void setUp() { userService = new UserServiceImpl(userRepository, userMapper); }
+
+    @Test
+    @DisplayName("should create user when email is unique")
+    void shouldCreateUserWhenEmailIsUnique() {
+        when(userRepository.existsByEmail("test@example.com")).thenReturn(false);
+        when(userMapper.toEntity(any())).thenReturn(new User());
+        when(userRepository.save(any())).thenReturn(new User());
+        when(userMapper.toResponse(any())).thenReturn(expectedResponse);
+
+        UserResponse result = userService.createUser(request);
+
+        assertThat(result).isNotNull();
+        verify(userRepository).save(any());
+    }
+}
+
+@MicronautTest
+@Testcontainers
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class IntegrationTest implements TestPropertyProvider {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine");
+
+    @Inject @Client("/") HttpClient client;
+
+    @Override
+    public Map<String, String> getProperties() {
+        postgres.start();
+        return Map.of(
+            "datasources.default.url", postgres.getJdbcUrl(),
+            "datasources.default.username", postgres.getUsername(),
+            "datasources.default.password", postgres.getPassword()
+        );
+    }
+
+    @Test
+    void healthEndpoint_shouldReturnUp() {
+        var response = client.toBlocking().exchange(HttpRequest.GET("/health"), String.class);
+        assertThat(response.status().getCode()).isEqualTo(200);
+    }
+}]]></example>
+</testing>
+
+<tooling>
+  <commands>
+    <cmd purpose="Build">./gradlew build</cmd>
+    <cmd purpose="Run (dev profile)">MICRONAUT_ENVIRONMENTS=dev ./gradlew run</cmd>
+    <cmd purpose="Run tests">./gradlew test</cmd>
+    <cmd purpose="Tests + coverage">./gradlew test jacocoTestReport</cmd>
+    <cmd purpose="GraalVM native image">./gradlew nativeCompile</cmd>
+    <cmd purpose="Docker image">./gradlew dockerBuild</cmd>
+    <cmd purpose="Native Docker image">./gradlew dockerBuildNative</cmd>
+    <cmd purpose="Lint (checkstyle/spotbugs)">./gradlew check</cmd>
+  </commands>
+</tooling>
+
+<quick-reference>
+  <item key="di">Constructor injection only — compile-time verified, native-compatible; @Factory for third-party objects</item>
+  <item key="dtos">@Serdeable records with Jakarta validation annotations — immutable and native-safe</item>
+  <item key="blocking">@ExecuteOn(TaskExecutors.BLOCKING) on controllers handling JDBC; never block reactive threads</item>
+  <item key="transactions">@Transactional at service layer only; @Transactional(readOnly = true) for reads</item>
+  <item key="repositories">@JdbcRepository extends PageableRepository; derived query methods preferred over @Query</item>
+  <item key="config">application.yml with -dev.yml / -prod.yml overrides; ${ENV_VAR:default} for secrets</item>
+  <item key="testing">@MicronautTest + TestPropertyProvider + Testcontainers for integration; @MockBean for overrides</item>
+  <item key="avoid">Field injection, @Autowired, mutable DTOs, unbounded list responses, schema-generate: create</item>
+</quick-reference>
+
+</knowledge-base>

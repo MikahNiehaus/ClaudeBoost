@@ -306,6 +306,24 @@ If the input already implies a path or clearly describes ClaudeBoost-internal wo
 
 ## Phase 5: Write the Plan
 
+### COMPLEX+ Tasks (>15 source files or new subsystem)
+
+Before writing `plan.md`, check if this task qualifies as COMPLEX+:
+- More than 15 source files will be created or modified, OR
+- A new subsystem is being introduced (new module, new service, new data layer, new auth strategy)
+
+If COMPLEX+, run `/create-prd` before spawning agents:
+
+1. `/create-prd` — generates `workspace/$WORKSPACE_ID/prd.md` + `workspace/$WORKSPACE_ID/tasks.md`
+2. Review and approve the PRD with the user
+3. Then spawn agents per the task list in `tasks.md`
+
+This replaces the standard `plan.md` for COMPLEX+ scope — the PRD provides the goals, acceptance criteria, and out-of-scope boundaries that agents need for large initiatives. Note this in `context.md` under **Key Decisions**: "COMPLEX+ scope — using PRD workflow instead of plan.md."
+
+If the task does NOT qualify as COMPLEX+, proceed with the standard plan below.
+
+---
+
 Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ```markdown

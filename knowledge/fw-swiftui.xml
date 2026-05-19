@@ -1,0 +1,372 @@
+<knowledge-base name="fw-swiftui" version="1.0">
+<triggers>SwiftUI, swiftui, .swift SwiftUI, @State, @Binding, @Observable, @StateObject, @ObservedObject, @EnvironmentObject, @Environment, @ViewBuilder, NavigationStack, NavigationPath, TabView, LazyVStack, LazyHStack, LazyVGrid, AsyncImage, some View, View body, #Preview, App protocol, @main SwiftUI, WindowGroup, Scene, iOS 17, macOS 14, watchOS 10, visionOS, struct View, import SwiftUI</triggers>
+<overview>SwiftUI 5.0+ guardrails, patterns, and best practices for iOS 17+, macOS 14+, watchOS 10+, tvOS 17+, and visionOS 1.0+. Covers declarative view composition, state management with @Observable, NavigationStack with typed routes, TabView, List/Grid patterns, async data loading, custom modifiers, environment-based DI, forms, previews, and XCTest view model testing. Applies to .swift files using SwiftUI.</overview>
+
+<core-principles>
+  <principle name="Declarative UI">Describe what the UI should look like; SwiftUI handles all rendering. Never imperatively mutate view state outside of state wrappers.</principle>
+  <principle name="Single Source of Truth">Each piece of state lives in exactly one place. Views derive their display from state — they do not maintain their own copy.</principle>
+  <principle name="View Composition">Keep views small and composable. Decompose body into private computed properties at 30+ lines. Extract reusable pieces as separate structs.</principle>
+  <principle name="@Observable for View Models">Use @Observable (iOS 17+) for view models instead of ObservableObject/Published. @State owns the instance; @Environment passes it down the tree.</principle>
+  <principle name="Async with .task">Use .task modifier for async data loading. It automatically cancels the task when the view disappears — no manual cancellation needed.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="SUI-001" severity="BLOCKER">
+    <rule>Never mutate @State or @Observable properties during a view update cycle (synchronously inside body). Only mutate in event handlers, .task, or .onChange callbacks.</rule>
+    <bad><![CDATA[var body: some View {
+    count += 1  // BLOCKER: mutation during render
+    return Text("\(count)")
+}]]></bad>
+    <good><![CDATA[var body: some View {
+    Text("\(count)").onAppear { count += 1 }
+}]]></good>
+  </guardrail>
+
+  <guardrail id="SUI-002" severity="BLOCKER">
+    <rule>Never create @StateObject in a computed property. @StateObject must be created at the stored property level — computed properties are recreated on every render.</rule>
+    <bad><![CDATA[var viewModel: UserViewModel { UserViewModel() } // recreated every render]]></bad>
+    <good><![CDATA[@StateObject private var viewModel = UserViewModel()
+// Or iOS 17+:
+@State private var viewModel = UserViewModel()]]></good>
+  </guardrail>
+
+  <guardrail id="SUI-003" severity="BLOCKER">
+    <rule>Never use @ObservedObject for state the view owns. Use @StateObject (iOS 14-16) or @State with @Observable (iOS 17+) for owned instances.</rule>
+    <bad><![CDATA[@ObservedObject var viewModel = UserViewModel() // view owns it but uses wrong wrapper]]></bad>
+    <good><![CDATA[@State private var viewModel = UserViewModel() // iOS 17+ with @Observable]]></good>
+  </guardrail>
+
+  <guardrail id="SUI-004" severity="HIGH">
+    <rule>Keep views under 200 lines. Decompose body into private computed properties using // MARK: - Subviews at the 30-line mark.</rule>
+  </guardrail>
+
+  <guardrail id="SUI-005" severity="HIGH">
+    <rule>Never perform heavy computation inside body. Precompute in view models, use .task for async work, or cache with stored properties.</rule>
+    <bad><![CDATA[var body: some View { Text(hugeData.filter { $0.matches }.map(\.name).joined()) }]]></bad>
+    <good><![CDATA[private var filteredNames: String { /* computed once */ }
+var body: some View { Text(filteredNames) }]]></good>
+  </guardrail>
+
+  <guardrail id="SUI-006" severity="HIGH">
+    <rule>Use LazyVStack / LazyHStack for long scrollable lists. Use LazyVGrid / LazyHGrid for grids. Never use VStack/HStack for unbounded data.</rule>
+  </guardrail>
+
+  <guardrail id="SUI-007" severity="HIGH">
+    <rule>Avoid AnyView type erasure. Use @ViewBuilder, Group, or generic constraints instead. AnyView suppresses diff optimizations.</rule>
+    <bad><![CDATA[func makeView() -> AnyView { AnyView(Text("hello")) }]]></bad>
+    <good><![CDATA[@ViewBuilder func makeView() -> some View { Text("hello") }]]></good>
+  </guardrail>
+
+  <guardrail id="SUI-008" severity="HIGH">
+    <rule>Use NavigationStack with typed Route enum for navigation. Avoid legacy NavigationView (deprecated iOS 16+).</rule>
+  </guardrail>
+
+  <guardrail id="SUI-009" severity="MEDIUM">
+    <rule>Provide multiple #Preview configurations: light mode, dark mode, different devices. Include static preview data via extension on model types.</rule>
+  </guardrail>
+
+  <guardrail id="SUI-010" severity="MEDIUM">
+    <rule>Use environment-based dependency injection for testability. Define custom EnvironmentKey types and inject mock implementations in previews and tests.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[MyApp/
+├── MyApp/
+│   ├── App/
+│   │   └── MyApp.swift              # @main entry point
+│   ├── Features/
+│   │   ├── Authentication/
+│   │   │   ├── Views/               # LoginView.swift, SignUpView.swift
+│   │   │   ├── ViewModels/          # AuthViewModel.swift (@Observable)
+│   │   │   └── Models/              # User.swift
+│   │   ├── Home/
+│   │   │   ├── Views/
+│   │   │   ├── ViewModels/
+│   │   │   └── Components/          # Feature-scoped reusable views
+│   │   └── Settings/
+│   ├── Core/
+│   │   ├── Network/                 # APIClient.swift, Endpoints.swift
+│   │   ├── Storage/
+│   │   └── Extensions/              # View+Extensions.swift
+│   ├── Shared/
+│   │   ├── Components/              # LoadingView, ErrorView, PrimaryButton
+│   │   └── Modifiers/               # CardModifier.swift
+│   └── Resources/                   # Assets.xcassets, Localizable.strings
+├── MyAppTests/
+└── MyAppUITests/]]></example>
+  <notes>
+    <note>Features/ groups by domain with Views, ViewModels, Models, Components</note>
+    <note>Shared/ for cross-feature reusable views and custom modifiers</note>
+    <note>Core/ for non-UI infrastructure: networking, storage, extensions</note>
+  </notes>
+</project-structure>
+
+<patterns>
+
+  <pattern name="App Entry Point">
+    <description>@main App struct injecting shared @Observable state via .environment().</description>
+    <example><![CDATA[import SwiftUI
+
+@main
+struct MyApp: App {
+    @State private var appState    = AppState()
+    @State private var authManager = AuthManager()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(appState)
+                .environment(authManager)
+        }
+    }
+}
+
+struct ContentView: View {
+    @Environment(AuthManager.self) private var authManager
+
+    var body: some View {
+        Group {
+            if authManager.isAuthenticated { MainTabView() }
+            else { AuthenticationView() }
+        }
+        .animation(.easeInOut, value: authManager.isAuthenticated)
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="View Decomposition">
+    <description>UserProfileView broken into private computed subview properties with // MARK: - Subviews.</description>
+    <example><![CDATA[import SwiftUI
+
+struct UserProfileView: View {
+    let user: User
+    @State private var isEditing = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            profileHeader
+            statsSection
+            actionButtons
+        }
+        .padding()
+        .navigationTitle("Profile")
+        .sheet(isPresented: $isEditing) { EditProfileView(user: user) }
+    }
+
+    // MARK: - Subviews
+
+    private var profileHeader: some View {
+        VStack(spacing: 8) {
+            AsyncImage(url: URL(string: user.avatarURL)) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Circle().fill(Color.gray.opacity(0.3))
+            }
+            .frame(width: 100, height: 100).clipShape(Circle())
+
+            Text(user.name).font(.title2).fontWeight(.semibold)
+            Text(user.email).font(.subheadline).foregroundStyle(.secondary)
+        }
+    }
+
+    private var statsSection: some View {
+        HStack(spacing: 32) {
+            StatView(title: "Posts",     value: user.postCount)
+            StatView(title: "Followers", value: user.followerCount)
+        }.padding(.vertical)
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 16) {
+            Button("Edit Profile") { isEditing = true }.buttonStyle(.borderedProminent)
+            Button("Share") { }.buttonStyle(.bordered)
+        }
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="@Observable View Model">
+    <description>View model using the @Observable macro (iOS 17+). Owned by the view with @State.</description>
+    <example><![CDATA[import Observation
+
+@Observable
+final class UserViewModel {
+    var user: User?
+    var isLoading = false
+    var errorMessage: String?
+
+    private let userService: UserServiceProtocol
+
+    init(userService: UserServiceProtocol = UserService()) {
+        self.userService = userService
+    }
+
+    func loadUser(id: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            user = try await userService.fetchUser(id: id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+struct UserView: View {
+    @State private var viewModel = UserViewModel()
+    let userId: String
+
+    var body: some View {
+        Group {
+            if viewModel.isLoading { ProgressView() }
+            else if let user = viewModel.user { UserProfileView(user: user) }
+            else if let error = viewModel.errorMessage {
+                ErrorView(message: error) { Task { await viewModel.loadUser(id: userId) } }
+            }
+        }
+        .task { await viewModel.loadUser(id: userId) }
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="NavigationStack with Typed Routes">
+    <description>Enum-driven routing with NavigationStack and .navigationDestination(for:).</description>
+    <example><![CDATA[import SwiftUI
+
+enum Route: Hashable {
+    case settings
+    case profile(userId: String)
+    case notifications
+}
+
+struct MainView: View {
+    @State private var navigationPath = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $navigationPath) {
+            HomeView(navigationPath: $navigationPath)
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .settings:              SettingsView()
+                    case .profile(let id):       ProfileView(userId: id)
+                    case .notifications:         NotificationsView()
+                    }
+                }
+        }
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Custom View Modifier">
+    <description>Reusable modifier extracted to a struct with a View extension for call-site clarity.</description>
+    <example><![CDATA[import SwiftUI
+
+struct CardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+    }
+}
+
+extension View {
+    func cardStyle() -> some View { modifier(CardModifier()) }
+}]]></example>
+  </pattern>
+
+  <pattern name="Environment Dependency Injection">
+    <description>Custom EnvironmentKey for protocol-typed dependencies, enabling mock injection in previews and tests.</description>
+    <example><![CDATA[import SwiftUI
+
+struct APIClientKey: EnvironmentKey {
+    static let defaultValue: APIClientProtocol = APIClient()
+}
+
+extension EnvironmentValues {
+    var apiClient: APIClientProtocol {
+        get { self[APIClientKey.self] }
+        set { self[APIClientKey.self] = newValue }
+    }
+}
+
+struct PostListView: View {
+    @Environment(\.apiClient) private var apiClient
+    @State private var posts: [Post] = []
+
+    var body: some View {
+        List(posts) { post in PostRowView(post: post) }
+            .task { posts = (try? await apiClient.fetchPosts()) ?? [] }
+    }
+}
+
+#Preview {
+    PostListView().environment(\.apiClient, MockAPIClient())
+}]]></example>
+  </pattern>
+
+  <pattern name="View Model Test">
+    <description>Async XCTest for @Observable view model using protocol-based mock injection.</description>
+    <example><![CDATA[import XCTest
+@testable import MyApp
+
+final class UserViewModelTests: XCTestCase {
+    var sut: UserViewModel!
+    var mockService: MockUserService!
+
+    override func setUp() {
+        super.setUp()
+        mockService = MockUserService()
+        sut = UserViewModel(userService: mockService)
+    }
+
+    func test_loadUser_success_updatesUser() async {
+        mockService.userToReturn = User(id: "1", name: "John")
+        await sut.loadUser(id: "1")
+        XCTAssertEqual(sut.user?.name, "John")
+        XCTAssertFalse(sut.isLoading)
+    }
+
+    func test_loadUser_failure_setsErrorMessage() async {
+        mockService.errorToThrow = APIError.invalidResponse
+        await sut.loadUser(id: "1")
+        XCTAssertNil(sut.user)
+        XCTAssertNotNil(sut.errorMessage)
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands>
+    <cmd purpose="Build for simulator">xcodebuild -scheme MyApp -destination 'platform=iOS Simulator,name=iPhone 15'</cmd>
+    <cmd purpose="Run tests">xcodebuild test -scheme MyApp -destination 'platform=iOS Simulator,name=iPhone 15'</cmd>
+    <cmd purpose="SPM build">swift build</cmd>
+    <cmd purpose="SPM test">swift test</cmd>
+    <cmd purpose="Format code">swift format .</cmd>
+    <cmd purpose="Lint">swiftlint</cmd>
+    <cmd purpose="Auto-fix lint">swiftlint --fix</cmd>
+  </commands>
+</tooling>
+
+<quick-reference>
+  <item key="state ownership">@State owns value; @Binding borrows from parent</item>
+  <item key="view model iOS 17+">@Observable final class + @State in view</item>
+  <item key="view model iOS 14-16">ObservableObject + @Published + @StateObject in view</item>
+  <item key="shared state">@Environment(MyObservable.self) or custom EnvironmentKey</item>
+  <item key="async loading">.task { await vm.load() } — auto-cancels on disappear</item>
+  <item key="navigation">NavigationStack + typed Route enum + .navigationDestination</item>
+  <item key="scrollable lists">LazyVStack / LazyHStack — never plain VStack for unbounded data</item>
+  <item key="type erasure">@ViewBuilder or Group — never AnyView</item>
+  <item key="DI in previews">.environment(\.apiClient, MockAPIClient())</item>
+  <item key="view size">Under 200 lines; private computed subviews past 30 lines</item>
+  <item key="mutation">Only in handlers / .task / .onChange — never in body</item>
+  <item key="testing">XCTest + async throws + protocol mocks injected via init</item>
+</quick-reference>
+
+</knowledge-base>

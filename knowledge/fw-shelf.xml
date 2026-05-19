@@ -1,0 +1,383 @@
+<knowledge-base name="fw-shelf" version="1.0">
+<triggers>Shelf, shelf, shelf_router, shelf_static, shelf_web_socket, Shelf pipeline, Pipeline, Cascade, Handler, Middleware, shelf_io, addMiddleware, addHandler, Router shelf, dart server, dart backend, dart HTTP, .dart, pubspec.yaml shelf, dart run bin/server.dart, dart compile exe, Dockerfile dart, freezed dart server, json_serializable dart server</triggers>
+<overview>Shelf 1.x guardrails, Pipeline/Router composition, handler patterns, middleware writing rules, request/response handling, error management, and testing. Applies to Dart REST APIs, microservices, and backend services. A Handler is FutureOr&lt;Response&gt; Function(Request) — keep it functional and thin. Business logic lives in services, not handlers or middleware.</overview>
+
+<core-principles>
+  <principle name="Middleware Composition">Everything flows through Pipeline. Compose handlers with addMiddleware then addHandler. Middleware order is outermost-first.</principle>
+  <principle name="Handler Simplicity">Handlers receive a Request and return a Response. Parse, delegate to service, serialize, return. No business logic inside handlers.</principle>
+  <principle name="Immutable Requests">Use request.change(context: {...}) to pass data downstream between middleware and handlers. Never use mutable globals.</principle>
+  <principle name="Cascade for Fallback">Use Cascade to try handlers in sequence. Specific routes first (API), then generic fallback (static files).</principle>
+  <principle name="Separation of Concerns">Handlers call services. Services call repositories. No database queries or business rules in middleware or handlers directly.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="SHF-001" severity="BLOCKER">
+    <rule>Never let unhandled exceptions propagate to shelf_io.serve. Always wrap the router in error-handling middleware that catches all exceptions and returns structured JSON.</rule>
+    <bad><![CDATA[// Without error middleware — any uncaught exception crashes the response
+final handler = const Pipeline().addHandler(router.call);]]></bad>
+    <good><![CDATA[final handler = const Pipeline()
+    .addMiddleware(loggingMiddleware())
+    .addMiddleware(corsMiddleware())
+    .addMiddleware(handleErrors())
+    .addHandler(router.call);]]></good>
+  </guardrail>
+
+  <guardrail id="SHF-002" severity="BLOCKER">
+    <rule>Never call request.readAsString() more than once — the body is a stream and is consumed on the first read. Read once, store the result.</rule>
+    <bad><![CDATA[final body1 = await request.readAsString();
+final body2 = await request.readAsString(); // empty — stream already consumed]]></bad>
+    <good><![CDATA[final body = await request.readAsString();
+final json = jsonDecode(body) as Map<String, dynamic>;]]></good>
+  </guardrail>
+
+  <guardrail id="SHF-003" severity="BLOCKER">
+    <rule>Always load secrets from Platform.environment via a Config class. Never hardcode connection strings, JWT secrets, or API keys.</rule>
+    <good><![CDATA[class Config {
+  final String jwtSecret;
+  final String dbUrl;
+  final int port;
+
+  const Config({required this.jwtSecret, required this.dbUrl, required this.port});
+
+  factory Config.fromEnvironment() {
+    return Config(
+      jwtSecret: Platform.environment['JWT_SECRET'] ??
+          (throw StateError('JWT_SECRET is required')),
+      dbUrl:     Platform.environment['DATABASE_URL'] ??
+          (throw StateError('DATABASE_URL is required')),
+      port:      int.parse(Platform.environment['PORT'] ?? '8080'),
+    );
+  }
+}]]></good>
+  </guardrail>
+
+  <guardrail id="SHF-004" severity="BLOCKER">
+    <rule>Set Content-Type: application/json on every response that has a JSON body. Missing Content-Type causes clients to misparse the response.</rule>
+    <good><![CDATA[return Response.ok(
+  jsonEncode(data),
+  headers: {'Content-Type': 'application/json'},
+);]]></good>
+  </guardrail>
+
+  <guardrail id="SHF-005" severity="HIGH">
+    <rule>Keep handler methods under 20 lines. Delegate all business logic to services. A handler that does more than: parse, delegate, serialize is too fat.</rule>
+  </guardrail>
+
+  <guardrail id="SHF-006" severity="HIGH">
+    <rule>Use typed custom exceptions (NotFoundException, ValidationException, UnauthorizedException). Never throw Exception('message') — untyped exceptions cannot be caught specifically.</rule>
+  </guardrail>
+
+  <guardrail id="SHF-007" severity="HIGH">
+    <rule>Use request.change(context: {...request.context, 'key': value}) to pass auth users and other data from middleware to handlers. Never use global variables for request-scoped data.</rule>
+  </guardrail>
+
+  <guardrail id="SHF-008" severity="HIGH">
+    <rule>Wire graceful shutdown via ProcessSignal.sigint.watch(). Call app.close() before server.close() to release database connections cleanly.</rule>
+  </guardrail>
+
+  <guardrail id="SHF-009" severity="MEDIUM">
+    <rule>Parse query parameters defensively with int.tryParse and a fallback default. Never assume query parameters are present or correctly typed.</rule>
+    <good><![CDATA[final page  = int.tryParse(request.url.queryParameters['page']  ?? '1')  ?? 1;
+final limit = int.tryParse(request.url.queryParameters['limit'] ?? '20') ?? 20;]]></good>
+  </guardrail>
+
+  <guardrail id="SHF-010" severity="MEDIUM">
+    <rule>Compile to native executable for production deployments. Never run dart run in production — it starts the VM with the Dart SDK overhead.</rule>
+    <good><![CDATA[dart compile exe bin/server.dart -o server]]></good>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[myapp/
+├── bin/
+│   └── server.dart               # Entry: config, serve, shutdown (under 25 lines)
+├── lib/
+│   ├── src/
+│   │   ├── app.dart              # Pipeline + Router assembly
+│   │   ├── config/
+│   │   │   └── config.dart       # Config.fromEnvironment()
+│   │   ├── handlers/
+│   │   │   ├── health_handler.dart
+│   │   │   └── users_handler.dart
+│   │   ├── middleware/
+│   │   │   ├── auth_middleware.dart
+│   │   │   ├── cors_middleware.dart
+│   │   │   ├── logging_middleware.dart
+│   │   │   └── error_middleware.dart
+│   │   ├── models/
+│   │   │   └── user.dart         # freezed + json_serializable
+│   │   ├── repositories/
+│   │   │   └── user_repository.dart
+│   │   └── services/
+│   │       └── user_service.dart
+│   └── myapp.dart                # Barrel export
+├── test/
+│   ├── handlers/
+│   │   └── users_handler_test.dart
+│   └── middleware/
+│       └── auth_middleware_test.dart
+├── pubspec.yaml
+├── analysis_options.yaml
+└── Dockerfile]]></example>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Entry Point">
+    <example><![CDATA[// bin/server.dart
+import 'dart:io';
+import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'package:myapp/myapp.dart';
+
+Future<void> main() async {
+  final config  = Config.fromEnvironment();
+  final app     = Application(config);
+  final handler = await app.createHandler();
+
+  final server = await shelf_io.serve(
+    handler,
+    InternetAddress.anyIPv4,
+    config.port,
+  );
+
+  print('Server running on http://${server.address.host}:${server.port}');
+
+  ProcessSignal.sigint.watch().listen((_) async {
+    await app.close();
+    await server.close();
+    exit(0);
+  });
+}]]></example>
+  </pattern>
+
+  <pattern name="Application (Pipeline + Router)">
+    <example><![CDATA[// lib/src/app.dart
+class Application {
+  final Config config;
+  late final UserRepository _userRepository;
+  late final UserService _userService;
+
+  Application(this.config);
+
+  Future<Handler> createHandler() async {
+    _userRepository = UserRepository(config.dbUrl);
+    _userService    = UserService(_userRepository, config);
+
+    final healthHandler = HealthHandler();
+    final usersHandler  = UsersHandler(_userService);
+
+    final router = Router()
+      ..mount('/health',       healthHandler.router.call)
+      ..mount('/api/v1/users', usersHandler.router.call);
+
+    return const Pipeline()
+        .addMiddleware(loggingMiddleware())
+        .addMiddleware(corsMiddleware())
+        .addMiddleware(handleErrors())
+        .addHandler(router.call);
+  }
+
+  Future<void> close() async {
+    await _userRepository.close();
+  }
+}]]></example>
+  </pattern>
+
+  <pattern name="Resource Handler">
+    <example><![CDATA[// lib/src/handlers/users_handler.dart
+class UsersHandler {
+  final UserService _userService;
+  UsersHandler(this._userService);
+
+  Router get router {
+    final r = Router();
+    r.post('/register', _register);
+    r.post('/login',    _login);
+    r.get('/',          _withAuth(_getAll));
+    r.get('/<id>',      _withAuth(_getById));
+    r.put('/<id>',      _withAuth(_update));
+    r.delete('/<id>',   _withAuth(_delete));
+    return r;
+  }
+
+  Handler _withAuth(Handler handler) =>
+      const Pipeline().addMiddleware(authMiddleware()).addHandler(handler);
+
+  Future<Response> _register(Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final user = await _userService.register(
+      email:    body['email'] as String,
+      password: body['password'] as String,
+      name:     body['name'] as String,
+    );
+    return Response(201,
+        body: jsonEncode(user.toJson()),
+        headers: {'Content-Type': 'application/json'});
+  }
+
+  Future<Response> _getAll(Request request) async {
+    final page  = int.tryParse(request.url.queryParameters['page']  ?? '1') ?? 1;
+    final limit = int.tryParse(request.url.queryParameters['limit'] ?? '20') ?? 20;
+    final users = await _userService.getAll(page: page, limit: limit);
+    return Response.ok(
+      jsonEncode({'users': users.map((u) => u.toJson()).toList(),
+                  'meta':  {'page': page, 'limit': limit}}),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Future<Response> _getById(Request request, String id) async {
+    final user = await _userService.getById(id);
+    return Response.ok(jsonEncode(user.toJson()),
+        headers: {'Content-Type': 'application/json'});
+  }
+
+  Future<Response> _delete(Request request, String id) async {
+    await _userService.delete(id);
+    return Response(204);
+  }
+}]]></example>
+  </pattern>
+
+  <pattern name="Middleware Writing">
+    <example><![CDATA[// Logging middleware
+Middleware loggingMiddleware() {
+  return (Handler inner) {
+    return (Request request) async {
+      final sw = Stopwatch()..start();
+      final response = await inner(request);
+      print('[${DateTime.now()}] ${request.method} '
+            '${request.requestedUri} ${response.statusCode} '
+            '${sw.elapsedMilliseconds}ms');
+      return response;
+    };
+  };
+}
+
+// Error-handling middleware
+Middleware handleErrors() {
+  return (Handler inner) {
+    return (Request request) async {
+      try {
+        return await inner(request);
+      } on NotFoundException catch (e) {
+        return _jsonError(404, e.message);
+      } on ValidationException catch (e) {
+        return _jsonError(422, e.message, errors: e.errors);
+      } on UnauthorizedException {
+        return _jsonError(401, 'Unauthorized');
+      } catch (e, stack) {
+        print('Unhandled: $e\n$stack');
+        return _jsonError(500, 'Internal server error');
+      }
+    };
+  };
+}
+
+Response _jsonError(int status, String message,
+    {Map<String, dynamic>? errors}) {
+  return Response(
+    status,
+    body: jsonEncode({'error': message, if (errors != null) 'errors': errors}),
+    headers: {'Content-Type': 'application/json'},
+  );
+}]]></example>
+  </pattern>
+
+  <pattern name="Custom Exceptions">
+    <example><![CDATA[class UnauthorizedException implements Exception {
+  final String message;
+  UnauthorizedException([this.message = 'Unauthorized']);
+}
+
+class NotFoundException implements Exception {
+  final String message;
+  NotFoundException(this.message);
+}
+
+class ValidationException implements Exception {
+  final String message;
+  final Map<String, List<String>> errors;
+  ValidationException(this.message, [this.errors = const {}]);
+}]]></example>
+  </pattern>
+
+  <pattern name="Handler Unit Test (no HTTP server)">
+    <example><![CDATA[// test/handlers/users_handler_test.dart
+import 'package:shelf/shelf.dart';
+import 'package:test/test.dart';
+import 'package:mocktail/mocktail.dart';
+
+class MockUserService extends Mock implements UserService {}
+
+void main() {
+  late MockUserService mockService;
+  late UsersHandler handler;
+
+  setUp(() {
+    mockService = MockUserService();
+    handler     = UsersHandler(mockService);
+  });
+
+  test('GET / returns 200 with users', () async {
+    when(() => mockService.getAll(page: any(named: 'page'),
+                                  limit: any(named: 'limit')))
+        .thenAnswer((_) async => []);
+
+    final request  = Request('GET', Uri.parse('http://localhost/'));
+    final response = await handler.router.call(request);
+
+    expect(response.statusCode, 200);
+  });
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<commands>
+  <cmd purpose="Start dev server">dart run bin/server.dart</cmd>
+  <cmd purpose="Start with debugger">dart run --enable-vm-service bin/server.dart</cmd>
+  <cmd purpose="Code generation">dart run build_runner build --delete-conflicting-outputs</cmd>
+  <cmd purpose="Codegen watch">dart run build_runner watch</cmd>
+  <cmd purpose="Run all tests">dart test</cmd>
+  <cmd purpose="Run specific directory">dart test test/handlers/</cmd>
+  <cmd purpose="Tests with coverage">dart test --coverage</cmd>
+  <cmd purpose="Format code">dart format .</cmd>
+  <cmd purpose="Static analysis">dart analyze</cmd>
+  <cmd purpose="Auto-fix lint">dart fix --apply</cmd>
+  <cmd purpose="Compile to native binary">dart compile exe bin/server.dart -o server</cmd>
+</commands>
+
+<dependencies>
+  <dep name="shelf" version="^1.4.0" purpose="Core HTTP server primitives"/>
+  <dep name="shelf_router" version="^1.1.0" purpose="Route matching"/>
+  <dep name="shelf_static" version="^1.1.0" purpose="Static file serving"/>
+  <dep name="shelf_web_socket" version="^1.0.0" purpose="WebSocket support"/>
+  <dep name="freezed_annotation" version="^2.4.0" purpose="Immutable models annotation"/>
+  <dep name="json_annotation" version="^4.8.0" purpose="JSON serialization annotation"/>
+  <dep name="dart_jsonwebtoken" version="^2.12.0" purpose="JWT encoding/decoding"/>
+  <dep name="bcrypt" version="^1.1.0" purpose="Password hashing"/>
+  <dep name="test" version="^1.24.0" dev="true" purpose="Test framework"/>
+  <dep name="mocktail" version="^1.0.0" dev="true" purpose="Mocking (no codegen)"/>
+  <dep name="build_runner" version="^2.4.0" dev="true" purpose="Code generation runner"/>
+  <dep name="freezed" version="^2.4.0" dev="true" purpose="Freezed code generator"/>
+  <dep name="json_serializable" version="^6.7.0" dev="true" purpose="JSON codegen"/>
+</dependencies>
+
+<quick-reference>
+  <item key="pipeline order">logging -> CORS -> error handling -> router (outermost runs first)</item>
+  <item key="handler rule">Parse, delegate to service, serialize, return — under 20 lines</item>
+  <item key="body read">readAsString() once only — stream is consumed on first read</item>
+  <item key="pass data downstream">request.change(context: {...request.context, 'key': value})</item>
+  <item key="path parameters">Angle brackets in shelf_router: /<id> — extra String args in handler signature</item>
+  <item key="sub-routers">..mount('/prefix', router.call) — always call .call</item>
+  <item key="cascade">Cascade().add(apiRouter).add(staticHandler) — specific before generic</item>
+  <item key="exceptions">Typed exceptions (NotFoundException, etc.) — map to HTTP codes in error middleware only</item>
+  <item key="content-type">Set Content-Type: application/json on every response with a body</item>
+  <item key="production build">dart compile exe — never dart run in production</item>
+  <item key="testing">Use shelf directly in tests — no HTTP server needed; mock services with mocktail</item>
+</quick-reference>
+
+</knowledge-base>

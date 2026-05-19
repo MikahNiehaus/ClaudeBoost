@@ -1,0 +1,385 @@
+<knowledge-base name="fw-spring-boot-kotlin" version="1.0">
+<triggers>Spring Boot Kotlin, spring-boot kotlin, Spring Kotlin, @SpringBootApplication kotlin, build.gradle.kts spring, kotlinx-coroutines-reactor, suspend spring, data class entity, @field:NotBlank, @field:Email, runApplication, SpringBootApplication, JpaRepository kotlin, @Transactional kotlin, @Valid kotlin, @PreAuthorize kotlin, .kt spring, spring-boot-kotlin, coroutines spring</triggers>
+<overview>Spring Boot 3.x / Kotlin 1.9+ guardrails, patterns, and best practices for enterprise REST APIs and microservices using idiomatic Kotlin. Covers Kotlin data classes as entities and DTOs, constructor injection, @field: annotation targets for validation, null safety in repositories, Kotlin coroutines with Spring WebFlux, @Transactional usage, GlobalExceptionHandler, Spring Security (stateless), and Gradle Kotlin DSL. Loaded automatically when agents work on Spring Boot Kotlin projects.</overview>
+
+<core-principles>
+  <principle name="Kotlin-First Spring">Use Kotlin idioms throughout: data classes for entities/DTOs, constructor injection (default), null safety, extension functions.</principle>
+  <principle name="Layered Architecture">Controller -> Service -> Repository. Controllers return ResponseEntity with explicit status. Services contain transactions and business logic. Repositories are Spring Data interfaces.</principle>
+  <principle name="Null Safety at Boundaries">Repository findBy methods return T? for nullable finds. Use ?. and ?: consistently. Avoid !! without prior null checks.</principle>
+  <principle name="Data Classes for Everything">Use data classes for JPA entities (plugin.jpa auto-generates no-arg constructors), DTOs, and config. Use copy() for updates.</principle>
+  <principle name="No Field Injection">Constructor injection is Kotlin's default. Never use @Autowired or lateinit var for dependencies.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="SBK-001" severity="BLOCKER">
+    <rule>Never use lateinit var for dependencies. Constructor injection is idiomatic and enforced.</rule>
+    <bad><![CDATA[@Autowired
+lateinit var userRepository: UserRepository // BLOCKER]]></bad>
+    <good><![CDATA[@Service
+class UserService(
+    private val userRepository: UserRepository,
+    private val passwordEncoder: PasswordEncoder,
+)]]></good>
+  </guardrail>
+
+  <guardrail id="SBK-002" severity="BLOCKER">
+    <rule>Never expose JPA entities in controller responses. Always return DTOs from the service layer.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-003" severity="BLOCKER">
+    <rule>Use @field: annotation target prefix for validation annotations on data class properties.</rule>
+    <bad><![CDATA[data class CreateUserRequest(
+    @NotBlank val email: String // targets constructor param, not field — validation skipped
+)]]></bad>
+    <good><![CDATA[data class CreateUserRequest(
+    @field:NotBlank(message = "Email is required")
+    @field:Email(message = "Invalid email format")
+    val email: String,
+)]]></good>
+  </guardrail>
+
+  <guardrail id="SBK-004" severity="BLOCKER">
+    <rule>Never use ddl-auto=update in production. Use Flyway or Liquibase migrations.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-005" severity="HIGH">
+    <rule>Use @Transactional for write operations, @Transactional(readOnly = true) for reads.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-006" severity="HIGH">
+    <rule>Use @Valid @RequestBody on all incoming request bodies in controllers.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-007" severity="HIGH">
+    <rule>Never use !! operator without a prior null check or explicit invariant justification.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-008" severity="HIGH">
+    <rule>Never mix reactive and blocking code in the same call chain.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-009" severity="HIGH">
+    <rule>Use Spring profiles (application-{profile}.yml) for all environment-specific configuration. Never hardcode secrets.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-010" severity="MEDIUM">
+    <rule>Use @ConfigurationProperties data classes for type-safe configuration. Annotate the main class or a @Configuration class with @EnableConfigurationProperties.</rule>
+  </guardrail>
+
+  <guardrail id="SBK-011" severity="MEDIUM">
+    <rule>Use the open modifier (or plugin.spring) on @Component, @Service, @Controller classes. Kotlin classes are final by default; Spring needs to proxy them.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure><![CDATA[
+myproject/
+├── build.gradle.kts
+├── settings.gradle.kts
+├── src/
+│   ├── main/
+│   │   ├── kotlin/com/example/myproject/
+│   │   │   ├── MyProjectApplication.kt
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.kt
+│   │   │   │   ├── WebConfig.kt
+│   │   │   │   └── JwtProperties.kt
+│   │   │   ├── controller/
+│   │   │   │   └── UserController.kt
+│   │   │   ├── service/
+│   │   │   │   └── UserService.kt
+│   │   │   ├── repository/
+│   │   │   │   └── UserRepository.kt
+│   │   │   ├── model/
+│   │   │   │   ├── entity/User.kt
+│   │   │   │   └── dto/UserDto.kt
+│   │   │   ├── exception/
+│   │   │   │   ├── GlobalExceptionHandler.kt
+│   │   │   │   └── Exceptions.kt
+│   │   │   └── security/
+│   │   │       ├── JwtService.kt
+│   │   │       ├── JwtAuthenticationFilter.kt
+│   │   │       └── CurrentUser.kt
+│   │   └── resources/
+│   │       ├── application.yml
+│   │       ├── application-dev.yml
+│   │       └── db/migration/
+│   └── test/kotlin/com/example/myproject/
+│       ├── controller/
+│       ├── service/
+│       └── integration/
+]]></project-structure>
+
+<patterns>
+
+  <pattern name="Application Entry Point">
+    <example><![CDATA[@SpringBootApplication
+class MyProjectApplication
+
+fun main(args: Array<String>) {
+    runApplication<MyProjectApplication>(*args)
+}]]></example>
+  </pattern>
+
+  <pattern name="Type-Safe Configuration">
+    <example><![CDATA[@ConfigurationProperties(prefix = "jwt")
+data class JwtProperties(
+    val secret: String,
+    val expiration: Long,
+)
+
+# application.yml
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-here}
+  expiration: 86400000]]></example>
+  </pattern>
+
+  <pattern name="Entity with Data Class">
+    <example><![CDATA[@Entity
+@Table(name = "users")
+data class User(
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    val id: UUID? = null,
+
+    @Column(unique = true, nullable = false)
+    val email: String,
+
+    @Column(nullable = false)
+    val passwordHash: String,
+
+    @Column(nullable = false)
+    val name: String,
+
+    @Column(nullable = false)
+    val role: String = "USER",
+
+    @CreationTimestamp @Column(updatable = false)
+    val createdAt: Instant? = null,
+
+    @UpdateTimestamp
+    val updatedAt: Instant? = null,
+)]]></example>
+  </pattern>
+
+  <pattern name="DTO with Validation">
+    <example><![CDATA[data class CreateUserRequest(
+    @field:NotBlank(message = "Email is required")
+    @field:Email(message = "Invalid email format")
+    val email: String,
+
+    @field:NotBlank(message = "Password is required")
+    @field:Size(min = 8, message = "Password must be at least 8 characters")
+    val password: String,
+
+    @field:NotBlank(message = "Name is required")
+    @field:Size(min = 1, max = 100)
+    val name: String,
+)
+
+data class UserResponse(
+    val id: UUID,
+    val email: String,
+    val name: String,
+    val role: String,
+    val createdAt: Instant,
+) {
+    companion object {
+        fun from(user: User): UserResponse = UserResponse(
+            id = user.id!!,
+            email = user.email,
+            name = user.name,
+            role = user.role,
+            createdAt = user.createdAt!!,
+        )
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Repository">
+    <example><![CDATA[@Repository
+interface UserRepository : JpaRepository<User, UUID> {
+    fun findByEmail(email: String): User?
+    fun existsByEmail(email: String): Boolean
+}]]></example>
+  </pattern>
+
+  <pattern name="Service">
+    <example><![CDATA[@Service
+class UserService(
+    private val userRepository: UserRepository,
+    private val passwordEncoder: PasswordEncoder,
+) {
+    @Transactional
+    fun createUser(request: CreateUserRequest): UserResponse {
+        if (userRepository.existsByEmail(request.email)) {
+            throw ConflictException("Email already registered")
+        }
+        val user = User(
+            email = request.email,
+            passwordHash = passwordEncoder.encode(request.password),
+            name = request.name,
+        )
+        return UserResponse.from(userRepository.save(user))
+    }
+
+    @Transactional(readOnly = true)
+    fun getUserById(id: UUID): UserResponse {
+        val user = userRepository.findById(id)
+            .orElseThrow { NotFoundException("User not found: $id") }
+        return UserResponse.from(user)
+    }
+
+    @Transactional
+    fun updateUser(id: UUID, request: UpdateUserRequest): UserResponse {
+        val user = userRepository.findById(id)
+            .orElseThrow { NotFoundException("User not found: $id") }
+        val updated = user.copy(
+            name = request.name ?: user.name,
+            email = request.email ?: user.email,
+        )
+        return UserResponse.from(userRepository.save(updated))
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Controller">
+    <example><![CDATA[@RestController
+@RequestMapping("/api")
+class UserController(
+    private val userService: UserService,
+) {
+    @PostMapping("/register")
+    fun register(@Valid @RequestBody request: CreateUserRequest): ResponseEntity<UserResponse> {
+        val user = userService.createUser(request)
+        return ResponseEntity.status(HttpStatus.CREATED).body(user)
+    }
+
+    @GetMapping("/users/{id}")
+    @PreAuthorize("hasRole('ADMIN') or @userSecurity.isOwner(#id, authentication)")
+    fun getUser(@PathVariable id: UUID): ResponseEntity<UserResponse> =
+        ResponseEntity.ok(userService.getUserById(id))
+
+    @GetMapping("/users")
+    @PreAuthorize("hasRole('ADMIN')")
+    fun getAllUsers(
+        @PageableDefault(size = 20) pageable: Pageable,
+    ): ResponseEntity<Page<UserResponse>> =
+        ResponseEntity.ok(userService.getAllUsers(pageable))
+}]]></example>
+  </pattern>
+
+  <pattern name="Exception Handling">
+    <example><![CDATA[class NotFoundException(message: String) : RuntimeException(message)
+class UnauthorizedException(message: String) : RuntimeException(message)
+class ConflictException(message: String) : RuntimeException(message)
+
+data class ErrorResponse(
+    val timestamp: Instant = Instant.now(),
+    val status: Int,
+    val error: String,
+    val message: String,
+    val details: List<String>? = null,
+)
+
+@RestControllerAdvice
+class GlobalExceptionHandler {
+    @ExceptionHandler(NotFoundException::class)
+    fun handleNotFound(ex: NotFoundException) = ResponseEntity
+        .status(HttpStatus.NOT_FOUND)
+        .body(ErrorResponse(status = 404, error = "NOT_FOUND", message = ex.message ?: "Not found"))
+
+    @ExceptionHandler(MethodArgumentNotValidException::class)
+    fun handleValidation(ex: MethodArgumentNotValidException): ResponseEntity<ErrorResponse> {
+        val details = ex.bindingResult.fieldErrors.map { "${it.field}: ${it.defaultMessage}" }
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(ErrorResponse(status = 400, error = "VALIDATION_ERROR",
+                message = "Validation failed", details = details))
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Security Configuration">
+    <example><![CDATA[@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+class SecurityConfig(
+    private val jwtAuthenticationFilter: JwtAuthenticationFilter,
+) {
+    @Bean
+    fun securityFilterChain(http: HttpSecurity): SecurityFilterChain = http
+        .csrf { it.disable() }
+        .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
+        .authorizeHttpRequests { auth ->
+            auth
+                .requestMatchers("/api/register", "/api/login").permitAll()
+                .requestMatchers("/health/**", "/actuator/**").permitAll()
+                .anyRequest().authenticated()
+        }
+        .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter::class.java)
+        .build()
+
+    @Bean
+    fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder(12)
+}]]></example>
+  </pattern>
+
+  <pattern name="Coroutines Integration">
+    <description>Add coroutines-reactor dependency; suspend controller functions are handled by Spring WebFlux automatically.</description>
+    <example><![CDATA[// build.gradle.kts
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
+
+// Controller with suspend function
+@GetMapping("/users/{id}")
+suspend fun getUser(@PathVariable id: UUID): ResponseEntity<UserResponse> {
+    val user = userService.getUserById(id)
+    return ResponseEntity.ok(user)
+}]]></example>
+  </pattern>
+
+  <pattern name="Custom Annotation for Current User">
+    <example><![CDATA[@Target(AnnotationTarget.VALUE_PARAMETER)
+@Retention(AnnotationRetention.RUNTIME)
+@AuthenticationPrincipal
+annotation class CurrentUser]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands><![CDATA[
+./gradlew bootRun
+./gradlew build
+./gradlew test
+./gradlew test jacocoTestReport
+./gradlew ktlintFormat
+./gradlew ktlintCheck
+./gradlew bootJar
+java -jar build/libs/myproject-0.0.1-SNAPSHOT.jar
+docker build -t myproject .
+  ]]></commands>
+</tooling>
+
+<quick-reference>
+  <item key="entry point">@SpringBootApplication class + fun main { runApplication&lt;&gt;(*args) }</item>
+  <item key="injection">Constructor injection (Kotlin default); no @Autowired, no lateinit var</item>
+  <item key="validation">@field:NotBlank, @field:Email — prefix required on data class properties</item>
+  <item key="entities">data class with plugin.jpa; use copy() for updates; nullable val id = null</item>
+  <item key="transactions">@Transactional on writes; @Transactional(readOnly=true) on reads</item>
+  <item key="null safety">repository returns T?; use ?. and ?: operators; avoid !!</item>
+  <item key="config">@ConfigurationProperties data class; ${ENV_VAR:default} syntax</item>
+  <item key="coroutines">suspend functions + kotlinx-coroutines-reactor; never mix reactive and blocking</item>
+  <item key="security">SessionCreationPolicy.STATELESS; BCryptPasswordEncoder(12); @EnableMethodSecurity</item>
+  <item key="exceptions">Sealed or separate exception classes; @RestControllerAdvice handler</item>
+</quick-reference>
+
+<external-references>
+  <ref name="Spring Boot Documentation" url="https://docs.spring.io/spring-boot/docs/current/reference/html/"/>
+  <ref name="Spring Kotlin Support" url="https://docs.spring.io/spring-framework/reference/languages/kotlin.html"/>
+  <ref name="Spring Security" url="https://docs.spring.io/spring-security/reference/index.html"/>
+  <ref name="Kotlin + Spring Boot Guide" url="https://spring.io/guides/tutorials/spring-boot-kotlin/"/>
+</external-references>
+
+</knowledge-base>

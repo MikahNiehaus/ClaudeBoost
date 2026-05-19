@@ -1,0 +1,392 @@
+<knowledge-base name="fw-symfony" version="1.0">
+<triggers>Symfony, symfony, Doctrine, doctrine, Twig, twig, Messenger, messenger, symfony/framework-bundle, symfony/console, symfony/security-bundle, AbstractController, RouteCollection, #[Route], #[IsGranted], #[MapRequestPayload], #[AsCommand], #[AsMessageHandler], ServiceEntityRepository, bin/console, .php (Symfony), symfony.lock, config/packages, config/services.yaml, ORM\Entity, ORM\Column, ORM\ManyToOne, PHP 8 attributes Symfony</triggers>
+<overview>Symfony 7+ guardrails, patterns, and best practices. Covers Doctrine ORM entities and repositories, Twig templates, constructor injection services, Messenger async handlers, security Voters, Form types, CLI commands, DTOs, and migrations. Applies to PHP 8.2+ Symfony projects including REST APIs, web apps, and microservices.</overview>
+
+<core-principles>
+  <principle name="Dependency Injection">Constructor injection for all services using readonly promoted properties. Never use service locators or the container directly in business code.</principle>
+  <principle name="Thin Controllers">Controllers delegate to services. No business logic, no direct EntityManager calls. Controllers should be under 20 lines per action.</principle>
+  <principle name="DTOs at Boundaries">Never expose Doctrine entities directly to API consumers. Use DTOs for request input and response output. Serialization groups control response shape.</principle>
+  <principle name="PHP 8 Attributes">Use attributes (not YAML/XML annotations) for routing, Doctrine mapping, validation, and command configuration.</principle>
+  <principle name="Events for Decoupling">Use EventDispatcher and Messenger for side effects. Core logic should not know about emails, cache invalidation, or notifications.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="S-001" severity="BLOCKER">
+    <rule>All files start with declare(strict_types=1). Enforce PSR-12 with php-cs-fixer before every commit.</rule>
+  </guardrail>
+
+  <guardrail id="S-002" severity="BLOCKER">
+    <rule>Never put business logic in controllers. One action per method, under 20 lines. Inject services; never inject EntityManagerInterface directly into controllers.</rule>
+    <bad><![CDATA[public function create(Request $request, EntityManagerInterface $em): JsonResponse
+{
+    $user = new User();
+    $user->setEmail($request->request->get('email'));
+    $em->persist($user); $em->flush();
+    // complex business logic here...
+}]]></bad>
+    <good><![CDATA[public function create(#[MapRequestPayload] CreateUserDto $dto): JsonResponse
+{
+    return $this->json($this->userService->create($dto), Response::HTTP_CREATED, [], ['groups' => 'user:read']);
+}]]></good>
+  </guardrail>
+
+  <guardrail id="S-003" severity="BLOCKER">
+    <rule>Use DateTimeImmutable for all date columns in Doctrine entities. Never use mutable DateTime.</rule>
+    <bad><![CDATA[#[ORM\Column(type: Types::DATETIME_MUTABLE)]
+private \DateTime $createdAt;]]></bad>
+    <good><![CDATA[#[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+private \DateTimeImmutable $createdAt;]]></good>
+  </guardrail>
+
+  <guardrail id="S-004" severity="BLOCKER">
+    <rule>Initialize Doctrine collections in the entity constructor. Never leave OneToMany/ManyToMany uninitialized.</rule>
+    <good><![CDATA[public function __construct()
+{
+    $this->items = new ArrayCollection();
+    $this->createdAt = new \DateTimeImmutable();
+}]]></good>
+  </guardrail>
+
+  <guardrail id="S-005" severity="HIGH">
+    <rule>Do not flush EntityManager inside loops. Batch all persist calls and flush once after the loop.</rule>
+    <bad><![CDATA[foreach ($users as $user) { $em->persist($user); $em->flush(); }]]></bad>
+    <good><![CDATA[foreach ($users as $user) { $em->persist($user); }
+$em->flush();]]></good>
+  </guardrail>
+
+  <guardrail id="S-006" severity="HIGH">
+    <rule>Use #[IsGranted] attribute on controller actions for authorization. Use Voters for object-level authorization — never role-string checks for fine-grained logic.</rule>
+  </guardrail>
+
+  <guardrail id="S-007" severity="HIGH">
+    <rule>Always review generated migrations before running. Every migration must have a working down() method. Never edit migrations applied to production.</rule>
+  </guardrail>
+
+  <guardrail id="S-008" severity="HIGH">
+    <rule>Use stateless: true firewall for APIs. Use lexik/jwt-authentication-bundle for JWT. Never store plain-text passwords — always use UserPasswordHasherInterface.</rule>
+  </guardrail>
+
+  <guardrail id="S-009" severity="HIGH">
+    <rule>Run php bin/console doctrine:schema:validate in CI to catch mapping drift before deployment.</rule>
+  </guardrail>
+
+  <guardrail id="S-010" severity="MEDIUM">
+    <rule>Rely on autowiring and autoconfigure. Only add explicit service definitions when autowiring cannot resolve. Use #[Autowire] attribute for non-standard parameters.</rule>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <example><![CDATA[myapp/
+├── bin/console
+├── config/
+│   ├── packages/            # Per-package YAML config (doctrine.yaml, security.yaml, messenger.yaml)
+│   ├── routes/
+│   ├── routes.yaml
+│   ├── services.yaml        # Autowiring defaults
+│   └── bundles.php
+├── migrations/              # Doctrine migrations (never edit after deploy)
+├── public/index.php         # Single entry point
+├── src/
+│   ├── Controller/          # Thin HTTP controllers
+│   ├── Dto/                 # Request/response DTOs
+│   ├── Entity/              # Doctrine entities
+│   ├── Repository/          # Doctrine repositories
+│   ├── Service/             # Business logic
+│   ├── EventSubscriber/     # Event subscribers
+│   ├── Message/             # Messenger messages
+│   ├── MessageHandler/      # Messenger handlers
+│   ├── Command/             # Console commands
+│   ├── Form/                # Symfony Form types
+│   ├── Security/            # Voters, authenticators
+│   └── Kernel.php
+├── templates/               # Twig templates
+├── tests/
+│   ├── Controller/          # Functional controller tests
+│   └── Service/             # Unit service tests
+├── .env                     # Default env vars (committed)
+├── .env.local               # Local overrides (gitignored)
+├── composer.json
+└── symfony.lock]]></example>
+</project-structure>
+
+<patterns>
+
+  <pattern name="API Controller with DTO">
+    <description>Thin controller using #[Route], #[IsGranted], #[MapRequestPayload], and serialization groups.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Controller;
+
+use App\Dto\CreateUserDto;
+use App\Service\UserService;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
+use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
+
+#[Route('/api/v1/users')]
+class UserController extends AbstractController
+{
+    public function __construct(
+        private readonly UserService $userService,
+    ) {}
+
+    #[Route('', methods: ['GET'])]
+    public function index(Request $request): JsonResponse
+    {
+        $page  = $request->query->getInt('page', 1);
+        $limit = $request->query->getInt('limit', 15);
+
+        return $this->json(
+            $this->userService->getPaginated($page, $limit),
+            Response::HTTP_OK,
+            [],
+            ['groups' => 'user:read'],
+        );
+    }
+
+    #[Route('', methods: ['POST'])]
+    #[IsGranted('ROLE_ADMIN')]
+    public function create(#[MapRequestPayload] CreateUserDto $dto): JsonResponse
+    {
+        return $this->json(
+            $this->userService->create($dto),
+            Response::HTTP_CREATED,
+            [],
+            ['groups' => 'user:read'],
+        );
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Doctrine Entity">
+    <description>Entity with PHP 8 attributes, DateTimeImmutable, unique constraint, and validation.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Entity;
+
+use App\Repository\UserRepository;
+use Doctrine\DBAL\Types\Types;
+use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Validator\Constraints as Assert;
+
+#[ORM\Entity(repositoryClass: UserRepository::class)]
+#[ORM\Table(name: 'users')]
+class User
+{
+    #[ORM\Id]
+    #[ORM\GeneratedValue]
+    #[ORM\Column]
+    private ?int $id = null;
+
+    #[ORM\Column(length: 180, unique: true)]
+    #[Assert\NotBlank]
+    #[Assert\Email]
+    private string $email;
+
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+    private \DateTimeImmutable $createdAt;
+
+    public function __construct()
+    {
+        $this->createdAt = new \DateTimeImmutable();
+    }
+
+    public function getId(): ?int { return $this->id; }
+
+    public function getEmail(): string { return $this->email; }
+
+    public function setEmail(string $email): static
+    {
+        $this->email = strtolower($email);
+        return $this;
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Repository">
+    <description>Typed ServiceEntityRepository with query builder methods.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Repository;
+
+use App\Entity\User;
+use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\Persistence\ManagerRegistry;
+
+/** @extends ServiceEntityRepository<User> */
+class UserRepository extends ServiceEntityRepository
+{
+    public function __construct(ManagerRegistry $registry)
+    {
+        parent::__construct($registry, User::class);
+    }
+
+    public function findOneByEmail(string $email): ?User
+    {
+        return $this->createQueryBuilder('u')
+            ->andWhere('u.email = :email')
+            ->setParameter('email', strtolower($email))
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Service with EventDispatcher">
+    <description>Service layer with readonly DI, password hashing, and event dispatch.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Service;
+
+use App\Dto\CreateUserDto;
+use App\Entity\User;
+use App\Event\UserCreatedEvent;
+use App\Repository\UserRepository;
+use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
+
+class UserService
+{
+    public function __construct(
+        private readonly UserRepository $userRepository,
+        private readonly EntityManagerInterface $entityManager,
+        private readonly UserPasswordHasherInterface $passwordHasher,
+        private readonly EventDispatcherInterface $eventDispatcher,
+    ) {}
+
+    public function create(CreateUserDto $dto): User
+    {
+        $user = new User();
+        $user->setEmail($dto->email);
+        $user->setPassword($this->passwordHasher->hashPassword($user, $dto->password));
+
+        $this->entityManager->persist($user);
+        $this->entityManager->flush();
+
+        $this->eventDispatcher->dispatch(new UserCreatedEvent($user));
+
+        return $user;
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Voter">
+    <description>Object-level authorization using Voter pattern.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Security;
+
+use App\Entity\Post;
+use App\Entity\User;
+use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
+use Symfony\Component\Security\Core\Authorization\Voter\Voter;
+
+class PostVoter extends Voter
+{
+    public const EDIT   = 'POST_EDIT';
+    public const DELETE = 'POST_DELETE';
+
+    protected function supports(string $attribute, mixed $subject): bool
+    {
+        return in_array($attribute, [self::EDIT, self::DELETE], true)
+            && $subject instanceof Post;
+    }
+
+    protected function voteOnAttribute(
+        string $attribute,
+        mixed $subject,
+        TokenInterface $token,
+    ): bool {
+        $user = $token->getUser();
+        if (!$user instanceof User) {
+            return false;
+        }
+        return $subject->getAuthor() === $user || $user->getRole() === 'admin';
+    }
+}]]></example>
+  </pattern>
+
+  <pattern name="Console Command">
+    <description>Symfony console command using #[AsCommand] attribute and SymfonyStyle output.</description>
+    <example><![CDATA[<?php
+
+declare(strict_types=1);
+
+namespace App\Command;
+
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
+
+#[AsCommand(name: 'app:import-users', description: 'Import users from CSV')]
+class ImportUsersCommand extends Command
+{
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        $io = new SymfonyStyle($input, $output);
+        // implementation here
+        $io->success('Import complete.');
+        return Command::SUCCESS;
+    }
+}]]></example>
+  </pattern>
+
+</patterns>
+
+<tooling>
+  <commands>
+    <cmd purpose="Local dev server">symfony serve</cmd>
+    <cmd purpose="Clear cache">php bin/console cache:clear</cmd>
+    <cmd purpose="List routes">php bin/console debug:router</cmd>
+    <cmd purpose="List services">php bin/console debug:container</cmd>
+    <cmd purpose="Generate entity">php bin/console make:entity User</cmd>
+    <cmd purpose="Generate controller">php bin/console make:controller UserController</cmd>
+    <cmd purpose="Generate migration">php bin/console make:migration</cmd>
+    <cmd purpose="Apply migrations">php bin/console doctrine:migrations:migrate</cmd>
+    <cmd purpose="Validate schema">php bin/console doctrine:schema:validate</cmd>
+    <cmd purpose="Load fixtures">php bin/console doctrine:fixtures:load</cmd>
+    <cmd purpose="Generate voter">php bin/console make:voter PostVoter</cmd>
+    <cmd purpose="Generate message">php bin/console make:message SendWelcomeEmail</cmd>
+    <cmd purpose="Consume async messages">php bin/console messenger:consume async</cmd>
+    <cmd purpose="Run tests">php bin/phpunit</cmd>
+    <cmd purpose="Static analysis">vendor/bin/phpstan analyse src</cmd>
+    <cmd purpose="Fix code style">vendor/bin/php-cs-fixer fix</cmd>
+    <cmd purpose="Production install">composer install --no-dev --optimize-autoloader</cmd>
+  </commands>
+</tooling>
+
+<quick-reference>
+  <item key="strict types">declare(strict_types=1) in every file</item>
+  <item key="DI">Constructor injection with readonly promoted properties</item>
+  <item key="routing">PHP 8 #[Route] attribute on class and method</item>
+  <item key="validation">#[MapRequestPayload] auto-deserializes and validates DTOs</item>
+  <item key="auth">#[IsGranted] on actions; Voters for object-level checks</item>
+  <item key="dates">DateTimeImmutable always — never mutable DateTime</item>
+  <item key="collections">Initialize ArrayCollection in constructor</item>
+  <item key="flush">Never flush inside loops — batch and flush once</item>
+  <item key="response shape">Serialization groups control JSON output — never expose raw entity</item>
+  <item key="async">Messenger + #[AsMessageHandler] for emails and heavy work</item>
+  <item key="commands">#[AsCommand] attribute; return Command::SUCCESS/FAILURE/INVALID</item>
+  <item key="CI">doctrine:schema:validate in every CI pipeline</item>
+</quick-reference>
+
+</knowledge-base>

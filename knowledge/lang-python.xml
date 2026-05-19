@@ -1,0 +1,432 @@
+<knowledge-base name="lang-python" version="1.0">
+<triggers>Python, .py, pyproject.toml, requirements.txt, pytest, ruff, mypy, uv, poetry, FastAPI, Django, Flask, Pydantic, SQLAlchemy, asyncio, venv</triggers>
+<overview>Language-specific idioms, guardrails, and patterns for Python. Loaded automatically when agents work on .py files or pyproject.toml. Applies to Python 3.11+, APIs, CLIs, data pipelines, and automation.</overview>
+
+<core-principles>
+  <principle name="Type Hints Everywhere">All function signatures, class attributes, and module-level variables must have type annotations.</principle>
+  <principle name="Explicit Over Implicit">No `*` imports, no mutable default arguments, no implicit type coercions.</principle>
+  <principle name="Virtual Environments Always">Never install into system Python. Use `venv`, `uv`, or `poetry` for every project.</principle>
+  <principle name="Pytest Over unittest">Use pytest for all testing. Fixtures and `parametrize` over `setUp`/`tearDown`.</principle>
+  <principle name="PEP 8 + Ruff">Enforce style mechanically. Never rely on manual formatting.</principle>
+</core-principles>
+
+<guardrails>
+
+  <guardrail id="G-001" severity="BLOCKER">
+    <rule>Never use bare `except:` or `except Exception:` without re-raising. Always catch specific exceptions.</rule>
+    <bad><![CDATA[try:
+    result = risky_operation()
+except:                         # catches KeyboardInterrupt, SystemExit, etc.
+    pass                        # silently swallows all errors]]></bad>
+    <good><![CDATA[try:
+    result = risky_operation()
+except ValueError as err:
+    raise AppError("Invalid input") from err]]></good>
+  </guardrail>
+
+  <guardrail id="G-002" severity="BLOCKER">
+    <rule>Never use mutable default arguments. They are shared across all calls and cause subtle bugs.</rule>
+    <bad><![CDATA[def append_item(item: str, items: list[str] = []) -> list[str]:
+    items.append(item)
+    return items  # same list reused on every call!]]></bad>
+    <good><![CDATA[def append_item(item: str, items: list[str] | None = None) -> list[str]:
+    if items is None:
+        items = []
+    items.append(item)
+    return items]]></good>
+  </guardrail>
+
+  <guardrail id="G-003" severity="BLOCKER">
+    <rule>Never use star imports (`from module import *`). They pollute the namespace and break static analysis.</rule>
+    <bad><![CDATA[from os.path import *
+from mymodule import *]]></bad>
+    <good><![CDATA[from os.path import join, exists, dirname
+from mymodule import UserService, UserRepository]]></good>
+  </guardrail>
+
+  <guardrail id="G-004" severity="BLOCKER">
+    <rule>All public functions must have full type annotations: parameters AND return type.</rule>
+    <bad><![CDATA[def find_users(ids, active_only=True):
+    ...]]></bad>
+    <good><![CDATA[from collections.abc import Sequence
+
+def find_users(
+    ids: Sequence[str],
+    *,
+    active_only: bool = True,
+) -> list[User]:
+    """Fetch users by ID list, optionally filtering inactive."""
+    ...]]></good>
+  </guardrail>
+
+  <guardrail id="G-005" severity="BLOCKER">
+    <rule>Use `raise ... from err` to preserve exception chains. Never log-and-raise — log at the boundary or raise in the interior, not both.</rule>
+    <bad><![CDATA[try:
+    row = db.fetch(query)
+except DatabaseError as err:
+    logger.error("DB failed: %s", err)  # log AND raise = duplicate noise
+    raise AppError("Failed") from err]]></bad>
+    <good><![CDATA[# Interior: just raise
+def get_user(user_id: str) -> User:
+    try:
+        row = db.fetch_one("SELECT * FROM users WHERE id = %s", (user_id,))
+    except DatabaseError as err:
+        raise AppError(f"Failed to fetch user {user_id}") from err
+    if row is None:
+        raise NotFoundError("User", user_id)
+    return User.from_row(row)
+
+# Boundary (e.g., API handler): log here
+try:
+    user = get_user(user_id)
+except AppError as err:
+    logger.error("Request failed", extra={"code": err.code, "user_id": user_id})
+    return {"error": str(err)}, 400]]></good>
+  </guardrail>
+
+  <guardrail id="G-006" severity="HIGH">
+    <rule>Use `collections.abc` types for annotations (`Sequence`, `Mapping`, `Iterable`), not `list`, `dict` as generics in older code, and never `List`, `Dict` from `typing`.</rule>
+    <bad><![CDATA[from typing import List, Dict, Optional  # deprecated in 3.9+
+def process(items: List[str]) -> Optional[Dict[str, int]]: ...]]></bad>
+    <good><![CDATA[from collections.abc import Sequence, Mapping
+
+def process(items: Sequence[str]) -> Mapping[str, int] | None: ...]]></good>
+  </guardrail>
+
+  <guardrail id="G-007" severity="HIGH">
+    <rule>Use `pathlib.Path` instead of `os.path` for all file operations.</rule>
+    <bad><![CDATA[import os
+path = os.path.join(base_dir, "data", "users.csv")
+if os.path.exists(path):
+    with open(path) as f: ...]]></bad>
+    <good><![CDATA[from pathlib import Path
+path = Path(base_dir) / "data" / "users.csv"
+if path.exists():
+    with path.open() as f: ...]]></good>
+  </guardrail>
+
+  <guardrail id="G-008" severity="HIGH">
+    <rule>Always use `with` statements or `contextlib.closing` for resources. Never rely on manual `close()` calls.</rule>
+    <bad><![CDATA[conn = get_connection()
+result = conn.execute(query)
+conn.close()  # skipped if exception raised above]]></bad>
+    <good><![CDATA[with get_connection() as conn:
+    result = conn.execute(query)  # conn.close() guaranteed]]></good>
+  </guardrail>
+
+  <guardrail id="G-009" severity="HIGH">
+    <rule>Run `mypy --strict` in CI. No `type: ignore` without an explanatory comment.</rule>
+    <bad><![CDATA[result = some_untyped_lib()  # type: ignore]]></bad>
+    <good><![CDATA[result = some_untyped_lib()  # type: ignore[no-untyped-call] -- third-party lib has no stubs (TODO: open issue)]]></good>
+  </guardrail>
+
+  <guardrail id="G-010" severity="HIGH">
+    <rule>Define all dependencies in `pyproject.toml`. Never hand-edit `requirements.txt` — it is a generated artifact only.</rule>
+  </guardrail>
+
+  <guardrail id="G-011" severity="MEDIUM">
+    <rule>Target Python 3.11+. Set `requires-python = ">=3.11"` in `pyproject.toml`. Use `match` statements, `ExceptionGroup`, `tomllib`.</rule>
+  </guardrail>
+
+  <guardrail id="G-012" severity="MEDIUM">
+    <rule>Prefer f-strings over `.format()` or `%` formatting. Use f-strings for all string interpolation in 3.11+.</rule>
+    <bad><![CDATA[msg = "User %s not found" % user_id
+msg = "User {} not found".format(user_id)]]></bad>
+    <good><![CDATA[msg = f"User {user_id} not found"]]></good>
+  </guardrail>
+
+  <guardrail id="G-013" severity="MEDIUM">
+    <rule>Use `contextlib.suppress()` instead of empty except blocks when intentionally ignoring a specific exception.</rule>
+    <bad><![CDATA[try:
+    os.remove(tmp_file)
+except FileNotFoundError:
+    pass]]></bad>
+    <good><![CDATA[import contextlib
+with contextlib.suppress(FileNotFoundError):
+    os.remove(tmp_file)]]></good>
+  </guardrail>
+
+</guardrails>
+
+<project-structure>
+  <directory path="src/" purpose="Root for all importable packages (src layout prevents accidental local imports)"/>
+  <directory path="src/myproject/__init__.py" purpose="Package init"/>
+  <directory path="src/myproject/py.typed" purpose="PEP 561 marker — tells downstream tools this package ships type stubs"/>
+  <directory path="src/myproject/domain/" purpose="Business logic and entities — no I/O dependencies"/>
+  <directory path="src/myproject/domain/models.py" purpose="Domain models (dataclasses or Pydantic)"/>
+  <directory path="src/myproject/domain/exceptions.py" purpose="Domain-specific exception hierarchy"/>
+  <directory path="src/myproject/service/" purpose="Application services — orchestrate domain + I/O"/>
+  <directory path="src/myproject/repository/" purpose="Data access layer — database queries, ORM models"/>
+  <directory path="src/myproject/api/" purpose="HTTP or CLI interface layer"/>
+  <directory path="tests/conftest.py" purpose="Shared fixtures for the entire test suite"/>
+  <directory path="tests/unit/" purpose="Unit tests (fast, no I/O)"/>
+  <directory path="tests/integration/" purpose="Integration tests (database, HTTP)"/>
+  <directory path="pyproject.toml" purpose="Single source of truth for project config, dependencies, and tool settings"/>
+  <directory path="uv.lock" purpose="Lockfile for reproducible installs (or poetry.lock)"/>
+  <note>No `__init__.py` in `tests/` — pytest discovers without it. Split modules at ~200 lines.</note>
+</project-structure>
+
+<patterns>
+
+  <pattern name="Exception Hierarchy" context="All projects — define in domain/exceptions.py before writing services">
+    <description>Typed exception hierarchy with machine-readable error codes. All application exceptions root in a single base class for easy catch-all at boundaries.</description>
+    <example><![CDATA[class AppError(Exception):
+    """Base exception for the application."""
+
+    def __init__(self, message: str, *, code: str = "UNKNOWN") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class NotFoundError(AppError):
+    """Raised when a requested resource does not exist."""
+
+    def __init__(self, resource: str, identifier: str) -> None:
+        super().__init__(
+            f"{resource} with id '{identifier}' not found",
+            code="NOT_FOUND",
+        )
+        self.resource = resource
+        self.identifier = identifier
+
+
+class ValidationError(AppError):
+    """Raised when input data fails validation."""
+
+    def __init__(self, field: str, reason: str) -> None:
+        super().__init__(
+            f"Validation failed for '{field}': {reason}",
+            code="VALIDATION_ERROR",
+        )]]></example>
+  </pattern>
+
+  <pattern name="Context Manager for Resource Cleanup" context="Database connections, file handles, network sessions">
+    <description>Use `contextmanager` to guarantee cleanup even on exception. Translate low-level errors to domain errors at the boundary.</description>
+    <example><![CDATA[from contextlib import contextmanager
+from collections.abc import Generator
+
+@contextmanager
+def managed_connection(url: str) -> Generator[Connection, None, None]:
+    conn = Connection(url)
+    try:
+        conn.open()
+        yield conn
+    except ConnectionError as err:
+        raise AppError("Database unavailable") from err
+    finally:
+        conn.close()
+
+# Usage
+with managed_connection(DATABASE_URL) as conn:
+    rows = conn.execute("SELECT * FROM users")]]></example>
+  </pattern>
+
+  <pattern name="Protocol for Structural Subtyping" context="Abstracting interfaces without inheritance — duck typing with type safety">
+    <description>Use `Protocol` instead of ABCs when you want duck typing with static checking. Clients depend on the structural interface, not a concrete base class.</description>
+    <example><![CDATA[from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class UserRepository(Protocol):
+    def get(self, user_id: str) -> User: ...
+    def save(self, user: User) -> None: ...
+    def delete(self, user_id: str) -> None: ...
+
+# Any class with these methods satisfies UserRepository — no inheritance needed
+class PostgresUserRepository:
+    def get(self, user_id: str) -> User: ...
+    def save(self, user: User) -> None: ...
+    def delete(self, user_id: str) -> None: ...
+
+def build_service(repo: UserRepository) -> UserService:
+    return UserService(repo)]]></example>
+  </pattern>
+
+  <pattern name="Dataclass for Value Objects" context="Data containers without behavior — request/response shapes, domain value objects">
+    <description>Prefer dataclasses or Pydantic over plain dicts for structured data. `frozen=True` enforces immutability.</description>
+    <example><![CDATA[from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class UserId:
+    value: str
+
+    def __post_init__(self) -> None:
+        if not self.value:
+            raise ValidationError("user_id", "cannot be empty")
+
+@dataclass(frozen=True)
+class UserName:
+    value: str
+
+    def __post_init__(self) -> None:
+        if len(self.value) > 100:
+            raise ValidationError("name", "exceeds 100 characters")]]></example>
+  </pattern>
+
+</patterns>
+
+<error-handling>
+  <pattern name="Error chaining with raise from"><![CDATA[def get_user(user_id: str) -> User:
+    try:
+        row = db.fetch_one("SELECT * FROM users WHERE id = %s", (user_id,))
+    except DatabaseError as err:
+        raise AppError(f"Failed to fetch user {user_id}") from err
+    if row is None:
+        raise NotFoundError("User", user_id)
+    return User.from_row(row)]]></pattern>
+
+  <pattern name="Context manager with error translation"><![CDATA[from contextlib import contextmanager
+from collections.abc import Generator
+
+@contextmanager
+def managed_connection(url: str) -> Generator[Connection, None, None]:
+    conn = Connection(url)
+    try:
+        conn.open()
+        yield conn
+    except ConnectionError as err:
+        raise AppError("Database unavailable") from err
+    finally:
+        conn.close()]]></pattern>
+</error-handling>
+
+<testing>
+  <framework>pytest</framework>
+  <coverage-target>80% business logic, 60% overall</coverage-target>
+
+  <pattern name="Fixtures and Parametrize"><![CDATA[import pytest
+from myproject.domain.models import User
+
+@pytest.fixture
+def sample_user() -> User:
+    return User(id="u-123", name="Ada Lovelace", email="ada@example.com")
+
+
+@pytest.mark.parametrize(
+    ("email", "is_valid"),
+    [
+        ("user@example.com", True),
+        ("user@.com",        False),
+        ("",                 False),
+        ("user@domain",      False),
+    ],
+)
+def test_validate_email(email: str, is_valid: bool) -> None:
+    assert validate_email(email) == is_valid
+
+
+def test_get_user_returns_user(sample_user: User) -> None:
+    repo = InMemoryUserRepo(users=[sample_user])
+    result = repo.get("u-123")
+    assert result == sample_user
+
+
+def test_get_user_not_found_raises() -> None:
+    repo = InMemoryUserRepo(users=[])
+    with pytest.raises(NotFoundError, match="User.*not found"):
+        repo.get("nonexistent")]]></pattern>
+
+  <pattern name="Mocking with AsyncMock"><![CDATA[from unittest.mock import AsyncMock, patch
+
+async def test_send_notification_retries_on_failure() -> None:
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = [ConnectionError, None]
+
+    with patch("myproject.service.notify.http_client", mock_client):
+        await send_notification(user_id="u-123", message="hello")
+
+    assert mock_client.post.call_count == 2]]></pattern>
+
+  <rules>
+    <rule>Test files: `test_*.py`, same name as module (`models.py` -> `test_models.py`)</rule>
+    <rule>Test function naming: `test_&lt;unit&gt;_&lt;scenario&gt;_&lt;expected&gt;` (e.g., `test_get_user_not_found_raises`)</rule>
+    <rule>Use `conftest.py` for fixtures shared across a directory; nest conftest files for scope</rule>
+    <rule>Mark slow tests: `@pytest.mark.slow` and exclude from default runs with `-m "not slow"`</rule>
+    <rule>No `unittest.TestCase` — use plain functions with pytest assertions</rule>
+    <rule>Use `tmp_path` fixture for file operations (auto-cleanup by pytest)</rule>
+    <rule>No `__init__.py` in `tests/`</rule>
+  </rules>
+</testing>
+
+<tooling>
+  <tool name="ruff" purpose="Lint (replaces flake8, isort, pyupgrade)" command="ruff check ."/>
+  <tool name="ruff" purpose="Format (replaces black)" command="ruff format ."/>
+  <tool name="mypy" purpose="Type check in strict mode" command="mypy ."/>
+  <tool name="pytest" purpose="Run all tests" command="pytest"/>
+  <tool name="pytest" purpose="Coverage summary" command="pytest --cov=src -q"/>
+  <tool name="pytest" purpose="Skip slow tests" command="pytest -m 'not slow'"/>
+  <tool name="pip-audit" purpose="Check dependencies for known vulnerabilities" command="pip-audit"/>
+  <tool name="python" purpose="Build sdist and wheel" command="python -m build"/>
+</tooling>
+
+<pyproject-config>
+  <description>Canonical pyproject.toml configuration for Python 3.11+ projects.</description>
+  <example><![CDATA[[project]
+name = "myproject"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "pytest-cov", "pytest-asyncio"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/myproject"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
+exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]]]></example>
+</pyproject-config>
+
+<quick-reference>
+  <item key="python version">3.11+ required — set `requires-python = ">=3.11"` in pyproject.toml</item>
+  <item key="type hints">All public functions need full annotations — params + return. Run `mypy --strict`.</item>
+  <item key="union syntax">Use `X | None` not `Optional[X]`; use `X | Y` not `Union[X, Y]`</item>
+  <item key="collections">Use `collections.abc` (Sequence, Mapping, Iterable) not `typing.List`, `typing.Dict`</item>
+  <item key="star import">Never — always name what you import</item>
+  <item key="mutable default">Never `def f(items=[])` — use `None` and initialize inside the function</item>
+  <item key="bare except">Never — always catch specific exceptions</item>
+  <item key="log-and-raise">Never — log at boundaries, raise in the interior</item>
+  <item key="exception chain">Always `raise NewError(...) from original_err`</item>
+  <item key="file paths">Use `pathlib.Path` not `os.path`</item>
+  <item key="f-strings">Prefer over `.format()` and `%` interpolation</item>
+  <item key="suppress">Use `contextlib.suppress(ExcType)` instead of empty except blocks</item>
+  <item key="resources">Always use `with` — never rely on manual `.close()`</item>
+  <item key="dependencies">pyproject.toml is the source of truth; requirements.txt is generated only</item>
+  <item key="linting">ruff check + ruff format before every commit</item>
+  <item key="testing">pytest + parametrize + fixtures; no unittest.TestCase</item>
+  <item key="coverage">80% business logic minimum, 60% overall; `fail_under = 60` enforced in CI</item>
+  <item key="src layout">Use `src/myproject/` to prevent accidental local imports</item>
+  <item key="py.typed">Include `py.typed` marker for downstream type checking (PEP 561)</item>
+</quick-reference>
+
+</knowledge-base>
