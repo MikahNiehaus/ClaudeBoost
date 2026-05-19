@@ -108,4 +108,4 @@ Write-Host "[OK] Removed $removed stale hook(s) from settings.json" -ForegroundC
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Run full setup:  powershell -ExecutionPolicy Bypass -File `"$PSScriptRoot\setup.ps1`""
-Write-Host "  2. Restart Claude Code"
+Write-Host "  2. Run /mcp in Claude Code"

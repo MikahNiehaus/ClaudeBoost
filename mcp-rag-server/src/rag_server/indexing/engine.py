@@ -20,10 +20,43 @@ from rag_server.ports.store_port import Chunk, StorePort
 
 logger = logging.getLogger(__name__)
 
-CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}  # legacy; project.py is authoritative
+MANIFEST_VERSION = 2
 
 
-def _build_file_map(rel_paths: list[str]) -> dict[str, str]:
+def _find_go_modules(project_path: str) -> dict[str, str]:
+    """Find all go.mod files and return {mod_dir → module_name}.
+
+    mod_dir is the directory containing go.mod, as a forward-slash project-relative path
+    (empty string "" means the project root itself).  Skips vendor/, testdata/, .git/.
+    """
+    import re as _re
+    result: dict[str, str] = {}
+    root = Path(project_path)
+    try:
+        go_mods = sorted(root.rglob("go.mod"))
+    except (OSError, RecursionError):
+        return result
+    for go_mod in go_mods:
+        try:
+            rel_parts = go_mod.relative_to(root).parts
+        except ValueError:
+            continue
+        if any(p in {"vendor", "testdata", ".git", "node_modules"} for p in rel_parts):
+            continue
+        if len(rel_parts) > 5:  # don't recurse too deep
+            continue
+        try:
+            text = go_mod.read_text(encoding="utf-8")
+            m = _re.search(r"^module\s+(\S+)", text, _re.MULTILINE)
+            if m:
+                mod_dir = "/".join(rel_parts[:-1])  # drop "go.mod" filename; "" = root
+                result[mod_dir] = m.group(1)
+        except OSError:
+            continue
+    return result
+
+
+def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = None) -> dict[str, str]:
     """Build a lookup table from module-name variants to project-relative file paths.
 
     For each indexed file we generate the key forms that might appear in import statements:
@@ -31,6 +64,7 @@ def _build_file_map(rel_paths: list[str]) -> dict[str, str]:
     - Python __init__: "foo/bar/__init__.py" → keys "foo/bar", "foo.bar"
     - JS/TS: "foo/bar.ts" → keys "foo/bar", "foo.bar"
     - JS/TS index: "foo/index.ts" → keys "foo", "foo/index"
+    - Go: "gastown/internal/cmd/server.go" → keys "internal/cmd", "github.com/x/gastown/internal/cmd"
 
     **Suffix keys for src-layout projects**: for Python and JS/TS files, we also
     generate keys for every trailing sub-path, so that a file at
@@ -70,6 +104,38 @@ def _build_file_map(rel_paths: list[str]) -> dict[str, str]:
             else:
                 file_map.setdefault(no_ext, rel_path)
                 file_map.setdefault(no_ext.replace("/", "."), rel_path)
+        elif suffix == ".go":
+            # Go packages are identified by directory, not individual files.
+            # Register the parent directory as the key — first .go file in the dir wins.
+            parent_slash = "/".join(parts[:-1])
+            if parent_slash:
+                file_map.setdefault(parent_slash, rel_path)
+            if go_modules:
+                # Find the go.mod that governs this file (longest matching mod_dir prefix).
+                best_mod_dir = None
+                best_len = -1
+                for mod_dir, module_name in go_modules.items():
+                    if mod_dir == "":
+                        if best_len < 0:
+                            best_mod_dir = mod_dir
+                            best_len = 0
+                    elif rel_path.startswith(mod_dir + "/") and len(mod_dir) > best_len:
+                        best_mod_dir = mod_dir
+                        best_len = len(mod_dir)
+                if best_mod_dir is not None:
+                    module_name = go_modules[best_mod_dir]
+                    # Package import path = module_name + "/" + path-within-module
+                    if best_mod_dir:
+                        # e.g. rel_path = "gastown/internal/cmd/server.go"
+                        #      best_mod_dir = "gastown", parent_slash = "gastown/internal/cmd"
+                        within_module = parent_slash[len(best_mod_dir):].lstrip("/")
+                    else:
+                        within_module = parent_slash
+                    if within_module:
+                        import_path = f"{module_name}/{within_module}"
+                    else:
+                        import_path = module_name
+                    file_map.setdefault(import_path, rel_path)
         else:
             file_map.setdefault(rel_path, rel_path)
             file_map.setdefault(no_ext, rel_path)
@@ -277,12 +343,26 @@ class IndexingEngine:
         graph_store = SQLiteGraphStore(index_dir / "graph.db")
         project_manifest_path = index_dir / "manifest.json"
         project_manifest = {}
+        stored_version = MANIFEST_VERSION
         if not force and project_manifest_path.exists():
-            project_manifest = json.loads(
-                project_manifest_path.read_text(encoding="utf-8")
-            )
+            raw = json.loads(project_manifest_path.read_text(encoding="utf-8"))
+            project_manifest = {k: v for k, v in raw.items() if k != "__schema_version__"}
+            stored_version = raw.get("__schema_version__", 1)
 
         collection = "codebase"
+
+        # Health check: detect broken/stale index before scanning
+        if not force:
+            health_issues = self._check_project_health(
+                index_dir, project_store, graph_store, project_manifest, stored_version
+            )
+            if health_issues:
+                return {
+                    "project_id": pid,
+                    "needs_reindex": True,
+                    "health_issues": health_issues,
+                    "suggestion": "Run rag_index_project with force=True to rebuild cleanly, or pass force=True to continue anyway.",
+                }
 
         # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d).
         # If the stored vectors don't match the current model, force a full re-index so
@@ -297,7 +377,11 @@ class IndexingEngine:
                 force = True
 
         if force and project_store.collection_exists(collection):
-            project_store.delete_collection(collection)
+            try:
+                project_store.delete_collection(collection)
+            except Exception as e:
+                logger.error("Failed to drop collection for re-index: %s", e)
+                return {"error": f"Re-index aborted: could not drop collection: {e}"}
         project_store.create_collection(collection)
 
         # Scan project — respects .gitignore, filters generated/large files
@@ -394,7 +478,10 @@ class IndexingEngine:
             if file_language:
                 edges = extract_edges(content, file_language, rel_path)
                 if edges:
-                    graph_store.add_edges(edges)
+                    try:
+                        graph_store.add_edges(edges)
+                    except Exception as e:
+                        logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
             texts = [c.content for c in raw_chunks]
             embeddings = self._embedder.embed(texts)
@@ -438,16 +525,71 @@ class IndexingEngine:
         # Edges are stored with target_file="" during the loop because we process
         # one file at a time and can't know where an import target lives until
         # the full manifest is complete. This pass fills them in.
+        # Build file_map from the full manifest so historical files can still be resolved,
+        # but validate resolved targets against the current scan to avoid ghost edges.
+        go_modules = _find_go_modules(project_path)
+        if go_modules:
+            logger.info(
+                "Go modules found: %s",
+                ", ".join(f"{d or '(root)'}={n}" for d, n in go_modules.items()),
+            )
         all_rel_paths = list(project_manifest.keys())
-        file_map = _build_file_map(all_rel_paths)
-        resolved_count = graph_store.resolve_target_files(file_map)
-        if resolved_count:
-            logger.info("Graph edge resolution: %d target_file entries resolved", resolved_count)
+        file_map = _build_file_map(all_rel_paths, go_modules=go_modules)
+        go_module_prefixes = set(go_modules.values()) if go_modules else None
+        resolved_count = None
+        try:
+            resolved_count = graph_store.resolve_target_files(
+                file_map, go_module_prefixes=go_module_prefixes
+            )
+            if resolved_count:
+                logger.info("Graph edge resolution: %d target_file entries resolved", resolved_count)
+        except Exception as e:
+            logger.error("Graph edge resolution failed: %s", e)
+            resolved_count = 0
 
-        # Save project manifest
-        project_manifest_path.write_text(
-            json.dumps(project_manifest, indent=2), encoding="utf-8",
-        )
+        # Prune ghost edges: remove edges whose resolved target_file is no longer in the manifest
+        try:
+            current_files = set(project_manifest.keys())
+            graph_store.delete_ghost_edges(current_files)
+        except Exception as e:
+            logger.warning("Ghost edge pruning failed: %s", e)
+
+        # Community detection + summaries (optional deps — never blocks indexing).
+        if files_indexed > 0 and graph_store.has_graph():
+            try:
+                from rag_server.core.community import detect_communities
+                from rag_server.core.summarizer import summarize_community
+
+                communities = detect_communities(graph_store)
+                if communities:
+                    graph_store.save_communities(communities)
+                    num_communities = len(set(communities.values()))
+                    logger.info(
+                        "Community detection: %d files in %d communities",
+                        len(communities), num_communities,
+                    )
+                    for cid in graph_store.get_all_community_ids():
+                        members = graph_store.get_community_members(cid)
+                        try:
+                            summarize_community(cid, members, graph_store, project_path)
+                        except Exception:
+                            logger.exception(
+                                "Community summary failed for community %d", cid
+                            )
+            except ImportError:
+                logger.debug("Community detection modules not available — skipping")
+            except Exception:
+                logger.exception("Community detection failed unexpectedly")
+                # don't re-raise — community detection is non-critical
+
+        # Save project manifest (C3: include schema version)
+        try:
+            manifest_to_write = {"__schema_version__": MANIFEST_VERSION, **project_manifest}
+            project_manifest_path.write_text(
+                json.dumps(manifest_to_write, indent=2), encoding="utf-8",
+            )
+        except OSError as e:
+            logger.error("Failed to write project manifest to %s: %s", project_manifest_path, e)
 
         logger.info(
             "Indexed project %s (%s): %d files, %d chunks (%d skipped)",
@@ -461,10 +603,56 @@ class IndexingEngine:
             "index_path": str(index_dir),
         }
 
+    def _check_project_health(
+        self, index_dir, project_store, graph_store, project_manifest, stored_version
+    ) -> list[str]:
+        """Check for signs of a broken or stale project index.
+
+        Returns a list of issue strings. Empty list means healthy.
+        """
+        issues = []
+        if stored_version < MANIFEST_VERSION:
+            issues.append(
+                f"manifest schema v{stored_version} < current v{MANIFEST_VERSION} (schema changed)"
+            )
+        if project_store.collection_exists("codebase"):
+            manifest_count = len(project_manifest)
+            chroma_count = project_store.count("codebase")
+            if manifest_count > 0 and chroma_count == 0:
+                issues.append(
+                    "manifest has entries but codebase collection is empty (index may be corrupt)"
+                )
+            elif manifest_count > 0 and chroma_count < manifest_count * 0.5:
+                issues.append(
+                    f"codebase collection has {chroma_count} chunks but manifest has "
+                    f"{manifest_count} files (possible partial index)"
+                )
+        if graph_store.has_graph():
+            try:
+                current_files = set(project_manifest.keys())
+                ghost_count = graph_store.count_ghost_edges(current_files)
+                if ghost_count > 10:
+                    issues.append(
+                        f"{ghost_count} ghost edges pointing to files no longer in manifest"
+                    )
+                unresolved = graph_store.count_unresolved_edges()
+                total = graph_store.count_edges() if hasattr(graph_store, 'count_edges') else None
+                if total and total > 0:
+                    unresolved_pct = unresolved / total * 100
+                    if unresolved_pct > 50:
+                        issues.append(
+                            f"{unresolved_pct:.0f}% of graph edges unresolved "
+                            f"({unresolved}/{total}) — import resolution may have failed"
+                        )
+            except Exception as e:
+                logger.debug("Graph health check skipped due to error: %s", e)
+        return issues
+
     def _chunk_file(self, content: str, rel_path: str):
         """Route to the right chunker based on file extension."""
-        if Path(rel_path).suffix in CODE_EXTENSIONS:
-            from rag_server.indexing.code_chunker import chunk_code
+        from rag_server.core.project import extension_to_language
+        from rag_server.indexing.code_chunker import chunk_code
+        if extension_to_language(Path(rel_path).suffix):
             return chunk_code(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,

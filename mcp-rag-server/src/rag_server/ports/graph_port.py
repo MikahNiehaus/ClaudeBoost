@@ -55,11 +55,15 @@ class GraphStorePort(ABC):
         ...
 
     @abstractmethod
-    def resolve_target_files(self, file_map: dict[str, str]) -> int:
+    def resolve_target_files(
+        self, file_map: dict[str, str], go_module_prefixes: set[str] | None = None
+    ) -> int:
         """Resolve target_file='' edges using the project file map.
 
         *file_map* maps module-name variants to project-relative file paths,
         e.g. {"foo.bar": "foo/bar.py", "foo/bar": "foo/bar.py"}.
-        Updates edges in-place. Returns the count of edges resolved.
+        Go stdlib and external-dep imports are marked '_external_' instead of
+        being left as '' so they don't inflate the unresolved-edge count.
+        Returns the count of edges resolved to real project files.
         """
         ...

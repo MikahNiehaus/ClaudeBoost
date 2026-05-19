@@ -78,7 +78,7 @@ def main() -> int:
         "additionalContext": (
             "CLAUDEBOOST AUTO-SETUP: CLAUDEBOOST_HOME is not configured on this machine. "
             "Running setup.ps1 now — a PowerShell window will open. "
-            "Please restart Claude Code once setup completes."
+            "Run /mcp in Claude Code once setup completes."
         )
     }))
 

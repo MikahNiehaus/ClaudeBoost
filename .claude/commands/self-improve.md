@@ -98,7 +98,7 @@ Use `rag_search` to locate files before reading them. Never guess file paths.
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
 | `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
 | `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
-| `rag` | RAG search spot-checks (see Phase 3 ST-07/08) + `rag_status` chunk count health |
+| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `rag_status` total > 700 (ST-10). Context pipeline: `rag_context` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
 | `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
 | `all` | All of the above |
@@ -152,6 +152,8 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ST-10 | `rag_status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `rag_status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via `rag_index_project` output instead |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
+| ST-13 | `rag_search("rag search implementation", scope="codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
+| ST-14 | `rag_context(agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME)` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
 
 ### WORKSPACE mode tests (run all)
 

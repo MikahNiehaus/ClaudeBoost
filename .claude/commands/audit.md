@@ -12,9 +12,14 @@ Input: **$ARGUMENTS**
 
 ---
 
-## Phase 0: RAG Context
+## Phase 0: Setup
 
-Call `rag_context(agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000)` as your FIRST action.
+**Set audit flag** (suppresses verify-gate hook during this audit — it fires on every agent and would serialize the parallel flow):
+```bash
+python -c "import json,os; p=os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','audit-in-progress.json'); open(p,'w').write(json.dumps({'active':True}))"
+```
+
+Then call `rag_context(agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000)`.
 
 ---
 
@@ -248,3 +253,8 @@ Output the full verdict report. Lead with the VERDICT and CONFIDENCE.
 
 Final message to user:
 > "Audit complete. **[VERDICT]** (confidence: [CONFIDENCE], risk: [RISK_LEVEL]). [SUMMARY sentence 1]. [RECOMMENDATION]"
+
+**Clear audit flag** (re-enables verify-gate hook for subsequent agent spawns):
+```bash
+python -c "import os; p=os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','audit-in-progress.json'); os.remove(p) if os.path.exists(p) else None"
+```

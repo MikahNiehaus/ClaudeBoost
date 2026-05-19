@@ -157,7 +157,7 @@ print('PRESENT' if 'ClaudeBoost' in cmd else 'MISSING')
 "
 ```
 
-If MISSING: re-run `setup.ps1` — it now creates the statusLine on fresh installs. Then restart Claude Code for the change to take effect.
+If MISSING: re-run `setup.ps1` — it now creates the statusLine on fresh installs. Then run `/mcp` to reconnect.
 
 ---
 
@@ -193,7 +193,7 @@ Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING
-statusLine               : OK / MISSING (restart Claude Code after setup.ps1)
+statusLine               : OK / MISSING (run `/mcp` after setup.ps1)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 
 ─────────────────────────────────────────
@@ -201,7 +201,7 @@ Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 
 **If ALL checks pass:**
 > "Setup complete. All systems operational."
-> - **Fresh install:** "Restart Claude Code for MCP changes to take effect, then run `/boost`."
+> - **Fresh install:** "Run `/mcp` to reconnect, then run `/boost`."
 > - **After git pull:** "Run `/boost` to activate the updated ClaudeBoost for this session."
 
 **If any checks fail after all retries:**

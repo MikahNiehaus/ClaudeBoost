@@ -717,7 +717,7 @@ Write-Host "  RAG server registered in $mcpPath"
 Write-Host "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)"
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1. Restart Claude Code for MCP changes to take effect"
+Write-Host "  1. Run /mcp in Claude Code to reconnect"
 Write-Host "  2. Run /boost to verify all systems"
 Write-Host "  3. Run /speak on to enable text-to-speech"
 Write-Host "  4. (Optional) Rebuild Gas Town with 'make build' if gt errors occur"

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from pathlib import Path
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -21,6 +22,7 @@ from rag_server.core.watcher import FileWatcher
 from rag_server.indexing.engine import IndexingEngine
 from rag_server.indexing.markdown_chunker import estimate_tokens
 from rag_server.tools.search import rag_search
+import rag_server.tools.context as _context_mod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -391,216 +393,17 @@ def _build_context(
     agent: str, task_description: str, max_tokens: int,
     weight: str = "standard", project_path: str | None = None,
 ) -> dict:
-    """Build a tiered context package for an agent.
-
-    Tier 0: Agent definition (always included, full text)
-    Tier 1: Universal guardrails (skipped for lightweight agents)
-    Tier 2: Agent-declared knowledge bases (from <knowledge-base> tags)
-    Tier 3: Semantic search fills remaining budget (knowledge only, not agents)
-    Tier 4: Codebase search (if project_path provided and index exists)
-    """
-    import re as _re
-
-    # --- Tier 0: Agent definition ---
-    agent_file = f"agents/{agent}.md"
-    agent_def = ""
-    agent_path = PROJECT_ROOT / agent_file
-    if agent_path.exists():
-        agent_def = agent_path.read_text(encoding="utf-8")
-    else:
-        agent_path_xml = PROJECT_ROOT / f"agents/{agent}.xml"
-        if agent_path_xml.exists():
-            agent_def = agent_path_xml.read_text(encoding="utf-8")
-            agent_file = f"agents/{agent}.xml"
-
-    agent_tokens = estimate_tokens(agent_def)
-    remaining_budget = max_tokens - agent_tokens
-
-    # --- Parse agent's declared knowledge bases ---
-    declared_files = []
-    if agent_def:
-        # Match <primary file="knowledge/foo.xml"> and <secondary file="knowledge/bar.xml">
-        for match in _re.finditer(r'<(?:primary|secondary)\s+file="([^"]+)"', agent_def):
-            declared_files.append(match.group(1))
-
-    # --- Tier 1: Universal guardrails (skipped for lightweight agents) ---
-    GUARDRAIL_FILES = [
-        "knowledge/security.xml",
-        "knowledge/observability.xml",
-        "knowledge/coding-standards.xml",
-        "knowledge/scope-governance.xml",
-    ]
-
-    tier1_chunks = []
-    tier1_tokens = 0
-    tier1_sources_seen = set()
-
-    # Lightweight agents (explore, research, docs, estimator, rag-indexing, research-rag) skip guardrails —
-    # they gather info / produce docs / index external sources, they don't write code.
-    skip_guardrails = weight == "lightweight"
-
-    for guardrail_file in GUARDRAIL_FILES:
-        if skip_guardrails:
-            break
-        if tier1_tokens >= remaining_budget * 0.4:
-            break  # Don't let guardrails eat more than 40% of remaining budget
-        chunks = store.get_by_source("knowledge", guardrail_file)
-        for chunk in chunks:
-            chunk_tokens = chunk.metadata.get("token_count", estimate_tokens(chunk.content))
-            if tier1_tokens + chunk_tokens > remaining_budget * 0.4:
-                break
-            tier1_chunks.append({
-                "source": chunk.metadata.get("source_file", guardrail_file),
-                "section": chunk.metadata.get("section", ""),
-                "content": chunk.content,
-                "score": 1.0,
-                "tier": "guardrail",
-            })
-            tier1_tokens += chunk_tokens
-            tier1_sources_seen.add(guardrail_file)
-
-    remaining_budget -= tier1_tokens
-
-    # --- Tier 2: Agent-declared knowledge bases ---
-    tier2_chunks = []
-    tier2_tokens = 0
-    tier2_sources_seen = set()
-    for declared_file in declared_files:
-        if declared_file in tier1_sources_seen:
-            continue  # Already included as guardrail
-        if tier2_tokens >= remaining_budget * 0.5:
-            break  # Don't let declared KBs eat more than 50% of what's left
-        chunks = store.get_by_source("knowledge", declared_file)
-        for chunk in chunks:
-            chunk_tokens = chunk.metadata.get("token_count", estimate_tokens(chunk.content))
-            if tier2_tokens + chunk_tokens > remaining_budget * 0.5:
-                break
-            tier2_chunks.append({
-                "source": chunk.metadata.get("source_file", declared_file),
-                "section": chunk.metadata.get("section", ""),
-                "content": chunk.content,
-                "score": 1.0,
-                "tier": "declared",
-            })
-            tier2_tokens += chunk_tokens
-            tier2_sources_seen.add(declared_file)
-
-    remaining_budget -= tier2_tokens
-
-    # --- Tier 3: Semantic search for task-relevant knowledge ---
-    # Only search knowledge collection (not agents — don't leak other agent definitions)
-    all_included_sources = tier1_sources_seen | tier2_sources_seen
-    tier3_chunks = []
-    tier3_tokens = 0
-
-    if remaining_budget > 200 and store.collection_exists("knowledge"):
-        query_embedding = embedder.embed_query(task_description)
-        search_results = store.search(
-            "knowledge", query_embedding, limit=15, min_score=0.4,
-        )
-        for r in search_results:
-            source = r.metadata.get("source_file", "")
-            # Skip chunks from files already included in Tier 1/2
-            if source in all_included_sources:
-                continue
-            chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
-            if tier3_tokens + chunk_tokens > remaining_budget:
-                break
-            tier3_chunks.append({
-                "source": source,
-                "section": r.metadata.get("section", ""),
-                "content": r.content,
-                "score": r.score,
-                "tier": "search",
-            })
-            tier3_tokens += chunk_tokens
-
-    # --- Tier 4: Codebase search (if project indexed) ---
-    tier4_chunks = []
-    tier4_tokens = 0
-
-    if project_path and remaining_budget > 200:
-        from rag_server.core.project import project_index_dir
-        from rag_server.core.store import ChromaStore as _ChromaStore
-
-        idx_dir = project_index_dir(project_path)
-        chroma_dir = idx_dir / "chroma"
-        if chroma_dir.exists():
-            project_store = _ChromaStore(persist_dir=str(chroma_dir))
-            if project_store.collection_exists("codebase") and project_store.count("codebase") > 0:
-                # Budget: up to 400 tokens or remaining budget, whichever is smaller
-                tier4_budget = min(400, remaining_budget)
-                query_embedding = embedder.embed_query(task_description)
-                codebase_results = project_store.search(
-                    "codebase", query_embedding, limit=10, min_score=0.35,
-                )
-                for r in codebase_results:
-                    chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
-                    if tier4_tokens + chunk_tokens > tier4_budget:
-                        break
-                    tier4_chunks.append({
-                        "source": r.metadata.get("source_file", ""),
-                        "section": r.metadata.get("section", ""),
-                        "content": r.content,
-                        "score": r.score,
-                        "tier": "codebase",
-                    })
-                    tier4_tokens += chunk_tokens
-
-                # --- Tier 4b: Graph structural neighbours (if graph index exists) ---
-                graph_db = idx_dir / "graph.db"
-                if graph_db.exists() and tier4_chunks:
-                    from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
-                    graph_store = SQLiteGraphStore(graph_db)
-                    if graph_store.has_graph():
-                        seen_sources = {c["source"] for c in tier4_chunks}
-                        graph_budget = (remaining_budget - tier4_tokens) // 2
-                        graph_tokens = 0
-
-                        for seed_chunk in tier4_chunks[:3]:
-                            seed_file = seed_chunk["source"]
-                            neighbours = graph_store.get_neighbours(seed_file, depth=1)
-                            for edge in neighbours:
-                                nb_file = (
-                                    edge.target_file
-                                    if edge.source_file == seed_file
-                                    else edge.source_file
-                                )
-                                if not nb_file or nb_file in seen_sources:
-                                    continue
-                                nb_chunks = project_store.get_by_source("codebase", nb_file)
-                                for nb in nb_chunks[:2]:
-                                    nb_tokens = nb.metadata.get("token_count", estimate_tokens(nb.content))
-                                    if graph_tokens + nb_tokens > graph_budget:
-                                        break
-                                    tier4_chunks.append({
-                                        "source": nb_file,
-                                        "section": nb.metadata.get("section", ""),
-                                        "content": nb.content,
-                                        "score": max(0.0, seed_chunk["score"] - 0.15),
-                                        "tier": "codebase_graph",
-                                    })
-                                    graph_tokens += nb_tokens
-                                    tier4_tokens += nb_tokens
-                                seen_sources.add(nb_file)
-
-    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier4_chunks
-    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier4_tokens
-
-    return {
-        "agent_definition": agent_def,
-        "agent_file": agent_file,
-        "weight": weight,
-        "relevant_knowledge": all_knowledge,
-        "total_tokens_approx": total_tokens,
-        "sources_used": len(all_knowledge) + (1 if agent_def else 0),
-        "tier_summary": {
-            "guardrails": len(tier1_chunks),
-            "declared": len(tier2_chunks),
-            "search": len(tier3_chunks),
-            "codebase": len(tier4_chunks),
-        },
-    }
+    """Delegate to tools/context.py so changes there hot-reload without a server restart."""
+    return _context_mod.build_context(
+        agent=agent,
+        task_description=task_description,
+        max_tokens=max_tokens,
+        store=store,
+        embedder=embedder,
+        project_root=PROJECT_ROOT,
+        weight=weight,
+        project_path=project_path,
+    )
 
 
 def sync_init() -> FileWatcher:
@@ -666,6 +469,35 @@ def sync_init() -> FileWatcher:
                 logger.exception("Auto-index failed after file change: %s", path)
         watcher.watch(watch_paths, _on_file_change)
         logger.info("Watcher started for: %s", ", ".join(watch_paths))
+
+    # Hot-reload watcher: reload RAG server source modules when they change so
+    # code fixes take effect without needing /mcp. Reloads in dependency order
+    # and re-binds the engine global so the updated IndexingEngine class is used.
+    src_dir = Path(__file__).parent
+    if src_dir.is_dir():
+        import importlib
+        import rag_server.adapters.sqlite_graph_store as _gstore_mod
+        import rag_server.indexing.engine as _engine_mod
+        import rag_server.tools.search as _search_mod
+        import rag_server.tools.context as _ctx_mod
+
+        def _on_source_change(path: str):
+            global engine, rag_search, _context_mod
+            logger.info("Source changed, hot-reloading modules: %s", path)
+            try:
+                importlib.reload(_gstore_mod)
+                importlib.reload(_engine_mod)
+                importlib.reload(_search_mod)
+                importlib.reload(_ctx_mod)
+                engine = _engine_mod.IndexingEngine(embedder=embedder, store=store)
+                rag_search = _search_mod.rag_search
+                _context_mod = _ctx_mod
+                logger.info("Hot-reload complete — updated code is now active")
+            except Exception:
+                logger.exception("Hot-reload failed for %s — still running old code", path)
+
+        watcher.watch([str(src_dir)], _on_source_change)
+        logger.info("Source hot-reload watcher active on: %s", src_dir)
 
     return watcher
 

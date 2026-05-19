@@ -1,6 +1,6 @@
 ---
 description: Index a project's codebase for semantic search
-allowed-tools: mcp__rag-server__rag_status, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, AskUserQuestion
+allowed-tools: mcp__rag-server__rag_status, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, mcp__rag-server__rag_context, AskUserQuestion
 ---
 
 # Index Project for Codebase RAG
@@ -19,7 +19,7 @@ $ARGUMENTS — flexible, any of:
 
 ## Instructions
 
-1. **Health check** — call `rag_status()` first. If it fails or returns an error, stop immediately and tell the user: "RAG server not connected — run `/mcp` to reconnect or restart Claude Code, then retry."
+1. **Health check** — call `rag_status()` first. If it fails or returns an error, stop immediately and tell the user: "RAG server not connected — run `/mcp` to reconnect, then retry."
 
 2. **Resolve the project path** from `$ARGUMENTS`:
 
@@ -61,8 +61,34 @@ $ARGUMENTS — flexible, any of:
 
 6. Call `rag_index_project` with the confirmed parameters.
 
+   **If the result contains `needs_reindex: true`** (broken index detected):
+   - Show the user the `health_issues` list explaining what's wrong
+   - Ask: "The index has pre-existing issues. Run with force=True to rebuild cleanly, or continue with the broken state?"
+   - If user chooses force: re-call `rag_index_project` with `force=true`
+   - If user chooses continue: proceed as-is and note the issues in the report
+
 7. Report results concisely:
    - Files indexed / chunks created / files skipped
    - Total time if notable
 
-8. Verify with a quick search: run `rag_search(query="main entry point", scope="codebase", project_path=<path>)` and show the top 3 results to confirm it's working.
+8. **Post-index health checks** — run all four after every successful index:
+
+   a. **Search smoke test** — confirm search works:
+      `rag_search(query="main entry point", scope="codebase", project_path=<path>)`
+      Show top 3 results. If 0 results returned, flag as a warning.
+
+   b. **Graph check** — confirm graph was built (if code files were indexed):
+      Check that `<project>/workspace/.rag-index/graph.db` exists. Report edge count if available via a quick search with `mode="graph"` on the same query.
+
+   c. **Manifest integrity** — confirm manifest was written:
+      Check that `<project>/workspace/.rag-index/manifest.json` exists and is non-empty.
+
+   d. **Context pipeline smoke test** — confirm the full `rag_context` pipeline works end-to-end:
+      `rag_context(agent="explore-agent", task_description="main entry point", max_tokens=3000, project_path=<path>)`
+      Check the result for:
+      - `tier_summary.codebase > 0` — codebase chunks loaded (WARN if 0)
+      - No `tier_errors` key in result (FAIL if present — shows which tier broke and why)
+      - `total_tokens_approx` is reasonable (not 0, not wildly over max_tokens)
+      Report findings inline. This catches embedding failures, ChromaDB errors, and graph expansion bugs that the search smoke test alone won't surface.
+
+   Report a clean `✓ health checks passed` or list any failures.

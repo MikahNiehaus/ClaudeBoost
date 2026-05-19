@@ -29,6 +29,10 @@ def rag_search(
     if scope not in VALID_SCOPES:
         return {"error": f"Invalid scope: {scope}. Valid: {VALID_SCOPES}"}
 
+    VALID_MODES = {"vector", "graph"}
+    if mode not in VALID_MODES:
+        return {"error": f"Invalid mode: {mode!r}. Valid: {sorted(VALID_MODES)}"}
+
     if scope == "codebase" and not project_path:
         return {"error": "project_path is required when scope='codebase'"}
 
@@ -37,9 +41,16 @@ def rag_search(
 
     start = time.time()
 
-    query_embedding = embedder.embed_query(query)
+    try:
+        query_embedding = embedder.embed_query(query)
+    except Exception as e:
+        logger.error("Embedding failed: %s", e)
+        return {"results": [], "total_found": 0, "query_time_ms": 0, "error": f"Embedding failed: {e}"}
 
     all_results = []
+
+    result_warning = None
+    _graph_augmented = False
 
     # Research search uses a per-task workspace store
     if scope == "research":
@@ -61,13 +72,19 @@ def rag_search(
 
         research_store = ChromaStore(persist_dir=str(research_chroma))
         if research_store.collection_exists("research") and research_store.count("research") > 0:
-            results = research_store.search(
-                collection="research",
-                query_embedding=query_embedding,
-                limit=limit,
-                min_score=min_score,
-            )
-            all_results.extend(results)
+            try:
+                results = research_store.search(
+                    collection="research",
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    min_score=min_score,
+                )
+                all_results.extend(results)
+            except Exception as e:
+                logger.error("Research store search failed: %s", e)
+                result_warning = f"Research search failed: {e}"
+        elif not research_store.collection_exists("research"):
+            result_warning = "Research collection not found — run rag_index_research first."
 
     # Codebase search uses a separate per-project store
     elif scope == "codebase":
@@ -85,20 +102,31 @@ def rag_search(
             }
 
         project_store = ChromaStore(persist_dir=str(chroma_dir))
-        if project_store.collection_exists("codebase") and project_store.count("codebase") > 0:
-            results = project_store.search(
-                collection="codebase",
-                query_embedding=query_embedding,
-                limit=limit,
-                min_score=min_score,
-            )
-            all_results.extend(results)
+        collection = "codebase"
+        if project_store.collection_exists(collection) and project_store.count(collection) > 0:
+            try:
+                results = project_store.search(
+                    collection=collection,
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    min_score=min_score,
+                )
+                all_results.extend(results)
+            except Exception as e:
+                logger.error("Codebase store search failed: %s", e)
+                result_warning = f"Codebase search failed: {e}"
 
             # Graph mode: augment seed results with structural neighbours
-            if mode == "graph":
-                all_results = _augment_with_graph(
+            if mode == "graph" and all_results:
+                all_results, _graph_augmented = _augment_with_graph(
                     all_results, idx_dir, project_store, limit,
                 )
+            else:
+                _graph_augmented = False
+        elif project_store.collection_exists(collection) and project_store.count(collection) == 0:
+            result_warning = "Codebase collection exists but is empty — run rag_index_project first."
+        else:
+            result_warning = "Codebase collection not found — run rag_index_project first."
     else:
         # Standard scopes: knowledge, agents, or all
         if scope == "all":
@@ -109,13 +137,18 @@ def rag_search(
         for collection in collections:
             if not store.collection_exists(collection) or store.count(collection) == 0:
                 continue
-            results = store.search(
-                collection=collection,
-                query_embedding=query_embedding,
-                limit=limit,
-                min_score=min_score,
-            )
-            all_results.extend(results)
+            try:
+                results = store.search(
+                    collection=collection,
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    min_score=min_score,
+                )
+                all_results.extend(results)
+            except Exception as e:
+                logger.error("Store search failed for collection %s: %s", collection, e)
+                result_warning = f"Search failed for collection {collection!r}: {e}"
+                continue
 
     # Sort by score descending, take top N
     all_results.sort(key=lambda r: r.score, reverse=True)
@@ -138,7 +171,11 @@ def rag_search(
         "total_found": len(all_results),
         "query_time_ms": elapsed_ms,
         "mode": mode,
+        "graph_augmented": _graph_augmented,
     }
+
+    if result_warning:
+        result["warning"] = result_warning
 
     return result
 
@@ -148,49 +185,65 @@ def _augment_with_graph(
     idx_dir: "Path",
     project_store,
     limit: int,
-) -> list:
+) -> "tuple[list, bool]":
     """Expand seed results with structural neighbours from the graph store.
 
-    Fetches depth-1 neighbours for the top seed files and merges them with
-    the vector results.  Returns a deduplicated list capped at *limit*.
+    Reserves up to 2 result slots for structural neighbours so they are always
+    visible even when their scores fall below the vector top-k.  Returns
+    (results, was_augmented) where was_augmented=True only when at least one
+    structural neighbour was actually added.
     Silently no-ops if graph.db does not exist or has no edges.
+    Degrades gracefully to (seed_results, False) on any error.
     """
     from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
     from rag_server.ports.store_port import SearchResult
 
     graph_db = idx_dir / "graph.db"
     if not graph_db.exists():
-        return seed_results
+        return seed_results, False
 
     graph_store = SQLiteGraphStore(graph_db)
     if not graph_store.has_graph():
-        return seed_results
+        return seed_results, False
 
-    seen_sources = {r.metadata.get("source_file", "") for r in seed_results}
-    extra: list[SearchResult] = []
+    try:
+        seen_sources = {r.metadata.get("source_file", "") for r in seed_results}
+        extra: list[SearchResult] = []
 
-    # Limit graph expansion to top-3 seeds to control token budget
-    for seed in seed_results[:3]:
-        seed_file = seed.metadata.get("source_file", "")
-        if not seed_file:
-            continue
-        neighbours = graph_store.get_neighbours(seed_file, depth=1)
-        for edge in neighbours:
-            # Fetch chunks from the neighbouring file (source or target)
-            neighbour_file = (
-                edge.target_file if edge.source_file == seed_file else edge.source_file
-            )
-            if not neighbour_file or neighbour_file in seen_sources:
+        # Limit graph expansion to top-3 seeds to control token budget
+        for seed in seed_results[:3]:
+            seed_file = seed.metadata.get("source_file", "")
+            if not seed_file:
                 continue
-            chunks = project_store.get_by_source("codebase", neighbour_file)
-            for chunk in chunks[:2]:  # at most 2 chunks per neighbour file
-                extra.append(SearchResult(
-                    content=chunk.content,
-                    metadata=chunk.metadata,
-                    score=max(0.0, seed.score - 0.15),  # slight penalty vs vector seed
-                ))
-            seen_sources.add(neighbour_file)
+            neighbours = graph_store.get_neighbours(seed_file, depth=1)
+            for edge in neighbours:
+                # Fetch chunks from the neighbouring file (source or target)
+                neighbour_file = (
+                    edge.target_file if edge.source_file == seed_file else edge.source_file
+                )
+                if not neighbour_file or neighbour_file == "_external_" or neighbour_file in seen_sources:
+                    continue
+                chunks = project_store.get_by_source("codebase", neighbour_file)
+                for chunk in chunks[:2]:  # at most 2 chunks per neighbour file
+                    extra.append(SearchResult(
+                        content=chunk.content,
+                        metadata=chunk.metadata,
+                        score=max(0.1, seed.score - 0.15),
+                    ))
+                seen_sources.add(neighbour_file)
 
-    combined = seed_results + extra
-    combined.sort(key=lambda r: r.score, reverse=True)
-    return combined[:limit]
+        if not extra:
+            return seed_results, False
+
+        # Reserve up to 2 slots for graph neighbours so they always appear in results.
+        # Without this, graph neighbours score lower than vector top-k and get cut.
+        graph_slots = min(len(extra), 2, max(0, limit - 1))
+        vector_slots = max(0, limit - graph_slots)
+        top_vectors = sorted(seed_results, key=lambda r: r.score, reverse=True)[:vector_slots]
+        top_graph = sorted(extra, key=lambda r: r.score, reverse=True)[:graph_slots]
+        combined = top_vectors + top_graph
+        combined.sort(key=lambda r: r.score, reverse=True)
+        return combined, True
+    except Exception as e:
+        logger.error("Graph augmentation failed, returning seed results: %s", e)
+        return seed_results, False
