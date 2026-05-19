@@ -4,12 +4,18 @@ import re
 
 from rag_server.indexing.markdown_chunker import RawChunk, estimate_tokens
 
+# Elements whose direct children should each become individual chunks.
+# Without this, <guardrails> (13+ children, 1000+ tokens) gets split at
+# arbitrary line boundaries, cutting <bad>/<good> pairs mid-element.
+_CONTAINER_ELEMENTS = frozenset({"guardrails", "patterns"})
+
 
 def chunk_xml(text: str, source_file: str, max_tokens: int = 500, min_tokens: int = 50) -> list[RawChunk]:
     """Split XML into chunks based on top-level element boundaries.
 
     Strategy:
     - Find top-level elements (direct children of root)
+    - Expand container elements (<guardrails>, <patterns>) into their children
     - Each element becomes a chunk
     - If an element exceeds max_tokens, split at nested element boundaries
     - Merge very small elements with the next one
@@ -18,6 +24,18 @@ def chunk_xml(text: str, source_file: str, max_tokens: int = 500, min_tokens: in
 
     # Find top-level elements by tracking tag depth
     elements = _extract_elements(lines)
+
+    # Expand containers: replace <guardrails>/<patterns> with their children
+    # so each <guardrail> / <pattern> becomes its own atomic chunk
+    expanded: list[RawChunk] = []
+    for element in elements:
+        if element.section in _CONTAINER_ELEMENTS:
+            children = _extract_elements(element.content.split("\n"))
+            if children:
+                expanded.extend(children)
+                continue
+        expanded.append(element)
+    elements = expanded
 
     chunks = []
     pending = None  # Small element waiting to merge
