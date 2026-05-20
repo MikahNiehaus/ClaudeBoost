@@ -8,6 +8,31 @@ Build a per-task research RAG from external sources (web pages, PDFs, docs) scop
 current task workspace. The research index lives at `workspace/[task-id]/.rag-index/research/`
 and does not pollute the global ClaudeBoost RAG or any project codebase index.
 
+---
+
+## SEARCH RULES — NEVER SKIP EITHER CALL
+
+Every research query during implementation MUST run **both** of the following. No exceptions.
+
+**Call 1 — Research vector search** (external content: web pages, PDFs, docs):
+```
+rag_search scope=research workspace_path=$WORKSPACE query="<concept>" mode=vector
+```
+
+**Call 2 — Codebase graph search** (structural neighbours from the project source):
+```
+rag_search scope=codebase project_path=$PROJECT_PATH query="<concept>" mode=graph
+```
+
+Rules:
+- **NEVER run only one.** Both calls are mandatory on every query.
+- **NEVER skip the graph call** because "research already covered it" — graph traversal finds import/inheritance neighbours that vector alone misses.
+- **NEVER skip the vector call** because "you already know the codebase" — the research index has external context the codebase does not.
+- If the project has not been indexed yet (`rag_index_project` not run), note it and run Call 1 only — but flag the gap explicitly.
+- `mode=graph` is only meaningful for `scope=codebase`. Research scope always uses vector internally; always pass `mode=vector` explicitly to make intent clear.
+
+---
+
 ## Phase 0 — Init
 
 Parse `$ARGUMENTS`:
@@ -82,18 +107,29 @@ If more than half of sources failed or returned fewer than 5 chunks each, warn t
 the research index may be too sparse to be useful, and suggest alternatives (different URLs,
 cached versions, local PDF downloads).
 
-## Phase 4 — Verify
+## Phase 4 — Dual-Mode Verify
 
-Run `rag_search` with:
+Run **both** searches. NEVER skip either.
+
+**Search A — Research vector** (verifies index content):
 - `scope`: `research`
 - `workspace_path`: `$WORKSPACE`
-- `query`: a specific concept from `$TOPIC` (not the topic itself verbatim)
+- `mode`: `vector`
+- `query`: a specific concept from `$TOPIC` (not the topic verbatim)
 - `limit`: 3
 
-Show the top 3 results as a preview snippet (first 200 chars of content + source URL).
+**Search B — Codebase graph** (verifies structural context is reachable):
+- `scope`: `codebase`
+- `project_path`: current project path (ask user if unknown)
+- `mode`: `graph`
+- `query`: same concept as Search A
+- `limit`: 3
 
-If 0 results returned, something went wrong — check that workspace_path is correct and
-at least one source indexed successfully. Report the issue to the user.
+Show results from both as preview snippets (first 200 chars + source). Label which came from research vs codebase.
+
+If Search A returns 0 results: index is broken — check workspace_path and re-run Phase 3.
+If Search B returns 0 results: project not indexed — note it, proceed, flag that `rag_index_project` should be run before implementation begins.
+If both return 0: stop and report to user before continuing.
 
 ## Phase 5 — Update context.md
 
@@ -115,6 +151,22 @@ Search with: `rag_search scope=research workspace_path=<WORKSPACE> query="<speci
 
 If `context.md` already has a "Research Sources" section, replace it.
 
+## Final Step: Evidence Verification
+
+Before printing the "Done" output, spawn a single `evaluator-agent` with this prompt:
+
+"Read the Research Sources table that was just written to context.md for task $TASK_ID. Verify:
+1. Every source marked 'ok' in the Status column has a chunk count greater than 0.
+2. Every source that was in the approved list appears in the table (no silent omissions).
+3. The search example query is specific enough to return meaningful results (not just the topic name verbatim).
+
+Output a simple table:
+| Source/Claim | Evidence present? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+
+Flag any NEEDS_EVIDENCE items (e.g., a source marked 'ok' with 0 chunks, or a missing approved source). Under 500 tokens."
+
+Surface any NEEDS_EVIDENCE items to the user before reporting Done.
+
 ## Done
 
 Print:
@@ -122,7 +174,10 @@ Print:
 Research RAG ready at `workspace/$TASK_ID/`.
 
 Indexed: N sources, M total chunks
-Query: rag_search scope=research workspace_path=<WORKSPACE> query="<concept>"
+
+MANDATORY dual-mode search pattern (NEVER run only one):
+  rag_search scope=research  workspace_path=<WORKSPACE>    query="<concept>" mode=vector
+  rag_search scope=codebase  project_path=<PROJECT_PATH>   query="<concept>" mode=graph
 ```
 
 ---
@@ -134,3 +189,5 @@ Query: rag_search scope=research workspace_path=<WORKSPACE> query="<concept>"
 - To force re-index all sources: pass `force=true` to `rag_index_research` manually.
 - PDF detection is automatic: `.pdf` extension or `Content-Type: application/pdf` routes to the PDF chunker.
 - If a PDF is image-only (scanned), text extraction will return 0 chunks — use an OCR'd version or find an HTML alternative.
+- `mode=graph` only works on `scope=codebase` — research scope always uses vector internally. Always pass `mode=vector` explicitly on research calls to make intent visible.
+- **NEVER run only vector or only graph.** Both calls are required on every query during implementation. Graph traversal finds import/inheritance neighbours that semantic search alone misses; research vector finds external context the codebase does not contain. They are complementary, not interchangeable.

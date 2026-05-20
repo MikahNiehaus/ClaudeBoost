@@ -52,15 +52,26 @@ _EXTERNAL_SENTINEL = "_external_"
 def _is_external_symbol(
     symbol: str, source_file: str, go_module_prefixes: set[str] | None
 ) -> bool:
-    """Return True if symbol is a stdlib or external-dep import for a .go source file.
+    """Return True if symbol is a stdlib or external-dep import.
 
-    Only applied to Go sources — Python/JS resolution is reliable enough without this.
+    For JS/TS: any non-relative import (no leading dot) is an npm package → external.
+    For Python: single-segment names with no slashes or dots are stdlib/third-party.
     For Go:
       - No dot in first path segment  → Go stdlib  (os, fmt, net/http, encoding/json)
       - Domain-like first segment that is NOT any project module → external dep
     """
     if not symbol or symbol.startswith("."):
         return False
+
+    if source_file.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+        # Path aliases like @/ map to project-internal directories — not npm packages.
+        # Standard scoped npm packages use @scope/name (word chars before the first slash).
+        # Path aliases use @/ (slash immediately after @) — let resolution handle them.
+        if symbol.startswith("@/"):
+            return False
+        # All other non-relative JS/TS imports are npm packages or node builtins → external.
+        # Relative imports (./foo, ../bar) already return False above.
+        return True
 
     if source_file.endswith(".py"):
         # Single-segment Python name with no slashes or dots = stdlib or third-party top-level
@@ -82,6 +93,10 @@ def _is_external_symbol(
     return True  # external domain-hosted dep (github.com/other, golang.org/x, etc.)
 
 
+_JS_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx", ".mjs")
+_JS_SOURCE_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+
+
 def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, str]) -> str:
     """Try to map *target_symbol* to a project-relative file path.
 
@@ -90,6 +105,8 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
     2. Dotted → slash form  (foo.bar → foo/bar).
     3. Slash → dotted form  (foo/bar → foo.bar).
     4. Relative import resolved against source_file directory.
+    5. Extension-less JS/TS relative imports (./Foo → Foo.jsx, Foo/index.js).
+    6. Path alias @/foo → foo (project root alias common in Expo/Next projects).
     Returns empty string if no match.
     """
     if not target_symbol:
@@ -112,9 +129,12 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
     # 4. Relative import (starts with . or ..)
     if target_symbol.startswith("."):
         source_dir = "/".join(source_file.split("/")[:-1])
-        # Strip leading dots to count levels up
-        stripped = target_symbol.lstrip(".")
-        levels_up = len(target_symbol) - len(stripped) - 1  # -1 for the first dot = same dir
+        # Strip leading dots to count levels up, then strip the path separator.
+        # JS-style: "./foo" → lstrip(".") = "/foo" → levels_up=0, stripped="foo"
+        #           "../foo" → lstrip(".") = "/foo" → levels_up=1, stripped="foo"
+        stripped_with_sep = target_symbol.lstrip(".")
+        levels_up = len(target_symbol) - len(stripped_with_sep) - 1  # -1: first dot = same dir
+        stripped = stripped_with_sep.lstrip("/")  # remove the path separator after the dots
         parts = source_dir.split("/") if source_dir else []
         if levels_up > 0:
             parts = parts[:-levels_up] if levels_up <= len(parts) else []
@@ -124,6 +144,25 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
         rel_dot = rel_slash.replace("/", ".")
         if rel_dot in file_map:
             return file_map[rel_dot]
+        # 5. Extension-less JS/TS relative imports: ./Foo → Foo.jsx, Foo/index.js, etc.
+        if source_file.endswith(_JS_SOURCE_EXTS):
+            for ext in _JS_EXTENSIONS:
+                if rel_slash + ext in file_map:
+                    return file_map[rel_slash + ext]
+                if rel_slash + "/index" + ext in file_map:
+                    return file_map[rel_slash + "/index" + ext]
+
+    # 6. Path alias: @/foo/bar → look up "foo/bar" against file_map.
+    #    Common in Expo/Next.js projects where @/ maps to src/ or project root.
+    if target_symbol.startswith("@/") and source_file.endswith(_JS_SOURCE_EXTS):
+        alias_path = target_symbol[2:]  # strip "@/"
+        if alias_path in file_map:
+            return file_map[alias_path]
+        for ext in _JS_EXTENSIONS:
+            if alias_path + ext in file_map:
+                return file_map[alias_path + ext]
+            if alias_path + "/index" + ext in file_map:
+                return file_map[alias_path + "/index" + ext]
 
     return ""
 

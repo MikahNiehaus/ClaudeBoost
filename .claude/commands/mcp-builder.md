@@ -217,6 +217,22 @@ Save evaluations as `evals.xml`:
 
 ---
 
+## Phase 4.5: Anti-Hallucination Verification
+
+Before proceeding to registration, run `/audit evals.xml` with:
+- Input type: `output`
+- Dimensions: O1 Completion Coverage, O2 Evidence Quality, O3 Goal Alignment, C1 Logic & Correctness
+
+Verify:
+- All 10 eval QA pairs are present and non-empty
+- Each answer references something verifiable in the target API (not a placeholder)
+- The set of tools covered by the evals aligns with the CRUD coverage designed in Phase 1.4
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: proceed to ClaudeBoost Registration.
+If verdict is UNVERIFIED: surface the specific gaps (e.g., missing eval pairs, placeholder answers, uncovered tools) and fix them before registering the server.
+
+---
+
 ## ClaudeBoost Registration
 
 Once built and tested, register your new MCP server so all ClaudeBoost sessions can use it. Run `/update-config` and add the server entry to `~/.claude/settings.json` under `mcpServers`.

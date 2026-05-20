@@ -52,6 +52,22 @@ OVERALL: [ALL GATES PASSED / BLOCKED AT GATE N]
 [If blocked: Action required before proceeding]
 ```
 
+## Final Step: Evidence Verification
+
+After all gates have produced their PASS/FAIL results but before printing the OVERALL verdict line, spawn a single `evaluator-agent` with this prompt:
+
+"Read the GATE CHECK RESULTS above. Verify:
+1. Each PASS result cites what was actually checked — not just 'PASS' alone (e.g., 'Gate 2: PASS — workspace/my-task/context.md exists' is evidence; 'Gate 2: PASS' alone is not).
+2. All 5 gates are present in the results — no gate was silently skipped.
+3. The OVERALL verdict is consistent with individual gate results: OVERALL PASS is only valid if all 5 gates show PASS.
+
+Output a simple table:
+| Gate | Evidence cited? | Consistent with OVERALL? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+
+Flag any NEEDS_EVIDENCE items. Under 500 tokens."
+
+Surface any NEEDS_EVIDENCE items alongside the gate results before the user acts on the OVERALL verdict.
+
 ## When to Run
 
 - At start of EVERY new task

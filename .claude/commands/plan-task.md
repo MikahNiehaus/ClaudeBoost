@@ -63,6 +63,16 @@ Populate the Plan section with:
 - Execution Strategy
 - Approval Status (set to Pending)
 
+### Step 5.5: Anti-Hallucination Verification
+
+Before presenting the plan for review, run `/audit` on the plan content in `context.md` with:
+- Input type: `process`
+- Stated goal: the task description (`$2` or the description from `context.md`)
+- Dimensions: P1 Correctness, P5 Completeness, P6 Completion Coverage, O3 Goal Alignment
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: present the plan as normal.
+If verdict is UNVERIFIED: surface the specific gaps identified by the audit alongside the plan so the user can see what's missing before approving.
+
 ### Step 6: Present Plan for Review
 
 Display the completed plan and ask:

@@ -129,9 +129,16 @@ Validate the PRD against these before saving:
 - [ ] Out-of-scope items explicitly listed
 - [ ] Tech stack references match the actual project
 
-### Step 5: Save and Report
+### Step 5: Save and Verify
 
-Save the file. Inform the user:
+Save the file. Before asking the user to proceed, run `/audit workspace/[task-id]/prd.md` with:
+- Input type: `document`
+- Dimensions: D1 Factual Accuracy, D3 Completeness & Gaps, D2 Internal Consistency
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: inform the user the PRD is ready.
+If verdict is UNVERIFIED: surface the specific gaps identified by the audit alongside the PRD so the user can review before proceeding to Phase 2.
+
+Inform the user:
 ```
 PRD saved to workspace/[task-id]/prd.md
 
@@ -252,6 +259,16 @@ Write `workspace/[task-id]/tasks.md`:
 
 [Implementation Notes section]
 ```
+
+### Step 6.5: Verify tasks.md
+
+Before informing the user, run `/audit workspace/[task-id]/tasks.md` with:
+- Input type: `process`
+- Stated goal: the Functional Requirements from `workspace/[task-id]/prd.md`
+- Dimensions: P1 Correctness, P5 Completeness, P6 Completion Coverage
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: inform the user as normal.
+If verdict is UNVERIFIED: surface the specific gaps identified by the audit alongside the task list so the user can see what's missing before starting implementation.
 
 Inform the user:
 ```

@@ -207,12 +207,12 @@ def _augment_with_graph(
         return seed_results, False
 
     try:
-        seen_sources = {r.metadata.get("source_file", "") for r in seed_results}
+        seen_sources = {r.metadata.get("source_file", "").replace("\\", "/") for r in seed_results}
         extra: list[SearchResult] = []
 
         # Limit graph expansion to top-3 seeds to control token budget
         for seed in seed_results[:3]:
-            seed_file = seed.metadata.get("source_file", "")
+            seed_file = seed.metadata.get("source_file", "").replace("\\", "/")
             if not seed_file:
                 continue
             neighbours = graph_store.get_neighbours(seed_file, depth=1)

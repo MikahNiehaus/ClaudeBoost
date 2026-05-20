@@ -9,10 +9,11 @@ CHANNEL A — Behavior enforcement (one per turn, elif chain):
    - At 100+ tool uses (every 25 past): /clear-safe suggestion
    - Every 25 tool uses: comprehensive 5-behavior checklist
 
-CHANNEL B — Workspace checkpoint (independent, every 20 tool uses):
-   - Names the specific workspace/[task-id]/context.md to update
-   - Tracks compliance: if context.md mtime unchanged since last nudge → URGENT
-   - If no workspace: suggests creating one at 60 tool uses
+CHANNEL B — Workspace checkpoint (independent):
+   - On Edit/Write: always auto-save handoff-latest.json (silent, no context cost)
+     then nudge if context.md is stale (>5 min old)
+   - On other tools: every 20 tool uses, names workspace/[task-id]/context.md to update
+     and escalates to URGENT if it hasn't changed since last nudge
 
 Both channels fire in the same turn when both conditions are met.
 Messages are combined into a single additionalContext output.
@@ -23,6 +24,8 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 NUDGE_INTERVAL = 20
@@ -39,6 +42,10 @@ CLEAR_CONSIDERATION_INTERVAL = 25     # repeat every N uses past threshold
 CONTEXT_WINDOW_SIZE = 200_000   # tokens — default for Claude Sonnet/Opus in Claude Code
 CONTEXT_PCT_WARN = 0.75         # warn when >75% of the window is used (< 25% remaining)
 
+# Auto-save + stale nudge on Edit/Write
+AUTO_SAVE_TOOLS = {"Edit", "Write"}
+STALE_NUDGE_SECONDS = 300  # 5 minutes — nudge if context.md older than this after an edit
+
 RAG_TOOLS = {
     "mcp__rag-server__rag_search",
     "mcp__rag-server__rag_context",
@@ -51,12 +58,55 @@ RAG_TOOLS = {
 FILE_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 
+def _auto_save_handoff(home: Path, ctx_files: list, session_id: str = "") -> None:
+    """Silently write handoff-latest.json from current workspace context.md files.
+
+    Called after every Edit/Write so /clear is always safe — no additionalContext
+    output, no token cost. Reads whatever context.md files currently contain.
+    The compaction-save.py (PreCompact) will overwrite this with richer conversation
+    data; this is the lightweight in-session safety net.
+    """
+    if not ctx_files:
+        return
+
+    summaries = []
+    for ctx_file in sorted(ctx_files):
+        task_id = ctx_file.parent.name
+        try:
+            content = ctx_file.read_text(encoding="utf-8")
+            summaries.append(f"### {task_id}\n{content[:3000]}")
+        except Exception:
+            pass
+
+    if not summaries:
+        return
+
+    workspace_memo = "\n\n".join(summaries)
+    handoff_data = {
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "trigger": "PostToolUse:auto-save",
+        "workspace_memo": workspace_memo,
+        "conversation": {},
+    }
+
+    try:
+        (home / "state" / "handoff-latest.json").write_text(
+            json.dumps(handoff_data, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def main() -> int:
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     ))
     workspace_dir = home / "workspace"
-    has_workspace = workspace_dir.exists() and any(workspace_dir.glob("*/context.md"))
+
+    # Compute ctx_files once — used by both Channel B paths and auto-save
+    ctx_files = list(workspace_dir.glob("*/context.md")) if workspace_dir.exists() else []
+    has_workspace = bool(ctx_files)
 
     # --- Read hook payload ---
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -66,6 +116,7 @@ def main() -> int:
         payload = {}
 
     tool_name = payload.get("tool_name", "")
+    session_id = payload.get("session_id", "")
 
     # --- Context window pressure (from hook payload when available) ---
     ctx_usage = payload.get("context_window_usage") or {}
@@ -142,7 +193,7 @@ def main() -> int:
 
     nudges = []
 
-    # --- CHANNEL A: Behavior enforcement (one per turn) ---
+    # --- CHANNEL A: Behavior enforcement (one per turn, elif chain) ---
     if context_pct_used is not None and context_pct_used >= CONTEXT_PCT_WARN:
         nudges.append(
             f"CONTEXT PRESSURE ({int(context_pct_used * 100)}% of window used — "
@@ -204,42 +255,57 @@ def main() -> int:
             "(5) SPAWNING AGENT? -> rag_context as FIRST step in prompt."
         )
 
-    # --- CHANNEL B: Workspace checkpoint (independent — fires even if Channel A fired) ---
-    if has_workspace and total % NUDGE_INTERVAL == 0:
-        ctx_files = list(workspace_dir.glob("*/context.md"))
-        if ctx_files:
-            most_recent = max(ctx_files, key=lambda f: f.stat().st_mtime)
+    # --- CHANNEL B: Workspace checkpoint (independent — fires even when Channel A fired) ---
+    if tool_name in AUTO_SAVE_TOOLS and has_workspace:
+        # Always: silently save handoff state so /clear is always safe regardless of
+        # whether context.md was just updated. No additionalContext — zero token cost.
+        _auto_save_handoff(home, ctx_files, session_id)
+
+        # Nudge only when context.md is stale — no spam when it was just written
+        most_recent = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        age_seconds = time.time() - most_recent.stat().st_mtime
+        if age_seconds > STALE_NUDGE_SECONDS:
             task_id = most_recent.parent.name
-            current_mtime = most_recent.stat().st_mtime
-
-            last_mtime = behavior.get("last_nudge_ctx_mtime", 0.0)
-            last_path = behavior.get("last_nudge_ctx_path", "")
-            last_count = behavior.get("last_nudge_count", 0)
-
-            unchanged = (
-                last_path == str(most_recent)
-                and abs(current_mtime - last_mtime) < 2.0
+            age_min = int(age_seconds / 60)
+            nudges.append(
+                f"CONTEXT UPDATE — workspace/{task_id}/context.md is {age_min}m stale. "
+                "Update it now: current status, decision made, next step."
             )
 
-            if unchanged and last_count > 0:
-                uses_since = total - last_count
-                nudges.append(
-                    f"URGENT CONTEXT CHECKPOINT: workspace/{task_id}/context.md "
-                    f"has NOT been updated since the reminder {uses_since} tool uses ago. "
-                    "Update it NOW before continuing — status, next step, decisions made. "
-                    "This file is what survives /clear and compaction."
-                )
-            else:
-                nudges.append(
-                    f"CONTEXT CHECKPOINT: Update workspace/{task_id}/context.md now with: "
-                    "(1) what was just implemented or decided, "
-                    "(2) current status and specific next step, "
-                    "(3) user requirements or constraints stated this session."
-                )
+    elif has_workspace and total % NUDGE_INTERVAL == 0:
+        # Fallback: periodic nudge for sessions without recent Edit/Write activity
+        most_recent = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        task_id = most_recent.parent.name
+        current_mtime = most_recent.stat().st_mtime
 
-            behavior["last_nudge_ctx_mtime"] = current_mtime
-            behavior["last_nudge_ctx_path"] = str(most_recent)
-            behavior["last_nudge_count"] = total
+        last_mtime = behavior.get("last_nudge_ctx_mtime", 0.0)
+        last_path = behavior.get("last_nudge_ctx_path", "")
+        last_count = behavior.get("last_nudge_count", 0)
+
+        unchanged = (
+            last_path == str(most_recent)
+            and abs(current_mtime - last_mtime) < 2.0
+        )
+
+        if unchanged and last_count > 0:
+            uses_since = total - last_count
+            nudges.append(
+                f"URGENT CONTEXT CHECKPOINT: workspace/{task_id}/context.md "
+                f"has NOT been updated since the reminder {uses_since} tool uses ago. "
+                "Update it NOW before continuing — status, next step, decisions made. "
+                "This file is what survives /clear and compaction."
+            )
+        else:
+            nudges.append(
+                f"CONTEXT CHECKPOINT: Update workspace/{task_id}/context.md now with: "
+                "(1) what was just implemented or decided, "
+                "(2) current status and specific next step, "
+                "(3) user requirements or constraints stated this session."
+            )
+
+        behavior["last_nudge_ctx_mtime"] = current_mtime
+        behavior["last_nudge_ctx_path"] = str(most_recent)
+        behavior["last_nudge_count"] = total
 
     elif not has_workspace and total == NO_WORKSPACE_NUDGE_THRESHOLD:
         nudges.append(

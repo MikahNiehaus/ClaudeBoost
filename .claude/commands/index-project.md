@@ -1,6 +1,6 @@
 ---
 description: Index a project's codebase for semantic search
-allowed-tools: mcp__rag-server__rag_status, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, mcp__rag-server__rag_context, AskUserQuestion
+allowed-tools: mcp__rag-server__rag_status, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_index, mcp__rag-server__rag_search, mcp__rag-server__rag_context, AskUserQuestion
 ---
 
 # Index Project for Codebase RAG
@@ -71,42 +71,73 @@ $ARGUMENTS — flexible, any of:
    - Files indexed / chunks created / files skipped
    - Total time if notable
 
-8. **Post-index quality checks** — run all five. Two extra searches + one Glob. Fast but catches real gaps.
+8. **Post-index quality checks** — run all five checks, then auto-fix anything that can be fixed, then re-verify.
 
    a. **Coverage check** (Glob, no API calls) — detect unsupported file types silently excluded from the index:
       Glob for `**/*.cshtml`, `**/*.razor`, `**/*.vue`, `**/*.svelte` in the project path (excluding `node_modules`, `obj`, `bin`).
-      - If any of these extensions exist AND were not in the scan's `files_by_language` output: WARN — "Found N .ext files not indexed — this extension is not supported by the indexer."
-      - This catches the class of bug where an entire UI layer (Razor views, Vue components, etc.) is silently absent from the index.
+      - PASS: none found, or all found extensions were in the scan's `files_by_language` output
+      - WARN: Found N .ext files not indexed — this extension is not supported by the indexer.
+      - **Auto-fix**: none — this requires a code change to `LANGUAGE_EXTENSIONS` in `ClaudeBoost/mcp-rag-server/src/rag_server/core/project.py`. Report the exact file and what to add.
 
-   b. **Graph liveness check** (1 search call) — verify graph edges were actually built:
+   b. **Graph liveness check** (1 search call) — verify graph edges are activating during search:
       `rag_search(query="service class method", scope="codebase", project_path=<path>, mode="graph", limit=3)`
-      - PASS: response contains `graph_augmented: true` — structural neighbors are being added
-      - WARN: `graph_augmented: false` — graph.db exists but has no edges; graph-mode searches are identical to vector-only. Note: "graph edges not built — graph search provides no benefit over vector."
+      - PASS: `graph_augmented: true`
+      - WARN: `graph_augmented: false`
 
-   c. **Relevance quality check** (1 search call) — verify top scores are meaningful, not noise:
-      Pick a query based on the primary language from scan:
+      **Auto-fix sequence when WARN:**
+      1. Call `rag_status()` and check `indexed_projects[<id>]` for this project:
+         - If `graph_edges = 0`: No edges were extracted — language has no graph support. Cannot auto-fix. Report: "No graph edges extracted — graph search unavailable for this language."
+         - If `graph_edges > 0` AND `graph_resolved = 0`: Edges exist but none resolved (file map lookup failed). Auto-fix: re-run `rag_index_project(project_path, force=true)`. Re-check with `rag_search(mode="graph")`. Report FIXED or PERSISTENT.
+         - If `graph_active: true` (edges AND resolved > 0) but search still returns `graph_augmented: false`: The seed files for this query have no graph neighbors. Try a second query: `rag_search(query="import module dependency", scope="codebase", project_path=<path>, mode="graph", limit=3)`. If `graph_augmented: true` on retry: report PASS — graph is working, the original query's seed files happened to have no neighbors. If still false: report WARN — graph edges may be isolated.
+
+   c. **Relevance quality check** (1 search call) — verify top scores are meaningful:
+      Pick a primary query based on the dominant language from scan:
       - csharp/java/kotlin → `"class constructor dependency injection"`
-      - typescript/javascript → `"interface type export function"`
+      - typescript → `"interface type export function"`
+      - javascript (not typescript) → `"export function module component"`
       - python → `"class method return type"`
       - other → `"function parameter return"`
       `rag_search(query=<above>, scope="codebase", project_path=<path>, limit=5)`
-      Evaluate results:
-      - PASS: top score ≥ 0.68 AND top 3 results are from primary language files
-      - WARN: top score 0.62–0.68 — index is returning best-of-bad-matches; queries need to be more specific
-      - FAIL: top score < 0.62 OR top 3 results are from irrelevant file types (e.g. enum files, config files for a code query)
+      Evaluate:
+      - PASS: top score ≥ 0.68 AND top 3 results from primary language files
+      - WARN: top score 0.62–0.68
+      - FAIL: top score < 0.62 OR top 3 results from irrelevant file types
+
+      **Auto-fix sequence when WARN or FAIL:**
+      1. Retry with a vocabulary-rich fallback query for the primary language:
+         - csharp → `"public async Task service repository interface"`
+         - typescript → `"export interface type generic extends"`
+         - javascript → `"module exports require callback promise"`
+         - python → `"def self return async await"`
+         - other → `"class method interface implementation"`
+      2. Re-run `rag_search` with the fallback query.
+         - If new top score ≥ 0.68: report PASS — original query vocabulary didn't match codebase idioms. Show both scores.
+         - If still < 0.68: report WARN with suggestion: "Re-index with a stronger embedding model (current: check `rag_status().model`). Consider `sentence-transformers/all-mpnet-base-v2` (768d) for better code semantic resolution."
       Show top 3 results with scores so the user can judge quality.
 
    d. **Manifest integrity** — confirm manifest was written:
       Check that `<project>/workspace/.rag-index/manifest.json` exists and is non-empty.
+      - **Auto-fix**: none — if missing, re-run `rag_index_project` with `force=true`.
 
    e. **Context pipeline smoke test** — confirm the full `rag_context` pipeline works end-to-end:
       `rag_context(agent="explore-agent", task_description="main entry point", max_tokens=3000, project_path=<path>)`
-      - `tier_summary.codebase > 0` — WARN if 0
-      - No `tier_errors` key — FAIL if present (shows which tier broke and why)
-      - `total_tokens_approx` is reasonable (not 0, not wildly over max_tokens)
+      - PASS: `tier_summary.codebase > 0`, no `tier_errors`, `total_tokens_approx` > 0
+      - WARN: `tier_summary.codebase = 0`
+      - FAIL: `tier_errors` key present
 
-   Report `✓ quality checks passed` or list each failure with its specific value and a one-line fix.
-   Common fixes to show inline:
-   - Coverage gap: "Add the extension to LANGUAGE_EXTENSIONS in ClaudeBoost/mcp-rag-server/src/rag_server/core/project.py, then re-index."
-   - Graph not built: "GraphRAG edges may require a specific indexer flag — check rag_index_project parameters."
-   - Low scores: "Use more specific, vocabulary-rich queries; or re-index with a stronger embedding model."
+      **Auto-fix for tier_errors containing "dimension mismatch":**
+      Re-index the ClaudeBoost knowledge base: call `rag_index(force=true, scope="all")`. Then re-run the smoke test. Report FIXED or PERSISTENT.
+
+   **After all auto-fixes, print a summary table:**
+   ```
+   ────────────────────────────────────────────────────────
+   Post-Index Quality Checks
+   ────────────────────────────────────────────────────────
+   a. Coverage          ✓ / ⚠ [detail]
+   b. Graph liveness    ✓ / ⚠ [detail] [→ FIXED / cannot auto-fix]
+   c. Relevance         ✓ / ⚠ [top score, query used] [→ FIXED via fallback query]
+   d. Manifest          ✓ / ⚠
+   e. Context pipeline  ✓ / ⚠ [→ FIXED via knowledge re-index]
+   ────────────────────────────────────────────────────────
+   ```
+   End with one line: `✓ All checks passed` or `⚠ N warning(s) — [non-fixable items listed]`.

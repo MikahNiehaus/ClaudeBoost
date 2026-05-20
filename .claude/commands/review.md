@@ -113,3 +113,19 @@ No issues found.
 Summary: 0 CRITICAL, 0 MAJOR, 0 MINOR
 Verdict: PASS
 ```
+
+## Final Step: Evidence Verification
+
+Before presenting to the user, spawn a single `evaluator-agent` with this prompt:
+
+"Read the review output above (Grade, issue list, Summary, Verdict). Verify that:
+1. Every CRITICAL and MAJOR issue cites a specific file:line.
+2. The Grade is consistent with the issue counts (e.g., a D grade requires at least one CRITICAL issue; a C grade requires at least one MAJOR and no CRITICAL).
+3. The Verdict (PASS/FAIL) is consistent with the Grade (A/B = PASS, C/D = FAIL).
+
+Output a simple table:
+| Claim | Evidence present? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+
+Flag any NEEDS_EVIDENCE items. Under 500 tokens."
+
+Surface any NEEDS_EVIDENCE items alongside the review output so the user sees them before acting on the grade.

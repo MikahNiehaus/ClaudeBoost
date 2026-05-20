@@ -58,7 +58,20 @@ Spawn `security-agent` with the full diff and the following checks:
 **Hardcoded secrets scan (diff only):**
 Grep the diff for: `password=`, `secret=`, `api_key=`, `token=`, `AKIA`, `sk_live_`, `-----BEGIN`, `bearer`, `Authorization:`
 
-### Step 3: Output
+### Step 3: Verify and Output
+
+Before presenting findings to the user, run `/audit` on the security-agent findings output with:
+- Input type: `output`
+- Dimensions: O2 Evidence Quality, O1 Completion Coverage, X1 Red Flags/Anomalies
+- (CL3 Source Credibility omitted — that dimension applies to `claim` input type; security agent output is `output` type, verified by O2 instead)
+
+Verify:
+- Every finding has a specific `file:line` citation and an impact statement
+- Findings that reference the diff specifically (not hypothetical or templated patterns not in the actual code) are retained
+- Findings without `file:line` and impact are false positives and should be surfaced as such to the user
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: present findings as normal.
+If verdict is UNVERIFIED: surface the unverified findings separately (labeled "Evidence insufficient — review before acting") alongside the verified findings.
 
 Findings use severity levels:
 - **CRITICAL** — Exploitable vulnerability, must fix before merge

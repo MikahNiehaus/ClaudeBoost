@@ -53,7 +53,21 @@ Generate polished documentation for the PROJECT (not the toolkit) in the `docs/`
 
 ## After Update
 
-Report:
+Before reporting completion to the user, spawn a single `evaluator-agent` with this prompt:
+
+"Read the generated documentation files listed above. Verify:
+1. Every command, script, or API call described in the docs actually exists in the project (check package.json scripts, Makefile targets, or source files as needed).
+2. If multiple sections were planned (e.g., README, architecture, API), verify each promised section is present and non-empty.
+3. Flag any section that describes a command or endpoint not found in the codebase, or any planned section that is missing.
+
+Output a simple table:
+| Claim/Section | Evidence present? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+
+Flag any NEEDS_EVIDENCE items. Under 500 tokens."
+
+Surface any NEEDS_EVIDENCE items to the user alongside the completion report.
+
+Then report:
 - What documentation was created/updated
 - Key sections covered
 - Any gaps that need manual attention

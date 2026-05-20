@@ -16,7 +16,7 @@ Input: **$ARGUMENTS**
 
 **Set audit flag** (suppresses verify-gate hook during this audit — it fires on every agent and would serialize the parallel flow):
 ```bash
-python -c "import json,os; p=os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','audit-in-progress.json'); open(p,'w').write(json.dumps({'active':True}))"
+echo '{"active":true}' > "$CLAUDEBOOST_HOME/state/audit-in-progress.json"
 ```
 
 Then call `rag_context(agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000)`.
@@ -38,12 +38,13 @@ Examine `$ARGUMENTS` and classify it as one of:
 | `claim` | A factual assertion, statement, or short text being verified for accuracy |
 | `document` | Multi-paragraph text, a pasted document, a ticket description, a spec |
 | `process` | Describes a workflow, sequence of steps, or plan |
+| `output` | The result of an agent, skill, or task execution. Contains claims that certain work was done, findings that were produced, or artifacts that were created. Typically a file path (plan.md, prd.md, exploration.md) or quoted agent output. |
 
 Set `INPUT_TYPE`.
 
 ### 1b — Fetch or read the content
 
-**If `file`:** Read the file at the given path. Store full contents as `INPUT_CONTENT`.
+**If `file`:** Read the file at the given path. Store full contents as `INPUT_CONTENT`. Set `STATED_GOAL = "Not provided — audit internal consistency only."`
 
 **If `url`:**
 
@@ -54,13 +55,23 @@ Navigate to the URL:
 browser_navigate(url="$ARGUMENTS")
 browser_snapshot()
 ```
-Store the page text and visible content as `INPUT_CONTENT`.
+Store the page text and visible content as `INPUT_CONTENT`. Set `STATED_GOAL = "Not provided — audit internal consistency only."`
 
-**If `code`, `config`, `claim`, `document`, `process`:** `INPUT_CONTENT` = `$ARGUMENTS` verbatim (already in hand).
+**If `code`, `config`, `claim`, `document`, `process`:** `INPUT_CONTENT` = `$ARGUMENTS` verbatim (already in hand). Set `STATED_GOAL = "Not provided — audit internal consistency only."`
+
+**If `output`:** Read the file(s) at the given path. If multiple files are implied, read all of them. Store full contents as `INPUT_CONTENT`. Also note the stated goal or ticket as `STATED_GOAL` — check for `ticket.md` or `context.md` in the same workspace directory (e.g., if input is `workspace/task-id/plan.md`, look for `workspace/task-id/ticket.md`). If found, store first 500 chars as `STATED_GOAL`. If not found, set `STATED_GOAL = "Not provided — audit internal consistency only."`.
 
 ### 1c — Summarize in one sentence
 
 Write: `"Auditing: [one sentence describing what this is and what it claims to be or do]"`
+
+### 1d — Detect audit scope
+
+If `INPUT_TYPE` is `output`, OR the user's request contains "verify completion", "check if done", "did this happen", or "was this actually done":
+  Set `AUDIT_SCOPE = completion-verification`
+
+Otherwise:
+  Set `AUDIT_SCOPE = general`
 
 ---
 
@@ -121,6 +132,16 @@ Choose 3–6 dimensions from the tables below based on `INPUT_TYPE`. Be decisive
 | P3 | Edge Cases | What happens when steps fail? Missing error handling in the flow? |
 | P4 | Efficiency | Unnecessary steps, bottlenecks, missing parallelism opportunities |
 | P5 | Completeness | Missing steps, implicit assumptions not made explicit |
+| P6 | Completion Coverage | Cross-reference the stated goals (ticket, acceptance criteria, or task description) against the output artifacts. For each stated goal: is there specific evidence in the output that it was addressed? Goals with no corresponding artifact are GAPS. |
+
+**`output`:**
+| ID | Dimension | Focus |
+|----|-----------|-------|
+| O1 | Completion Coverage | Does the output address ALL stated goals? For each claim of "done", cite the specific evidence in the output. Claims with no evidence in the artifact are incomplete. |
+| O2 | Evidence Quality | Every finding, conclusion, or action item must cite specific file:line, quoted text, or test result. Vague assertions ("this is improved", "security has been reviewed") with no specific citation are not evidence. |
+| O3 | Goal Alignment | Does the output match what was originally asked? Are there stated goals that appear nowhere in the output? Are there deliverables in the output that were not in the goal? |
+| O4 | Internal Consistency | Does the output contradict itself? Does "COMPLETE" status conflict with open items? Does a summary contradict the details? |
+| O5 | Specificity | Are all action items, findings, and next steps specific enough to be actionable? "Needs review" is not specific. "Review auth.py:45 for missing rate limit" is specific. |
 
 **Universal dimensions (always available, include if relevant):**
 | ID | Dimension | Focus |
@@ -163,6 +184,11 @@ Do NOT comment on anything outside your dimension. Stay strictly scoped.
 <INPUT_CONTENT verbatim — do not truncate>
 == END CONTENT ==
 
+== STATED GOAL (if available) ==
+<STATED_GOAL verbatim — the ticket, task description, or acceptance criteria this output is supposed to address>
+If no goal is available: "Not provided — audit internal consistency only."
+== END STATED GOAL ==
+
 == YOUR DIMENSION ==
 <DIMENSION_ID>: <DIMENSION_NAME>
 Focus: <DIMENSION_FOCUS>
@@ -184,6 +210,10 @@ Output format (JSON only, no prose):
   ]
 }
 If no issues found: {"dimension": "<ID>: <NAME>", "findings": []}
+
+EVIDENCE RULE: If you cannot quote specific text, cite a specific line/field, or name an exact section that supports a finding — do NOT include that finding. An empty or vague `evidence` field ("general concern", "seems wrong", "could be better") is worse than no finding. Return an empty `findings` array instead.
+
+This rule exists because: a finding without evidence is a FALSE POSITIVE by definition (per verdict agent Rule 1). Returning it wastes the verdict agent's processing time and inflates apparent issue counts. Silence is correct when you cannot prove an issue.
 ```
 
 Collect all JSON outputs as `AUDIT_FINDINGS`.
@@ -227,6 +257,12 @@ Output this exact structure (no additional sections):
 - INVALID: fundamental problems that invalidate the input
 - INCOMPLETE: cannot make a definitive call — state exactly what's missing
 
+If AUDIT_SCOPE = completion-verification, use these verdict labels instead of LEGIT/SUSPICIOUS:
+**VERIFIED**: all stated goals have specific evidence in the output
+**PARTIALLY VERIFIED**: some goals verified with evidence, some lack evidence
+**UNVERIFIED**: stated goals are present but without specific supporting evidence
+**CANNOT_VERIFY**: insufficient information to assess (missing goal, missing output content)
+
 **CONFIDENCE**: [HIGH | MEDIUM | LOW]
 (HIGH = strong evidence for verdict; MEDIUM = reasonable evidence but some gaps; LOW = limited auditability)
 
@@ -249,12 +285,17 @@ Output this exact structure (no additional sections):
 
 ## Phase 5: Report
 
-Output the full verdict report. Lead with the VERDICT and CONFIDENCE.
+**Clear audit flag first** (before any output — ensures cleanup even if interrupted):
+```bash
+rm -f "$CLAUDEBOOST_HOME/state/audit-in-progress.json"
+```
+
+Output the full verdict report. Lead with the severity count header on the very first line:
+
+**Severity summary (always first):**
+> `N CRITICAL | N HIGH | N MEDIUM | N LOW | N dismissed`
+
+Then the VERDICT, CONFIDENCE, RISK LEVEL, and full report body.
 
 Final message to user:
-> "Audit complete. **[VERDICT]** (confidence: [CONFIDENCE], risk: [RISK_LEVEL]). [SUMMARY sentence 1]. [RECOMMENDATION]"
-
-**Clear audit flag** (re-enables verify-gate hook for subsequent agent spawns):
-```bash
-python -c "import os; p=os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','audit-in-progress.json'); os.remove(p) if os.path.exists(p) else None"
-```
+> "Audit complete. **[VERDICT]** (confidence: [CONFIDENCE], risk: [RISK_LEVEL]). [N CRITICAL, N HIGH, N MEDIUM, N LOW — N dismissed as false positives]. [SUMMARY sentence 1]. [RECOMMENDATION]"

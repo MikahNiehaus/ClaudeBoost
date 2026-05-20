@@ -142,6 +142,20 @@ cp .env.example .env
 
 Fill in all `[PLACEHOLDER]` values from the actual project. Omit sections that have no content rather than leaving them with empty placeholders.
 
+### Step 3.5: Anti-Hallucination Verification
+
+Before showing the generated content to the user, run `/audit` on the generated `AGENTS.md` content with:
+- Input type: `document`
+- Dimensions: D1 Factual Accuracy, D2 Internal Consistency, D3 Completeness & Gaps
+
+Verify:
+- Setup, test, and build commands match what's in `package.json` scripts, `Makefile`, or CI/CD workflow files
+- Boundaries described match what's in `CLAUDE.md`
+- All required sections (Setup Commands, Testing, Build/Deploy, Code Style, Boundaries) are present and non-empty
+
+If verdict is VERIFIED or PARTIALLY VERIFIED: show the content to the user as normal.
+If verdict is UNVERIFIED: surface the specific inaccuracies or gaps identified by the audit alongside the content so the user can review before confirming.
+
 ### Step 4: Present and Confirm
 
 Show the generated `AGENTS.md` content to the user and ask: "Save to `./AGENTS.md`?"
