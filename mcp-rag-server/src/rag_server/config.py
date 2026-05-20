@@ -30,8 +30,10 @@ RAG_INDEX_DIR = Path(os.environ.get(
 CHROMA_DIR = RAG_INDEX_DIR / "chroma"
 MANIFEST_PATH = RAG_INDEX_DIR / "manifest.json"
 
-# Embedding model
-EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Embedding model — all-mpnet-base-v2 (768d) gives significantly better semantic
+# resolution than all-MiniLM-L6-v2 (384d), especially for code and technical text.
+# Override per-machine via RAG_EMBEDDING_MODEL env var if needed.
+EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
 # Scoped collection paths (relative to PROJECT_ROOT)
 SCOPES = {

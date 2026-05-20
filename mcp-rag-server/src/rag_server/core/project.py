@@ -35,6 +35,7 @@ LANGUAGE_EXTENSIONS = {
     "php":        {".php"},
     "css":        {".css", ".scss"},
     "html":       {".html", ".htm"},
+    "cshtml":     {".cshtml", ".razor"},
     "json":       {".json"},
     "toml":       {".toml"},
     "yaml":       {".yaml", ".yml"},

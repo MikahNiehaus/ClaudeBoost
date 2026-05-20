@@ -136,6 +136,16 @@ def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = No
                     else:
                         import_path = module_name
                     file_map.setdefault(import_path, rel_path)
+        elif suffix in {".cs", ".cshtml"}:
+            # C# namespace key: convert path separators to dots.
+            # ViveryAscend.Core/Services/AgencyService.cs →
+            #   "ViveryAscend.Core.Services.AgencyService"  (full class key)
+            #   "ViveryAscend.Core.Services"               (namespace/dir key, first file wins)
+            dot_full = no_ext.replace("/", ".")
+            file_map.setdefault(dot_full, rel_path)
+            if len(parts) > 1:
+                dir_dot = ".".join(parts[:-1])
+                file_map.setdefault(dir_dot, rel_path)
         else:
             file_map.setdefault(rel_path, rel_path)
             file_map.setdefault(no_ext, rel_path)
@@ -176,6 +186,17 @@ def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = No
                     if sub:
                         file_map.setdefault(sub, rel_path)
                         file_map.setdefault(sub.replace("/", "."), rel_path)
+        elif suffix in {".cs", ".cshtml"}:
+            # Suffix variants: "Core.Services.AgencyService", "Services.AgencyService", etc.
+            for start in range(1, len(parts)):
+                sub_parts = parts[start:]
+                sub = ".".join(sub_parts)
+                if sub:
+                    file_map.setdefault(sub, rel_path)
+                if len(sub_parts) > 1:
+                    dir_sub = ".".join(sub_parts[:-1])
+                    if dir_sub:
+                        file_map.setdefault(dir_sub, rel_path)
 
     return file_map
 

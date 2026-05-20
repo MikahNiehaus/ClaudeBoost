@@ -281,6 +281,12 @@ def _chunk_from_tree(
 
     chunks = []
 
+    # Small import blocks (< threshold tokens) are merged into the first class/method
+    # chunk rather than emitted separately. This prevents import stubs from outranking
+    # the actual implementation in semantic search results.
+    _SMALL_IMPORT_MERGE_THRESHOLD = 150
+    _pending_import: "RawChunk | None" = None
+
     # File-summary chunk: everything before the first definition
     first_def_line = definitions[0].start_point[0]
     if first_def_line > 0:
@@ -288,21 +294,36 @@ def _chunk_from_tree(
         if summary_text:
             tokens = estimate_tokens(summary_text)
             if tokens >= min_tokens:
-                chunks.append(RawChunk(
+                import_chunk = RawChunk(
                     content=summary_text,
                     section="[imports]",
                     line_start=1,
                     line_end=first_def_line,
                     token_count_approx=tokens,
-                ))
+                )
+                if tokens < _SMALL_IMPORT_MERGE_THRESHOLD and definitions:
+                    _pending_import = import_chunk
+                else:
+                    chunks.append(import_chunk)
 
     # Each definition becomes a chunk
-    for node in definitions:
+    for i, node in enumerate(definitions):
         start_line = node.start_point[0]
         end_line = node.end_point[0]
         chunk_text = "\n".join(lines[start_line:end_line + 1])
         section_name = _extract_name(node, language)
         tokens = estimate_tokens(chunk_text)
+
+        if _pending_import is not None and i == 0:
+            merged_text = _pending_import.content + "\n\n" + chunk_text
+            merged_tokens = estimate_tokens(merged_text)
+            if merged_tokens <= max_tokens:
+                chunk_text = merged_text
+                tokens = merged_tokens
+                start_line = 0  # merged chunk starts at line 1
+            else:
+                chunks.append(_pending_import)  # too large to merge — emit separately
+            _pending_import = None
 
         if tokens > max_tokens:
             # Split large definitions

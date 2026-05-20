@@ -71,24 +71,42 @@ $ARGUMENTS — flexible, any of:
    - Files indexed / chunks created / files skipped
    - Total time if notable
 
-8. **Post-index health checks** — run all four after every successful index:
+8. **Post-index quality checks** — run all five. Two extra searches + one Glob. Fast but catches real gaps.
 
-   a. **Search smoke test** — confirm search works:
-      `rag_search(query="main entry point", scope="codebase", project_path=<path>)`
-      Show top 3 results. If 0 results returned, flag as a warning.
+   a. **Coverage check** (Glob, no API calls) — detect unsupported file types silently excluded from the index:
+      Glob for `**/*.cshtml`, `**/*.razor`, `**/*.vue`, `**/*.svelte` in the project path (excluding `node_modules`, `obj`, `bin`).
+      - If any of these extensions exist AND were not in the scan's `files_by_language` output: WARN — "Found N .ext files not indexed — this extension is not supported by the indexer."
+      - This catches the class of bug where an entire UI layer (Razor views, Vue components, etc.) is silently absent from the index.
 
-   b. **Graph check** — confirm graph was built (if code files were indexed):
-      Check that `<project>/workspace/.rag-index/graph.db` exists. Report edge count if available via a quick search with `mode="graph"` on the same query.
+   b. **Graph liveness check** (1 search call) — verify graph edges were actually built:
+      `rag_search(query="service class method", scope="codebase", project_path=<path>, mode="graph", limit=3)`
+      - PASS: response contains `graph_augmented: true` — structural neighbors are being added
+      - WARN: `graph_augmented: false` — graph.db exists but has no edges; graph-mode searches are identical to vector-only. Note: "graph edges not built — graph search provides no benefit over vector."
 
-   c. **Manifest integrity** — confirm manifest was written:
+   c. **Relevance quality check** (1 search call) — verify top scores are meaningful, not noise:
+      Pick a query based on the primary language from scan:
+      - csharp/java/kotlin → `"class constructor dependency injection"`
+      - typescript/javascript → `"interface type export function"`
+      - python → `"class method return type"`
+      - other → `"function parameter return"`
+      `rag_search(query=<above>, scope="codebase", project_path=<path>, limit=5)`
+      Evaluate results:
+      - PASS: top score ≥ 0.68 AND top 3 results are from primary language files
+      - WARN: top score 0.62–0.68 — index is returning best-of-bad-matches; queries need to be more specific
+      - FAIL: top score < 0.62 OR top 3 results are from irrelevant file types (e.g. enum files, config files for a code query)
+      Show top 3 results with scores so the user can judge quality.
+
+   d. **Manifest integrity** — confirm manifest was written:
       Check that `<project>/workspace/.rag-index/manifest.json` exists and is non-empty.
 
-   d. **Context pipeline smoke test** — confirm the full `rag_context` pipeline works end-to-end:
+   e. **Context pipeline smoke test** — confirm the full `rag_context` pipeline works end-to-end:
       `rag_context(agent="explore-agent", task_description="main entry point", max_tokens=3000, project_path=<path>)`
-      Check the result for:
-      - `tier_summary.codebase > 0` — codebase chunks loaded (WARN if 0)
-      - No `tier_errors` key in result (FAIL if present — shows which tier broke and why)
+      - `tier_summary.codebase > 0` — WARN if 0
+      - No `tier_errors` key — FAIL if present (shows which tier broke and why)
       - `total_tokens_approx` is reasonable (not 0, not wildly over max_tokens)
-      Report findings inline. This catches embedding failures, ChromaDB errors, and graph expansion bugs that the search smoke test alone won't surface.
 
-   Report a clean `✓ health checks passed` or list any failures.
+   Report `✓ quality checks passed` or list each failure with its specific value and a one-line fix.
+   Common fixes to show inline:
+   - Coverage gap: "Add the extension to LANGUAGE_EXTENSIONS in ClaudeBoost/mcp-rag-server/src/rag_server/core/project.py, then re-index."
+   - Graph not built: "GraphRAG edges may require a specific indexer flag — check rag_index_project parameters."
+   - Low scores: "Use more specific, vocabulary-rich queries; or re-index with a stronger embedding model."
