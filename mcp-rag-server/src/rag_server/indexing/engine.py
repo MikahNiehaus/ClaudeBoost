@@ -616,6 +616,30 @@ class IndexingEngine:
             "Indexed project %s (%s): %d files, %d chunks (%d skipped)",
             pid, project_path, files_indexed, chunks_created, files_skipped,
         )
+
+        # Register project in global registry so rag_status can surface graph state
+        # to any new Claude instance without requiring a project-specific query.
+        try:
+            import datetime
+            registry_path = MANIFEST_PATH.parent / "projects.json"
+            registry: dict = {}
+            if registry_path.exists():
+                registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            edge_count = graph_store.count_edges()
+            resolved = graph_store.count_resolved_edges()
+            registry[pid] = {
+                "project_path": project_path,
+                "indexed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "files_indexed": files_indexed,
+                "chunks_created": chunks_created,
+                "graph_edges": edge_count,
+                "graph_resolved": resolved,
+                "graph_active": edge_count > 0 and resolved > 0,
+            }
+            registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning("Failed to write project registry: %s", e)
+
         return {
             "project_id": pid,
             "files_indexed": files_indexed,

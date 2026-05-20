@@ -14,6 +14,7 @@ from rag_server.config import (
     DEFAULT_SEARCH_LIMIT,
     EMBEDDING_MODEL,
     PROJECT_ROOT,
+    RAG_INDEX_DIR,
     SCOPES,
 )
 from rag_server.core.embedding import SentenceTransformerEmbedding
@@ -133,7 +134,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="rag_status",
-            description="Check RAG server status: index health, collection sizes, model info.",
+            description=(
+                "Check RAG server status: model info, collection sizes, and all indexed projects. "
+                "Each indexed project entry shows graph_active (true = graph-mode search works) "
+                "and graph_edges/graph_resolved counts. Graph DBs are per-project — "
+                "they are NOT shown as a global component."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -364,12 +370,21 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                     "chunks": store.count(col),
                     "files": len(store.list_sources(col)) if store.collection_exists(col) else 0,
                 }
+            # Load per-project graph registry written by rag_index_project
+            registry_path = RAG_INDEX_DIR / "projects.json"
+            indexed_projects: dict = {}
+            if registry_path.exists():
+                try:
+                    indexed_projects = json.loads(registry_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
             return {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
                 "model": EMBEDDING_MODEL,
                 "embedding_dimensions": embedder.dimensions() if embedder.is_loaded else "not loaded yet",
+                "indexed_projects": indexed_projects,
             }
 
         elif name == "rag_context":

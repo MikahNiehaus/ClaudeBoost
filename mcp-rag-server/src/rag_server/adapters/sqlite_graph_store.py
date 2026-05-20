@@ -209,6 +209,16 @@ class SQLiteGraphStore(GraphStorePort):
             count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         return count > 0
 
+    def count_edges(self) -> int:
+        with self._connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    def count_resolved_edges(self) -> int:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE target_file != ''"
+            ).fetchone()[0]
+
     def get_all_edges(self) -> list[GraphEdge]:
         """Return all stored edges. Used by community detection to build the graph."""
         with self._connect() as conn:
