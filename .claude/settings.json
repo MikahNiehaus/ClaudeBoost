@@ -81,6 +81,15 @@
             "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-agent-guard.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash(mkdir*workspace*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\""
+          }
+        ]
       }
     ],
     "SessionEnd": [

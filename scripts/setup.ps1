@@ -411,6 +411,23 @@ $taskSpawnHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $taskSpawnHook `
     -Sentinel "agent-spawn-gate.py" -Label "Task RAG/proposal gate (command-type)"
 
+# --- PreToolUse: workspace boost gate (blocks mkdir workspace/* if /boost not run) ---
+# Hard block (exit 2): if /boost sentinel is absent, workspace creation is denied.
+# RAG must be verified before a workspace is created — otherwise rag_context won't
+# load correctly into the workspace and the whole session starts on a broken footing.
+$workspaceBoostGatePath = "$boostHome\scripts\workspace-boost-gate.py".Replace("\", "/")
+$workspaceBoostGateHook = [PSCustomObject]@{
+    matcher = "Bash(mkdir*workspace*)"
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$workspaceBoostGatePath`""
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "PreToolUse" -Entry $workspaceBoostGateHook `
+    -Sentinel "workspace-boost-gate.py" -Label "workspace boost gate (command-type)"
+
 # --- PreToolUse: workspace creation (original) ---
 $workspaceHook = [PSCustomObject]@{
     matcher = "Bash(mkdir*workspace*)"
