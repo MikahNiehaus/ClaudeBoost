@@ -107,18 +107,30 @@ Then write `$CLAUDEBOOST_HOME/state/clear-pending.json` with the current UTC tim
 {"pending": true, "timestamp": "[current UTC ISO timestamp — e.g. 2026-05-12T18:30:00+00:00]"}
 ```
 
-Replace `[current UTC ISO timestamp]` with the actual current time in ISO format.
+This flag is consumed by `session-primer.py` on the first message after `/clear`.
 
-This flag is consumed by `session-primer.py` on the first message after `/clear`, which injects the saved workspace context so you resume right where you left off. Do not send any other messages between this step and typing `/clear` — the flag is one-shot.
+Then write `$CLAUDEBOOST_HOME/state/auto-clear-pending.json` with a Unix timestamp and the session name:
+
+```json
+{
+  "pending": true,
+  "timestamp": [current Unix timestamp as a number — e.g. 1716393600.0],
+  "session_name": "[name or empty string]"
+}
+```
+
+For `session_name`: scan the current conversation for the most recent occurrence of `Session renamed to: [name]` (this appears in the output when the user ran `/rename`). Use that name. If no rename was found in this conversation, use an empty string `""`.
+
+This flag is consumed by `auto-clear.py` (Stop hook) — in tmux, it injects `/clear` automatically, then restores the session name in the new session.
 
 **Step 5 — Confirm and hand off**
 
 Tell the user:
 
-> Pre-flight complete. Type `/clear` to proceed.
-> State is saved to `state/handoff-latest.json` and will be restored on your first message after clearing.
-> The next session will restore only **[task-id]** context — not all workspaces.
-> Workspace committed to handoff: **[task-id]** — if this is wrong, correct `state/active-workspace.json` before clearing.
+> Pre-flight complete. State saved to `state/handoff-latest.json`.
+> **In tmux:** `/clear` will fire automatically when I stop responding.
+> **Windows (no tmux):** `/clear` injection will be attempted automatically (best effort). If it doesn't fire, type `/clear` manually — the restore will still work on your first message in the new session.
+> The next session will restore only **[task-id]** context.
 
 If the user says anything other than confirming (asks a question, requests a change):
-answer them and do NOT tell them to /clear yet. Only give the go-ahead once they confirm.
+answer them and do NOT proceed — the auto-clear flag has a 5-minute expiry, so if they ask something first, write a fresh flag before finishing your final response.

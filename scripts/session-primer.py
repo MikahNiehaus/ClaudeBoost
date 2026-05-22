@@ -127,8 +127,21 @@ def main() -> int:
     if len(prompt) < 15 and not clear_context:
         return 0
 
+    # Post-clear restore path — bypass RAG hard-stop.
+    # rag-session-reset.py unconditionally deletes the sentinel at every SessionStart,
+    # so rag_verified() is always false on the first post-clear message. Blocking on
+    # RAG here means auto-restore can never work. Inject context directly with a soft nudge.
+    if clear_context and not rag_verified():
+        context = (
+            clear_context
+            + "\n\nNOTE: RAG not yet verified. Run /boost before spawning agents "
+            "or starting any investigation."
+        )
+        print(json.dumps({"additionalContext": context}))
+        return 0
+
     if not rag_verified():
-        # RAG not verified — inject hard-stop directive for ALL prompts including slash commands
+        # RAG not verified, no clear context — hard stop
         context = (
             "CRITICAL — RAG NOT VERIFIED: "
             "The RAG server has not been verified this session. "
@@ -138,8 +151,6 @@ def main() -> int:
             "'RAG is not connected. Run /boost to verify RAG before I can continue.' "
             "Do not attempt to self-recover by reading files or grepping. Just stop."
         )
-        if clear_context:
-            context = clear_context + "\n\n" + context
         print(json.dumps({"additionalContext": context}))
         return 0
 
