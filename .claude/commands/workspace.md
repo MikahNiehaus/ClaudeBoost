@@ -12,9 +12,26 @@ Creates a workspace for your goal and produces a step-by-step implementation pla
 
 ---
 
-## Phase 0: RAG Context
+## Phase 0: Session Readiness Check
 
-Call `rag_context(agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000)` as your FIRST action.
+Before loading RAG context, verify the session is properly boosted:
+
+```bash
+[ -f "$TEMP/claudeboost_active" ] && echo "BOOSTED" || echo "NOT_BOOSTED"
+```
+
+If NOT_BOOSTED, emit this warning **once** and proceed — do NOT block:
+> "⚠ Session not boosted. Graph RAG and project codebase search will not be available.
+> For best results run `/boost` then `/index-project <path>` before planning.
+> Continuing with knowledge RAG only."
+
+If BOOSTED: proceed silently.
+
+---
+
+## Phase 0.5: RAG Context
+
+Call `rag_context(agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000)` as your FIRST action after the boost check.
 
 This loads architecture, workflow, orchestration, and model-selection knowledge so the plan is grounded in real ClaudeBoost capabilities.
 
@@ -287,6 +304,14 @@ NOT in the ticket must be flagged as a separate candidate — not silently inclu
 > "While investigating I also found [X] at file:line. Is this in scope for this ticket, or should I open a separate ticket?"
 Never bundle unrequested fixes into the same commit.
 
+**Bug Fix investigation rule:** Before finalizing the fix approach in `plan.md`:
+1. Read the **full file** for every location being changed — not just the bug line
+2. Find **all callers** of modified methods: use `rag_search(scope="codebase", mode="graph", query="[method name]", project_path=PROJECT_PATH)` if indexed, or `Grep("[method name]")` across the codebase if not
+3. Confirm the caller sweep is complete — "no 4th location" must be verified, not assumed
+4. Document what was checked in the plan under a **"Pre-fix Investigation"** section, citing file:line for every location reviewed
+
+Skipping any of these steps is a plan quality failure — the code review step should not be the first time surrounding context is read.
+
 ---
 
 ## Phase 4: Ask About Project (if needed)
@@ -301,6 +326,28 @@ AskUserQuestion: "Does this involve a specific project codebase? Provide the ful
 Set `PROJECT_PATH` from the answer. If 'none' or ClaudeBoost meta-work: `PROJECT_PATH = none`.
 
 If the input already implies a path or clearly describes ClaudeBoost-internal work: skip this question and set accordingly.
+
+---
+
+## Phase 4.5: Project RAG Check
+
+Applies when `PROJECT_PATH` is set (not `none`) and WORK_TYPES includes Bug Fix, Feature, Database, Refactor, or Performance.
+
+Check if the project is indexed:
+```
+rag_search(scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1)
+```
+
+**If results returned**: "Project RAG active — vector + graph search available. Graph RAG will auto-trace callers/dependents."
+
+**If fails or returns nothing**: emit this warning **once** and proceed — do NOT block:
+> "⚠ Project not indexed — codebase vector search and graph RAG unavailable.
+> Run `/index-project $PROJECT_PATH` to enable:
+> - Vector RAG: semantic code search across the whole codebase
+> - Graph RAG: automatic call-graph traversal (finds all callers, dependents, import chains)
+> Falling back to direct Grep/Glob for code exploration."
+
+Record the index status in `context.md` under **Key Decisions**: "Project RAG: [active / not indexed — using Grep/Glob]"
 
 ---
 

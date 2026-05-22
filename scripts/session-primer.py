@@ -20,13 +20,15 @@ Behavior:
 - If RAG online: injects 6 non-negotiable standing orders
 - Exits 0 always (nudge layer — PreToolUse rag-agent-guard handles hard blocks)
 
-The 6 standing orders (RAG-online path):
+The 8 standing orders (RAG-online path):
 1. RAG before file searching
-2. Verify Gate (file:line for every finding)
-3. Evaluator for all findings (never self-verify)
-4. CONSULT before new endpoints/tables/dependencies
-5. rag_context as first step in every agent spawn
-6. If any RAG tool is unavailable or errors mid-task: STOP, report to user
+2. Health check — rag_status at investigation start (unresolved edges = stop and fix)
+3. Write findings — update context.md after each search or read that reveals something
+4. Verify Gate (file:line for every finding)
+5. Evaluator for all findings (never self-verify)
+6. CONSULT before new endpoints/tables/dependencies
+7. rag_context as first step in every agent spawn
+8. If any RAG tool is unavailable or errors mid-task: STOP, report to user
 """
 from __future__ import annotations
 
@@ -144,13 +146,25 @@ def main() -> int:
     # RAG verified — inject normal standing orders (applies to slash commands too)
     standing_orders = (
         "STANDING ORDERS (non-negotiable): "
-        "Search RAG before reading files. "
-        "Cite file:line for every finding. "
-        "Spawn evaluator-agent — never self-verify. "
-        "CONSULT before new endpoints/tables/dependencies. "
-        "rag_context first in every agent spawn prompt. "
-        "If any RAG MCP tool is unavailable or errors mid-task: STOP immediately, "
-        "do NOT self-recover by searching files, tell the user RAG is offline."
+        "(1) RAG before files — rag_search before Read/Grep. "
+        "(2) Health check — at start of any investigation, call rag_status to verify index "
+        "health; if unresolved edges or errors, stop and fix before continuing. "
+        "(3) Write findings — after each RAG search or file read that reveals something, "
+        "update workspace/[task-id]/context.md with what you found before moving on. "
+        "Do not accumulate findings in your head; write them down as you go. "
+        "(4) Cite file:line — for every finding. "
+        "(5) Evaluator — spawn evaluator-agent, never self-verify. "
+        "(6) CONSULT — before new endpoints/tables/dependencies. "
+        "(7) rag_context first — in every agent spawn prompt. "
+        "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
+        "do NOT self-recover by searching files; tell the user RAG is offline and wait. "
+        "(9) Human voice — every word you write must sound like a human wrote it. "
+        "Use contractions. Vary sentence length. Start with the substance. "
+        "Never use: delve, leverage, utilize, seamless, robust, comprehensive, "
+        "pivotal, facilitate, harness, foster, transformative, paradigm, synergy, holistic, empower. "
+        "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
+        "It's worth noting, In today's rapidly evolving. "
+        "Max one em-dash per response. The Stop hook will block you if you violate this."
     )
 
     if clear_context:

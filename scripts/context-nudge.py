@@ -28,13 +28,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-NUDGE_INTERVAL = 20
+NUDGE_INTERVAL = 8         # workspace checkpoint every N tool uses (was 20 — more continuous)
 NO_WORKSPACE_NUDGE_THRESHOLD = 60
 RAG_THRESHOLD = 5          # reads without RAG before reminding
 EVALUATOR_THRESHOLD = 2    # agent spawns without evaluator before reminding
 COMPREHENSIVE_INTERVAL = 25  # full behavior checklist every N tool uses
 CLEAR_CONSIDERATION_THRESHOLD = 100   # start suggesting /clear-safe at this tool count
 CLEAR_CONSIDERATION_INTERVAL = 25     # repeat every N uses past threshold
+READS_BEFORE_CONTEXT_UPDATE = 5  # consecutive reads/greps that trigger a "write findings" nudge
 
 # Context window pressure detection
 # PostToolUse payload may include context_window_usage.input_tokens — used when available.
@@ -146,11 +147,24 @@ def main() -> int:
     except Exception:
         behavior = {"reads_since_rag": 0, "tasks_since_evaluator": 0}
 
+    # Detect context.md write (Edit/Write to a file named context.md) — resets investigation counter
+    tool_input = payload.get("tool_input") or {}
+    wrote_context = (
+        tool_name in AUTO_SAVE_TOOLS
+        and "context.md" in str(tool_input.get("file_path", ""))
+    )
+
     # Update RAG/file counters
     if tool_name in RAG_TOOLS:
         behavior["reads_since_rag"] = 0
     elif tool_name in FILE_TOOLS:
         behavior["reads_since_rag"] = behavior.get("reads_since_rag", 0) + 1
+
+    # Track reads since last context.md update — fires "write your findings" nudge
+    if wrote_context:
+        behavior["reads_since_context_update"] = 0
+    elif tool_name in FILE_TOOLS or tool_name in RAG_TOOLS:
+        behavior["reads_since_context_update"] = behavior.get("reads_since_context_update", 0) + 1
 
     # Update evaluator counter
     # Reset only when evaluator Task *completes* with a real verdict, not on spawn.
@@ -188,6 +202,7 @@ def main() -> int:
             behavior["last_task_response"] = str(tool_response_raw)[:2000]
 
     reads = behavior.get("reads_since_rag", 0)
+    reads_since_ctx = behavior.get("reads_since_context_update", 0)
     tasks = behavior.get("tasks_since_evaluator", 0)
     total = tracker.get("edit_count", 0)
 
@@ -202,6 +217,19 @@ def main() -> int:
             "Finish the current sentence, update workspace context.md with status + next step, "
             "then run /clear-safe to save state and clear. "
             "Only skip if an agent is mid-task; finish it first, then clear immediately after."
+        )
+    elif (
+        reads_since_ctx >= READS_BEFORE_CONTEXT_UPDATE
+        and reads_since_ctx % READS_BEFORE_CONTEXT_UPDATE == 0
+        and has_workspace
+    ):
+        most_recent_ctx = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        task_id = most_recent_ctx.parent.name
+        nudges.append(
+            f"WRITE FINDINGS: You've done {reads_since_ctx} reads/searches since last updating "
+            f"workspace/{task_id}/context.md. "
+            "Record what you found NOW before continuing — hypothesis, evidence, next lead. "
+            "Findings in context.md survive compaction; findings only in your head do not."
         )
     elif reads >= RAG_THRESHOLD and reads % RAG_THRESHOLD == 0:
         nudges.append(

@@ -19,6 +19,7 @@
   <header class="header" data-section-id="_intro">
     <h1 id="page-title"></h1>
     <p id="page-subtitle" class="subtitle"></p>
+  <button id="tour-btn" class="tour-start-btn" style="display:none" aria-label="Start guided tour">&#9654; Tour</button>
   </header>
 
   <!-- Narration player (only shown when narration is embedded) -->
@@ -43,6 +44,22 @@
 
     <!-- Side rails (cross-cutting concerns) -->
     <aside id="right-rail" class="side-rail right"></aside>
+  </div>
+
+  <!-- Tour Mode Overlay -->
+  <div id="tour-overlay" class="tour-overlay hidden" role="dialog" aria-modal="true" aria-label="Architecture tour">
+    <div class="tour-slide">
+      <div class="tour-top">
+        <span class="tour-progress" id="tour-progress"></span>
+        <span class="tour-layer-label" id="tour-layer-label"></span>
+      </div>
+      <div class="tour-body" id="tour-body"></div>
+      <nav class="tour-nav">
+        <button class="tour-btn tour-btn-back" id="tour-back" aria-label="Previous slide">&#8592; Back</button>
+        <button class="tour-btn tour-btn-exit" id="tour-exit" aria-label="Exit tour">&#215; Exit</button>
+        <button class="tour-btn tour-btn-next" id="tour-next" aria-label="Next slide">Next &#8594;</button>
+      </nav>
+    </div>
   </div>
 
 </div>
@@ -538,6 +555,191 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
       }
     });
   }
+
+  // ── Tour Mode ──────────────────────────────────────────────────────────────
+  (function() {
+    var tourSlides = [];
+
+    function addSlide(card, layerLabel) {
+      if (!card || !card.title) return;
+      tourSlides.push({ card: card, layer: layerLabel });
+    }
+
+    (DATA.side_rails || []).forEach(function(rail) {
+      addSlide(rail, 'Cross-Cutting');
+    });
+
+    (DATA.layers || []).forEach(function(layer) {
+      var lbl = layer.label || '';
+      (layer.cards || []).forEach(function(card) { addSlide(card, lbl); });
+      (layer.columns || []).forEach(function(col) {
+        (col.cards || []).forEach(function(card) {
+          addSlide(card, lbl + (col.label ? ' / ' + col.label : ''));
+        });
+      });
+      (layer.exchanges || []).forEach(function(ex) {
+        if (ex.left) addSlide(ex.left, lbl);
+        if (ex.right) addSlide(ex.right, lbl);
+      });
+      (layer.decisions || []).forEach(function(dec) {
+        if (dec.question) addSlide(dec.question, lbl);
+        (dec.outcomes || []).forEach(function(o) { addSlide(o, lbl); });
+      });
+    });
+
+    if (!tourSlides.length) return;
+
+    var currentIdx = 0;
+    var overlay  = document.getElementById('tour-overlay');
+    var tourBody = document.getElementById('tour-body');
+    var tourProg = document.getElementById('tour-progress');
+    var tourLbl  = document.getElementById('tour-layer-label');
+    var tourBack = document.getElementById('tour-back');
+    var tourNext = document.getElementById('tour-next');
+    var tourExit = document.getElementById('tour-exit');
+    var tourBtn  = document.getElementById('tour-btn');
+
+    tourBtn.style.display = '';
+
+    function showSlide(idx) {
+      var s = tourSlides[idx];
+      var c = s.card;
+      var total = tourSlides.length;
+
+      tourProg.textContent = (idx + 1) + ' / ' + total;
+      tourLbl.textContent  = s.layer || '';
+      tourBack.disabled    = (idx === 0);
+      var isLast = (idx === total - 1);
+      tourNext.textContent = isLast ? 'Done \u2713' : 'Next \u2192';
+      if (isLast) tourNext.classList.add('is-last');
+      else tourNext.classList.remove('is-last');
+
+      tourBody.innerHTML = '';
+
+      // Image (top position)
+      if (c.image && c.image_position !== 'detail') {
+        var wrap = document.createElement('div');
+        wrap.className = 'tour-image-wrap';
+        var img = document.createElement('img');
+        img.src = c.image;
+        img.alt = c.image_alt || c.title || '';
+        wrap.appendChild(img);
+        tourBody.appendChild(wrap);
+      }
+
+      // Icon — shown regardless of top image (matches buildCard behaviour)
+      if (c.icon) {
+        var icon = document.createElement('span');
+        icon.className = 'tour-icon-lg';
+        icon.textContent = c.icon;
+        tourBody.appendChild(icon);
+      } else if (!c.image || c.image_position === 'detail') {
+        // Fallback monogram when no image and no icon
+        var mono = document.createElement('span');
+        mono.className = 'tour-icon-lg tour-monogram';
+        mono.textContent = (c.title || '?').charAt(0).toUpperCase();
+        tourBody.appendChild(mono);
+      }
+
+      // Title
+      var titleEl = document.createElement('div');
+      titleEl.className = 'tour-title';
+      titleEl.textContent = c.title;
+      tourBody.appendChild(titleEl);
+
+      // Subtitle
+      if (c.subtitle) {
+        var subEl = document.createElement('div');
+        subEl.className = 'tour-subtitle';
+        subEl.textContent = c.subtitle;
+        tourBody.appendChild(subEl);
+      }
+
+      // Accent bar
+      var bar = document.createElement('div');
+      bar.className = 'tour-accent-bar';
+      if (c.accent) bar.style.background = c.accent;
+      tourBody.appendChild(bar);
+
+      // Detail text
+      if (c.detail) {
+        var det = document.createElement('div');
+        det.className = 'tour-detail';
+        det.textContent = c.detail;
+        tourBody.appendChild(det);
+      }
+
+      // Image (detail position — after text)
+      if (c.image && c.image_position === 'detail') {
+        var wrap2 = document.createElement('div');
+        wrap2.className = 'tour-image-wrap';
+        wrap2.style.marginTop = '16px';
+        var img2 = document.createElement('img');
+        img2.src = c.image;
+        img2.alt = c.image_alt || c.title || '';
+        wrap2.appendChild(img2);
+        tourBody.appendChild(wrap2);
+      }
+
+      // Responsibilities
+      if (c.responsibilities && c.responsibilities.length) {
+        var ul = document.createElement('ul');
+        ul.className = 'tour-list';
+        c.responsibilities.forEach(function(r) {
+          var li = document.createElement('li');
+          li.textContent = r;
+          ul.appendChild(li);
+        });
+        tourBody.appendChild(ul);
+      }
+
+      tourBody.scrollTop = 0;
+    }
+
+    function openTour(startIdx) {
+      currentIdx = (startIdx !== undefined) ? startIdx : 0;
+      overlay.classList.remove('hidden');
+      try {
+        showSlide(currentIdx);
+      } catch (e) {
+        closeTour();
+        return;
+      }
+      document.body.style.overflow = 'hidden';
+      tourNext.focus();
+    }
+
+    function closeTour() {
+      overlay.classList.add('hidden');
+      document.body.style.overflow = '';
+      tourBtn.focus();
+    }
+
+    tourBtn.addEventListener('click', function() { openTour(0); });
+    tourExit.addEventListener('click', closeTour);
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) closeTour();
+    });
+
+    tourBack.addEventListener('click', function() {
+      if (currentIdx > 0) { currentIdx--; showSlide(currentIdx); }
+    });
+
+    tourNext.addEventListener('click', function() {
+      if (currentIdx < tourSlides.length - 1) { currentIdx++; showSlide(currentIdx); }
+      else { closeTour(); }
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (overlay.classList.contains('hidden')) {
+        if ((e.key === 't' || e.key === 'T') && e.target === document.body) { openTour(0); }
+        return;
+      }
+      if (e.key === 'Escape') { e.preventDefault(); closeTour(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); tourNext.click(); }
+      else if (e.key === 'ArrowLeft')  { e.preventDefault(); tourBack.click(); }
+    });
+  })();
 
 })();
 </script>

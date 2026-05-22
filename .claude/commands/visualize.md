@@ -82,5 +82,5 @@ Tell the user:
 - How many nodes and edges were extracted/generated
 - Where the files were saved
 - That the board is open in their browser
-- Keyboard shortcuts: `esc` close drawer, `/` search, `r` reset zoom, `1-4` switch layout, `dblclick` focus mode
+- Keyboard shortcuts: `esc` close drawer, `t` start tour, `←` `→` navigate tour slides, `esc` exit tour
 

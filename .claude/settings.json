@@ -12,6 +12,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\""
           }
         ]
@@ -90,6 +98,24 @@
             "command": "python \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\""
           }
         ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -108,6 +134,14 @@
           {
             "type": "command",
             "command": "python \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\""
           }
         ]
       }

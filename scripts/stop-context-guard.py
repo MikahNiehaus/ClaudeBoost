@@ -21,9 +21,9 @@ import sys
 import time
 from pathlib import Path
 
-THRESHOLD = 40       # tool uses before guard activates
-FIRE_EVERY = 20      # only check every N uses past threshold
-STALE_MINUTES = 20   # context.md older than this is considered stale
+THRESHOLD = 5        # tool uses before guard activates (was 40 -- too lenient)
+FIRE_EVERY = 5       # only check every N uses past threshold (was 20)
+STALE_MINUTES = 10   # context.md older than this is considered stale (was 20)
 
 
 def main() -> int:

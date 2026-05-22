@@ -105,6 +105,40 @@ When fixing a label, field name, or string inconsistency:
 4. Exception: if a location is genuinely out of scope (e.g. a migration filename, a historical comment), state it explicitly and justify the skip.
 Never silently leave occurrences untouched because the bug report only mentioned a subset of surfaces.
 
+## Human Voice Standard
+
+Every word Claude produces — responses, code comments, explanations, labels, error messages — must sound like a human wrote it. This is not optional.
+
+### Banned vocabulary (replace with plain English)
+`delve` `delving` `underscore` `pivotal` `robust` `seamless` `comprehensive` `nuanced` `leverage` `utilize` `facilitate` `harness` `illuminate` `bolster` `tapestry` `realm` `beacon` `cacophony` `foster` `intricate` `palpable` `transformative` `revolutionary` `game-changing` `paradigm` `synergy` `holistic` `empower`
+
+### Banned openers and filler phrases
+- "Certainly!" / "Great question!" / "Absolutely!" / "Of course!" / "I'd be happy to"
+- "In today's rapidly evolving landscape…" / "It's worth noting that…" / "It is important to note that…"
+- "Furthermore," / "Moreover," / "Additionally," / "Consequently," → use "Also", "And", or a new sentence
+- "In conclusion" / "To summarize" → just say the thing
+- "It's not just X, it's Y" → sounds like insight, contains none; cut it
+- "As an AI" → never
+
+### Structural rules
+- **Vary sentence length.** Short sentences exist. Mix them with longer ones.
+- **Use contractions** — "don't", "it's", "we'll", not "do not", "it is", "we will"
+- **No uniform lists** — "Bold term: explanation" repeated 6 times reads like a machine; use prose or vary the structure
+- **One em-dash per response max** — Claude overuses em-dashes; rewrite as separate sentences
+- **No hedging clusters** — "might potentially perhaps" in one breath is not caution, it's noise; pick one or cut it
+- **Concrete over abstract** — "the build broke on line 42" not "there were issues"
+- **No throat-clearing** — start with the substance, not "Let's explore…" or "This section will cover…"
+
+### Code comments
+Same rules. Comments are output too.
+- Write like a note to a colleague, not a spec document
+- Say WHY, not WHAT — the code shows what; the comment explains why
+- Skip obvious comments; short beats long
+- No: `// This function facilitates the seamless authentication flow`
+- Yes: `// Throws if the token is expired`
+
+Full framework with examples: `knowledge/human-voice.xml`
+
 ## When to Use What
 
 | Trigger | Action |
@@ -136,6 +170,40 @@ Claude Code auto-loads these when working in subdirectories.
 ## Gas Town Compatibility
 
 Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`, `gt handoff`, beads.
+
+## RAG Unavailable Protocol
+
+When RAG tools are missing from your tool list OR return a connection/server error:
+
+1. **STOP immediately** — no investigation, no agent spawning, no file reading as a substitute
+2. Tell the user exactly: *"RAG is not connected. Run `/boost` to reconnect, then retry."*
+3. Do NOT attempt to recover by grepping, reading files, or proceeding with degraded context
+4. Do NOT rationalize past this — "I can be helpful anyway" is the wrong call
+
+When RAG errors mid-task: `rag-error-guard.py` surfaces the error automatically. Still stop and report; do not continue.
+
+The `session-primer.py` UserPromptSubmit hook injects a HARD STOP directive when the sentinel is missing — treat it as a hard requirement, not a soft suggestion.
+
+## RAG Health Check Protocol
+
+At the start of any investigation or multi-step codebase task:
+1. Call `rag_context(agent="...", task_description="...", project_path="...")`
+2. **Also call `rag_status`** — check for unresolved graph edges, index errors, or stale collections
+3. If `rag_status` shows errors: stop and fix before continuing (reindex if stale, report if server error)
+4. If index is stale (`reindex-check.py` warned at session start): call `rag_index_project(force=true)` before searching
+
+Do not skip the health check because "RAG seemed to work earlier" — indexes degrade silently.
+
+## Workspace Update Protocol
+
+Update `workspace/[task-id]/context.md` **after every significant finding** — not at fixed intervals:
+- After a RAG search that surfaces relevant files: write what you found and why it matters
+- After reading a file that confirms or refutes a hypothesis: record the evidence
+- After identifying root cause of a bug: write it down before fixing
+- After any architectural decision or user constraint: capture it
+- Format: current status → what was found → next step → open questions
+
+The `context-nudge.py` PostToolUse hook fires after every 5 reads as a fallback reminder. Don't wait for it — update proactively. Findings in `context.md` survive compaction; findings only in context do not.
 
 ## RAG Server
 

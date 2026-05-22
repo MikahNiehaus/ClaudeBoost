@@ -49,6 +49,17 @@ CREATE TABLE IF NOT EXISTS community_summaries (
 _EXTERNAL_SENTINEL = "_external_"
 
 
+_CS_EXTERNAL_PREFIXES = frozenset({
+    "System", "Microsoft", "Newtonsoft", "AutoMapper",
+    "Serilog", "FluentValidation", "MediatR", "Dapper",
+    "NUnit", "Xunit", "Moq", "FluentAssertions", "Bogus",
+    "Azure", "Amazon", "Google", "Twilio", "SendGrid",
+    "Polly", "Hangfire", "Quartz", "MassTransit", "RabbitMQ",
+    "StackExchange", "MongoDB", "Npgsql", "MySql", "Oracle",
+    "JWT", "IdentityModel", "Humanizer", "CsvHelper",
+})
+
+
 def _is_external_symbol(
     symbol: str, source_file: str, go_module_prefixes: set[str] | None
 ) -> bool:
@@ -56,6 +67,7 @@ def _is_external_symbol(
 
     For JS/TS: any non-relative import (no leading dot) is an npm package → external.
     For Python: single-segment names with no slashes or dots are stdlib/third-party.
+    For C#: using directives whose first namespace segment is a known BCL/NuGet prefix.
     For Go:
       - No dot in first path segment  → Go stdlib  (os, fmt, net/http, encoding/json)
       - Domain-like first segment that is NOT any project module → external dep
@@ -79,6 +91,12 @@ def _is_external_symbol(
         # Multi-segment dotted names (e.g. email.mime.text) are left as '' to avoid
         # false-positives on unresolved internal packages.
         return "/" not in symbol and "." not in symbol
+
+    if source_file.endswith((".cs", ".cshtml")):
+        # C# using directives: mark known BCL and NuGet top-level namespaces as external
+        # so they don't inflate the unresolved-edge count.
+        first_segment = symbol.split(".")[0]
+        return first_segment in _CS_EXTERNAL_PREFIXES
 
     if not source_file.endswith(".go"):
         return False
