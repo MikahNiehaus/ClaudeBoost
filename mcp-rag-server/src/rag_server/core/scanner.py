@@ -61,9 +61,13 @@ def scan_project(
         DEFAULT_EXCLUDES,
         LANGUAGE_EXTENSIONS,
         extension_to_language,
+        load_ragignore,
     )
 
     root = Path(project_path).resolve()
+
+    # Merge .ragignore entries (per-project) into the exclude set
+    excludes = DEFAULT_EXCLUDES | load_ragignore(project_path)
 
     # Resolve target extensions from language filter
     if languages:
@@ -81,12 +85,12 @@ def scan_project(
     # git ls-files was removed — subprocess.run() hangs indefinitely in the
     # MCP subprocess context on Windows even when called from a thread pool,
     # and the timeout mechanism itself fails in that context.
-    raw_files, skipped_gitignore = _discover_via_pathspec(root, target_exts, DEFAULT_EXCLUDES)
+    raw_files, skipped_gitignore = _discover_via_pathspec(root, target_exts, excludes)
     method = "pathspec"
 
     if raw_files is None:
         # --- Tier 2: plain os.walk ---
-        raw_files = _discover_via_walk(root, target_exts, DEFAULT_EXCLUDES)
+        raw_files = _discover_via_walk(root, target_exts, excludes)
         skipped_gitignore = 0
         method = "walk"
 

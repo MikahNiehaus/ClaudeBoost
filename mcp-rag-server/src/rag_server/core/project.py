@@ -64,6 +64,28 @@ def project_index_dir(project_path: str) -> Path:
     return Path(project_path).resolve() / "workspace" / ".rag-index"
 
 
+def load_ragignore(project_path: str) -> set[str]:
+    """Read .ragignore from the project root and return a set of directory names to skip.
+
+    Syntax (same philosophy as .gitignore, but directory-names only for now):
+      - Lines starting with # are comments
+      - Trailing slash is optional and ignored (e.g. "gastown/" == "gastown")
+      - Blank lines are ignored
+      - Each entry is matched against directory *names* during os.walk (not full paths)
+    """
+    ragignore = Path(project_path).resolve() / ".ragignore"
+    extras: set[str] = set()
+    if not ragignore.exists():
+        return extras
+    for line in ragignore.read_text(encoding="utf-8").splitlines():
+        line = line.strip().rstrip("/")
+        if line and not line.startswith("#"):
+            extras.add(line)
+    if extras:
+        logger.info(".ragignore: excluding directories %s", sorted(extras))
+    return extras
+
+
 def discover_files(
     project_path: str,
     languages: list[str] | None = None,
@@ -75,13 +97,15 @@ def discover_files(
         project_path: Root directory of the target project.
         languages: Optional list of language names to filter (e.g., ["python", "typescript"]).
                    None means all supported languages.
-        excludes: Directory names to skip. Defaults to DEFAULT_EXCLUDES.
+        excludes: Directory names to skip. Defaults to DEFAULT_EXCLUDES merged with .ragignore.
 
     Returns:
         List of absolute file paths.
     """
     if excludes is None:
-        excludes = DEFAULT_EXCLUDES
+        excludes = DEFAULT_EXCLUDES | load_ragignore(project_path)
+    else:
+        excludes = excludes | load_ragignore(project_path)
 
     # Resolve which extensions to look for
     if languages:

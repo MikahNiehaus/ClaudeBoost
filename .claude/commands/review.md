@@ -8,6 +8,14 @@ Review code and provide a structured assessment with grading.
 
 Arguments: $ARGUMENTS
 
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+Call `rag_context(agent="workflow-agent", task_description="code change review and grading", max_tokens=3000)`.
+
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+---
+
 ## Diff Source Resolution
 
 Determine the diff to review based on arguments:

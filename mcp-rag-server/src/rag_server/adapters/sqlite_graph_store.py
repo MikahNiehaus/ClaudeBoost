@@ -49,6 +49,26 @@ CREATE TABLE IF NOT EXISTS community_summaries (
 _EXTERNAL_SENTINEL = "_external_"
 
 
+# Python stdlib top-level package names — used to mark multi-segment stdlib imports
+# like urllib.request and xml.etree.ElementTree as _external_ instead of unresolved.
+_PYTHON_STDLIB_PREFIXES = frozenset({
+    "abc", "ast", "asyncio", "base64", "binascii", "bisect", "builtins",
+    "codecs", "collections", "concurrent", "configparser", "contextlib",
+    "copy", "csv", "ctypes", "dataclasses", "datetime", "dbm", "decimal",
+    "email", "enum", "fnmatch", "fractions", "ftplib", "functools", "gc",
+    "getopt", "getpass", "glob", "gzip", "hashlib", "heapq", "html",
+    "http", "imaplib", "inspect", "io", "itertools", "json", "logging",
+    "lzma", "marshal", "math", "mmap", "multiprocessing", "operator",
+    "os", "pathlib", "pickle", "platform", "poplib", "pprint", "queue",
+    "random", "re", "readline", "reprlib", "rlcompleter", "selectors",
+    "shelve", "shutil", "signal", "smtplib", "socket", "sqlite3",
+    "ssl", "stat", "statistics", "string", "struct", "subprocess",
+    "sys", "tarfile", "tempfile", "textwrap", "threading", "time",
+    "token", "tokenize", "traceback", "types", "typing", "unittest",
+    "urllib", "uuid", "warnings", "weakref", "xml", "xmlrpc", "zipfile",
+    "zlib", "bz2", "array", "cmath", "grp", "pwd", "termios", "tty",
+})
+
 _CS_EXTERNAL_PREFIXES = frozenset({
     "System", "Microsoft", "Newtonsoft", "AutoMapper",
     "Serilog", "FluentValidation", "MediatR", "Dapper",
@@ -88,9 +108,12 @@ def _is_external_symbol(
     if source_file.endswith(".py"):
         # Single-segment Python name with no slashes or dots = stdlib or third-party top-level
         # (os, sys, re, json, typing, chromadb, fastapi, anthropic, ...).
-        # Multi-segment dotted names (e.g. email.mime.text) are left as '' to avoid
-        # false-positives on unresolved internal packages.
-        return "/" not in symbol and "." not in symbol
+        # Multi-segment dotted names where the first segment is a known stdlib package are
+        # also external (urllib.request, xml.etree.ElementTree, email.mime.text, etc.).
+        if "/" not in symbol and "." not in symbol:
+            return True
+        first_segment = symbol.split(".")[0]
+        return first_segment in _PYTHON_STDLIB_PREFIXES
 
     if source_file.endswith((".cs", ".cshtml")):
         # C# using directives: mark known BCL and NuGet top-level namespaces as external
@@ -127,6 +150,13 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
     6. Path alias @/foo → foo (project root alias common in Expo/Next projects).
     Returns empty string if no match.
     """
+    if not target_symbol:
+        return ""
+
+    # Strip "as <alias>" suffix — produced by Python "import X as Y" and
+    # "from X import Y as Z" statements. The alias is not part of the module path.
+    if " as " in target_symbol:
+        target_symbol = target_symbol.split(" as ")[0].strip()
     if not target_symbol:
         return ""
 

@@ -14,12 +14,9 @@ Does NOT run /clear itself — you confirm and type /clear.
 
 Read `$CLAUDEBOOST_HOME/state/active-workspace.json` (field: `workspace`).
 If the file is missing or the named workspace has no `context.md`, auto-detect:
-find the most recently modified `workspace/*/context.md` — checking both ClaudeBoost-local workspaces AND project-scoped workspaces via the registry:
+find the most recently modified `workspace/*/context.md` — checking both ClaudeBoost-local workspaces AND project-scoped workspaces via the registry.
 
-```bash
-# Check registry for project-scoped workspace paths
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --list 2>/dev/null
-```
+Use the Read tool to load `$CLAUDEBOOST_HOME/state/workspaces.json` (JSON object where each key is a task ID and values have a `workspace_path` field). If the file is missing, there are no project-scoped workspaces. Compare mtimes of all context.md files found (local + project-scoped) to determine the most recently modified.
 
 **Recency cross-check (staleness guard):** `active-workspace.json` is only
 written at `/clear-safe` time, so it may reflect a *previous* session's workspace.
@@ -92,7 +89,7 @@ If there is no active workspace, write `{"workspace": ""}`.
 Run the save script to capture current workspace state into `state/handoff-latest.json`:
 
 ```bash
-echo '{}' | python "$CLAUDEBOOST_HOME/scripts/session-clear-save.py"
+python "$CLAUDEBOOST_HOME/scripts/session-clear-save.py" --no-stdin
 ```
 
 Then write `$CLAUDEBOOST_HOME/state/clear-pending.json` with the current UTC timestamp:

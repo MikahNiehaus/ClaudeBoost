@@ -128,6 +128,22 @@ $ARGUMENTS — flexible, any of:
       **Auto-fix for tier_errors containing "dimension mismatch":**
       Re-index the ClaudeBoost knowledge base: call `rag_index(force=true, scope="all")`. Then re-run the smoke test. Report FIXED or PERSISTENT.
 
+   f. **.ragignore compliance** — verify that any excluded directories were actually excluded:
+      Read `<project>/.ragignore` using the Read tool (not a bash command).
+      - If `.ragignore` does not exist: report PASS — "No .ragignore — all files eligible."
+      - If `.ragignore` exists: parse the excluded directory names (strip `#` comments, trailing `/`, blank lines).
+        For each excluded directory, run:
+        `rag_search(query="<dir-name> file module", scope="codebase", project_path=<path>, limit=3)`
+        Check that no result's `source` path starts with the excluded directory name.
+        - PASS: no results from excluded directories
+        - WARN: results found under an excluded directory — exclusion did not take effect
+        **Auto-fix when WARN:** The server loaded old code. Clear pycache and reconnect:
+        ```bash
+        find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
+        echo "Restart MCP server via /mcp, then re-run /index-project force"
+        ```
+        Report: "WARN — .ragignore not active. Clear pycache and reconnect MCP server."
+
    **After all auto-fixes, print a summary table:**
    ```
    ────────────────────────────────────────────────────────
@@ -138,6 +154,7 @@ $ARGUMENTS — flexible, any of:
    c. Relevance         ✓ / ⚠ [top score, query used] [→ FIXED via fallback query]
    d. Manifest          ✓ / ⚠
    e. Context pipeline  ✓ / ⚠ [→ FIXED via knowledge re-index]
+   f. .ragignore        ✓ / ⚠ [excluded dirs verified / not active → reconnect MCP]
    ────────────────────────────────────────────────────────
    ```
    End with one line: `✓ All checks passed` or `⚠ N warning(s) — [non-fixable items listed]`.

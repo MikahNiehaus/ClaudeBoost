@@ -5,6 +5,14 @@ description: Execute planning phase for a task (without execution)
 
 # Planning Phase: $ARGUMENTS
 
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+Call `rag_context(agent="workflow-agent", task_description="implementation planning for current task", max_tokens=3000)`.
+
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+---
+
 ## Instructions
 
 Execute the PLANNING PHASE ONLY for this task. Do NOT proceed to execution.

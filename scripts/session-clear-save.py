@@ -234,7 +234,11 @@ def main() -> int:
     state_dir = home / "state"
 
     # Read hook input from stdin
-    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    # --no-stdin: skip stdin read (used when called manually from /clear-safe)
+    if "--no-stdin" in sys.argv:
+        raw = ""
+    else:
+        raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
         hook_input = json.loads(raw) if raw else {}
     except Exception:

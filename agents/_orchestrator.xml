@@ -177,10 +177,7 @@ Read and internalize all returned content before proceeding.
 action before calling `rag_context`. The orchestrator's PreToolUse hook verifies
 that every spawn includes this instruction.
 
-**Fallback:** If `rag_context` is unavailable (MCP error), use the Read tool to load:
-- agents/[agent-name].xml
-- The knowledge files listed in its <knowledge-base> section
-**Do NOT proceed until identity and knowledge are loaded.**
+**If `rag_context` is unavailable (MCP error): STOP immediately. Do NOT read files as a substitute. Report to the orchestrator: "RAG unavailable — halting. Run /boost to reconnect before this agent can continue."**
 
 ## Step 2: Ticket Loading (IF EXISTS)
 Check if workspace/[task-id]/ticket.md exists. If so, use the Read tool NOW to read:

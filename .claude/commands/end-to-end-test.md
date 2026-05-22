@@ -11,7 +11,15 @@ Arguments: **$ARGUMENTS**
 
 ---
 
-## Phase 0: Initialize
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+Call `rag_context(agent="workflow-agent", task_description="end-to-end UI test planning and execution", max_tokens=3000)`.
+
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+---
+
+## Phase 1: Initialize
 
 **0a — Parse arguments.**
 

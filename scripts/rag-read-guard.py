@@ -23,10 +23,10 @@ import os
 import sys
 from pathlib import Path
 
-RAG_THRESHOLD = 4  # block after this many consecutive file searches without RAG
+RAG_THRESHOLD = 2  # block after this many consecutive file searches without RAG
 
 # Always allow reads of these paths -- no RAG needed for config/workspace files
-EXEMPTED_SUFFIXES = {".json", ".md", ".lock", ".env", ".gitignore", ".toml", ".yaml", ".yml"}
+EXEMPTED_SUFFIXES = {".json", ".lock", ".env", ".gitignore", ".toml", ".yaml", ".yml"}
 EXEMPTED_NAME_FRAGMENTS = {
     "context.md", "settings", "claude.md", "memory", "package", "requirements",
     "cargo.toml", "pyproject", "go.mod", "go.sum", "tsconfig",
@@ -43,6 +43,12 @@ def is_exempted(tool_input: dict) -> bool:
         return True
     if Path(path_str).suffix in EXEMPTED_SUFFIXES:
         return True
+    # .md reads are only exempt inside workspace/ and state/ (context.md, ticket.md, etc.)
+    # All other .md files (skills, knowledge docs) count toward the RAG threshold
+    if Path(path_str).suffix == ".md":
+        if "workspace/" in path_str or "/workspace" in path_str or "state/" in path_str:
+            return True
+        return False
     # Allow glob/grep on non-source patterns (e.g. workspace/**)
     if "workspace" in pattern_str or "state/" in pattern_str:
         return True
@@ -74,7 +80,7 @@ def main() -> int:
     try:
         behavior = json.loads(tracker_path.read_text(encoding="utf-8"))
     except Exception:
-        return 0  # no tracker -- can't enforce, allow
+        behavior = {"reads_since_rag": 0}  # no tracker yet -- start counting fresh
 
     reads_since_rag = behavior.get("reads_since_rag", 0)
 

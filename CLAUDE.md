@@ -12,13 +12,13 @@ A RAG server indexes all of them for semantic search.
 - Use `rag_search` when unsure which knowledge file applies or when reviewing code for standards
 - NEVER guess which file to read — search for it
 - Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
-- PreToolUse hook on `Task` reminds you to include `rag_context` in the spawn prompt — it is a nudge, not a gate; do not rely on it as a safety net
+- PreToolUse hook on `Task` enforces `rag_context` in the spawn prompt — spawns without it are blocked (exit 2); include `rag_context` as the first action in every spawn prompt
 
 ## Decision Flow
 
 Two paths, not five mandatory steps:
 
-**Simple task?** Just do it. No workspace, no ceremony.
+**Simple task?** Just do it. No workspace, no ceremony — but `rag_search` still applies when you need to find something in the codebase.
 
 **Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this", or touches >5 files)
 

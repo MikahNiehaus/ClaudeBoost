@@ -19,16 +19,16 @@ by scripts/setup.ps1. Prompt-type hooks on Task tool calls were over-firing:
 
 This script reads the actual Task tool_input from stdin, checks whether the
 spawn prompt instructs the agent to call `rag_context` as its first action,
-and emits a non-blocking stderr nudge if it doesn't. Never blocks.
+and exits 2 (blocking) if it doesn't.
 
 Behavior:
   - Prompt mentions `rag_context` -> exit 0 silently (pass)
-  - Prompt missing `rag_context`  -> exit 0 + stderr reminder
+  - Prompt missing `rag_context`  -> exit 2 + stderr error (blocked)
   - architect-agent spawn without PROPOSAL_ONLY + 2 citations
-                                  -> exit 0 + stderr reminder
+                                  -> exit 2 + stderr error (blocked)
 
-It is a nudge, not a gate. Blocking hooks over-fire and grind the session.
-A visible reminder is enough.
+Exits 2 (blocking) when the spawn prompt does not include a rag_context call.
+Exits 0 (pass) when rag_context is present or when checking architect-agent contract only.
 """
 from __future__ import annotations
 import json
@@ -77,10 +77,16 @@ def main() -> int:
         )
 
     # Secondary check: architect-agent proposal contract.
-    # Only fires if the prompt or description explicitly invokes architect-agent.
+    # Only fires when the spawn IS an architect-agent, not when the prompt merely
+    # references it (e.g. as a rag_context agent= parameter or in a description).
+    # The description field is the reliable signal — the orchestrator sets it
+    # explicitly when spawning architect-agent. Prompt body checks use identity
+    # phrases only to avoid false positives from rag_context parameter values.
     is_architect = (
-        "architect-agent" in prompt_lower
-        or "architect-agent" in description.lower()
+        "architect-agent" in description.lower()
+        or "you are architect-agent" in prompt_lower
+        or "acting as architect-agent" in prompt_lower
+        or "i am architect-agent" in prompt_lower
     )
     if is_architect:
         has_proposal_only = "PROPOSAL_ONLY" in prompt  # case-sensitive, as specified
@@ -96,9 +102,11 @@ def main() -> int:
                 "refuse and return BLOCKED."
             )
 
-    # Emit nudges (never blocks)
-    for n in nudges:
-        print(n, file=sys.stderr)
+    if nudges:
+        for n in nudges:
+            print(n, file=sys.stderr)
+        # Block when rag_context is absent from spawn prompt — hard requirement
+        return 2
 
     return 0
 

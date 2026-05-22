@@ -6,6 +6,14 @@ description: Interactive Architecture Board — generate a visual project archit
 
 Generate an interactive visual board of the project's architecture — boxes for components, lines showing connections, click to drill into details. Opens in a browser tab.
 
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+Call `rag_context(agent="workflow-agent", task_description="architecture visualization of current project", max_tokens=3000)`.
+
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+---
+
 ## Step 1: Detect Mode
 
 Check if the current working directory has both `agents/` and `knowledge/` directories:

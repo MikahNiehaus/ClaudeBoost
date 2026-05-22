@@ -6,6 +6,14 @@ allowed-tools: Read, Glob, Task
 
 # Agent Spawn Request: $ARGUMENTS
 
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+Call `rag_context(agent="workflow-agent", task_description="agent spawn with RAG knowledge loading", max_tokens=3000)`.
+
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+---
+
 ## Validation Checklist
 
 Before spawning, verify:
@@ -46,7 +54,7 @@ A `PreToolUse` hook on `Task` fires before every agent spawn to verify:
 2. Workspace reference is included if one exists
 3. Gas Town (`gt sling`) is considered for cross-session work
 
-This hook is a nudge, not a gate — it always exits 0 and cannot block the spawn. If your spawn prompt is missing `rag_context` instructions, the hook will remind you via stderr before the spawn proceeds.
+This hook is a hard gate — spawns without `rag_context` in the prompt are blocked (exit 2). Include `rag_context` as the agent's first action or the spawn will not proceed.
 
 If the agent file doesn't exist, list available agents from the `agents/` directory.
 

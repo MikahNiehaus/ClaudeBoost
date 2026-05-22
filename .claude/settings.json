@@ -2,7 +2,7 @@
   "includeCoAuthoredBy": false,
   "permissions": {
     "allow": [
-      "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\")",
+      "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
       "Bash(python -c *)"
     ]
   },
