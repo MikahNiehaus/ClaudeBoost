@@ -615,6 +615,19 @@ $speakStopHook = [PSCustomObject]@{
 Install-HookEntry -Settings $settings -HookType "UserPromptSubmit" -Entry $speakStopHook `
     -Sentinel "speak-stop.py" -Label "TTS interrupt (command-type)"
 
+# --- Stop: human voice guard (command-type) ---
+$humanVoiceGuardPath = "$boostHome\scripts\human-voice-guard.py".Replace("\", "/")
+$humanVoiceGuardHook = [PSCustomObject]@{
+    hooks = @(
+        [PSCustomObject]@{
+            type = "command"
+            command = "python `"$humanVoiceGuardPath`""
+        }
+    )
+}
+Install-HookEntry -Settings $settings -HookType "Stop" -Entry $humanVoiceGuardHook `
+    -Sentinel "human-voice-guard.py" -Label "human voice guard"
+
 # --- Stop: TTS speak hook (command-type) ---
 $speakHookPath = "$boostHome\scripts\speak-tts.py".Replace("\", "/")
 $speakHook = [PSCustomObject]@{

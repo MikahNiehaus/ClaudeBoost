@@ -121,7 +121,7 @@ Then write `$CLAUDEBOOST_HOME/state/auto-clear-pending.json` with a Unix timesta
 
 For `session_name`: scan the current conversation for the most recent occurrence of `Session renamed to: [name]` (this appears in the output when the user ran `/rename`). Use that name. If no rename was found in this conversation, use an empty string `""`.
 
-This flag is consumed by `auto-clear.py` (Stop hook) — in tmux, it injects `/clear` automatically, then restores the session name in the new session.
+This flag is consumed by `auto-clear.py` (Stop hook) — in tmux, it injects `/clear` automatically and restores the session name. On Windows (no tmux), the hook is a no-op; type `/clear` manually.
 
 **Step 5 — Confirm and hand off**
 
@@ -129,7 +129,7 @@ Tell the user:
 
 > Pre-flight complete. State saved to `state/handoff-latest.json`.
 > **In tmux:** `/clear` will fire automatically when I stop responding.
-> **Windows (no tmux):** `/clear` injection will be attempted automatically (best effort). If it doesn't fire, type `/clear` manually — the restore will still work on your first message in the new session.
+> **Windows:** Type `/clear` manually — the restore will work automatically on your first message in the new session.
 > The next session will restore only **[task-id]** context.
 
 If the user says anything other than confirming (asks a question, requests a change):

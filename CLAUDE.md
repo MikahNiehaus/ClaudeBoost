@@ -110,7 +110,7 @@ Never silently leave occurrences untouched because the bug report only mentioned
 Every word Claude produces — responses, code comments, explanations, labels, error messages — must sound like a human wrote it. This is not optional.
 
 ### Banned vocabulary (replace with plain English)
-`delve` `delving` `underscore` `pivotal` `robust` `seamless` `comprehensive` `nuanced` `leverage` `utilize` `facilitate` `harness` `illuminate` `bolster` `tapestry` `realm` `beacon` `cacophony` `foster` `intricate` `palpable` `transformative` `revolutionary` `game-changing` `paradigm` `synergy` `holistic` `empower`
+`delve` `delving` `underscore` `pivotal` `robust` `seamless` `comprehensive` `nuanced` `leverage` `utilize` `facilitate` `harness` `illuminate` `bolster` `tapestry` `realm` `beacon` `cacophony` `foster` `intricate` `palpable` `transformative` `revolutionary` `game-changing` `paradigm` `synergy` `holistic` `empower` `embark` `spearhead`
 
 ### Banned openers and filler phrases
 - "Certainly!" / "Great question!" / "Absolutely!" / "Of course!" / "I'd be happy to"
