@@ -96,14 +96,19 @@ if exist "%GT_DIR%" (
 )
 
 :: ============================================================
-:: 4. Initial RAG index
+:: 4. Run setup.py (hooks, state, ML deps) and initial RAG index
 :: ============================================================
-echo  [4/4] Building initial RAG index...
+echo  [4/4] Running setup.py...
 
 set "RAG_PROJECT_ROOT=%BOOST_DIR%"
+python "%BOOST_DIR%\scripts\setup.py"
+if errorlevel 1 (
+    echo         WARNING: setup.py reported issues. Review the output above.
+)
+
 python -c "from rag_server.core.embedding import SentenceTransformerEmbedding; from rag_server.core.store import ChromaStore; from rag_server.indexing.engine import IndexingEngine; from rag_server.config import CHROMA_DIR; e=SentenceTransformerEmbedding(); s=ChromaStore(str(CHROMA_DIR)); eng=IndexingEngine(e,s); r=eng.index_all(force=True); print(f'Indexed {r[\"files_indexed\"]} files, {r[\"chunks_created\"]} chunks')" 2>&1
 if errorlevel 1 (
-    echo         Skipped. Run rag_index from Claude Code to index later.
+    echo         Skipped initial RAG index. Run rag_index from Claude Code to index later.
 ) else (
     echo         Index built successfully.
 )

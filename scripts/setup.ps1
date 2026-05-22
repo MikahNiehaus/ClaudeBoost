@@ -1,46 +1,27 @@
-﻿# scripts/setup.ps1 - ClaudeBoost portable setup
-# Run once after cloning: powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+# setup.ps1 - thin shim. The real setup is now scripts/setup.py (cross-platform).
+#
+# Kept so existing automation, docs, and ensure-setup copies on user machines
+# that reference setup.ps1 keep working without modification.
 
 $ErrorActionPreference = "Stop"
+$scriptDir = $PSScriptRoot
+$setupPy = Join-Path $scriptDir "setup.py"
 
-# Resolve ClaudeBoost install path from script location
-$boostHome = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$boostHomePosix = $boostHome.Replace("\", "/")
-$claudeDir = Join-Path $env:USERPROFILE ".claude"
-
-Write-Host "`n=== ClaudeBoost Setup ===" -ForegroundColor Cyan
-Write-Host "ClaudeBoost home: $boostHome"
-Write-Host "Claude config dir: $claudeDir`n"
-
-# --- 0. Preflight checks ---
-Write-Host "Running preflight checks..." -ForegroundColor Cyan
-$preflightOk = $true
-foreach ($req in @(
-    [PSCustomObject]@{ cmd = "python"; label = "Python 3.9+";     required = $true },
-    [PSCustomObject]@{ cmd = "pip";    label = "pip";             required = $true },
-    [PSCustomObject]@{ cmd = "claude"; label = "Claude Code CLI"; required = $true },
-    [PSCustomObject]@{ cmd = "git";    label = "Git";             required = $false }
-)) {
-    if (Get-Command $req.cmd -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] $($req.label)" -ForegroundColor Green
-    } elseif ($req.required) {
-        Write-Host "[ERROR] $($req.label) not found on PATH — install before re-running /setup." -ForegroundColor Red
-        $preflightOk = $false
-    } else {
-        Write-Host "[WARN] $($req.label) not found — gt commands and workspace commits will not work." -ForegroundColor Yellow
-    }
-}
-if (-not $preflightOk) {
-    Write-Host "`n[FAIL] Required tools missing. Fix the above and re-run /setup." -ForegroundColor Red
+if (-not (Test-Path $setupPy)) {
+    Write-Host "[ERROR] setup.py not found at $setupPy" -ForegroundColor Red
     exit 1
 }
 
-# Ensure ~/.claude exists
-if (-not (Test-Path $claudeDir)) {
-    New-Item -ItemType Directory -Path $claudeDir | Out-Null
-    Write-Host "Created $claudeDir" -ForegroundColor Yellow
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) {
+    $python = Get-Command python3 -ErrorAction SilentlyContinue
+}
+if (-not $python) {
+    Write-Host "[ERROR] Python not found on PATH. Install Python 3.9+." -ForegroundColor Red
+    exit 1
 }
 
+<<<<<<< HEAD
 # --- 1. Create/update ~/.claude/mcp.json (merge — never overwrite other servers) ---
 $mcpPath = Join-Path $claudeDir "mcp.json"
 $ragCwd = (Join-Path $boostHome "mcp-rag-server").Replace("\", "/")
@@ -757,3 +738,7 @@ Write-Host "  If Claude Code is completely blocked (UserPromptSubmit hook error)
 Write-Host "  Run fix-hooks.ps1 first, then re-run setup.ps1:"
 Write-Host "    powershell -ExecutionPolicy Bypass -File `"$boostHome\scripts\fix-hooks.ps1`""
 Write-Host ""
+=======
+& $python.Source $setupPy
+exit $LASTEXITCODE
+>>>>>>> 63b4070 (Add macOS and Linux support)

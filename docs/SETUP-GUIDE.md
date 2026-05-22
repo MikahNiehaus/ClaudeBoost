@@ -22,9 +22,21 @@ cd <install-path>
 
 ### 2. Run the Installer
 
+**Windows:**
+
 ```batch
 .\install.bat
 ```
+
+**macOS / Linux:**
+
+```bash
+./install.sh
+```
+
+Both wrappers delegate to `scripts/setup.py` — the single cross-platform installer. The Unix script symlinks `CLAUDE.md` and `commands/` into `~/.claude/` so any repo edit propagates immediately.
+
+> **TTS scope**: `/speak` is wired for Windows and macOS only. Linux installs everything else but `/speak` is a no-op on that platform.
 
 This does everything in one step:
 
@@ -50,7 +62,7 @@ Indexed 68 files, 736 chunks
 
 **Important**: The installer sets `RAG_PROJECT_ROOT` to your ClaudeBoost directory so the
 RAG server can find the index and XML files from any project. If you move ClaudeBoost to
-a different location, re-run `install.bat` to update the path.
+a different location, re-run `install.bat` (Windows) or `./install.sh` (macOS/Linux) to update the path.
 
 ### 3. Verify
 
@@ -368,9 +380,9 @@ This is a false positive — the file is pre-created for when polecats launch.
 Running `gt doctor --fix` clears it, and `gt hooks sync` recreates it.
 This is harmless and expected when no polecats are running.
 
-## Quick Start with gtstart.bat
+## Quick Start with gtstart
 
-For new projects, copy `gtstart.bat` into your project root. Running it will:
+For new projects, copy `gtstart.bat` (Windows) or `gtstart.sh` (macOS/Linux) into your project root. Running it will:
 
 1. Check if the project is already a registered rig — if so, jump straight to launch
 2. If not, set up everything automatically:
@@ -387,7 +399,7 @@ On launch, it presents a session menu:
 - **[2] Continue** — resumes the most recent session, auto-primes
 - **[3] Resume** — pick from a list of past sessions
 
-The bat lives in your source project directory (e.g., `~/OneDrive/prj/MyProject/gtstart.bat`),
+The script lives in your source project directory (e.g., `~/projects/MyProject/gtstart.sh`),
 but the actual workspace it creates is at `~/gt/<project-name>/crew/<your-username>/`.
 
 ## Verification Checklist
