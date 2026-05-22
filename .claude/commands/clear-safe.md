@@ -13,19 +13,20 @@ Does NOT run /clear itself — you confirm and type /clear.
 **Step 1 — Detect active workspace**
 
 Read `$CLAUDEBOOST_HOME/state/active-workspace.json` (field: `workspace`).
-If the file is missing or the named workspace has no `context.md`, auto-detect:
-find the most recently modified `workspace/*/context.md` — checking both ClaudeBoost-local workspaces AND project-scoped workspaces via the registry.
 
-Use the Read tool to load `$CLAUDEBOOST_HOME/state/workspaces.json` (JSON object where each key is a task ID and values have a `workspace_path` field). If the file is missing, there are no project-scoped workspaces. Compare mtimes of all context.md files found (local + project-scoped) to determine the most recently modified.
+**Staleness guard:** `active-workspace.json` is only written at `/clear-safe` time, so it may
+reflect a *previous* session's workspace. To check for a newer workspace without bash:
 
-**Recency cross-check (staleness guard):** `active-workspace.json` is only
-written at `/clear-safe` time, so it may reflect a *previous* session's workspace.
-After resolving a candidate from the file, compare its `context.md` mtime against
-all other `workspace/*/context.md` files. If another workspace is more than
-30 minutes newer, prefer it — the user switched workspaces without re-running
-`/clear-safe`. Show the user both the stored and detected values when they differ:
-> "state/active-workspace.json says **[stored]**, but **[mtime-winner]** is N hours
-> more recent. Using **[mtime-winner]** — correct this before proceeding if wrong."
+1. Use Glob with pattern `workspace/*/context.md` in the ClaudeBoost-local dir — Glob returns
+   files sorted by modification time (most recent first). The first result is the newest.
+2. Also read `$CLAUDEBOOST_HOME/state/workspaces.json` (Read tool) — each key is a task ID with
+   a `workspace_path` field. For any project-scoped workspace paths, use Glob with pattern
+   `[workspace_path]/context.md` to check if those exist.
+3. Compare the stored workspace against the Glob winner. If the Glob winner differs from the
+   stored value AND the stored workspace's context.md appears near the bottom of the Glob results
+   (i.e., older), prefer the Glob winner and tell the user:
+   > "state/active-workspace.json says **[stored]**, but **[mtime-winner]** appears more recent.
+   > Using **[mtime-winner]** — correct this before proceeding if wrong."
 
 If no workspace exists at all: skip to Step 4.
 
@@ -40,7 +41,7 @@ Check for ALL of the following:
 | Current status | A section named "Status", "Progress", or similar with a non-empty value |
 | Next step | A specific, actionable next step (not "TBD" or blank) |
 | Key decisions | At least one decision or constraint documented |
-| Recency | File modified within the last 60 minutes |
+| Recency | File contains a "Last updated" date of today, OR was clearly written/edited this session |
 
 **If any checks fail — draft missing sections, do NOT block:**
 
@@ -86,11 +87,19 @@ If there is no active workspace, write `{"workspace": ""}`.
 
 **Step 4b — Save handoff and arm the clear-pending flag.**
 
-Run the save script to capture current workspace state into `state/handoff-latest.json`:
+Write `$CLAUDEBOOST_HOME/state/handoff-latest.json` directly using the Write tool:
 
-```bash
-python "$CLAUDEBOOST_HOME/scripts/session-clear-save.py" --no-stdin
+```json
+{
+  "session_id": "manual-clear-safe",
+  "timestamp": "[current UTC ISO timestamp]",
+  "trigger": "SessionEnd(clear)",
+  "active_workspace": "[task-id]",
+  "workspace_memo": "# Clear Handoff Memo\nSession: manual-clear-safe\nTime: [timestamp]\n\n## Active Workspaces\n### [task-id]\n[full content of context.md read in Step 2]\n\n## Recovery Instructions\nRead workspace/[task-id]/context.md for full task detail.\nContinue from the last documented next step."
+}
 ```
+
+Use the actual context.md content in `workspace_memo`. This is what `session-primer.py` injects after `/clear`.
 
 Then write `$CLAUDEBOOST_HOME/state/clear-pending.json` with the current UTC timestamp:
 

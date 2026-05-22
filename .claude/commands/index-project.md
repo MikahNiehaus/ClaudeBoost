@@ -79,13 +79,23 @@ $ARGUMENTS — flexible, any of:
       - WARN: Found N .ext files not indexed — this extension is not supported by the indexer.
       - **Auto-fix**: none — this requires a code change to `LANGUAGE_EXTENSIONS` in `ClaudeBoost/mcp-rag-server/src/rag_server/core/project.py`. Report the exact file and what to add.
 
-   b. **Graph liveness check** (1 search call) — verify graph edges are activating during search:
+   b. **Graph liveness + edge resolution check** (1 search call + rag_status) — verify graph edges are activating and fully resolved:
       `rag_search(query="service class method", scope="codebase", project_path=<path>, mode="graph", limit=3)`
       - PASS: `graph_augmented: true`
       - WARN: `graph_augmented: false`
 
-      **Auto-fix sequence when WARN:**
-      1. Call `rag_status()` and check `indexed_projects[<id>]` for this project:
+      **Always call `rag_status()` after the search** and check `indexed_projects[<id>]` for this project.
+      Compute `unresolved = graph_edges - graph_resolved`.
+
+      **Edge resolution sub-check:**
+      - `unresolved = 0`: PASS — all edges resolved (or marked external)
+      - `unresolved > 0` AND `unresolved <= 5%` of total edges: WARN — small gap, likely edge cases (unusual import patterns, dynamic imports). Report count but don't auto-fix.
+      - `unresolved > 5%` of total edges: WARN — significant resolution gap. Auto-fix: re-run `rag_index_project(project_path, force=true)`. Report FIXED or PERSISTENT.
+
+      Report in the summary table as: `b. Graph liveness ✓ [graph_resolved/graph_edges edges resolved]`
+
+      **Auto-fix sequence when graph_augmented=false:**
+      1. Check `rag_status()`:
          - If `graph_edges = 0`: No edges were extracted — language has no graph support. Cannot auto-fix. Report: "No graph edges extracted — graph search unavailable for this language."
          - If `graph_edges > 0` AND `graph_resolved = 0`: Edges exist but none resolved (file map lookup failed). Auto-fix: re-run `rag_index_project(project_path, force=true)`. Re-check with `rag_search(mode="graph")`. Report FIXED or PERSISTENT.
          - If `graph_active: true` (edges AND resolved > 0) but search still returns `graph_augmented: false`: The seed files for this query have no graph neighbors. Try a second query: `rag_search(query="import module dependency", scope="codebase", project_path=<path>, mode="graph", limit=3)`. If `graph_augmented: true` on retry: report PASS — graph is working, the original query's seed files happened to have no neighbors. If still false: report WARN — graph edges may be isolated.
@@ -150,7 +160,7 @@ $ARGUMENTS — flexible, any of:
    Post-Index Quality Checks
    ────────────────────────────────────────────────────────
    a. Coverage          ✓ / ⚠ [detail]
-   b. Graph liveness    ✓ / ⚠ [detail] [→ FIXED / cannot auto-fix]
+   b. Graph liveness    ✓ / ⚠ [graph_resolved/graph_edges edges resolved] [→ FIXED / cannot auto-fix]
    c. Relevance         ✓ / ⚠ [top score, query used] [→ FIXED via fallback query]
    d. Manifest          ✓ / ⚠
    e. Context pipeline  ✓ / ⚠ [→ FIXED via knowledge re-index]

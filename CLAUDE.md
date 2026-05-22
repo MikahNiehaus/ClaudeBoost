@@ -184,6 +184,8 @@ When RAG errors mid-task: `rag-error-guard.py` surfaces the error automatically.
 
 The `session-primer.py` UserPromptSubmit hook injects a HARD STOP directive when the sentinel is missing — treat it as a hard requirement, not a soft suggestion.
 
+**Agent spawn blocked by sentinel guard?** Run `/boost` immediately. Do not investigate the sentinel file, do not try to set it manually, do not look for workarounds. The block means `/boost` hasn't run this session — that's the fix, full stop.
+
 ## RAG Health Check Protocol
 
 At the start of any investigation or multi-step codebase task:

@@ -31,11 +31,9 @@ If `$ARGUMENTS` is non-empty, override `active_workspace` with the provided valu
 
 Resolve the workspace path for `[active_workspace]`:
 
-1. Check the registry first:
-   ```bash
-   python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --get [active_workspace] 2>/dev/null
-   ```
-   If a path is returned, use `[registry_path]/context.md`.
+1. Check the registry first: Read `$CLAUDEBOOST_HOME/state/workspaces.json` using the Read tool.
+   Parse the JSON and look up `[active_workspace]` as a key. If found, use `[workspace_path]/context.md`
+   from that entry.
 
 2. Otherwise fall back to the ClaudeBoost-local path:
    `$CLAUDEBOOST_HOME/workspace/[active_workspace]/context.md`
@@ -75,3 +73,8 @@ Tell the user:
 > Continue from: [Next Step from context.md or workspace_memo]
 >
 > If this is the wrong workspace, run `/restore [workspace-id]` with the correct ID.
+
+## Step 5 — Prime the session
+
+Run `/boost` to verify RAG, set the sentinel, and fully initialize the session.
+Do not skip this — without it, agent spawning will be blocked by the sentinel guard.

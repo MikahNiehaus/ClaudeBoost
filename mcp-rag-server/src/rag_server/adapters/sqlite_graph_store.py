@@ -6,6 +6,7 @@ ChromaDB metadata is scalar-only, so graph edges live in a separate SQLite file.
 
 import logging
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -49,8 +50,9 @@ CREATE TABLE IF NOT EXISTS community_summaries (
 _EXTERNAL_SENTINEL = "_external_"
 
 
-# Python stdlib top-level package names — used to mark multi-segment stdlib imports
-# like urllib.request and xml.etree.ElementTree as _external_ instead of unresolved.
+# Python stdlib top-level names — fallback for Python < 3.10 or when stdlibs isn't installed.
+# sys.stdlib_module_names (3.10+) and the stdlibs package are authoritative; this list
+# is a safety net only.
 _PYTHON_STDLIB_PREFIXES = frozenset({
     "abc", "ast", "asyncio", "base64", "binascii", "bisect", "builtins",
     "codecs", "collections", "concurrent", "configparser", "contextlib",
@@ -68,6 +70,27 @@ _PYTHON_STDLIB_PREFIXES = frozenset({
     "urllib", "uuid", "warnings", "weakref", "xml", "xmlrpc", "zipfile",
     "zlib", "bz2", "array", "cmath", "grp", "pwd", "termios", "tty",
 })
+
+
+def _get_stdlib_names() -> frozenset[str]:
+    """Return the complete set of Python stdlib top-level module names.
+
+    Resolution order (best → fallback):
+    1. sys.stdlib_module_names — accurate for the running interpreter (Python 3.10+)
+    2. stdlibs.module_names — cross-version superset covering all Python 3.x releases
+    3. _PYTHON_STDLIB_PREFIXES — hardcoded fallback for environments without stdlibs
+    """
+    if hasattr(sys, "stdlib_module_names"):
+        return frozenset(sys.stdlib_module_names)
+    try:
+        from stdlibs import module_names  # type: ignore[import-not-found]
+        return frozenset(module_names)
+    except ImportError:
+        return _PYTHON_STDLIB_PREFIXES
+
+
+# Resolved once at import time — no per-call overhead.
+_STDLIB_NAMES: frozenset[str] = _get_stdlib_names()
 
 _CS_EXTERNAL_PREFIXES = frozenset({
     "System", "Microsoft", "Newtonsoft", "AutoMapper",
@@ -106,14 +129,15 @@ def _is_external_symbol(
         return True
 
     if source_file.endswith(".py"):
-        # Single-segment Python name with no slashes or dots = stdlib or third-party top-level
-        # (os, sys, re, json, typing, chromadb, fastapi, anthropic, ...).
-        # Multi-segment dotted names where the first segment is a known stdlib package are
-        # also external (urllib.request, xml.etree.ElementTree, email.mime.text, etc.).
+        # Single-segment names (os, sys, re, chromadb, fastapi, ...) are always external —
+        # stdlib or third-party top-level; project-internal modules use dotted or relative paths.
+        # Multi-segment names: check whether the first segment is a stdlib package.
+        # Third-party dotted names (mcp.server, rich.style, etc.) that pass here are caught
+        # by the namespace fallback in resolve_target_files.
+        first_segment = symbol.split(".")[0]
         if "/" not in symbol and "." not in symbol:
             return True
-        first_segment = symbol.split(".")[0]
-        return first_segment in _PYTHON_STDLIB_PREFIXES
+        return first_segment in _STDLIB_NAMES
 
     if source_file.endswith((".cs", ".cshtml")):
         # C# using directives: mark known BCL and NuGet top-level namespaces as external
@@ -461,6 +485,19 @@ class SQLiteGraphStore(GraphStorePort):
         if not unresolved:
             return 0
 
+        # Pre-compute the set of top-level namespace segments that appear inside the
+        # project's file_map — used to distinguish unresolved internal imports from
+        # unresolved third-party package imports.
+        # A segment is "in the project" if any indexed path contains "/<seg>/" or
+        # starts with "<seg>/".  This avoids false-positives like "mcp" matching
+        # "mcp-rag-server/…" (the dir name contains extra chars after the segment).
+        project_namespaces: set[str] = set()
+        for k in file_map:
+            parts = k.replace("\\", "/").split("/")
+            for i, part in enumerate(parts):
+                # Record each directory segment that contains a sub-path as a namespace
+                project_namespaces.add(part)
+
         updates: list[tuple[str, int]] = []
         external_count = 0
         for row in unresolved:
@@ -472,6 +509,18 @@ class SQLiteGraphStore(GraphStorePort):
             ):
                 updates.append((_EXTERNAL_SENTINEL, row["id"]))
                 external_count += 1
+            elif row["source_file"].endswith(".py"):
+                # Fallback for Python: dotted third-party imports that aren't caught by
+                # _is_external_symbol (e.g. mcp.server, chromadb.config, rich.style).
+                # If the first segment of the import is NOT a real project namespace
+                # (i.e. no indexed file lives under that directory name), treat as external.
+                symbol = row["target_symbol"]
+                if " as " in symbol:
+                    symbol = symbol.split(" as ")[0].strip()
+                first_seg = symbol.split(".")[0]
+                if first_seg and first_seg not in project_namespaces:
+                    updates.append((_EXTERNAL_SENTINEL, row["id"]))
+                    external_count += 1
 
         if updates:
             with self._connect() as conn:

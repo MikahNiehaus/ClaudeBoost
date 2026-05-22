@@ -55,7 +55,9 @@ Keep the codebase index current so `rag_search(scope="codebase")` works against 
 echo "$CLAUDEBOOST_HOME"
 ```
 
-Then call `rag_index_project(project_path=<value from above>)`. Incremental — only changed files re-embed. Report briefly: "X files updated, Y chunks." Skip if RAG failed.
+Then call `rag_index_project(project_path=<value from above>)`. Incremental — only changed files re-embed. Skip if RAG failed.
+
+After indexing, read the graph edge counts for the ClaudeBoost project from the `rag_status` response already retrieved in Step 2 (look up the entry whose `project_path` matches `$CLAUDEBOOST_HOME`). Report: "X files updated, Y chunks, Z/W graph edges resolved." If `graph_active` is false, add "(graph inactive — reindex to rebuild)".
 
 ## Step 2.6: Project Index Check
 
@@ -72,7 +74,7 @@ PROJECT_PATH="<path from above>" && [ -d "$PROJECT_PATH/workspace/.rag-index" ] 
 **If NOT_INDEXED**: report in Systems Status:
 > "Project RAG: not indexed — run `/index-project [path]` to enable vector + graph search"
 
-**If INDEXED**: report "Project RAG: ready — vector + graph search active for [project]."
+**If INDEXED**: read the project's entry from the `rag_status` response and report: "Project RAG: ready — [files] files, [chunks] chunks, [graph_resolved]/[graph_edges] edges ([project name])".
 
 ---
 
@@ -118,11 +120,11 @@ if [ -f "$CLAUDEBOOST_HOME/state/session-approvals.json" ]; then echo '{"session
 ## Step 6: Workspace Discovery
 
 ```bash
-mkdir -p workspace && for d in workspace/*/; do if [ -f "${d}context.md" ]; then echo "WORKSPACE: $d"; head -5 "${d}context.md"; echo "---"; fi; done; echo "  workspace: ready"
+mkdir -p workspace && for d in workspace/*/; do if [ -f "${d}context.md" ]; then STATUS=$(grep -i "^## Status" -A1 "${d}context.md" | tail -1); echo "$STATUS" | grep -qiE "in progress|plan_ready|implemented|blocked" && echo "WORKSPACE: $d | $STATUS"; fi; done; echo "  workspace: ready"
 ```
 
-- List each task ID and current status from context.md
-- If exactly one workspace exists, read its full `context.md` to restore session state
+- Only show workspaces with status: IN PROGRESS, PLAN_READY, IMPLEMENTED, or BLOCKED — skip COMPLETE and empty
+- If exactly one active workspace exists, read its full `context.md` to restore session state
 - If none: "No active workspaces — ready for new work"
 
 ## Step 7: Done
@@ -134,8 +136,9 @@ touch "$TEMP/claudeboost_active" && python "$CLAUDEBOOST_HOME/scripts/boost-inli
 **Report format — include ALL of these sections:**
 
 ### Systems Status
-- RAG: ready/failed (chunk counts)
-- Project RAG: indexed (vector + graph) / not indexed
+- RAG: ready/failed (knowledge: X chunks/Y files, agents: X chunks/Y files)
+- ClaudeBoost index: X files, Y chunks, Z/W graph edges resolved
+- Project RAG: ready (files, chunks, graph_resolved/graph_edges edges) / not indexed — pull counts from `rag_status`
 - GT: ready/failed (version)
 - Hooks: all 6 types present/missing
 - Rules: CLAUDE.md loaded/missing
