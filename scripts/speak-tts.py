@@ -24,8 +24,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Windows: DETACHED_PROCESS so the player runs independently
+# Windows: DETACHED_PROCESS so the player runs independently.
+# On POSIX we use start_new_session=True instead, which puts the player in
+# its own process group so it survives this hook returning.
 DETACHED_PROCESS = 0x00000008
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
 MIN_SPEAK_CHARS = 10
 DEFAULT_VOICE = "en-US-AndrewNeural"
 
@@ -211,6 +215,12 @@ def main() -> int:
     if not state.get("enabled", False):
         return 0
 
+    # TTS playback was intentionally scoped to Windows + macOS. On Linux we
+    # leave the state file alone (so /speak commands still update state) but
+    # never spawn the player.
+    if not (IS_WINDOWS or IS_MACOS):
+        return 0
+
     voice = state.get("voice", DEFAULT_VOICE)
 
     # 3. Prevent infinite loops
@@ -232,8 +242,9 @@ def main() -> int:
     if len(text) < MIN_SPEAK_CHARS:
         return 0
 
-    # 6. Write to temp file and spawn background player
-    temp_dir = os.environ.get("TEMP", tempfile.gettempdir())
+    # 6. Write to temp file and spawn background player.
+    # TMPDIR is the POSIX standard; TEMP is set by Claude Code on Windows.
+    temp_dir = os.environ.get("TEMP") or os.environ.get("TMPDIR") or tempfile.gettempdir()
     text_file = os.path.join(temp_dir, "claudeboost_tts_text.txt")
     try:
         Path(text_file).write_text(text, encoding="utf-8")
@@ -251,13 +262,21 @@ def main() -> int:
         pass
 
     play_script = str(Path(home) / "scripts" / "speak-play.py")
+    popen_kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+    }
+    if IS_WINDOWS:
+        popen_kwargs["creationflags"] = DETACHED_PROCESS
+    else:
+        # POSIX: start_new_session detaches from the hook's process group
+        # so the player keeps running after this script exits.
+        popen_kwargs["start_new_session"] = True
     try:
         subprocess.Popen(
             [sys.executable, play_script, text_file, voice, temp_dir],
-            creationflags=DETACHED_PROCESS,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
+            **popen_kwargs,
         )
     except Exception:
         pass

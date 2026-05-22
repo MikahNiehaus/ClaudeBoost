@@ -1,8 +1,8 @@
 """
-ClaudeBoost ensure-setup: UserPromptSubmit hook that auto-runs setup.ps1
+ClaudeBoost ensure-setup: UserPromptSubmit hook that auto-runs setup.py
 if CLAUDEBOOST_HOME is not configured in settings.json.
 
-Installed to ~/.claude/ensure-setup.py by setup.ps1 so the path is stable
+Installed to ~/.claude/ensure-setup.py by setup.py so the path is stable
 across machines regardless of where ClaudeBoost is cloned.
 
 Self-locating via __file__ — no CLAUDEBOOST_HOME dependency.
@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 _SENTINEL = Path.home() / ".claude" / ".ensure-setup-triggered"
+_IS_WINDOWS = os.name == "nt"
 
 
 def _needs_setup() -> bool:
@@ -40,11 +41,12 @@ def _needs_setup() -> bool:
     return True
 
 
-def _find_setup_ps1() -> Path | None:
-    """Locate setup.ps1 via __file__ (works whether installed to ~/.claude or scripts/)."""
+def _find_setup_script() -> Path | None:
+    """Locate setup.py via __file__ — works whether installed to ~/.claude/ or scripts/."""
     candidates = [
-        Path(__file__).resolve().parent / "scripts" / "setup.ps1",  # ~/.claude/
-        Path(__file__).resolve().parent.parent / "scripts" / "setup.ps1",  # repo/scripts/
+        Path(__file__).resolve().parent / "scripts" / "setup.py",  # ~/.claude/
+        Path(__file__).resolve().parent.parent / "scripts" / "setup.py",  # repo/scripts/
+        Path(__file__).resolve().parent / "setup.py",  # repo/scripts/ direct
     ]
     for p in candidates:
         if p.exists():
@@ -56,14 +58,19 @@ def main() -> int:
     if not _needs_setup():
         return 0
 
-    setup_ps1 = _find_setup_ps1()
+    setup_script = _find_setup_script()
 
-    if setup_ps1 is None:
+    if setup_script is None:
+        manual_cmd = (
+            'powershell -ExecutionPolicy Bypass -File '
+            '"C:/Development/ClaudeBoost/scripts/setup.py"'
+            if _IS_WINDOWS
+            else 'python3 "$HOME/ClaudeBoost/scripts/setup.py"'
+        )
         print(json.dumps({
             "additionalContext": (
-                "CLAUDEBOOST SETUP REQUIRED: Cannot find setup.ps1. "
-                "Run: powershell -ExecutionPolicy Bypass -File "
-                "\"C:/Development/ClaudeBoost/scripts/setup.ps1\""
+                "CLAUDEBOOST SETUP REQUIRED: Cannot find setup.py. "
+                f"Run: {manual_cmd}"
             )
         }))
         return 0
@@ -77,22 +84,32 @@ def main() -> int:
     print(json.dumps({
         "additionalContext": (
             "CLAUDEBOOST AUTO-SETUP: CLAUDEBOOST_HOME is not configured on this machine. "
-            "Running setup.ps1 now — a PowerShell window will open. "
+            "Running setup.py now in the background. "
             "Run /mcp in Claude Code once setup completes."
         )
     }))
 
     try:
-        subprocess.Popen([
-            "powershell.exe", "-ExecutionPolicy", "Bypass",
-            "-File", str(setup_ps1)
-        ])
+        # Use the current Python interpreter so this works in venvs and on
+        # systems where only `python3` (not `python`) is on PATH.
+        popen_kwargs = {}
+        if _IS_WINDOWS:
+            # Detach from this hook so Claude Code's prompt isn't blocked.
+            popen_kwargs["creationflags"] = 0x00000008  # DETACHED_PROCESS
+        else:
+            popen_kwargs["start_new_session"] = True
+        subprocess.Popen(
+            [sys.executable, str(setup_script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            **popen_kwargs,
+        )
     except Exception as e:
-        # Print to stdout so Claude Code surfaces it via additionalContext
         print(json.dumps({
             "additionalContext": (
                 f"CLAUDEBOOST AUTO-SETUP FAILED: {e}. "
-                f"Run manually: powershell -ExecutionPolicy Bypass -File \"{setup_ps1}\""
+                f"Run manually: {sys.executable} \"{setup_script}\""
             )
         }))
 

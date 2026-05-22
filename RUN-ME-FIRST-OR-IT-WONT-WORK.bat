@@ -20,13 +20,13 @@ pause
 echo.
 echo [1/3] Clearing stale hooks...
 echo.
-powershell -ExecutionPolicy Bypass -File "%BOOST_DIR%\scripts\fix-hooks.ps1"
+python "%BOOST_DIR%\scripts\fix_hooks.py"
 
-:: ── Step 2: PowerShell setup ─────────────────────────────────────────────────
+:: ── Step 2: Python setup ─────────────────────────────────────────────────────
 echo.
 echo [2/3] Running setup...
 echo.
-powershell -ExecutionPolicy Bypass -File "%BOOST_DIR%\scripts\setup.ps1"
+python "%BOOST_DIR%\scripts\setup.py"
 
 if errorlevel 1 (
     echo.

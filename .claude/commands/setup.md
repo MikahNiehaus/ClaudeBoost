@@ -8,8 +8,10 @@ allowed-tools: Bash, Read, Write, Glob, mcp__rag-server__rag_index, mcp__rag-ser
 Installs ClaudeBoost (if needed) then verifies every component in a loop with auto-repair.
 
 **Two scenarios this covers:**
-- **Fresh computer** — No previous ClaudeBoost install. setup.ps1 creates everything from scratch: hooks, MCP config, RAG server, state files, Python deps.
-- **After `git pull`** — Existing install. setup.ps1 picks up new hooks and deps idempotently (never duplicates). New slash commands are already in the repo. Re-index refreshes the RAG so new agents/knowledge are searchable.
+- **Fresh computer** — No previous ClaudeBoost install. setup.py creates everything from scratch: hooks, MCP config, RAG server, state files, Python deps.
+- **After `git pull`** — Existing install. setup.py picks up new hooks and deps idempotently (never duplicates). New slash commands are already in the repo. Re-index refreshes the RAG so new agents/knowledge are searchable.
+
+> Cross-platform: setup.py runs on Windows, macOS, and Linux. The old `setup.ps1` is now a one-line shim that delegates here, so any existing automation keeps working.
 
 Safe to re-run anytime — all operations preserve existing user settings.
 
@@ -43,8 +45,10 @@ Announce: `ClaudeBoost home: <path>`
 Installs hooks, registers MCP server, seeds state files, installs Python deps. All steps are idempotent.
 
 ```bash
-powershell -ExecutionPolicy Bypass -File "$CLAUDEBOOST_HOME/scripts/setup.ps1"
+python "$CLAUDEBOOST_HOME/scripts/setup.py"
 ```
+
+(On macOS/Linux where only `python3` is on PATH, use `python3` instead.)
 
 Read the output. Summarize:
 - `[OK]` items: newly installed or verified
@@ -96,7 +100,7 @@ for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPrompt
 done
 ```
 
-If any are MISSING: re-run `setup.ps1` (hooks are additive — re-running never duplicates), then retry.
+If any are MISSING: re-run `setup.py` (hooks are additive — re-running never duplicates), then retry.
 
 ---
 
@@ -108,7 +112,7 @@ ls "$CLAUDEBOOST_HOME/state/"
 
 Required: `claudeboost-mode.json`, `session-approvals.json`, `speak-state.json`
 
-If any are missing: re-run `setup.ps1` (it seeds missing files while preserving existing ones), then retry.
+If any are missing: re-run `setup.py` (it seeds missing files while preserving existing ones), then retry.
 
 Also verify that `claudeboost-mode.json` contains `"mode": "CONSULT"`:
 
@@ -116,7 +120,7 @@ Also verify that `claudeboost-mode.json` contains `"mode": "CONSULT"`:
 python -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
 ```
 
-If mode is not `CONSULT`: re-run `setup.ps1` — it now resets any non-CONSULT value back to CONSULT automatically.
+If mode is not `CONSULT`: re-run `setup.py` — it now resets any non-CONSULT value back to CONSULT automatically.
 
 ---
 
@@ -157,13 +161,13 @@ print('PRESENT' if 'ClaudeBoost' in cmd else 'MISSING')
 "
 ```
 
-If MISSING: re-run `setup.ps1` — it now creates the statusLine on fresh installs. Then run `/mcp` to reconnect.
+If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/mcp` to reconnect.
 
 ---
 
 ### Check 7 — Global slash commands synced
 
-Project `.claude/commands/` only load when Claude Code's cwd is inside the ClaudeBoost repo. `setup.ps1` mirrors every command to `~/.claude/commands/` so all skills (`/workspace`, `/explore`, `/audit`, etc.) are available in **every** Claude instance regardless of directory. Verify the global dir has the full set:
+Project `.claude/commands/` only load when Claude Code's cwd is inside the ClaudeBoost repo. `setup.py` mirrors every command to `~/.claude/commands/` so all skills (`/workspace`, `/explore`, `/audit`, etc.) are available in **every** Claude instance regardless of directory. Verify the global dir has the full set:
 
 ```bash
 SRC=$(ls "$CLAUDEBOOST_HOME/.claude/commands/"*.md 2>/dev/null | wc -l)
@@ -172,7 +176,7 @@ echo "project=$SRC global=$DST"
 comm -23 <(ls "$CLAUDEBOOST_HOME/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
 ```
 
-If the `comm` output lists any files (commands present in the repo but missing globally), re-run `setup.ps1` — section 2b syncs them. Then **restart any other Claude instances** for them to pick up the new commands (the command list is read at startup).
+If the `comm` output lists any files (commands present in the repo but missing globally), re-run `setup.py` — section 2b syncs them. Then **restart any other Claude instances** for them to pick up the new commands (the command list is read at startup).
 
 ---
 
@@ -193,7 +197,7 @@ Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING
-statusLine               : OK / MISSING (run `/mcp` after setup.ps1)
+statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 
 ─────────────────────────────────────────

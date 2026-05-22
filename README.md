@@ -21,20 +21,32 @@ ClaudeBoost/
 
 ### 1. Install Gas Town (optional but recommended)
 
-See [SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for full Windows installation including Go, Dolt, and GT.
+See [SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for full installation including Go, Dolt, and GT (Windows, macOS, Linux).
 
 ### 2. Install ClaudeBoost Extensions
 
-```powershell
+**macOS / Linux:**
+
+```bash
 cd <path-to-ClaudeBoost>
-powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+./install.sh
 ```
 
-This registers everything globally:
+**Windows:**
+
+```powershell
+cd <path-to-ClaudeBoost>
+.\install.bat
+```
+
+Either path runs `scripts/setup.py`, the cross-platform installer. It registers everything globally:
+
 - RAG MCP server (semantic search in every project)
 - Hooks (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 - CLAUDEBOOST_HOME environment variable
 - Agent/knowledge files in GT directives (if GT installed)
+
+> **TTS support:** `/speak` works on Windows and macOS. Linux is not supported (no `afplay` / Windows API equivalent wired in) — the rest of ClaudeBoost runs fine.
 
 ### 3. Use It
 
