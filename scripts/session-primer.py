@@ -96,6 +96,17 @@ def _consume_clear_pending(home: Path) -> str:
     if not workspace_memo:
         return ""
 
+    # The auto-save hook writes ALL workspace memos into one string.
+    # Filter to just the active workspace section — injecting everything wastes tokens.
+    active_ws = handoff.get("active_workspace", "").strip()
+    if active_ws:
+        marker = f"### {active_ws}\n"
+        idx = workspace_memo.find(marker)
+        if idx != -1:
+            rest = workspace_memo[idx + len(marker):]
+            next_section = rest.find("\n### ")
+            workspace_memo = rest[:next_section].strip() if next_section != -1 else rest.strip()
+
     return (
         "POST-CLEAR CONTEXT RESTORATION\n"
         "===============================\n\n"
