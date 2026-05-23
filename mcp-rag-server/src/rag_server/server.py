@@ -378,6 +378,18 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                     indexed_projects = json.loads(registry_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
+            # Run health checks on each indexed project so issues are visible
+            # without requiring a re-index run.
+            for proj in indexed_projects.values():
+                project_path = proj.get("project_path", "")
+                if not project_path:
+                    continue
+                try:
+                    issues = engine.check_project_health(project_path)
+                    if issues:
+                        proj["health_issues"] = issues
+                except Exception as e:
+                    proj["health_issues"] = [f"health check failed: {e}"]
             return {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),

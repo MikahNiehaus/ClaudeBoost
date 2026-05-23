@@ -693,6 +693,38 @@ class IndexingEngine:
                 logger.debug("Graph health check skipped due to error: %s", e)
         return issues
 
+    def check_project_health(self, project_path: str) -> list[str]:
+        """Run health checks on a previously-indexed project without re-indexing.
+
+        Returns a list of issue strings. Empty list means healthy.
+        Called by rag_status to surface problems without requiring a re-index run.
+        """
+        from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+        from rag_server.core.project import project_index_dir
+        from rag_server.core.store import ChromaStore
+
+        index_dir = project_index_dir(project_path)
+        if not index_dir.exists():
+            return ["project index directory not found — run rag_index_project first"]
+
+        project_store = ChromaStore(persist_dir=str(index_dir / "chroma"))
+        graph_store = SQLiteGraphStore(index_dir / "graph.db")
+
+        manifest_path = index_dir / "manifest.json"
+        project_manifest: dict = {}
+        stored_version = MANIFEST_VERSION
+        if manifest_path.exists():
+            try:
+                raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+                project_manifest = {k: v for k, v in raw.items() if k != "__schema_version__"}
+                stored_version = raw.get("__schema_version__", 1)
+            except Exception as e:
+                return [f"manifest read failed: {e}"]
+
+        return self._check_project_health(
+            index_dir, project_store, graph_store, project_manifest, stored_version
+        )
+
     def _chunk_file(self, content: str, rel_path: str):
         """Route to the right chunker based on file extension."""
         from rag_server.core.project import extension_to_language

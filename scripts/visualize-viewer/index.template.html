@@ -126,6 +126,11 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
   // ── Helpers ──
   var expandedCard = null;
 
+  // Hoisted narration handles so the tour can seek/play without closure issues
+  var narrationAudio = null;
+  var narrPlayerEl   = null;
+  var narrPlayBtn    = null;
+
   function buildCard(card) {
     var el = document.createElement('div');
     el.className = 'card';
@@ -449,11 +454,13 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
 
   // ── Narration player ─────────────────────────────────────────────────────
   if (NARRATION) {
-    var playerEl = document.getElementById('narration-player');
-    playerEl.style.display = 'flex';
+    narrPlayerEl = document.getElementById('narration-player');
+    narrPlayerEl.style.display = 'flex';
+    var playerEl = narrPlayerEl;
 
-    var narrationAudio = new Audio(NARRATION.audio);
-    var playBtn = document.getElementById('narr-play');
+    narrationAudio = new Audio(NARRATION.audio);
+    narrPlayBtn = document.getElementById('narr-play');
+    var playBtn = narrPlayBtn;
     var seekEl = document.getElementById('narr-seek');
     var timeEl = document.getElementById('narr-time');
     var sectionLabelEl = document.getElementById('narr-section');
@@ -560,36 +567,38 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
   (function() {
     var tourSlides = [];
 
-    function addSlide(card, layerLabel) {
+    function addSlide(card, layerLabel, sectionId) {
       if (!card || !card.title) return;
-      tourSlides.push({ card: card, layer: layerLabel });
+      tourSlides.push({ card: card, layer: layerLabel, sectionId: sectionId || null });
     }
 
     (DATA.side_rails || []).forEach(function(rail) {
-      addSlide(rail, 'Cross-Cutting');
+      addSlide(rail, 'Cross-Cutting', rail.id);
     });
 
     (DATA.layers || []).forEach(function(layer) {
       var lbl = layer.label || '';
-      (layer.cards || []).forEach(function(card) { addSlide(card, lbl); });
+      var lid = layer.id || null;
+      (layer.cards || []).forEach(function(card) { addSlide(card, lbl, lid); });
       (layer.columns || []).forEach(function(col) {
         (col.cards || []).forEach(function(card) {
-          addSlide(card, lbl + (col.label ? ' / ' + col.label : ''));
+          addSlide(card, lbl + (col.label ? ' / ' + col.label : ''), lid);
         });
       });
       (layer.exchanges || []).forEach(function(ex) {
-        if (ex.left) addSlide(ex.left, lbl);
-        if (ex.right) addSlide(ex.right, lbl);
+        if (ex.left)  addSlide(ex.left,      lbl, lid);
+        if (ex.right) addSlide(ex.right,     lbl, lid);
       });
       (layer.decisions || []).forEach(function(dec) {
-        if (dec.question) addSlide(dec.question, lbl);
-        (dec.outcomes || []).forEach(function(o) { addSlide(o, lbl); });
+        if (dec.question) addSlide(dec.question, lbl, lid);
+        (dec.outcomes || []).forEach(function(o) { addSlide(o, lbl, lid); });
       });
     });
 
     if (!tourSlides.length) return;
 
     var currentIdx = 0;
+    var lastNarrSection = null;  // tracks which section we last seeked to (avoids mid-section rewinds)
     var overlay  = document.getElementById('tour-overlay');
     var tourBody = document.getElementById('tour-body');
     var tourProg = document.getElementById('tour-progress');
@@ -694,10 +703,31 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
       }
 
       tourBody.scrollTop = 0;
+
+      // ── Narration seek: jump to section when the layer changes ──
+      if (narrationAudio && NARRATION) {
+        var sid = tourSlides[idx].sectionId;
+        if (sid && sid !== lastNarrSection) {
+          lastNarrSection = sid;
+          var secs = (NARRATION.timing && NARRATION.timing.sections) || [];
+          for (var si = 0; si < secs.length; si++) {
+            if (secs[si].id === sid) {
+              narrationAudio.currentTime = secs[si].start_ms / 1000;
+              if (narrationAudio.paused) {
+                narrationAudio.play();
+                if (narrPlayerEl) narrPlayerEl.classList.add('is-playing');
+                if (narrPlayBtn) { narrPlayBtn.innerHTML = '&#9646;&#9646;'; narrPlayBtn.setAttribute('aria-label', 'Pause narration'); }
+              }
+              break;
+            }
+          }
+        }
+      }
     }
 
     function openTour(startIdx) {
       currentIdx = (startIdx !== undefined) ? startIdx : 0;
+      lastNarrSection = null;  // reset so showSlide always seeks on first slide
       overlay.classList.remove('hidden');
       try {
         showSlide(currentIdx);
@@ -713,6 +743,12 @@ var NARRATION = "__NARRATION_PLACEHOLDER__";
       overlay.classList.add('hidden');
       document.body.style.overflow = '';
       tourBtn.focus();
+      // Pause narration when exiting the tour
+      if (narrationAudio && !narrationAudio.paused) {
+        narrationAudio.pause();
+        if (narrPlayerEl) narrPlayerEl.classList.remove('is-playing');
+        if (narrPlayBtn) { narrPlayBtn.innerHTML = '&#9654;'; narrPlayBtn.setAttribute('aria-label', 'Play narration'); }
+      }
     }
 
     tourBtn.addEventListener('click', function() { openTour(0); });

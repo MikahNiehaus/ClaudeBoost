@@ -49,7 +49,7 @@ def rag_search(
 
     all_results = []
 
-    result_warning = None
+    warnings: list[str] = []
     _graph_augmented = False
 
     # Research search uses a per-task workspace store
@@ -82,9 +82,9 @@ def rag_search(
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Research store search failed: %s", e)
-                result_warning = f"Research search failed: {e}"
+                warnings.append(f"Research search failed: {e}")
         elif not research_store.collection_exists("research"):
-            result_warning = "Research collection not found — run rag_index_research first."
+            warnings.append("Research collection not found — run rag_index_research first.")
 
     # Codebase search uses a separate per-project store
     elif scope == "codebase":
@@ -114,19 +114,25 @@ def rag_search(
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Codebase store search failed: %s", e)
-                result_warning = f"Codebase search failed: {e}"
+                warnings.append(f"Codebase vector search failed: {e}")
 
             # Graph mode: augment seed results with structural neighbours
-            if mode == "graph" and all_results:
-                all_results, _graph_augmented = _augment_with_graph(
-                    all_results, idx_dir, project_store, limit,
-                )
-            else:
-                _graph_augmented = False
+            if mode == "graph":
+                if all_results:
+                    all_results, _graph_augmented, graph_warning = _augment_with_graph(
+                        all_results, idx_dir, project_store, limit,
+                    )
+                    if graph_warning:
+                        warnings.append(graph_warning)
+                else:
+                    # Vector search found nothing — graph expansion has no seeds to follow
+                    warnings.append(
+                        "graph mode: skipping graph expansion because vector search returned 0 results"
+                    )
         elif project_store.collection_exists(collection) and project_store.count(collection) == 0:
-            result_warning = "Codebase collection exists but is empty — run rag_index_project first."
+            warnings.append("Codebase collection exists but is empty — run rag_index_project first.")
         else:
-            result_warning = "Codebase collection not found — run rag_index_project first."
+            warnings.append("Codebase collection not found — run rag_index_project first.")
     else:
         # Standard scopes: knowledge, agents, or all
         if scope == "all":
@@ -147,7 +153,7 @@ def rag_search(
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Store search failed for collection %s: %s", collection, e)
-                result_warning = f"Search failed for collection {collection!r}: {e}"
+                warnings.append(f"Search failed for collection {collection!r}: {e}")
                 continue
 
     # Sort by score descending, take top N
@@ -174,8 +180,8 @@ def rag_search(
         "graph_augmented": _graph_augmented,
     }
 
-    if result_warning:
-        result["warning"] = result_warning
+    if warnings:
+        result["warnings"] = warnings
 
     return result
 
@@ -185,26 +191,33 @@ def _augment_with_graph(
     idx_dir: "Path",
     project_store,
     limit: int,
-) -> "tuple[list, bool]":
+) -> "tuple[list, bool, str | None]":
     """Expand seed results with structural neighbours from the graph store.
 
     Reserves up to 2 result slots for structural neighbours so they are always
     visible even when their scores fall below the vector top-k.  Returns
-    (results, was_augmented) where was_augmented=True only when at least one
-    structural neighbour was actually added.
-    Silently no-ops if graph.db does not exist or has no edges.
-    Degrades gracefully to (seed_results, False) on any error.
+    (results, was_augmented, warning_or_none).
+
+    warning_or_none is a non-None string when graph mode was requested but
+    couldn't deliver — e.g. graph.db missing, no edges, or a runtime error.
+    The caller surfaces this in the response warnings list so it's visible.
     """
     from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
     from rag_server.ports.store_port import SearchResult
 
     graph_db = idx_dir / "graph.db"
     if not graph_db.exists():
-        return seed_results, False
+        return (
+            seed_results, False,
+            "graph mode requested but graph.db not found — run rag_index_project to build the graph index",
+        )
 
     graph_store = SQLiteGraphStore(graph_db)
     if not graph_store.has_graph():
-        return seed_results, False
+        return (
+            seed_results, False,
+            "graph mode requested but graph has no edges — run rag_index_project to rebuild",
+        )
 
     try:
         seen_sources = {r.metadata.get("source_file", "").replace("\\", "/") for r in seed_results}
@@ -233,7 +246,8 @@ def _augment_with_graph(
                 seen_sources.add(neighbour_file)
 
         if not extra:
-            return seed_results, False
+            # No structural neighbours for these seed files — not an error
+            return seed_results, False, None
 
         # Reserve up to 2 slots for graph neighbours so they always appear in results.
         # Without this, graph neighbours score lower than vector top-k and get cut.
@@ -243,7 +257,7 @@ def _augment_with_graph(
         top_graph = sorted(extra, key=lambda r: r.score, reverse=True)[:graph_slots]
         combined = top_vectors + top_graph
         combined.sort(key=lambda r: r.score, reverse=True)
-        return combined, True
+        return combined, True, None
     except Exception as e:
-        logger.error("Graph augmentation failed, returning seed results: %s", e)
-        return seed_results, False
+        logger.error("Graph augmentation failed: %s", e)
+        return seed_results, False, f"graph augmentation failed: {e}"
