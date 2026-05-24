@@ -3,7 +3,22 @@
   "permissions": {
     "allow": [
       "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(python -c *)"
+      "Bash(python -c *)",
+      "Bash(grep *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(mkdir *)"
+    ],
+    "ask": [
+      "Bash(echo *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force*)"
     ]
   },
   "hooks": {

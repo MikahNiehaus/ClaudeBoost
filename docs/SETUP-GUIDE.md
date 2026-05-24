@@ -33,7 +33,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 24 slash commands | `~/.claude/commands/` |
+| 4 | Links 39 slash commands | `~/.claude/commands/` |
 | 5 | Links agents + knowledge to GT directives (if GT installed) | `~/gt/directives/` |
 | 6 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
@@ -57,12 +57,12 @@ a different location, re-run `install.bat` to update the path.
 Open any project in Claude Code and try:
 - `rag_status` — should show collections with chunk counts (counts vary based on file count)
 - `rag_search "SQL injection"` — should return results from security.xml
-- `/list-agents` — should list all 24 agents
+- `/list-agents` — should list all 25 agents
 
 That's it. Every Claude Code session now has:
-- Semantic search over 45 knowledge bases and 25 agent XML files
+- Semantic search over 96 knowledge files (46 domain, 17 language, 33 framework) and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 24 slash commands for task management
+- 39 slash commands for task management
 
 ### How RAG works after install
 
@@ -84,8 +84,8 @@ Only changed files get re-indexed normally (incremental via SHA-256 hash compari
 
 | Scope | Source files | What's in them |
 |-------|------------|----------------|
-| knowledge | `knowledge/*.xml` (44 files) | Coding standards, security, architecture, debugging, etc. |
-| agents | `agents/*.xml` (24 files) | Agent definitions with capabilities, guidelines, output formats |
+| knowledge | `knowledge/*.xml` (96 files: 46 domain, 17 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
+| agents | `agents/*.xml` (25 files) | Agent definitions with capabilities, guidelines, output formats |
 
 ---
 
@@ -297,7 +297,7 @@ These extend Gas Town with ClaudeBoost's quality system:
 - `witness.md` — Output validation, MAST failure detection, escalation triggers
 - `crew.md` — Interactive quality standards
 - `agents/` — 24 specialist agents + orchestrator (25 XML files, linked by `install.bat`)
-- `knowledge/` — 44 domain knowledge bases (linked by `install.bat`)
+- `knowledge/` — 96 knowledge files (46 domain, 17 lang, 33 fw) (linked by `install.bat`)
 
 ### Hooks (`~/.gt/`)
 - `hooks-base.json` — Full 3-tier permission model (180 allow / 60 ask / 50 deny)
@@ -396,7 +396,7 @@ but the actual workspace it creates is at `~/gt/<project-name>/crew/<your-userna
 # Standalone (always works)
 rag_status                    # In Claude Code — shows collection counts
 rag_search "SQL injection"    # Should return security.xml results
-ls ~/.claude/commands/        # 24 slash commands
+ls ~/.claude/commands/        # 39 slash commands
 cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 
 # Gas Town (if installed)
@@ -405,7 +405,7 @@ dolt version                  # Should show 1.84.0+
 bd list --json | head -3      # Should return JSON (even if empty)
 gt dolt status                # Should show "running"
 ls ~/gt/directives/agents/    # 25 agent XML files (24 specialist + orchestrator)
-ls ~/gt/directives/knowledge/ # 45 knowledge XML files
+ls ~/gt/directives/knowledge/ # 96 knowledge XML files
 
 # Health
 gt doctor                     # Should be mostly green

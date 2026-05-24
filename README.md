@@ -1,16 +1,16 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code. 24 specialist agents, 45 knowledge
-bases, semantic RAG search, and Gas Town integration — all installable globally.
+Multi-agent orchestration toolkit for Claude Code. 25 specialist agents, 96 knowledge
+files, semantic RAG search, and Gas Town integration — all installable globally.
 
 ## What's Inside
 
 ```
 ClaudeBoost/
-├── agents/              24 specialist agent definitions (XML)
-├── knowledge/           44 domain knowledge bases (XML)
+├── agents/              25 specialist agent definitions (XML)
+├── knowledge/           96 knowledge files (46 domain, 17 lang, 33 framework) (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    24 slash commands
+├── .claude/commands/    39 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -44,7 +44,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 24 slash commands for task management
+- 39 slash commands for task management
 
 ## Features
 
@@ -88,6 +88,7 @@ A PreToolUse hook reminds the orchestrator to include `rag_context` in spawn pro
 | ui-agent | Frontend, accessibility | Sonnet |
 | docs-agent | Documentation | Sonnet |
 | research-agent | Investigation | Sonnet |
+| research-rag-agent | Build persistent research RAG from URLs/PDFs | Sonnet |
 | explore-agent | Code exploration | Sonnet |
 | browser-agent | Playwright testing | Sonnet |
 | workflow-agent | Complex multi-step workflows | Sonnet |
@@ -103,7 +104,7 @@ A PreToolUse hook reminds the orchestrator to include `rag_context` in spawn pro
 
 ## Knowledge Bases
 
-44 domain expertise files covering: coding standards, security, architecture, debugging,
+96 knowledge files covering: coding standards, security, architecture, debugging,
 testing, observability, performance, refactoring, UI implementation, API design,
 context engineering, verify gate, scope governance, rule enforcement, and more.
 

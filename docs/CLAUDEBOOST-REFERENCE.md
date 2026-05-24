@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
-**Generated:** 2026-05-08  
-**Coverage:** All 16 hook registrations, 24 agent XMLs + orchestrator, 45 knowledge XMLs, 32 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Generated:** 2026-05-08 (counts updated 2026-05-23)
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 96 knowledge XMLs (46 domain + 17 lang + 33 framework), 39 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1585,7 +1585,7 @@ Agent reads and internalizes before taking any action
 ### 5.19 /list-agents
 **File:** `.claude/commands/list-agents.md`  
 **Description:** List all available agents with expertise domains  
-**Output:** Agent summary table (24 agents), quick decision guide
+**Output:** Agent summary table (25 agents), quick decision guide
 
 ---
 
