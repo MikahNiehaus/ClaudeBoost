@@ -249,15 +249,13 @@ def _augment_with_graph(
             # No structural neighbours for these seed files — not an error
             return seed_results, False, None
 
-        # Reserve up to 2 slots for graph neighbours so they always appear in results.
-        # Without this, graph neighbours score lower than vector top-k and get cut.
-        graph_slots = min(len(extra), 2, max(0, limit - 1))
-        vector_slots = max(0, limit - graph_slots)
-        top_vectors = sorted(seed_results, key=lambda r: r.score, reverse=True)[:vector_slots]
-        top_graph = sorted(extra, key=lambda r: r.score, reverse=True)[:graph_slots]
-        combined = top_vectors + top_graph
-        combined.sort(key=lambda r: r.score, reverse=True)
-        return combined, True, None
+        # Merge graph neighbours with vector results and let scores compete.
+        # Neighbours are scored at (seed.score - 0.15), so only structurally
+        # related files that are also semantically close will rank highly.
+        # Forcing slot reservation caused low-relevance structural files to
+        # displace stronger semantic matches — natural competition is cleaner.
+        combined = sorted(seed_results + extra, key=lambda r: r.score, reverse=True)
+        return combined[:limit], True, None
     except Exception as e:
         logger.error("Graph augmentation failed: %s", e)
         return seed_results, False, f"graph augmentation failed: {e}"
