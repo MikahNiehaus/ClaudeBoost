@@ -3,11 +3,8 @@
   "permissions": {
     "allow": [
       "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(python -c *)",
       "Bash(python3 \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(python3 -c *)",
-      "Bash(python3 \"$CLAUDEBOOST_HOME/mcp-rag-server/*\"*)",
-      "Bash(sqlite3 \"*/workspace/.rag-index/graph.db\" *)",
+      "Bash(sqlite3 \"C:/Development/*/workspace/.rag-index/graph.db\" *)",
       "Bash(rm -f \"$CLAUDEBOOST_HOME/state/*.json\")",
       "Bash(rm -f \"$TEMP/claudeboost_*\")",
       "Bash(grep *)",

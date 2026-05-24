@@ -194,9 +194,13 @@ def _augment_with_graph(
 ) -> "tuple[list, bool, str | None]":
     """Expand seed results with structural neighbours from the graph store.
 
-    Reserves up to 2 result slots for structural neighbours so they are always
-    visible even when their scores fall below the vector top-k.  Returns
-    (results, was_augmented, warning_or_none).
+    Graph neighbours compete naturally with vector results by score — no slots
+    are reserved. Returns (results, was_augmented, warning_or_none).
+
+    was_augmented=True means graph neighbours were found and merged into the
+    candidate pool; it does not guarantee any neighbour survived into the
+    final top-k (a strong vector result at the same limit position will beat
+    a weaker structural neighbour).
 
     warning_or_none is a non-None string when graph mode was requested but
     couldn't deliver — e.g. graph.db missing, no edges, or a runtime error.

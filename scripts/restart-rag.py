@@ -1,12 +1,13 @@
 """
-restart-rag.py — Kill the rag-server MCP process so Claude Code restarts it.
+restart-rag.py — Kill the rag-server MCP process to force a clean restart.
 
-Claude Code auto-restarts stdio MCP servers when they exit. This script
-finds the Python process running rag_server and sends SIGTERM so the
-server picks up code changes without a full Claude Code restart.
+Claude Code does NOT auto-restart stdio MCP servers after an external kill.
+After this script runs, the user must reconnect via /mcp in Claude Code.
+
+Use this when the RAG server is stuck or needs to pick up code changes.
 
 Usage (Claude can call this directly):
-  python "$CLAUDEBOOST_HOME/scripts/restart-rag.py"
+  python "C:/Development/ClaudeBoost/scripts/restart-rag.py"
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def find_rag_server_pids() -> list[int]:
                 "powershell",
                 "-Command",
                 "Get-WmiObject Win32_Process "
-                "| Where-Object {$_.CommandLine -like '*rag_server*' -and $_.Name -like 'python*'} "
+                "| Where-Object {$_.CommandLine -like '*rag_server*' -and $_.CommandLine -like '*ClaudeBoost*' -and $_.Name -like 'python*'} "
                 "| Select-Object -ExpandProperty ProcessId",
             ],
             capture_output=True,
