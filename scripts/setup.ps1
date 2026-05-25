@@ -22,6 +22,7 @@ if (-not $python) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 # --- 1. Create/update ~/.claude/mcp.json (merge — never overwrite other servers) ---
 $mcpPath = Join-Path $claudeDir "mcp.json"
 $ragCwd = (Join-Path $boostHome "mcp-rag-server").Replace("\", "/")
@@ -742,3 +743,7 @@ Write-Host ""
 & $python.Source $setupPy
 exit $LASTEXITCODE
 >>>>>>> 63b4070 (Add macOS and Linux support)
+=======
+& $python.Source $setupPy
+exit $LASTEXITCODE
+>>>>>>> 63b40704b55a5b81eae940a934bbf1e88392d681
