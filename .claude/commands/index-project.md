@@ -61,11 +61,23 @@ $ARGUMENTS — flexible, any of:
 
 6. Call `rag_index_project` with the confirmed parameters.
 
+   **Force decision — use `force=true` ONLY when there is a genuine health problem. Never force just because the incremental run returns 0 new files.**
+
+   | Signal | Action |
+   |--------|--------|
+   | User passed `force` as argument | Force — user explicitly requested it |
+   | `needs_reindex: true` in response | Force — broken index detected |
+   | `rag_status` shows `files_indexed` < 50% of scan's `files_to_index`, AND incremental returned 0 | Force — manifest thinks files are indexed but they weren't (stale/corrupt manifest) |
+   | Graph resolution < 5% (edges > 0 but resolved ≈ 0) | Force — file map lookup failed |
+   | Manifest file missing | Force — rebuild required |
+   | Incremental returns 0 (all files skipped) AND coverage looks healthy | **Do NOT force** — files haven't changed, index is current |
+   | Branch just switched with N changed files → incremental returned N updates | **Do NOT force** — incremental correctly picked up only the changed files |
+   | Branch just switched → incremental returned 0 AND rag_status shows healthy file count | **Do NOT force** — branch contents match what's indexed |
+
    **If the result contains `needs_reindex: true`** (broken index detected):
    - Show the user the `health_issues` list explaining what's wrong
-   - Ask: "The index has pre-existing issues. Run with force=True to rebuild cleanly, or continue with the broken state?"
-   - If user chooses force: re-call `rag_index_project` with `force=true`
-   - If user chooses continue: proceed as-is and note the issues in the report
+   - Re-call `rag_index_project` with `force=true` automatically (no need to ask — broken index must be rebuilt)
+   - Report FIXED or PERSISTENT
 
 7. Report results concisely:
    - Files indexed / chunks created / files skipped

@@ -115,6 +115,84 @@ Claude overuses em-dashes. One per response is fine. Three in a paragraph is not
 - Short is better. One line beats three.
 - No formal openings ("This method...", "The purpose of this function is...")
 </guidelines>
+
+<naturalness-rules>
+<!-- These rules target the specific patterns that make AI comments detectable.
+     Research basis: arxiv 2401.06461 (whitespace), 2509.18880 (rhythm), 2406.15583 (too correct), 2505.01800 (psycholinguistic) -->
+
+<rule id="C1" name="Fragments are correct">
+Incomplete sentences are not errors in inline comments — they're the norm. Do not force a complete
+sentence where a fragment is natural.
+  BAD:  // Returns early if the input value is null or empty.
+  GOOD: // skip if empty
+  BAD:  // This validates the user's permissions before proceeding.
+  GOOD: // auth check before we touch the DB
+Fragments show the comment was written quickly and honestly, not drafted.
+</rule>
+
+<rule id="C2" name="No structural uniformity">
+Writing 3+ consecutive comments in the same grammatical pattern is an AI tell, even if the words
+are plain. Vary the structure deliberately.
+  BAD (all same shape):
+    // Validates the token before processing.
+    // Fetches the user record from the cache.
+    // Returns the response object to the caller.
+  GOOD (mixed):
+    // token must be valid before anything else
+    // Fetches from cache — DB fallback is in getUserFallback()
+    // caller expects a plain object, not the model instance
+Break the pattern. Short fragment, then a fuller thought, then a fragment again.
+</rule>
+
+<rule id="C3" name="Polite skepticism and opinion are fine">
+Real developers leave opinionated comments. This is not unprofessional — it's honest and useful.
+Keep the tone respectful but don't sand off all opinion.
+  OK:  // not ideal, but avoids the N+1
+  OK:  // not sure this is right for negative inputs — revisit
+  OK:  // works for now, might be slow on large lists
+  OK:  // TODO: figure out why this needs to happen twice
+  NOT OK: // this is garbage code  (dismissive, no value)
+  NOT OK: // whoever wrote this was wrong  (attacks a person)
+The test: would you say it in a code review without being embarrassed? If yes, it's fine.
+</rule>
+
+<rule id="C4" name="Spacing after // is not always one space">
+AI always writes "// comment" — exactly one space, every time. That uniformity is a detection signal.
+Humans mix it:
+  - "// comment"     — normal inline comment
+  - "//comment"      — quick note, commented-out reminder, short annotation
+  - "//  note"       — occasional double space, especially after editing
+For commented-out code blocks, no space is natural: //return x; //oldMethod()
+Don't force every comment to the same spacing. Let it vary a little by context.
+</rule>
+
+<rule id="C5" name="Blank lines before comments are not uniform">
+AI adds a blank line before every block comment, or never adds one — consistent either way.
+Humans are inconsistent: some comments sit flush against the code above them, some have
+a preceding blank line for breathing room. Let that vary by feel, not by formula.
+  // this always gets a blank line above it (important context)
+  x := getValue()
+  // but this one sits right against the line it explains
+  if x == nil {
+</rule>
+
+<rule id="C6" name="Indentation can be slightly organic">
+AI aligns every comment perfectly to the surrounding indentation. Humans mostly do too — but
+occasionally a block comment sits at column 0 as a section marker, or a note is off by one
+level because it was added quickly. Don't introduce obvious misalignment, but don't over-correct
+to perfect either.
+</rule>
+
+<rule id="C7" name="Politeness is non-negotiable">
+Casual and human does NOT mean rude. Comments are read by teammates. Keep every comment
+respectful even when expressing doubt, frustration, or skepticism. The bar is: would you say
+this in a code review without cringing? If not, rewrite it.
+  NEVER: // this is dumb
+  NEVER: // no idea why this exists, probably useless
+  FINE:  // not sure this is needed — worth checking
+  FINE:  // bit of a hack, but the cleaner fix requires touching the schema
+</rule>
+</naturalness-rules>
 </code-comment-rules>
 
 <tone-framing>
@@ -146,6 +224,14 @@ Before delivering any output, run this mental check:
 5. Are my code comments describing the obvious? Delete them.
 6. Did I use more than one em-dash in a response? Rewrite.
 7. Is anything vague where I could be specific? Make it specific.
+
+Code comment specific:
+8. Do all my comments start with "// " (one space, always)? Vary it — some can be "//word" for quick notes.
+9. Do 3+ consecutive comments follow the same grammatical pattern? Break the pattern.
+10. Are all my comments complete sentences ending with a period? Convert some to fragments.
+11. Does every comment have a blank line above it, or none do? Let it vary by feel.
+12. Could any comment be more honest — a quick "not sure why" or "revisit this"? Add it if true.
+13. Is every comment polite enough to say in a code review? If not, rewrite it.
 </self-check>
 
 <examples>

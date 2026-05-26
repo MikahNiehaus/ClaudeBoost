@@ -24,6 +24,7 @@ WHITELIST = {
     "agent-spawn-gate.py",
     "bash-guard.py",
     "check-rag-health.py",
+    "comment-humanness-check.py",
     "compaction-primer.py",
     "compaction-restore.py",
     "compaction-save.py",
