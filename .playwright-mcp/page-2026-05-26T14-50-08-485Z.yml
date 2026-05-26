@@ -1,0 +1,184 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "Nectar" [ref=e5] [cursor=pointer]:
+          - /url: /
+        - generic [ref=e6]:
+          - button [ref=e7] [cursor=pointer]:
+            - generic [ref=e8]: 
+          - generic [ref=e156]: "1"
+          - text:  
+  - main [ref=e9]:
+    - generic [ref=e11]:
+      - navigation [ref=e14]:
+        - link "Dashboard" [ref=e15] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e16]: 
+          - text: Dashboard
+        - separator [ref=e17]
+        - generic [ref=e18]: Manage
+        - link "Members" [ref=e19] [cursor=pointer]:
+          - /url: /Neighbors
+          - generic [ref=e20]: 
+          - text: Members
+        - link "Admins" [ref=e21] [cursor=pointer]:
+          - /url: /Admins
+          - generic [ref=e22]:  
+          - text: Admins
+        - link "Groups" [ref=e23] [cursor=pointer]:
+          - /url: /Groups
+          - generic [ref=e24]: 
+          - text: Groups
+        - link "Orders" [ref=e25] [cursor=pointer]:
+          - /url: /Orders
+          - generic [ref=e26]: 
+          - text: Orders
+        - link "Programs" [ref=e27] [cursor=pointer]:
+          - /url: /Programs
+          - generic [ref=e28]: 
+          - text: Programs
+        - link "Agencies" [ref=e29] [cursor=pointer]:
+          - /url: /Agencies/ListAgencies
+          - img [ref=e30]
+          - text: Agencies
+        - link "Accounting" [ref=e31] [cursor=pointer]:
+          - /url: /Accounting/GenerateInvoices
+          - img [ref=e32]
+          - text: Accounting
+        - link "Surveys" [ref=e33] [cursor=pointer]:
+          - /url: /Surveys
+          - generic [ref=e34]: 
+          - text: Surveys
+        - separator [ref=e35]
+        - generic [ref=e36]: Message Center
+        - link "Nudges" [ref=e37] [cursor=pointer]:
+          - /url: /CommunicationCenter/Nudges
+          - generic [ref=e38]: 
+          - text: Nudges
+        - link "Send Notification" [ref=e39] [cursor=pointer]:
+          - /url: /Notifications/SendNotification
+          - generic [ref=e40]: 
+          - text: Send Notification
+        - link "Send to Group" [ref=e41] [cursor=pointer]:
+          - /url: /Notifications/SendGroupNotification
+          - generic [ref=e42]: 
+          - text: Send to Group
+        - link "Sent History" [ref=e43] [cursor=pointer]:
+          - /url: /Notifications
+          - generic [ref=e44]: 
+          - text: Sent History
+        - link "Direct Messages" [ref=e45] [cursor=pointer]:
+          - /url: /Messages
+          - generic [ref=e46]: 
+          - text: Direct Messages
+        - link "Invite to Join" [ref=e47] [cursor=pointer]:
+          - /url: /Invites
+          - generic [ref=e48]: 
+          - text: Invite to Join
+        - separator [ref=e49]
+        - generic [ref=e50]: Settings
+        - link "Account" [ref=e51] [cursor=pointer]:
+          - /url: /Account
+          - generic [ref=e52]: 
+          - text: Account
+        - link "Insights" [ref=e53] [cursor=pointer]:
+          - /url: /ActivityLogs
+          - generic [ref=e54]: 
+          - text: Insights
+        - link "Translation" [ref=e55] [cursor=pointer]:
+          - /url: /Settings/TranslationSettings
+          - generic [ref=e56]: 
+          - text: Translation
+        - link "Utilities" [ref=e57] [cursor=pointer]:
+          - /url: /Utilities
+          - generic [ref=e58]: 
+          - text: Utilities
+        - separator [ref=e59]
+        - link "Terms of Use" [ref=e60] [cursor=pointer]:
+          - /url: /Terms
+        - link "Privacy Policy" [ref=e61] [cursor=pointer]:
+          - /url: /Privacy
+        - link "Accessibility Statement" [ref=e62] [cursor=pointer]:
+          - /url: /Accessibility
+        - link "Sign Out" [ref=e64] [cursor=pointer]:
+          - /url: /MicrosoftIdentity/Account/SignOut
+      - generic [ref=e66]:
+        - text: 
+        - heading "Survey Detail" [level=1] [ref=e67]
+        - generic [ref=e69]:
+          - tablist [ref=e70]:
+            - tab "Settings" [ref=e71] [cursor=pointer]
+            - tab "Notifications" [ref=e72] [cursor=pointer]
+            - tab "Advanced" [selected] [ref=e73] [cursor=pointer]
+          - tabpanel "Settings" [ref=e76]:
+            - generic [ref=e79]:
+              - generic [ref=e81]: Map survey questions to member profile fields
+              - generic [ref=e82]:
+                - generic [ref=e83]: Last sync 1 year ago
+                - button "Sync Now" [ref=e84] [cursor=pointer]:
+                  - generic [ref=e85]: 
+                  - generic [ref=e86]: Sync Now
+            - separator [ref=e87]
+            - generic [ref=e91]:
+              - list [ref=e123]:
+                - listitem [ref=e124]:
+                  - generic [ref=e125]: $['Do you have health insurance?']
+                - listitem [ref=e126]:
+                  - generic [ref=e127]:
+                    - checkbox "Enable this to prevent overriding an existing value in the member profile field." [active] [ref=e128] [cursor=pointer]
+                    - generic [ref=e129]: Skip if has value?
+                  - combobox [ref=e130] [cursor=pointer]:
+                    - generic [ref=e132]: Member-Provided Plan ID
+                    - button "select" [ref=e133]
+                - listitem [ref=e134]:
+                  - generic [ref=e135]: $['What kind of insurance do you have?']
+                - generic [ref=e136]:
+                  - generic [ref=e137]:
+                    - checkbox "Enable this to prevent overriding an existing value in the member profile field." [ref=e138] [cursor=pointer]
+                    - generic [ref=e139]: Skip if has value?
+                  - combobox [ref=e140] [cursor=pointer]:
+                    - generic [ref=e142]: Health Insurance Type
+                    - button "select" [ref=e143]
+                - generic [ref=e145]: $['What company provides your health insurance?']
+                - generic [ref=e146]:
+                  - generic [ref=e147]:
+                    - checkbox "Enable this to prevent overriding an existing value in the member profile field." [ref=e148] [cursor=pointer]
+                    - generic [ref=e149]: Skip if has value?
+                  - combobox [ref=e150] [cursor=pointer]:
+                    - generic [ref=e152]: Health Insurance Company
+                    - button "select" [ref=e153]
+              - generic [ref=e95]:
+                - text:  
+                - list [ref=e97]:
+                  - listitem [ref=e154]:
+                    - button "Page 1" [ref=e155]: "1"
+                - text:  
+                - combobox "Page sizes drop down" [ref=e101] [cursor=pointer]:
+                  - generic [ref=e103]: 10 / page
+            - separator [ref=e104]
+          - generic [ref=e105]:
+            - heading "Survey Tools" [level=2] [ref=e107]
+            - generic [ref=e109]:
+              - generic [ref=e110]:
+                - generic [ref=e111]: Survey Name
+                - textbox [disabled] [ref=e112]: Health Coverage
+              - generic [ref=e114]: View in Form Manager
+              - link "Log in to view forms" [ref=e116] [cursor=pointer]:
+                - /url: https://www.formstack.com/admin/form/builder/99330
+              - generic [ref=e117]:
+                - button "Backfill Responses" [ref=e118] [cursor=pointer]
+                - generic [ref=e119]: Replays historical Formstack submissions into Nectar. Will not create duplicates.
+        - alert [ref=e157]:
+          - generic [ref=e158]:
+            - generic [ref=e159]: Survey Updated
+            - generic "Close" [ref=e160] [cursor=pointer]:
+              - generic [ref=e161]: 
+  - contentinfo [ref=e120]:
+    - generic [ref=e121]:
+      - text: © 2026 - AssetBlue Impact Technologies, PBC -
+      - link "Privacy" [ref=e122] [cursor=pointer]:
+        - /url: /Privacy
+  - text:   
+  - tooltip "Enable this to prevent overriding an existing value in the member profile field." [ref=e162]:
+    - generic [ref=e163]: Enable this to prevent overriding an existing value in the member profile field.

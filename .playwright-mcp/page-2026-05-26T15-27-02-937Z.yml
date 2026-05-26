@@ -1,0 +1,160 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "Nectar" [ref=e5] [cursor=pointer]:
+          - /url: /
+        - button [ref=e7] [cursor=pointer]:
+          - generic [ref=e8]: 
+  - main [ref=e9]:
+    - generic [ref=e11]:
+      - navigation [ref=e14]:
+        - link "Dashboard" [ref=e15] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e16]: 
+          - text: Dashboard
+        - separator [ref=e17]
+        - generic [ref=e18]: Manage
+        - link "Members" [ref=e19] [cursor=pointer]:
+          - /url: /Neighbors
+          - generic [ref=e20]: 
+          - text: Members
+        - link "Admins" [ref=e21] [cursor=pointer]:
+          - /url: /Admins
+          - generic [ref=e22]:  
+          - text: Admins
+        - link "Groups" [ref=e23] [cursor=pointer]:
+          - /url: /Groups
+          - generic [ref=e24]: 
+          - text: Groups
+        - link "Orders" [ref=e25] [cursor=pointer]:
+          - /url: /Orders
+          - generic [ref=e26]: 
+          - text: Orders
+        - link "Programs" [ref=e27] [cursor=pointer]:
+          - /url: /Programs
+          - generic [ref=e28]: 
+          - text: Programs
+        - link "Agencies" [ref=e29] [cursor=pointer]:
+          - /url: /Agencies/ListAgencies
+          - img [ref=e30]
+          - text: Agencies
+        - link "Accounting" [ref=e31] [cursor=pointer]:
+          - /url: /Accounting/GenerateInvoices
+          - img [ref=e32]
+          - text: Accounting
+        - link "Surveys" [ref=e33] [cursor=pointer]:
+          - /url: /Surveys
+          - generic [ref=e34]: 
+          - text: Surveys
+        - separator [ref=e35]
+        - generic [ref=e36]: Message Center
+        - link "Nudges" [ref=e37] [cursor=pointer]:
+          - /url: /CommunicationCenter/Nudges
+          - generic [ref=e38]: 
+          - text: Nudges
+        - link "Send Notification" [ref=e39] [cursor=pointer]:
+          - /url: /Notifications/SendNotification
+          - generic [ref=e40]: 
+          - text: Send Notification
+        - link "Send to Group" [ref=e41] [cursor=pointer]:
+          - /url: /Notifications/SendGroupNotification
+          - generic [ref=e42]: 
+          - text: Send to Group
+        - link "Sent History" [ref=e43] [cursor=pointer]:
+          - /url: /Notifications
+          - generic [ref=e44]: 
+          - text: Sent History
+        - link "Direct Messages" [ref=e45] [cursor=pointer]:
+          - /url: /Messages
+          - generic [ref=e46]: 
+          - text: Direct Messages
+        - link "Invite to Join" [ref=e47] [cursor=pointer]:
+          - /url: /Invites
+          - generic [ref=e48]: 
+          - text: Invite to Join
+        - separator [ref=e49]
+        - generic [ref=e50]: Settings
+        - link "Account" [ref=e51] [cursor=pointer]:
+          - /url: /Account
+          - generic [ref=e52]: 
+          - text: Account
+        - link "Insights" [ref=e53] [cursor=pointer]:
+          - /url: /ActivityLogs
+          - generic [ref=e54]: 
+          - text: Insights
+        - link "Translation" [ref=e55] [cursor=pointer]:
+          - /url: /Settings/TranslationSettings
+          - generic [ref=e56]: 
+          - text: Translation
+        - link "Utilities" [ref=e57] [cursor=pointer]:
+          - /url: /Utilities
+          - generic [ref=e58]: 
+          - text: Utilities
+        - separator [ref=e59]
+        - link "Terms of Use" [ref=e60] [cursor=pointer]:
+          - /url: /Terms
+        - link "Privacy Policy" [ref=e61] [cursor=pointer]:
+          - /url: /Privacy
+        - link "Accessibility Statement" [ref=e62] [cursor=pointer]:
+          - /url: /Accessibility
+        - link "Sign Out" [ref=e64] [cursor=pointer]:
+          - /url: /MicrosoftIdentity/Account/SignOut
+      - generic [ref=e66]:
+        - heading "Edit Bridget's Profile" [level=1] [ref=e67]
+        - generic [ref=e68]:
+          - list [ref=e71]:
+            - listitem [ref=e72]:
+              - link "General" [ref=e73] [cursor=pointer]:
+                - /url: /Neighbors/Profile/34
+            - listitem [ref=e74]:
+              - link "Benefits" [ref=e75] [cursor=pointer]:
+                - /url: /Neighbors/ProfileBenefits/34
+            - listitem [ref=e76]:
+              - link "Programs" [ref=e77] [cursor=pointer]:
+                - /url: /Neighbors/ProfilePrograms/34
+            - listitem [ref=e78]:
+              - link "Activity" [ref=e79] [cursor=pointer]:
+                - /url: /Neighbors/ProfileActivity/34
+          - generic [ref=e82]:
+            - button "Dion's Chicago Dream Pilot Active" [ref=e84] [cursor=pointer]:
+              - generic [ref=e85]:
+                - generic [ref=e86]: Dion's Chicago Dream Pilot
+                - generic [ref=e87]: Active
+            - text:    
+          - generic [ref=e88]:
+            - generic [ref=e89]:
+              - heading "Contact Information" [level=2] [ref=e90]
+              - generic [ref=e93]:
+                - generic [ref=e94]:
+                  - generic [ref=e95]: First Name
+                  - textbox [ref=e97]: Bridget
+                - generic [ref=e98]:
+                  - generic [ref=e99]: Last Name
+                  - textbox [ref=e101]: Hunt
+                - generic [ref=e102]:
+                  - generic [ref=e103]: Phone Number
+                  - generic [ref=e104]:
+                    - textbox [ref=e105]: "+15550037624"
+                    - img [ref=e107]
+                - generic [ref=e108]:
+                  - generic [ref=e109]: Email
+                  - textbox "contact@email.org" [ref=e111]: neighbor34@example.test
+            - text: 
+            - generic [ref=e112]:
+              - heading "Shortcuts" [level=2] [ref=e113]
+              - generic [ref=e114]:
+                - link "Manage Programs" [ref=e115] [cursor=pointer]:
+                  - /url: /Programs
+                  - generic [ref=e116]: 
+                  - text: Manage Programs
+                - link "View Insights" [ref=e117] [cursor=pointer]:
+                  - /url: /ActivityLogs
+                  - generic [ref=e118]: 
+                  - text: View Insights
+        - generic: 
+  - contentinfo [ref=e119]:
+    - generic [ref=e120]:
+      - text: © 2026 - AssetBlue Impact Technologies, PBC -
+      - link "Privacy" [ref=e121] [cursor=pointer]:
+        - /url: /Privacy

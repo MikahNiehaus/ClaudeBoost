@@ -541,6 +541,12 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("context-nudge.py"), "timeout": 3000}],
     }, sentinel="context-nudge.py", label="context nudge (command-type)")
 
+    # --- PostToolUse: comment humanness check (Edit/Write) ---
+    _install_hook(settings, "PostToolUse", {
+        "matcher": "Edit|Write",
+        "hooks": [{"type": "command", "command": _py_cmd("comment-humanness-check.py"), "timeout": 5000}],
+    }, sentinel="comment-humanness-check.py", label="comment humanness check (command-type)")
+
     # --- PostToolUse: project RAG flag ---
     _install_hook(settings, "PostToolUse", {
         "matcher": "mcp__rag-server__rag_index_project",

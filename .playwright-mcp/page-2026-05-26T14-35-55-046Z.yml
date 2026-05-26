@@ -1,0 +1,313 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "Nectar" [ref=e5] [cursor=pointer]:
+          - /url: /
+        - button [ref=e7] [cursor=pointer]:
+          - generic [ref=e8]: 
+  - main [ref=e9]:
+    - generic [ref=e11]:
+      - navigation [ref=e14]:
+        - link "Dashboard" [ref=e15] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e16]: 
+          - text: Dashboard
+        - separator [ref=e17]
+        - generic [ref=e18]: Manage
+        - link "Members" [ref=e19] [cursor=pointer]:
+          - /url: /Neighbors
+          - generic [ref=e20]: 
+          - text: Members
+        - link "Admins" [ref=e21] [cursor=pointer]:
+          - /url: /Admins
+          - generic [ref=e22]:  
+          - text: Admins
+        - link "Groups" [ref=e23] [cursor=pointer]:
+          - /url: /Groups
+          - generic [ref=e24]: 
+          - text: Groups
+        - link "Orders" [ref=e25] [cursor=pointer]:
+          - /url: /Orders
+          - generic [ref=e26]: 
+          - text: Orders
+        - link "Programs" [ref=e27] [cursor=pointer]:
+          - /url: /Programs
+          - generic [ref=e28]: 
+          - text: Programs
+        - link "Agencies" [ref=e29] [cursor=pointer]:
+          - /url: /Agencies/ListAgencies
+          - img [ref=e30]
+          - text: Agencies
+        - link "Accounting" [ref=e31] [cursor=pointer]:
+          - /url: /Accounting/GenerateInvoices
+          - img [ref=e32]
+          - text: Accounting
+        - link "Surveys" [ref=e33] [cursor=pointer]:
+          - /url: /Surveys
+          - generic [ref=e34]: 
+          - text: Surveys
+        - separator [ref=e35]
+        - generic [ref=e36]: Message Center
+        - link "Nudges" [ref=e37] [cursor=pointer]:
+          - /url: /CommunicationCenter/Nudges
+          - generic [ref=e38]: 
+          - text: Nudges
+        - link "Send Notification" [ref=e39] [cursor=pointer]:
+          - /url: /Notifications/SendNotification
+          - generic [ref=e40]: 
+          - text: Send Notification
+        - link "Send to Group" [ref=e41] [cursor=pointer]:
+          - /url: /Notifications/SendGroupNotification
+          - generic [ref=e42]: 
+          - text: Send to Group
+        - link "Sent History" [ref=e43] [cursor=pointer]:
+          - /url: /Notifications
+          - generic [ref=e44]: 
+          - text: Sent History
+        - link "Direct Messages" [ref=e45] [cursor=pointer]:
+          - /url: /Messages
+          - generic [ref=e46]: 
+          - text: Direct Messages
+        - link "Invite to Join" [ref=e47] [cursor=pointer]:
+          - /url: /Invites
+          - generic [ref=e48]: 
+          - text: Invite to Join
+        - separator [ref=e49]
+        - generic [ref=e50]: Settings
+        - link "Account" [ref=e51] [cursor=pointer]:
+          - /url: /Account
+          - generic [ref=e52]: 
+          - text: Account
+        - link "Insights" [ref=e53] [cursor=pointer]:
+          - /url: /ActivityLogs
+          - generic [ref=e54]: 
+          - text: Insights
+        - link "Translation" [ref=e55] [cursor=pointer]:
+          - /url: /Settings/TranslationSettings
+          - generic [ref=e56]: 
+          - text: Translation
+        - link "Utilities" [ref=e57] [cursor=pointer]:
+          - /url: /Utilities
+          - generic [ref=e58]: 
+          - text: Utilities
+        - separator [ref=e59]
+        - link "Terms of Use" [ref=e60] [cursor=pointer]:
+          - /url: /Terms
+        - link "Privacy Policy" [ref=e61] [cursor=pointer]:
+          - /url: /Privacy
+        - link "Accessibility Statement" [ref=e62] [cursor=pointer]:
+          - /url: /Accessibility
+        - link "Sign Out" [ref=e64] [cursor=pointer]:
+          - /url: /MicrosoftIdentity/Account/SignOut
+      - generic [ref=e66]:
+        - generic [ref=e68]:
+          - heading "Nectar Surveys" [level=1] [ref=e69]
+          - paragraph [ref=e70]:
+            - text: Click
+            - link "here" [ref=e71] [cursor=pointer]:
+              - /url: /Surveys/Documentation
+            - text: to read documentation on how to link surveys to Formstack.
+        - generic [ref=e72]:
+          - generic [ref=e74]:
+            - img [ref=e75]
+            - searchbox "Search" [ref=e76]
+          - link "New Survey" [ref=e79] [cursor=pointer]:
+            - /url: /Surveys/SurveyDetails
+            - generic [ref=e80]: +
+            - generic [ref=e81]: New Survey
+          - button "Filter" [ref=e84] [cursor=pointer]:
+            - generic [ref=e85]: 
+            - generic [ref=e86]: Filter
+        - generic [ref=e87]:
+          - generic [ref=e89]:
+            - list [ref=e105]:
+              - listitem [ref=e106]:
+                - generic [ref=e107]:
+                  - generic [ref=e108]:
+                    - generic [ref=e109]: My Food Box
+                    - generic [ref=e111]:
+                      - paragraph [ref=e113]:
+                        - generic [ref=e114]: 
+                        - text: Shown
+                      - paragraph [ref=e116]: Active
+                      - generic "MOPD Pilot" [ref=e117]:
+                        - paragraph [ref=e118]: MOPD Pilot
+                      - generic:
+                        - paragraph
+                    - link [ref=e121] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e122]: 
+                  - text: 
+              - listitem [ref=e123]:
+                - generic [ref=e124]:
+                  - generic [ref=e125]:
+                    - generic [ref=e126]: Monthly Feedback Survey
+                    - generic [ref=e128]:
+                      - paragraph [ref=e130]:
+                        - generic [ref=e131]: 
+                        - text: Shown
+                      - paragraph [ref=e133]: Active
+                      - generic "MOPD Pilot" [ref=e134]:
+                        - paragraph [ref=e135]: MOPD Pilot
+                      - generic:
+                        - paragraph
+                    - link [ref=e138] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e139]: 
+                  - text: 
+              - listitem [ref=e140]:
+                - generic [ref=e141]:
+                  - generic [ref=e142]:
+                    - generic [ref=e143]: Customize Your Grocery Box
+                    - generic [ref=e145]:
+                      - paragraph [ref=e147]:
+                        - generic [ref=e148]: 
+                        - text: Shown
+                      - paragraph [ref=e150]: Active
+                      - generic "Sinai Pilot" [ref=e151]:
+                        - paragraph [ref=e152]: Sinai Pilot
+                      - generic:
+                        - paragraph
+                    - link [ref=e155] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e156]: 
+                  - text: 
+              - listitem [ref=e157]:
+                - generic [ref=e158]:
+                  - generic [ref=e159]:
+                    - generic [ref=e160]: Grocery Box Program Survey
+                    - generic [ref=e162]:
+                      - paragraph [ref=e164]:
+                        - generic [ref=e165]: 
+                        - text: Shown
+                      - paragraph [ref=e167]: Active
+                      - generic "Sinai Pilot" [ref=e168]:
+                        - paragraph [ref=e169]: Sinai Pilot
+                      - generic:
+                        - paragraph
+                    - link [ref=e172] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e173]: 
+                  - text: 
+              - listitem [ref=e174]:
+                - generic [ref=e175]:
+                  - generic [ref=e176]:
+                    - generic [ref=e177]: Select Food Options
+                    - generic [ref=e179]:
+                      - paragraph [ref=e181]:
+                        - generic [ref=e182]: 
+                        - generic [ref=e183]: Hidden
+                      - paragraph [ref=e185]: Active
+                      - generic "Nectar Test (Pilots)" [ref=e186]:
+                        - paragraph [ref=e187]: Nectar Test (Pilots)
+                      - generic:
+                        - paragraph
+                    - link [ref=e190] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e191]: 
+                  - text: 
+              - listitem [ref=e192]:
+                - generic [ref=e193]:
+                  - generic [ref=e194]:
+                    - generic [ref=e195]: Foodbox Survey Nectar Test
+                    - generic [ref=e197]:
+                      - paragraph [ref=e199]:
+                        - generic [ref=e200]: 
+                        - text: Shown
+                      - paragraph [ref=e202]: Active
+                      - generic "Nectar Test (Pilots)" [ref=e203]:
+                        - paragraph [ref=e204]: Nectar Test (Pilots)
+                      - generic:
+                        - paragraph
+                    - link [ref=e207] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e208]: 
+                  - text: 
+              - listitem [ref=e209]:
+                - generic [ref=e210]:
+                  - generic [ref=e211]:
+                    - generic [ref=e212]: Dion's Dream Score
+                    - generic [ref=e214]:
+                      - paragraph [ref=e216]:
+                        - generic [ref=e217]: 
+                        - text: Shown
+                      - paragraph [ref=e219]: Active
+                      - generic:
+                        - paragraph
+                      - generic:
+                        - paragraph
+                    - link [ref=e222] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e223]: 
+                  - text: 
+              - listitem [ref=e224]:
+                - generic [ref=e225]:
+                  - generic [ref=e226]:
+                    - generic [ref=e227]: SNAP Eligibility Screener
+                    - generic [ref=e229]:
+                      - paragraph [ref=e231]:
+                        - generic [ref=e232]: 
+                        - generic [ref=e233]: Hidden
+                      - paragraph [ref=e235]: Active
+                      - generic "Nectar" [ref=e236]:
+                        - paragraph [ref=e237]: Nectar
+                      - paragraph [ref=e239]: Synced
+                    - link [ref=e242] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e243]: 
+                  - text: 
+              - listitem [ref=e244]:
+                - generic [ref=e245]:
+                  - generic [ref=e246]:
+                    - generic [ref=e247]: Health Coverage
+                    - generic [ref=e249]:
+                      - paragraph [ref=e251]:
+                        - generic [ref=e252]: 
+                        - text: Shown
+                      - paragraph [ref=e254]: Active
+                      - generic "Nectar, Northern Illinois Food Bank Pilot" [ref=e255]:
+                        - paragraph [ref=e256]: Nectar, Northern Illinois Food...
+                      - paragraph [ref=e258]: Synced
+                    - link [ref=e261] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e262]: 
+                  - text: 
+              - listitem [ref=e263]:
+                - generic [ref=e264]:
+                  - generic [ref=e265]:
+                    - generic [ref=e266]: Customize Your Food Box
+                    - generic [ref=e268]:
+                      - paragraph [ref=e270]:
+                        - generic [ref=e271]: 
+                        - text: Shown
+                      - paragraph [ref=e273]: Active
+                      - generic "Demo (Pilots)" [ref=e274]:
+                        - paragraph [ref=e275]: Demo (Pilots)
+                      - generic:
+                        - paragraph
+                    - link [ref=e278] [cursor=pointer]:
+                      - /url: "#"
+                      - generic [ref=e279]: 
+                  - text: 
+            - generic [ref=e93]:
+              - text:  
+              - list [ref=e95]:
+                - listitem [ref=e280]:
+                  - button "Page 1" [ref=e281]: "1"
+                - listitem [ref=e282]:
+                  - button "2" [ref=e283] [cursor=pointer]
+                - listitem [ref=e284]:
+                  - button "3" [ref=e285] [cursor=pointer]
+              - text:  
+              - combobox "Page sizes drop down" [ref=e99] [cursor=pointer]:
+                - generic [ref=e101]: 10 / page
+          - text:       
+        - text:   
+        - text: 
+        - generic: 
+  - contentinfo [ref=e102]:
+    - generic [ref=e103]:
+      - text: © 2026 - AssetBlue Impact Technologies, PBC -
+      - link "Privacy" [ref=e104] [cursor=pointer]:
+        - /url: /Privacy

@@ -1,0 +1,67 @@
+- generic [ref=e5]:
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e9] [cursor=pointer]: English
+      - generic [ref=e10]: "|"
+      - generic [ref=e12] [cursor=pointer]: Español
+    - generic [ref=e13]:
+      - generic [ref=e15]:
+        - generic [ref=e16]: Nectar
+        - img [ref=e17]
+      - generic [ref=e19]:
+        - generic [ref=e25] [cursor=pointer]: Get Started
+        - generic [ref=e27] [cursor=pointer]: 
+    - generic:
+      - generic:
+        - generic:
+          - generic: 
+        - generic:
+          - generic:
+            - generic: Home
+          - generic:
+            - generic: Get Started
+          - generic:
+            - generic: About
+          - generic:
+            - generic: FAQs
+          - generic:
+            - generic: Feedback
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - img
+                    - generic: View on your mobile device for optimal experience!
+        - generic:
+          - generic:
+            - generic: Terms
+          - generic:
+            - generic: Privacy
+          - generic:
+            - generic: Accessibility
+  - generic [ref=e30]:
+    - generic [ref=e33]:
+      - generic [ref=e35]:
+        - img [ref=e37]
+        - generic [ref=e39]: Stay updated with resources to meet your needs
+      - generic [ref=e41]:
+        - img [ref=e43]
+        - generic [ref=e45]: Access personalized health resources
+      - generic [ref=e47]:
+        - img [ref=e49]
+        - generic [ref=e51]: Find help nearby
+    - generic [ref=e58]:
+      - generic [ref=e59]:
+        - generic [ref=e61] [cursor=pointer]: About
+        - generic [ref=e62]:
+          - generic [ref=e64] [cursor=pointer]: EN
+          - generic [ref=e65]: "|"
+          - generic [ref=e67] [cursor=pointer]: ES
+      - generic [ref=e69] [cursor=pointer]: Frequently Asked Questions
+      - generic [ref=e71] [cursor=pointer]: Terms of Use
+      - generic [ref=e73] [cursor=pointer]: Privacy Policy
+      - generic [ref=e75] [cursor=pointer]: Accessibility Statement

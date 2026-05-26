@@ -1,0 +1,193 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "Nectar" [ref=e5] [cursor=pointer]:
+          - /url: /
+        - button [ref=e7] [cursor=pointer]:
+          - generic [ref=e8]: 
+  - main [ref=e9]:
+    - generic [ref=e11]:
+      - navigation [ref=e14]:
+        - link "Dashboard" [ref=e15] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e16]: 
+          - text: Dashboard
+        - separator [ref=e17]
+        - generic [ref=e18]: Manage
+        - link "Members" [ref=e19] [cursor=pointer]:
+          - /url: /Neighbors
+          - generic [ref=e20]: 
+          - text: Members
+        - link "Admins" [ref=e21] [cursor=pointer]:
+          - /url: /Admins
+          - generic [ref=e22]:  
+          - text: Admins
+        - link "Groups" [ref=e23] [cursor=pointer]:
+          - /url: /Groups
+          - generic [ref=e24]: 
+          - text: Groups
+        - link "Orders" [ref=e25] [cursor=pointer]:
+          - /url: /Orders
+          - generic [ref=e26]: 
+          - text: Orders
+        - link "Programs" [ref=e27] [cursor=pointer]:
+          - /url: /Programs
+          - generic [ref=e28]: 
+          - text: Programs
+        - link "Agencies" [ref=e29] [cursor=pointer]:
+          - /url: /Agencies/ListAgencies
+          - img [ref=e30]
+          - text: Agencies
+        - link "Accounting" [ref=e31] [cursor=pointer]:
+          - /url: /Accounting/GenerateInvoices
+          - img [ref=e32]
+          - text: Accounting
+        - link "Surveys" [ref=e33] [cursor=pointer]:
+          - /url: /Surveys
+          - generic [ref=e34]: 
+          - text: Surveys
+        - separator [ref=e35]
+        - generic [ref=e36]: Message Center
+        - link "Nudges" [ref=e37] [cursor=pointer]:
+          - /url: /CommunicationCenter/Nudges
+          - generic [ref=e38]: 
+          - text: Nudges
+        - link "Send Notification" [ref=e39] [cursor=pointer]:
+          - /url: /Notifications/SendNotification
+          - generic [ref=e40]: 
+          - text: Send Notification
+        - link "Send to Group" [ref=e41] [cursor=pointer]:
+          - /url: /Notifications/SendGroupNotification
+          - generic [ref=e42]: 
+          - text: Send to Group
+        - link "Sent History" [ref=e43] [cursor=pointer]:
+          - /url: /Notifications
+          - generic [ref=e44]: 
+          - text: Sent History
+        - link "Direct Messages" [ref=e45] [cursor=pointer]:
+          - /url: /Messages
+          - generic [ref=e46]: 
+          - text: Direct Messages
+        - link "Invite to Join" [ref=e47] [cursor=pointer]:
+          - /url: /Invites
+          - generic [ref=e48]: 
+          - text: Invite to Join
+        - separator [ref=e49]
+        - generic [ref=e50]: Settings
+        - link "Account" [ref=e51] [cursor=pointer]:
+          - /url: /Account
+          - generic [ref=e52]: 
+          - text: Account
+        - link "Insights" [ref=e53] [cursor=pointer]:
+          - /url: /ActivityLogs
+          - generic [ref=e54]: 
+          - text: Insights
+        - link "Translation" [ref=e55] [cursor=pointer]:
+          - /url: /Settings/TranslationSettings
+          - generic [ref=e56]: 
+          - text: Translation
+        - link "Utilities" [ref=e57] [cursor=pointer]:
+          - /url: /Utilities
+          - generic [ref=e58]: 
+          - text: Utilities
+        - separator [ref=e59]
+        - link "Terms of Use" [ref=e60] [cursor=pointer]:
+          - /url: /Terms
+        - link "Privacy Policy" [ref=e61] [cursor=pointer]:
+          - /url: /Privacy
+        - link "Accessibility Statement" [ref=e62] [cursor=pointer]:
+          - /url: /Accessibility
+        - link "Sign Out" [ref=e64] [cursor=pointer]:
+          - /url: /MicrosoftIdentity/Account/SignOut
+      - generic [ref=e66]:
+        - heading "Health Coverage" [level=1] [ref=e67]
+        - generic [ref=e69]:
+          - tablist [ref=e70]:
+            - tab "Settings" [selected] [ref=e71] [cursor=pointer]
+            - tab "Notifications" [ref=e72] [cursor=pointer]
+            - tab "Advanced" [ref=e73] [cursor=pointer]
+          - tabpanel "Settings" [ref=e76]:
+            - generic [ref=e78]:
+              - generic [ref=e79]:
+                - generic [ref=e80]:
+                  - generic [ref=e81]: Survey Name
+                  - textbox "Survey Name" [ref=e82]: Health Coverage
+                - generic [ref=e83]:
+                  - generic [ref=e84]: Formstack Id
+                  - spinbutton "Formstack Id" [ref=e85]: "99330"
+                - generic [ref=e86]:
+                  - generic [ref=e87]: Formstack Embedded Name
+                  - textbox "Formstack Embedded Name" [ref=e88]
+                - generic [ref=e89]:
+                  - generic [ref=e90]:
+                    - text: Survey Category
+                    - generic [ref=e91]: 
+                    - generic [ref=e92]: Select a category to adjust survey settings and behavior.
+                  - combobox "Survey Category Select a category to adjust survey settings and behavior." [ref=e93] [cursor=pointer]:
+                    - generic [ref=e95]: Benefits
+                    - button "select" [ref=e96]
+                - generic [ref=e97]:
+                  - generic [ref=e98]: Survey Description
+                  - textbox [ref=e99]: Discover health benefits and rewards
+                  - paragraph [ref=e100]: 36/70 characters
+              - generic [ref=e102]:
+                - button "Visibility Settings" [ref=e104] [cursor=pointer]
+                - text:      
+              - generic [ref=e105]:
+                - generic [ref=e106]:
+                  - generic [ref=e107]: Survey Icon Blob Name (direct image upload not yet supported)
+                  - textbox "Survey Icon Blob Name (direct image upload not yet supported)" [ref=e108]
+                - generic [ref=e110]:
+                  - generic [ref=e111]:
+                    - generic [ref=e112]: Add Link to Resource Hub Site
+                    - generic [ref=e113] [cursor=pointer]: Add 'Learn More'
+                  - generic [ref=e114]:
+                    - generic [ref=e115]: Display Text
+                    - textbox "Display Text" [ref=e116]: What is Medicaid?
+                - generic [ref=e117]:
+                  - generic [ref=e118]: Show for highlighted Agencies
+                  - generic [ref=e119]:
+                    - generic [ref=e120]:
+                      - generic [ref=e121] [cursor=pointer]:
+                        - generic [ref=e123]: Nectar
+                        - generic [ref=e125]: 
+                      - generic [ref=e126] [cursor=pointer]:
+                        - generic [ref=e128]: Northern Illinois Food Bank Pilot
+                        - generic [ref=e130]: 
+                      - combobox [ref=e131]
+                    - button "" [ref=e132] [cursor=pointer]:
+                      - generic [ref=e133]: 
+                - generic [ref=e134]:
+                  - generic [ref=e135]: Show for highlighted programs
+                  - generic [ref=e136]:
+                    - generic [ref=e137]:
+                      - generic [ref=e138] [cursor=pointer]:
+                        - generic [ref=e140]: Orrin Test Program
+                        - generic [ref=e142]: 
+                      - generic [ref=e143] [cursor=pointer]:
+                        - generic [ref=e145]: Demo Hospital Maternal Health
+                        - generic [ref=e147]: 
+                      - combobox [ref=e148]
+                    - button "" [ref=e149] [cursor=pointer]:
+                      - generic [ref=e150]: 
+              - separator [ref=e151]
+              - button "Update Survey" [ref=e154] [cursor=pointer]
+          - generic [ref=e155]:
+            - heading "Survey Tools" [level=2] [ref=e157]
+            - generic [ref=e161]:
+              - generic [ref=e162]: Show for highlighted members
+              - generic [ref=e163]:
+                - combobox [ref=e165]: Type or select below
+                - text: 
+        - text: 
+        - alert [ref=e166]:
+          - generic [ref=e167]:
+            - generic [ref=e168]: Survey Updated!
+            - generic "Close" [ref=e169] [cursor=pointer]:
+              - generic [ref=e170]: 
+  - contentinfo [ref=e171]:
+    - generic [ref=e172]:
+      - text: © 2026 - AssetBlue Impact Technologies, PBC -
+      - link "Privacy" [ref=e173] [cursor=pointer]:
+        - /url: /Privacy
