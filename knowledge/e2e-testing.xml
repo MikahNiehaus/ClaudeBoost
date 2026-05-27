@@ -11,6 +11,29 @@
   <principle>The database can be written to by background jobs and migrations. Finding a record in the database does not prove the UI created it.</principle>
 </e2e-philosophy>
 
+<filter-testing-note>
+  Unit tests for filter transformation logic (LINQ-to-Objects) do not catch SQL-level bugs.
+  EF Core null compensation only activates in real SQL: a NOT LIKE on a null column silently
+  adds OR IS NULL, so a DoesNotContain filter will include rows with null values unless an
+  explicit IsNotNullOrEmpty guard is present. Unit tests pass regardless because LINQ-to-Objects
+  handles nulls differently than SQL Server.
+
+  Always run a browser test against real data when any of these apply:
+  - A new field is added to a filter that can hold null values
+  - A DoesNotContain / None of filter is added or modified
+  - A Blank / IsNullOrEmpty or IsNotNullOrEmpty filter is added or modified
+  - A field's projection changes (e.g., int? to string)
+
+  The acceptance test: set the filter in a browser, check the member count is reasonable.
+  Blank should return only members with no value. None of should exclude the selected values
+  AND members with no recorded value.
+
+  Root cause from ASC-1201: null was projected as null instead of "", so IsNullOrEmpty("")
+  had nothing to match (Blank returned 0). The DoesNotContain guard was missing, so members
+  with null values were included in None of results. Both bugs passed unit tests and code
+  review because the SQL behavior was never tested in a browser.
+</filter-testing-note>
+
 <anti-cheat-patterns>
   <description>Catalog of testing shortcuts that produce false results. Recognize these patterns and refuse them.</description>
 

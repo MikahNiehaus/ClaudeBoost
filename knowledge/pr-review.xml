@@ -2,6 +2,18 @@
 <triggers>PR review, code review, pull request, feedback, LGTM, approve, request changes</triggers>
 <overview>Code review serves knowledge transfer, maintaining code health, and creating historical records. Approve code that improves overall health, even if not perfect.</overview>
 
+<rag-requirement mandatory="true">
+  Before writing any finding or starting any review pass, run these three calls in order:
+  1. rag_context(agent="reviewer-agent", task_description="code review [description]", max_tokens=4000)
+  2. rag_search(scope="codebase", project_path=[repo], query="[one-sentence summary of what changed]", limit=5)
+  3. rag_search(scope="codebase", project_path=[repo], query="[same summary]", limit=5, mode="graph")
+
+  Why this is mandatory: RAG surfaces existing patterns (guards, projections, conventions) before
+  any code is reviewed. Reviewing a diff in isolation means pattern-inconsistency bugs won't be
+  caught. In ASC-1201, an IsNotNullOrEmpty guard existed on DiagnosisIds but was missing on the
+  new fields. RAG would have surfaced the pattern immediately. It was only caught in QA.
+</rag-requirement>
+
 <core-principles>
   <principle>Approve code that definitely improves overall code health, even if not perfect</principle>
   <principle>Effectiveness drops beyond 400 lines of code</principle>

@@ -11,6 +11,13 @@ Patterns that trigger a nudge (research-backed, arxiv 2401.06461 / 2406.15583 / 
   3. Spacing uniformity: 5+ comments all using "// " — zero variation
   4. Structural uniformity: 4+ consecutive comments within 5 chars of same length
   5. Banned vocab inside a comment (from human-voice.xml list)
+  6. Dash separators: em-dash or spaced hyphen used as a separator
+
+Comment style rules (always enforced):
+  - Non-formal, concise, polite, professional
+  - No dashes whatsoever (no em-dash, no " - " separator)
+  - Say WHY, not WHAT
+  - Fragments over complete sentences
 
 Only fires when 3+ comment lines exist in the new content — not worth
 nudging on a single-line change.
@@ -131,6 +138,23 @@ def check_banned_vocab(comments: list[str]) -> Finding | None:
     return None
 
 
+def check_dashes(comments: list[str]) -> Finding | None:
+    """Flag comments using dashes as separators.
+
+    Catches em-dash and spaced hyphen used as separators.
+    Skips: -- (decrement/commented-out code), -> (arrow), -N (negative numbers).
+    """
+    import re as _re
+    _DASH_RE = _re.compile(r"\u2014|\u2013| \u2012 | - (?![->\d])")
+    hits = [c for c in comments if _DASH_RE.search(c)]
+    if hits:
+        return Finding(
+            "dash-separator",
+            f"Comment uses a dash as separator (use a comma or colon instead): {hits[0]!r}",
+        )
+    return None
+
+
 def get_new_content(payload: dict) -> str:
     """Extract the newly written text from Edit or Write tool input."""
     tool_input = payload.get("tool_input") or {}
@@ -166,6 +190,7 @@ def main() -> int:
         check_spacing_uniformity,
         check_structural_uniformity,
         check_banned_vocab,
+        check_dashes,
     ]:
         result = check(comments)
         if result:
@@ -183,6 +208,8 @@ def main() -> int:
     lines.append("  - Vary structure across consecutive comments (C2)")
     lines.append("  - Keep polite skepticism where honest (C3)")
     lines.append("  - Mix '//word' and '// word' spacing (C4)")
+    lines.append("  - Non-formal, concise, polite, professional")
+    lines.append("  - No dashes whatsoever (use commas or colons instead)")
 
     print("\n".join(lines), file=sys.stderr)
     return 0  # nudge only, never blocks

@@ -100,6 +100,7 @@ _CS_EXTERNAL_PREFIXES = frozenset({
     "Polly", "Hangfire", "Quartz", "MassTransit", "RabbitMQ",
     "StackExchange", "MongoDB", "Npgsql", "MySql", "Oracle",
     "JWT", "IdentityModel", "Humanizer", "CsvHelper",
+    "Kendo",  # NuGet: Kendo.Mvc, Kendo.Mvc.UI, Kendo.Mvc.Infrastructure
 })
 
 

@@ -99,6 +99,14 @@ Claude overuses em-dashes. One per response is fine. Three in a paragraph is not
 <code-comment-rules>
 <rule>Code comments are output too. The same rules apply.</rule>
 
+<style-requirements>
+  <requirement>Non-formal: write like a developer note, not documentation</requirement>
+  <requirement>Concise: one line beats three; cut anything obvious</requirement>
+  <requirement>Polite: respectful enough to say in a code review without cringing</requirement>
+  <requirement>Professional: no jokes, no rants, no dismissive remarks</requirement>
+  <requirement>No dashes whatsoever: no em-dash (—), no en-dash (–), no spaced hyphen ( - ) as a separator. Use a comma or colon instead.</requirement>
+</style-requirements>
+
 <bad-comment>// This method facilitates the seamless integration of the authentication module</bad-comment>
 <good-comment>// Checks the token, returns null if expired</good-comment>
 
