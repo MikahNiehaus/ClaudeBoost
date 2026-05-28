@@ -144,29 +144,38 @@ def build_context(
     tier3_tokens = 0
 
     if remaining_budget > 200 and store.collection_exists("knowledge"):
-        try:
-            query_embedding = embedder.embed_query(task_description)
-            search_results = store.search(
-                "knowledge", query_embedding, limit=15, min_score=0.4,
-            )
-            for r in search_results:
-                source = r.metadata.get("source_file", "")
-                if source in all_included_sources:
-                    continue
-                chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
-                if tier3_tokens + chunk_tokens > remaining_budget:
-                    break
-                tier3_chunks.append({
-                    "source": source,
-                    "section": r.metadata.get("section", ""),
-                    "content": r.content,
-                    "score": r.score,
-                    "tier": "search",
-                })
-                tier3_tokens += chunk_tokens
-        except Exception as e:
-            logger.error("Tier 3: semantic search failed: %s", e)
-            tier_errors.append({"tier": "search", "error": str(e)})
+        # Guard: skip embedding call if model isn't loaded yet — avoids blocking on
+        # _load_lock for minutes during background startup. Tiers 0-2 already loaded
+        # without the model, so caller gets useful context even during warmup.
+        if not embedder.is_loaded:
+            tier_errors.append({
+                "tier": "search",
+                "error": "Embedding model not ready yet — server is warming up. Tier 3 skipped.",
+            })
+        else:
+            try:
+                query_embedding = embedder.embed_query(task_description)
+                search_results = store.search(
+                    "knowledge", query_embedding, limit=15, min_score=0.4,
+                )
+                for r in search_results:
+                    source = r.metadata.get("source_file", "")
+                    if source in all_included_sources:
+                        continue
+                    chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
+                    if tier3_tokens + chunk_tokens > remaining_budget:
+                        break
+                    tier3_chunks.append({
+                        "source": source,
+                        "section": r.metadata.get("section", ""),
+                        "content": r.content,
+                        "score": r.score,
+                        "tier": "search",
+                    })
+                    tier3_tokens += chunk_tokens
+            except Exception as e:
+                logger.error("Tier 3: semantic search failed: %s", e)
+                tier_errors.append({"tier": "search", "error": str(e)})
 
     remaining_budget -= tier3_tokens
 
@@ -174,7 +183,7 @@ def build_context(
     tier4_chunks = []
     tier4_tokens = 0
 
-    if project_path and (tier4_reserved > 100 or remaining_budget > 200):
+    if project_path and (tier4_reserved > 100 or remaining_budget > 200) and embedder.is_loaded:
         try:
             from rag_server.core.project import project_index_dir
             from rag_server.core.store import ChromaStore as _ChromaStore

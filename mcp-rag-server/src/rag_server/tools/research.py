@@ -93,6 +93,10 @@ def rag_index_research(
     Returns:
         Dict with indexed_count, source_results list, and collection_path.
     """
+    # STOP: fail fast if model isn't loaded — avoids blocking on _load_lock.
+    if not embedder.is_loaded:
+        return {"error": "Embedding model not ready yet — retry in 30-60 seconds."}
+
     from rag_server.core.store import ChromaStore
 
     index_dir = _research_index_dir(workspace_path)

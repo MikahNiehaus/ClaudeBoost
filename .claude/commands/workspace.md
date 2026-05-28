@@ -29,9 +29,23 @@ If BOOSTED: proceed silently.
 
 ---
 
-## Phase 0.5: RAG Context
+## Phase 0.5: RAG Health Check + Context
 
-Call `rag_context(agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000)` as your FIRST action after the boost check.
+**Step 1 — Health check (REQUIRED, runs first):**
+
+Call `rag_status()` before loading any context.
+
+**If `rag_status()` returns an error OR the tool is not available:**
+> **STOP. Do not proceed.**
+> Tell the user: "RAG server is not responding. Run `/mcp` to reconnect, then retry `/workspace $ARGUMENTS`."
+
+**Step 2 — Load context (only if Step 1 passes):**
+
+Call `rag_context(agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000)`.
+
+**If `rag_context` returns an "error" key:**
+> **STOP. Do not proceed.**
+> Tell the user: "RAG context load failed: [error message]. Run `/mcp` to reconnect."
 
 This loads architecture, workflow, orchestration, and model-selection knowledge so the plan is grounded in real ClaudeBoost capabilities.
 

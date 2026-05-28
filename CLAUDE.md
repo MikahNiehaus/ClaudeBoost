@@ -189,12 +189,18 @@ The `session-primer.py` UserPromptSubmit hook injects a HARD STOP directive when
 ## RAG Health Check Protocol
 
 At the start of any investigation or multi-step codebase task:
-1. Call `rag_context(agent="...", task_description="...", project_path="...")`
-2. **Also call `rag_status`** — check for unresolved graph edges, index errors, or stale collections
-3. If `rag_status` shows errors: stop and fix before continuing (reindex if stale, report if server error)
-4. If index is stale (`reindex-check.py` warned at session start): call `rag_index_project(force=true)` before searching
 
-Do not skip the health check because "RAG seemed to work earlier" — indexes degrade silently.
+1. **Call `rag_status()` FIRST** — before `rag_context`, before spawning agents, before anything.
+   - `rag_status` does not use the embedding model, so it responds in under 1 second if the server is up.
+   - If it returns an error or the tool is unavailable: **STOP. Do not proceed.** Tell the user: "RAG server is not responding. Run `/mcp` to reconnect."
+2. **Then call `rag_context(agent="...", task_description="...", project_path="...")`**
+   - If `rag_context` returns an `"error"` key: **STOP. Do not proceed.** Report the error and tell the user to run `/mcp`.
+3. **Also check `rag_status`** for unresolved graph edges, index errors, or stale collections.
+4. If index is stale (`reindex-check.py` warned at session start): call `rag_index_project(force=true)` before searching.
+
+**Any RAG tool returning an error is a hard stop** — do not continue with degraded or missing context. Do not rationalize past it ("I can grep instead"). Stop and tell the user to fix RAG.
+
+Do not skip the health check because "RAG seemed to work earlier" — indexes degrade silently and the server can disconnect between calls.
 
 ## Workspace Update Protocol
 
@@ -226,6 +232,28 @@ When the user says "Project RAG" or "project index" → they mean the codebase i
 - `rag_search scope=codebase mode=vector` — semantic only (default, backwards compatible)
 - Graph index is built automatically during `rag_index_project` — no extra step needed
 - Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
+
+**Parallel reindex pattern** (use when reindexing a project while doing other work):
+
+Spawn a lightweight agent to run the reindex. The main agent stays unblocked.
+
+Spawn prompt must include:
+1. `rag_context(agent="rag-indexing-agent", task_description="reindex project at <path>")` as first action
+2. Call `rag_index_project(project_path=<path>, force=True)`
+3. Read the result: if `files_failed > 0`, log each entry in `errors[]` (file, type, message)
+4. If `errors[]` contains `embed_error` entries: retry once with `force=True`; if still failing, report the specific files
+5. Call `rag_status()` and confirm graph shows `graph_active: true` for the project
+6. Return summary: files_indexed, chunks_created, files_failed, elapsed_s, graph edges/resolved, any unresolved errors
+
+**Reading reindex results** — `rag_index_project` returns:
+- `files_indexed` — successfully embedded and stored
+- `files_unchanged` — skipped (hash match, no change needed)
+- `files_failed` — errored; check `errors[]` for details
+- `errors[]` — `[{file, type: "read_error|embed_error", message}]` — only present if failures occurred
+- `elapsed_s` — total time
+- `graph.edges` / `graph.resolved` — graph index health
+
+`files_failed > 0` is the signal that something went wrong. Zero failures = healthy index.
 
 ## TTS (Text-to-Speech)
 
