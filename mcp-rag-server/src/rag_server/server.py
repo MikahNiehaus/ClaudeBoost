@@ -320,9 +320,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 def _dispatch_tool(name: str, arguments: dict) -> dict:
     """Synchronous tool dispatch — runs in a thread pool via run_in_executor."""
     # Log a brief summary of the call (omit large values like embeddings/content).
+    _OMIT_KEYS = {"content", "embeddings"}
     _loggable_args = {
-        k: v for k, v in arguments.items()
-        if k not in {"content", "embeddings"} and not isinstance(v, (list, bytes))
+        k: (f"[{len(v)}-item list]" if isinstance(v, list) and len(v) > 10 else v)
+        for k, v in arguments.items()
+        if k not in _OMIT_KEYS and not isinstance(v, bytes)
     }
     logger.info("Tool call: %s | args=%s", name, _loggable_args)
     _start = time.monotonic()
@@ -563,6 +565,23 @@ def _background_startup() -> None:
             "Background: startup indexing complete in %.1fs: %d files, %d chunks",
             time.monotonic() - _t0, result["files_indexed"], result["chunks_created"],
         )
+
+        # Pre-load the embedding model so the first search call doesn't hang.
+        # The dimension-mismatch check above only loads it when chunks exist AND
+        # sample_dimension() returns a non-zero value — that path can miss. Always
+        # warm up here if the model still hasn't loaded.
+        if not embedder.is_loaded:
+            logger.info("Background: pre-loading embedding model...")
+            try:
+                _mt0 = time.monotonic()
+                embedder.dimensions()
+                logger.info(
+                    "Background: model ready in %.1fs (%dd)",
+                    time.monotonic() - _mt0, embedder.dimensions(),
+                )
+            except Exception:
+                logger.exception("Background: model pre-load failed — first search will be slow")
+
     except Exception:
         logger.exception(
             "Background: startup indexing failed — server is up but index may be empty or stale"

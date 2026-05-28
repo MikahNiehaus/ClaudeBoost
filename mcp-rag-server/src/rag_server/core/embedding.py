@@ -1,6 +1,7 @@
 """Embedding service using sentence-transformers. Lazy-loaded singleton."""
 
 import logging
+import threading
 
 from rag_server.ports.embedding_port import EmbeddingPort
 
@@ -22,16 +23,24 @@ class SentenceTransformerEmbedding(EmbeddingPort):
         self._model_name = model_name
         self._model = None
         self._uses_prefixes = model_name in _PREFIX_MODELS
+        self._load_lock = threading.Lock()
 
     def _load_model(self):
-        if self._model is None:
-            logger.info("Loading embedding model: %s", self._model_name)
-            from sentence_transformers import SentenceTransformer
-            kwargs = {}
-            if self._model_name in _PREFIX_MODELS:
-                kwargs["trust_remote_code"] = True
-            self._model = SentenceTransformer(self._model_name, local_files_only=True, **kwargs)
-            logger.info("Model loaded. Dimensions: %d", self.dimensions())
+        # Fast path — model already loaded (no lock needed for a read).
+        if self._model is not None:
+            return
+        with self._load_lock:
+            # Re-check inside the lock: another thread may have loaded while we waited.
+            if self._model is None:
+                logger.info("Loading embedding model: %s", self._model_name)
+                from sentence_transformers import SentenceTransformer
+                kwargs = {}
+                if self._model_name in _PREFIX_MODELS:
+                    kwargs["trust_remote_code"] = True
+                self._model = SentenceTransformer(self._model_name, local_files_only=True, **kwargs)
+                # Don't call self.dimensions() here — it calls _load_model() which
+                # tries to re-acquire _load_lock, deadlocking since this is non-reentrant.
+                logger.info("Model loaded. Dimensions: %d", self._model.get_sentence_embedding_dimension())
 
     @property
     def is_loaded(self) -> bool:
