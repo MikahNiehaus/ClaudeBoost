@@ -5,7 +5,7 @@ description = "MCP RAG server for ClaudeBoost - semantic search over knowledge b
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0",
-    "chromadb>=0.5",
+    "chromadb>=1.5.9,<2.0",
     "chroma-hnswlib>=0.7.6",
     "sentence-transformers>=3.0",
     "watchdog>=4.0",
