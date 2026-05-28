@@ -21,11 +21,15 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT = _resolve_project_root()
 
-# Persistence
-RAG_INDEX_DIR = Path(os.environ.get(
-    "RAG_INDEX_DIR",
-    PROJECT_ROOT / "mcp-rag-server" / ".rag-index",
-))
+# Persistence — default to LOCALAPPDATA on Windows so the index is machine-local
+# and never gets corrupted by OneDrive syncing incompatible HNSW binaries across machines.
+_local_appdata = os.environ.get("LOCALAPPDATA")
+_default_index_dir = (
+    Path(_local_appdata) / "rag-server-index"
+    if _local_appdata
+    else PROJECT_ROOT / "mcp-rag-server" / ".rag-index"
+)
+RAG_INDEX_DIR = Path(os.environ.get("RAG_INDEX_DIR", _default_index_dir))
 
 CHROMA_DIR = RAG_INDEX_DIR / "chroma"
 MANIFEST_PATH = RAG_INDEX_DIR / "manifest.json"
