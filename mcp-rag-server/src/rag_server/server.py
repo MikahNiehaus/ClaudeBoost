@@ -150,7 +150,11 @@ async def list_tools() -> list[Tool]:
             name="rag_index_project",
             description=(
                 "Index a project's source code for semantic codebase search. "
-                "Creates a per-project vector database. Re-runs only re-embed changed files."
+                "Creates a per-project vector database. Re-runs only re-embed changed files. "
+                "Returns: files_indexed, chunks_created, files_unchanged, files_failed, "
+                "elapsed_s, graph (edges/resolved), and errors[] if any files failed. "
+                "Check files_failed > 0 to detect partial failures — errors[] lists each "
+                "file, its error type (read_error or embed_error), and the message."
             ),
             inputSchema={
                 "type": "object",
@@ -297,11 +301,33 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # All tool handlers call blocking code (ChromaDB, subprocess, embedding inference).
     # On Windows with the MCP subprocess stdout=pipe + anyio I/O, blocking calls inside
     # the asyncio event loop hang indefinitely. Run ALL dispatch in a thread pool.
+    #
+    # 90-second timeout prevents indefinite hangs when the embedding model is still loading
+    # during background startup (model load holds _load_lock, tool calls queue behind it).
+    # If startup takes longer than 90s the caller gets a clear retry message instead of silence.
     import asyncio as _asyncio
     _t0 = time.monotonic()
     loop = _asyncio.get_running_loop()
+    # Index operations are long-running by nature (10-15 min for large projects).
+    # Query tools (search, context, status, scan) get the short 90s guard.
+    _LONG_RUNNING = {"rag_index", "rag_index_project", "rag_index_research"}
+    _timeout = 900.0 if name in _LONG_RUNNING else 90.0
     try:
-        result = await loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments))
+        result = await _asyncio.wait_for(
+            loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments)),
+            timeout=_timeout,
+        )
+    except _asyncio.TimeoutError:
+        logger.error(
+            "Tool %s timed out after %.0fs — likely blocked on model load or ChromaDB lock", name, _timeout,
+        )
+        result = {
+            "error": (
+                f"Tool '{name}' timed out after {int(_timeout)} seconds. "
+                "The RAG server is probably still loading the embedding model or indexing files. "
+                "Wait 30-60 seconds and retry — or run /mcp to reconnect if the problem persists."
+            )
+        }
     except Exception as e:
         logger.error(
             "Tool %s executor failed after %.1fs (threading/process issue): %s",
@@ -367,6 +393,9 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             )
 
         elif name == "rag_index_research":
+            # STOP: fail fast if model isn't loaded — avoids blocking on _load_lock.
+            if not embedder.is_loaded:
+                return {"error": "Embedding model not ready yet — retry in 30-60 seconds."}
             from rag_server.tools.research import rag_index_research
             return rag_index_research(
                 embedder=embedder,
@@ -376,6 +405,9 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             )
 
         elif name == "rag_index":
+            # STOP: fail fast if model isn't loaded — avoids blocking on _load_lock.
+            if not embedder.is_loaded:
+                return {"error": "Embedding model not ready yet — retry in 30-60 seconds."}
             force = arguments.get("force", False)
             scope = arguments.get("scope", "all")
             if scope == "all":
@@ -539,7 +571,10 @@ def _background_startup() -> None:
         # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
         # embedder.dimensions() triggers model load here — intentional, but done in
         # a background thread so it doesn't block MCP startup.
-        force_reindex = False
+        # STOP: never force re-index on dimension mismatch in background startup.
+        # A full force re-index holds ChromaDB locked for minutes, blocking all tool calls
+        # (rag_status, rag_search, etc.) and fills the thread pool. Log a warning instead —
+        # the user must explicitly trigger a force re-index via rag_index(force=true).
         try:
             for scope_config in SCOPES.values():
                 col_name = scope_config["collection"]
@@ -547,20 +582,20 @@ def _background_startup() -> None:
                     sample_dim = store.sample_dimension(col_name)
                     if sample_dim and sample_dim != embedder.dimensions():
                         logger.warning(
-                            "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
+                            "DIMENSION MISMATCH in %s: index=%dd, model=%dd. "
+                            "Skipping background re-index — run rag_index(force=true) or "
+                            "delete .rag-index/chroma to rebuild with the new model.",
                             col_name, sample_dim, embedder.dimensions(),
                         )
-                        force_reindex = True
-                        break
+                        # Return early — do not index at all. Incremental would add wrong-dimension
+                        # chunks; force would block the server. User must act explicitly.
+                        return
         except Exception:
             logger.exception("Background: dimension check failed — proceeding with incremental index")
 
-        logger.info(
-            "Background: auto-indexing default collections%s...",
-            " (forced)" if force_reindex else "",
-        )
+        logger.info("Background: auto-indexing default collections (incremental)...")
         _t0 = time.monotonic()
-        result = engine.index_all(force=force_reindex)
+        result = engine.index_all(force=False)
         logger.info(
             "Background: startup indexing complete in %.1fs: %d files, %d chunks",
             time.monotonic() - _t0, result["files_indexed"], result["chunks_created"],

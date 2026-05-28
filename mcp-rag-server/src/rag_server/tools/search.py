@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -10,6 +11,28 @@ from rag_server.ports.embedding_port import EmbeddingPort
 from rag_server.ports.store_port import StorePort
 
 logger = logging.getLogger(__name__)
+
+# Track which embedder objects have had a warmup thread started.
+# Keyed by id(embedder) so we don't spam threads across calls/hot-reloads.
+_warmup_started: set[int] = set()
+
+
+def _ensure_warmup(embedder: EmbeddingPort) -> None:
+    """Start a background thread to load the embedding model if not already loading."""
+    eid = id(embedder)
+    if eid in _warmup_started:
+        return
+    _warmup_started.add(eid)
+    # _load_model() is safe to call from multiple threads (double-checked lock),
+    # so starting a thread here is idempotent even across hot-reloads.
+    t = threading.Thread(
+        target=embedder.embed_query,
+        args=("warmup",),
+        daemon=True,
+        name="rag-model-warmup",
+    )
+    t.start()
+    logger.info("Started background model warmup thread (id=%d)", eid)
 
 VALID_SCOPES = ["all", "knowledge", "agents", "codebase", "research"]
 
@@ -40,6 +63,19 @@ def rag_search(
         return {"error": "workspace_path is required when scope='research'"}
 
     start = time.time()
+
+    # Guard: if the model hasn't finished loading yet, kick off a warmup thread
+    # (idempotent) and return immediately — never block on _load_lock for minutes.
+    if not embedder.is_loaded:
+        _ensure_warmup(embedder)
+        return {
+            "results": [],
+            "total_found": 0,
+            "query_time_ms": 0,
+            "error": (
+                "Embedding model loading — retry in 30-60 seconds."
+            ),
+        }
 
     try:
         query_embedding = embedder.embed_query(query)

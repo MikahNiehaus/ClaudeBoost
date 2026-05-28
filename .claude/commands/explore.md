@@ -149,6 +149,20 @@ Save to `$WORKSPACE_ABS/ticket.md`:
 
 ---
 
+## Phase 0.5: RAG Health Check
+
+**Call `rag_status()` now — before spawning any agents or calling rag_context.**
+
+This is a fast probe. `rag_status` does not use the embedding model, so it responds in under 1 second if the server is up.
+
+**If `rag_status()` returns an error OR the tool is not available:**
+> **STOP. Do not proceed.**
+> Tell the user: "RAG server is not responding. Run `/mcp` to reconnect, then retry `/explore $ARGUMENTS`."
+
+**If `rag_status()` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
+
+---
+
 ## Phase 1: Ticket Analysis
 
 **Gate: ticket.md must exist before spawning. Read it now to confirm.**
@@ -163,6 +177,7 @@ Spawn `ticket-analyst-agent` (Sonnet) with this prompt:
 You are analyzing a ticket for task $TASK_ID.
 
 FIRST ACTION: call rag_context(agent="ticket-analyst-agent", task_description="analyze ticket $TASK_ID and produce analysis + definition of done", max_tokens=4000)
+If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /mcp to reconnect."
 
 Then:
 
@@ -258,6 +273,7 @@ Spawn `explore-agent` (Sonnet) with this prompt:
 You are exploring a codebase to understand what code is relevant to ticket $TASK_ID.
 
 FIRST ACTION: call rag_context(agent="explore-agent", task_description="find code relevant to $TASK_ID in project at $PROJECT_PATH", max_tokens=4000)
+If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /mcp to reconnect."
 
 Context:
 - Project path: $PROJECT_PATH
@@ -322,6 +338,8 @@ Print the agent's summary when it returns.
 **4a — Load ClaudeBoost RAG context.**
 
 Call `rag_context(agent="architect-agent", task_description="implementation plan for ticket $TASK_ID", max_tokens=5000)`.
+
+**If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/mcp` to reconnect, then retry."**
 
 This loads architecture, workflow, testing, and security knowledge to validate the plan.
 

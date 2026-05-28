@@ -258,14 +258,24 @@ class IndexingEngine:
     def index_all(self, force: bool = False) -> dict:
         """Index all predefined scopes (acquires write lock once for the full run)."""
         from rag_server.core.locking import index_write_lock
-        total = {"files_indexed": 0, "chunks_created": 0, "files_skipped": 0}
+        total: dict = {
+            "files_indexed": 0,
+            "chunks_created": 0,
+            "files_unchanged": 0,
+            "files_failed": 0,
+        }
+        all_errors: list[dict] = []
         with index_write_lock(RAG_INDEX_DIR / "index.lock"):
             for scope in SCOPES:
                 result = self._index_scope_impl(scope, force)
                 total["files_indexed"] += result["files_indexed"]
                 total["chunks_created"] += result["chunks_created"]
-                total["files_skipped"] += result["files_skipped"]
+                total["files_unchanged"] += result.get("files_unchanged", 0)
+                total["files_failed"] += result.get("files_failed", 0)
+                all_errors.extend(result.get("errors", []))
             self._save_manifest()
+        if all_errors:
+            total["errors"] = all_errors
         return total
 
     def _index_files(
@@ -273,7 +283,9 @@ class IndexingEngine:
     ) -> dict:
         files_indexed = 0
         chunks_created = 0
-        files_skipped = 0
+        files_unchanged = 0
+        files_failed = 0
+        file_errors: list[dict] = []
 
         for file_path in file_paths:
             rel_path = self._relative_path(file_path)
@@ -281,15 +293,16 @@ class IndexingEngine:
             try:
                 content = Path(file_path).read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as e:
-                logger.warning("Skipping %s: %s", rel_path, e)
-                files_skipped += 1
+                logger.warning("Failed to read %s: %s", rel_path, e)
+                files_failed += 1
+                file_errors.append({"file": rel_path, "type": "read_error", "message": str(e)})
                 continue
 
             current_hash = file_hash(content)
 
             # Incremental: skip if unchanged
             if not force and self._manifest.get(rel_path) == current_hash:
-                files_skipped += 1
+                files_unchanged += 1
                 continue
 
             # Delete old chunks for this file
@@ -298,51 +311,64 @@ class IndexingEngine:
             # Chunk the file
             raw_chunks = self._chunk_file(content, rel_path)
             if not raw_chunks:
-                files_skipped += 1
+                files_unchanged += 1
                 continue
 
-            # Embed all chunks in one batch
-            texts = [c.content for c in raw_chunks]
-            embeddings = self._embedder.embed(texts)
+            try:
+                # Embed all chunks in one batch
+                texts = [c.content for c in raw_chunks]
+                embeddings = self._embedder.embed(texts)
 
-            # Build storage chunks
-            store_chunks = []
-            for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
-                cid = chunk_id(rel_path, i)
-                metadata = build_metadata(
-                    source_file=rel_path,
-                    scope=scope,
-                    section=raw.section,
-                    line_start=raw.line_start,
-                    line_end=raw.line_end,
-                    content_hash=current_hash,
-                    chunk_index=i,
-                    token_count=raw.token_count_approx,
-                )
-                store_chunks.append(Chunk(
-                    id=cid,
-                    content=raw.content,
-                    embedding=embedding,
-                    metadata=metadata,
-                ))
+                # Build storage chunks
+                store_chunks = []
+                for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                    cid = chunk_id(rel_path, i)
+                    metadata = build_metadata(
+                        source_file=rel_path,
+                        scope=scope,
+                        section=raw.section,
+                        line_start=raw.line_start,
+                        line_end=raw.line_end,
+                        content_hash=current_hash,
+                        chunk_index=i,
+                        token_count=raw.token_count_approx,
+                    )
+                    store_chunks.append(Chunk(
+                        id=cid,
+                        content=raw.content,
+                        embedding=embedding,
+                        metadata=metadata,
+                    ))
 
-            added = self._store.add_chunks(collection, store_chunks)
-            chunks_created += added
-            files_indexed += 1
-
-            # Update manifest
-            self._manifest[rel_path] = current_hash
+                added = self._store.add_chunks(collection, store_chunks)
+                chunks_created += added
+                files_indexed += 1
+                self._manifest[rel_path] = current_hash
+            except Exception as e:
+                logger.error("Failed to embed/store %s: %s", rel_path, e)
+                files_failed += 1
+                file_errors.append({"file": rel_path, "type": "embed_error", "message": str(e)})
 
         self._save_manifest()
-        logger.info(
-            "Indexed %s: %d files, %d chunks (%d skipped)",
-            collection, files_indexed, chunks_created, files_skipped,
-        )
-        return {
+        if files_failed:
+            logger.warning(
+                "Indexed %s: %d files, %d chunks (%d unchanged, %d FAILED)",
+                collection, files_indexed, chunks_created, files_unchanged, files_failed,
+            )
+        else:
+            logger.info(
+                "Indexed %s: %d files, %d chunks (%d unchanged)",
+                collection, files_indexed, chunks_created, files_unchanged,
+            )
+        result: dict = {
             "files_indexed": files_indexed,
             "chunks_created": chunks_created,
-            "files_skipped": files_skipped,
+            "files_unchanged": files_unchanged,
+            "files_failed": files_failed,
         }
+        if file_errors:
+            result["errors"] = file_errors
+        return result
 
     def index_project(
         self,
@@ -354,6 +380,15 @@ class IndexingEngine:
 
         Creates a separate ChromaDB + manifest at <project_path>/workspace/.rag-index/.
         """
+        # STOP: fail fast if model isn't loaded yet — avoids blocking on _load_lock for minutes.
+        if not self._embedder.is_loaded:
+            return {
+                "error": (
+                    "Embedding model not ready yet — server is still warming up. "
+                    "Wait 30-60 seconds and retry."
+                )
+            }
+
         import hashlib as _hashlib
         from rag_server.core.locking import index_write_lock
         from rag_server.core.project import project_index_dir
@@ -477,8 +512,11 @@ class IndexingEngine:
 
         files_indexed = 0
         chunks_created = 0
-        files_skipped = 0
+        files_unchanged = 0
+        files_failed = 0
+        file_errors: list[dict] = []
         start_time = time.time()
+        total_files = len(file_paths)
 
         for file_path in file_paths:
             # Relative path within the target project
@@ -492,14 +530,15 @@ class IndexingEngine:
             try:
                 content = Path(file_path).read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as e:
-                logger.warning("Skipping %s: %s", rel_path, e)
-                files_skipped += 1
+                logger.warning("Failed to read %s: %s", rel_path, e)
+                files_failed += 1
+                file_errors.append({"file": rel_path, "type": "read_error", "message": str(e)})
                 continue
 
             current_hash = file_hash(content)
 
             if not force and project_manifest.get(rel_path) == current_hash:
-                files_skipped += 1
+                files_unchanged += 1
                 continue
 
             project_store.delete_by_source(collection, rel_path)
@@ -513,7 +552,7 @@ class IndexingEngine:
                 min_tokens=MIN_CHUNK_TOKENS,
             )
             if not raw_chunks:
-                files_skipped += 1
+                files_unchanged += 1
                 continue
 
             # Extract and store graph edges (import/inherit/calls)
@@ -527,42 +566,50 @@ class IndexingEngine:
                     except Exception as e:
                         logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
-            texts = [c.content for c in raw_chunks]
-            embeddings = self._embedder.embed(texts)
+            try:
+                texts = [c.content for c in raw_chunks]
+                embeddings = self._embedder.embed(texts)
 
-            store_chunks = []
-            for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
-                cid = chunk_id(rel_path, i)
-                metadata = build_metadata(
-                    source_file=rel_path,
-                    scope="codebase",
-                    section=raw.section,
-                    line_start=raw.line_start,
-                    line_end=raw.line_end,
-                    content_hash=current_hash,
-                    chunk_index=i,
-                    token_count=raw.token_count_approx,
-                )
-                store_chunks.append(Chunk(
-                    id=cid,
-                    content=raw.content,
-                    embedding=embedding,
-                    metadata=metadata,
-                ))
+                store_chunks = []
+                for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                    cid = chunk_id(rel_path, i)
+                    metadata = build_metadata(
+                        source_file=rel_path,
+                        scope="codebase",
+                        section=raw.section,
+                        line_start=raw.line_start,
+                        line_end=raw.line_end,
+                        content_hash=current_hash,
+                        chunk_index=i,
+                        token_count=raw.token_count_approx,
+                    )
+                    store_chunks.append(Chunk(
+                        id=cid,
+                        content=raw.content,
+                        embedding=embedding,
+                        metadata=metadata,
+                    ))
 
-            added = project_store.add_chunks(collection, store_chunks)
-            chunks_created += added
-            files_indexed += 1
-            project_manifest[rel_path] = current_hash
+                added = project_store.add_chunks(collection, store_chunks)
+                chunks_created += added
+                files_indexed += 1
+                project_manifest[rel_path] = current_hash
+            except Exception as e:
+                logger.error("Failed to embed/store %s: %s", rel_path, e)
+                files_failed += 1
+                file_errors.append({"file": rel_path, "type": "embed_error", "message": str(e)})
 
             # Progress log every 25 files
-            if files_indexed % 25 == 0:
+            processed = files_indexed + files_failed
+            if processed > 0 and processed % 25 == 0:
                 elapsed = time.time() - start_time
-                rate = files_indexed / elapsed if elapsed > 0 else 0
-                remaining = (len(file_paths) - files_indexed) / rate if rate > 0 else 0
+                rate = processed / elapsed if elapsed > 0 else 0
+                remaining = (total_files - processed) / rate if rate > 0 else 0
+                pct = int(processed / total_files * 100) if total_files else 0
                 logger.info(
-                    "Progress: %d/%d files (%.1f files/sec, ~%ds remaining)",
-                    files_indexed, len(file_paths), rate, int(remaining),
+                    "Progress [%s]: %d/%d files (%d%%) — %.1f files/sec, ~%ds remaining%s",
+                    pid, processed, total_files, pct, rate, int(remaining),
+                    f", {files_failed} failed" if files_failed else "",
                 )
 
         # Resolve graph edge target_files now that all files are indexed.
@@ -635,10 +682,20 @@ class IndexingEngine:
         except OSError as e:
             logger.error("Failed to write project manifest to %s: %s", project_manifest_path, e)
 
-        logger.info(
-            "Indexed project %s (%s): %d files, %d chunks (%d skipped)",
-            pid, project_path, files_indexed, chunks_created, files_skipped,
-        )
+        elapsed_s = round(time.time() - start_time, 1)
+        if files_failed:
+            logger.warning(
+                "Indexed project %s (%s): %d files, %d chunks (%d unchanged, %d FAILED) in %.1fs",
+                pid, project_path, files_indexed, chunks_created,
+                files_unchanged, files_failed, elapsed_s,
+            )
+            for err in file_errors:
+                logger.warning("  %s — %s: %s", err["file"], err["type"], err["message"])
+        else:
+            logger.info(
+                "Indexed project %s (%s): %d files, %d chunks (%d unchanged) in %.1fs",
+                pid, project_path, files_indexed, chunks_created, files_unchanged, elapsed_s,
+            )
 
         # Register project in global registry so rag_status can surface graph state
         # to any new Claude instance without requiring a project-specific query.
@@ -655,6 +712,7 @@ class IndexingEngine:
                 "indexed_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "files_indexed": files_indexed,
                 "chunks_created": chunks_created,
+                "files_failed": files_failed,
                 "graph_edges": edge_count,
                 "graph_resolved": resolved,
                 "graph_active": edge_count > 0 and resolved > 0,
@@ -663,13 +721,22 @@ class IndexingEngine:
         except Exception as e:
             logger.warning("Failed to write project registry: %s", e)
 
-        return {
+        result: dict = {
             "project_id": pid,
             "files_indexed": files_indexed,
             "chunks_created": chunks_created,
-            "files_skipped": files_skipped,
+            "files_unchanged": files_unchanged,
+            "files_failed": files_failed,
+            "elapsed_s": elapsed_s,
+            "graph": {
+                "edges": graph_store.count_edges() if hasattr(graph_store, "count_edges") else 0,
+                "resolved": graph_store.count_resolved_edges() if hasattr(graph_store, "count_resolved_edges") else 0,
+            },
             "index_path": str(index_dir),
         }
+        if file_errors:
+            result["errors"] = file_errors
+        return result
 
     def _check_project_health(
         self, index_dir, project_store, graph_store, project_manifest, stored_version
