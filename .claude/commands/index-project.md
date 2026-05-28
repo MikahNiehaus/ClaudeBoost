@@ -76,8 +76,8 @@ $ARGUMENTS — flexible, any of:
 
    **If the result contains `needs_reindex: true`** (broken index detected):
    - Show the user the `health_issues` list explaining what's wrong
-   - Re-call `rag_index_project` with `force=true` automatically (no need to ask — broken index must be rebuilt)
-   - Report FIXED or PERSISTENT
+   - **Stop and tell the user**: "Run `/index-project force` to rebuild the index."
+   - Do NOT auto-run `force=true` — always wait for explicit user confirmation.
 
 7. Report results concisely:
    - Files indexed / chunks created / files skipped
