@@ -434,10 +434,14 @@ def _build_context(
 
 
 def sync_init() -> FileWatcher:
-    """Synchronous startup: initialize components and index files.
+    """Synchronous startup: initialize components and wire up watchers.
+
+    Kept deliberately fast — no model loading, no indexing. Those run in a
+    background thread after the MCP server is ready (see _background_startup).
 
     ChromaDB 1.5+ uses a Rust/Tokio backend that crashes when called from
-    inside an asyncio coroutine. Run all ChromaDB calls here, before asyncio.run().
+    inside an asyncio coroutine. ChromaDB calls in background tasks must use
+    run_in_executor (see main()).
     """
     global embedder, store, engine
 
@@ -446,39 +450,6 @@ def sync_init() -> FileWatcher:
     embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
     engine = IndexingEngine(embedder=embedder, store=store)
-
-    # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d)
-    force_reindex = False
-    for scope_config in SCOPES.values():
-        col_name = scope_config["collection"]
-        if store.collection_exists(col_name) and store.count(col_name) > 0:
-            sample_dim = store.sample_dimension(col_name)
-            if sample_dim and sample_dim != embedder.dimensions():
-                logger.warning(
-                    "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
-                    col_name, sample_dim, embedder.dimensions(),
-                )
-                force_reindex = True
-                break
-
-    # Auto-index on startup
-    logger.info("Auto-indexing default collections%s...", " (forced)" if force_reindex else "")
-    result = engine.index_all(force=force_reindex)
-    logger.info(
-        "Startup indexing complete: %d files, %d chunks",
-        result["files_indexed"], result["chunks_created"],
-    )
-
-    # Pre-warm the embedding model at startup. With local_files_only=True and
-    # HF_HUB_OFFLINE=1 set, this is pure disk I/O (~1-2s) and no longer risks
-    # triggering the MCP 5-second startup timeout. Pre-warming eliminates the
-    # first-call hang that occurred when the HuggingFace Hub online check blocked.
-    if embedder.is_loaded:
-        logger.info("Embedding model already loaded from indexing.")
-    else:
-        logger.info("Pre-warming embedding model...")
-        embedder.dimensions()  # Triggers _load_model() — fast with local_files_only=True
-        logger.info("Embedding model ready. Dimensions: %d", embedder.dimensions())
 
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()
@@ -526,13 +497,50 @@ def sync_init() -> FileWatcher:
         watcher.watch([str(src_dir)], _on_source_change)
         logger.info("Source hot-reload watcher active on: %s", src_dir)
 
+    logger.info("Sync init complete — MCP server ready. Background indexing will start shortly.")
     return watcher
+
+
+def _background_startup() -> None:
+    """Slow startup work that runs in a thread pool after MCP server is ready.
+
+    Keeps sync_init() fast so Claude Code can connect before its MCP timeout.
+    Must be called via run_in_executor — ChromaDB must not run inside an
+    asyncio coroutine.
+    """
+    # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
+    # embedder.dimensions() triggers model load here — that's intentional, but
+    # it happens in a background thread so it doesn't block MCP startup.
+    force_reindex = False
+    for scope_config in SCOPES.values():
+        col_name = scope_config["collection"]
+        if store.collection_exists(col_name) and store.count(col_name) > 0:
+            sample_dim = store.sample_dimension(col_name)
+            if sample_dim and sample_dim != embedder.dimensions():
+                logger.warning(
+                    "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
+                    col_name, sample_dim, embedder.dimensions(),
+                )
+                force_reindex = True
+                break
+
+    logger.info("Background: auto-indexing default collections%s...", " (forced)" if force_reindex else "")
+    result = engine.index_all(force=force_reindex)
+    logger.info(
+        "Background: startup indexing complete: %d files, %d chunks",
+        result["files_indexed"], result["chunks_created"],
+    )
 
 
 async def main(watcher: FileWatcher) -> None:
     """Run the MCP stdio server. Call sync_init() before this."""
+    import asyncio
     try:
         async with stdio_server() as (read_stream, write_stream):
+            # Schedule slow startup work (model load + indexing) as a background
+            # thread so the MCP handshake completes before it runs.
+            loop = asyncio.get_running_loop()
+            asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
             await app.run(read_stream, write_stream, app.create_initialization_options())
     finally:
         watcher.stop()
