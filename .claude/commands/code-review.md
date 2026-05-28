@@ -196,7 +196,7 @@ Spawn agents in batches. Wait for each batch to complete before starting the nex
 Your FIRST two actions (in order, no exceptions):
 1. Call rag_context(agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>")
 2. Call rag_search(scope="codebase", project_path="<cwd>", query="<a targeted query relevant to this pass>", limit=5)
-   — If your pass involves patterns, conventions, callers, or change impact (passes 4, 5, 6, 9), additionally call with mode="graph" to surface structural neighbours (files that import/inherit from the changed files).
+   — If your pass definition below says USE_GRAPH: yes, also call rag_search with mode="graph" using the same query. This surfaces structural neighbours (files that import/inherit from the changed files).
 
 Then review ONLY the diff below for your assigned pass. Do not review anything outside your pass scope.
 
@@ -251,15 +251,18 @@ Question: For every variable/param/function: "Is this actually referenced? Trace
 - Check imports — did extraction leave orphaned imports in the source file?
 
 **Pass 4 — Debug Cleanup**
+USE_GRAPH: yes
 Question: Did I leave any temporary logs, toasts, flags, debug UI, commented blocks, or test-only handlers?
 
 **Pass 5 — Project Patterns**
+USE_GRAPH: yes
 Question: How does this repo usually solve this problem?
 - Match naming, file placement, error handling, data flow, testing style used nearby
 - Check abstraction style: declarative vs imperative — match the codebase
 - If codebase has established state management (React state, Vuex, signals, observables), use that — not a parallel mechanism (raw refs, global flags, DOM attributes)
 
 **Pass 6 — Common-Pattern Breaker**
+USE_GRAPH: yes
 Question: Am I breaking a shared convention or introducing a one-off pattern?
 - If deviating, would the PR description explain why?
 - Count how many files in the project solve similar problems differently than this code. If "all of them" — the approach is the outlier.
@@ -276,6 +279,7 @@ Question: Does this PR implement exactly what the ticket asks for — no more, n
 - Flag missing items — anything in the ticket not addressed by the diff.
 
 **Pass 9 — Spec Precision**
+USE_GRAPH: yes
 Question: Did I match the ticket's wording and requirements exactly?
 - "multi select" means multiple values can actually be selected — verify it.
 - "alphabetical" means read the list top to bottom — verify the sort.
@@ -431,7 +435,9 @@ After ALL batches complete and Phase 3b test results are recorded, spawn a singl
 
 Prompt:
 ```
-Your FIRST action: call rag_context(agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>")
+Your FIRST two actions (in order):
+1. Call rag_context(agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>")
+2. For each unique BLOCKER in FINDINGS_CITATIONS, call rag_search(scope="codebase", project_path="<cwd>", query="<symbol or pattern from the finding>", limit=3, mode="graph") to independently verify the finding exists and is not already handled elsewhere in the codebase. If a finding references a symbol that doesn't appear in search results, downgrade it to FALSE POSITIVE.
 
 You are the Evaluator for a code review. You do NOT re-review the code — you review the FINDINGS from passes 1-14 and the TEST RESULTS from Phase 3b.
 
