@@ -52,20 +52,26 @@ class _IndexWriteLock:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._thread_lock.acquire()
         logger.debug("Waiting for index file lock: %s", self._lock_path)
-        if sys.platform == "win32":
-            self._file_lock = _WinFileLock(self._lock_path)
-        else:
-            self._file_lock = _UnixFileLock(self._lock_path)
-        self._file_lock.__enter__()
+        try:
+            if sys.platform == "win32":
+                self._file_lock = _WinFileLock(self._lock_path)
+            else:
+                self._file_lock = _UnixFileLock(self._lock_path)
+            self._file_lock.__enter__()
+        except:
+            self._thread_lock.release()
+            raise
         logger.debug("Acquired index write lock: %s", self._lock_path)
         return self
 
     def __exit__(self, *_):
-        if self._file_lock is not None:
-            self._file_lock.__exit__(None, None, None)
-            self._file_lock = None
-        self._thread_lock.release()
-        logger.debug("Released index write lock: %s", self._lock_path)
+        try:
+            if self._file_lock is not None:
+                self._file_lock.__exit__(None, None, None)
+                self._file_lock = None
+        finally:
+            self._thread_lock.release()
+            logger.debug("Released index write lock: %s", self._lock_path)
 
 
 def index_write_lock(lock_path: Path) -> _IndexWriteLock:
