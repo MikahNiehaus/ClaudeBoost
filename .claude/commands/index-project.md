@@ -99,10 +99,10 @@ $ARGUMENTS — flexible, any of:
       **Always call `rag_status()` after the search** and check `indexed_projects[<id>]` for this project.
       Compute `unresolved = graph_edges - graph_resolved`.
 
-      **Edge resolution sub-check:**
-      - `unresolved = 0`: PASS — all edges resolved (or marked external)
-      - `unresolved > 0` AND `unresolved <= 5%` of total edges: WARN — small gap, likely edge cases (unusual import patterns, dynamic imports). Report count but don't auto-fix.
-      - `unresolved > 5%` of total edges: WARN — significant resolution gap. Auto-fix: re-run `rag_index_project(project_path, force=true)`. Report FIXED or PERSISTENT.
+      **Edge resolution sub-check (informational only — `graph_augmented` is the health signal):**
+      - Report the ratio as info: e.g. "1165/1250 edges resolved (85 unresolved)".
+      - Do NOT auto-fix based on unresolved percentage alone. Unresolved edges are expected for any language that imports external packages (npm, NuGet, pip) — those imports will never resolve to project files and are normal.
+      - The only actionable signal is `graph_augmented: false` (handled in the auto-fix sequence below).
 
       Report in the summary table as: `b. Graph liveness ✓ [graph_resolved/graph_edges edges resolved]`
 
