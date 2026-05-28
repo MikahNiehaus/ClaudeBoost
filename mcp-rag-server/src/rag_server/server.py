@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from mcp.server import Server
@@ -297,13 +298,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # On Windows with the MCP subprocess stdout=pipe + anyio I/O, blocking calls inside
     # the asyncio event loop hang indefinitely. Run ALL dispatch in a thread pool.
     import asyncio as _asyncio
+    _t0 = time.monotonic()
     loop = _asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments))
+    try:
+        result = await loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments))
+    except Exception as e:
+        logger.error(
+            "Tool %s executor failed after %.1fs (threading/process issue): %s",
+            name, time.monotonic() - _t0, e, exc_info=True,
+        )
+        result = {"error": f"Executor error: {e}"}
+    else:
+        _elapsed = time.monotonic() - _t0
+        if "error" not in result:
+            logger.info("Tool %s OK (%.1fs)", name, _elapsed)
+        else:
+            logger.warning("Tool %s returned error (%.1fs): %s", name, _elapsed, result["error"])
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
 def _dispatch_tool(name: str, arguments: dict) -> dict:
     """Synchronous tool dispatch — runs in a thread pool via run_in_executor."""
+    # Log a brief summary of the call (omit large values like embeddings/content).
+    _loggable_args = {
+        k: v for k, v in arguments.items()
+        if k not in {"content", "embeddings"} and not isinstance(v, (list, bytes))
+    }
+    logger.info("Tool call: %s | args=%s", name, _loggable_args)
+    _start = time.monotonic()
     try:
         if name == "rag_search":
             return rag_search(
@@ -412,7 +434,10 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             return {"error": f"Unknown tool: {name}"}
 
     except Exception as e:
-        logger.error("Tool %s failed: %s", name, e, exc_info=True)
+        _elapsed = time.monotonic() - _start
+        logger.error(
+            "Tool %s failed after %.1fs: %s", name, _elapsed, e, exc_info=True
+        )
         return {"error": str(e)}
 
 
@@ -508,45 +533,70 @@ def _background_startup() -> None:
     Must be called via run_in_executor — ChromaDB must not run inside an
     asyncio coroutine.
     """
-    # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
-    # embedder.dimensions() triggers model load here — that's intentional, but
-    # it happens in a background thread so it doesn't block MCP startup.
-    force_reindex = False
-    for scope_config in SCOPES.values():
-        col_name = scope_config["collection"]
-        if store.collection_exists(col_name) and store.count(col_name) > 0:
-            sample_dim = store.sample_dimension(col_name)
-            if sample_dim and sample_dim != embedder.dimensions():
-                logger.warning(
-                    "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
-                    col_name, sample_dim, embedder.dimensions(),
-                )
-                force_reindex = True
-                break
+    try:
+        # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
+        # embedder.dimensions() triggers model load here — intentional, but done in
+        # a background thread so it doesn't block MCP startup.
+        force_reindex = False
+        try:
+            for scope_config in SCOPES.values():
+                col_name = scope_config["collection"]
+                if store.collection_exists(col_name) and store.count(col_name) > 0:
+                    sample_dim = store.sample_dimension(col_name)
+                    if sample_dim and sample_dim != embedder.dimensions():
+                        logger.warning(
+                            "Dimension mismatch in %s: index=%dd, model=%dd. Forcing re-index.",
+                            col_name, sample_dim, embedder.dimensions(),
+                        )
+                        force_reindex = True
+                        break
+        except Exception:
+            logger.exception("Background: dimension check failed — proceeding with incremental index")
 
-    logger.info("Background: auto-indexing default collections%s...", " (forced)" if force_reindex else "")
-    result = engine.index_all(force=force_reindex)
-    logger.info(
-        "Background: startup indexing complete: %d files, %d chunks",
-        result["files_indexed"], result["chunks_created"],
-    )
+        logger.info(
+            "Background: auto-indexing default collections%s...",
+            " (forced)" if force_reindex else "",
+        )
+        _t0 = time.monotonic()
+        result = engine.index_all(force=force_reindex)
+        logger.info(
+            "Background: startup indexing complete in %.1fs: %d files, %d chunks",
+            time.monotonic() - _t0, result["files_indexed"], result["chunks_created"],
+        )
+    except Exception:
+        logger.exception(
+            "Background: startup indexing failed — server is up but index may be empty or stale"
+        )
 
 
 async def main(watcher: FileWatcher) -> None:
     """Run the MCP stdio server. Call sync_init() before this."""
     import asyncio
+    logger.info("MCP stdio transport starting")
     try:
         async with stdio_server() as (read_stream, write_stream):
             # Schedule slow startup work (model load + indexing) as a background
             # thread so the MCP handshake completes before it runs.
             loop = asyncio.get_running_loop()
             asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
+            logger.info("MCP server ready — accepting tool calls")
             await app.run(read_stream, write_stream, app.create_initialization_options())
+        logger.info("MCP stdio connection closed cleanly")
+    except Exception:
+        logger.exception("MCP server crashed — unhandled exception in main()")
+        raise
     finally:
+        logger.info("MCP server shutting down, stopping file watchers")
         watcher.stop()
 
 
 if __name__ == "__main__":
     import asyncio
     _watcher = sync_init()
-    asyncio.run(main(_watcher))
+    try:
+        asyncio.run(main(_watcher))
+    except KeyboardInterrupt:
+        logger.info("RAG server stopped (KeyboardInterrupt)")
+    except Exception:
+        logger.exception("RAG server exited with unhandled exception")
+        raise

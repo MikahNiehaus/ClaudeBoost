@@ -5,7 +5,7 @@ import logging
 import time
 from pathlib import Path
 
-from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, SCOPES
+from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, RAG_INDEX_DIR, SCOPES
 from rag_server.ports.embedding_port import EmbeddingPort
 from rag_server.ports.store_port import StorePort
 
@@ -103,6 +103,17 @@ def rag_search(
 
         project_store = ChromaStore(persist_dir=str(chroma_dir))
         collection = "codebase"
+
+        # Wait if a project reindex is in progress
+        if not (project_store.collection_exists(collection) and project_store.count(collection) > 0):
+            from rag_server.core.locking import is_write_locked
+            _lock_path = idx_dir / "index.lock"
+            if is_write_locked(_lock_path):
+                logger.info("Project reindex in progress — waiting up to 30s")
+                _deadline = time.time() + 30
+                while is_write_locked(_lock_path) and time.time() < _deadline:
+                    time.sleep(0.5)
+
         if project_store.collection_exists(collection) and project_store.count(collection) > 0:
             try:
                 results = project_store.search(
@@ -139,6 +150,20 @@ def rag_search(
             collections = [s["collection"] for s in SCOPES.values()]
         else:
             collections = [scope]
+
+        # If all collections are empty and a reindex is in progress, wait up to
+        # 30s for the writer to finish rather than returning 0 results silently.
+        _any_live = any(
+            store.collection_exists(c) and store.count(c) > 0 for c in collections
+        )
+        if not _any_live:
+            from rag_server.core.locking import is_write_locked
+            _lock_path = RAG_INDEX_DIR / "index.lock"
+            if is_write_locked(_lock_path):
+                logger.info("RAG reindex in progress — waiting up to 30s for it to complete")
+                _deadline = time.time() + 30
+                while is_write_locked(_lock_path) and time.time() < _deadline:
+                    time.sleep(0.5)
 
         for collection in collections:
             if not store.collection_exists(collection) or store.count(collection) == 0:

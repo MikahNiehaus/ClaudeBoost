@@ -11,6 +11,7 @@ from rag_server.config import (
     MAX_CHUNK_TOKENS,
     MIN_CHUNK_TOKENS,
     PROJECT_ROOT,
+    RAG_INDEX_DIR,
     SCOPES,
 )
 from rag_server.core.metadata import build_metadata, chunk_id, file_hash
@@ -222,8 +223,8 @@ class IndexingEngine:
             encoding="utf-8",
         )
 
-    def index_scope(self, scope: str, force: bool = False) -> dict:
-        """Index a predefined scope (knowledge, agents).
+    def _index_scope_impl(self, scope: str, force: bool = False) -> dict:
+        """Index a predefined scope (knowledge, agents). Caller must hold write lock.
 
         Returns dict with files_indexed, chunks_created, files_skipped.
         """
@@ -248,15 +249,23 @@ class IndexingEngine:
 
         return self._index_files(files, collection, scope, force)
 
+    def index_scope(self, scope: str, force: bool = False) -> dict:
+        """Index a predefined scope (acquires write lock)."""
+        from rag_server.core.locking import index_write_lock
+        with index_write_lock(RAG_INDEX_DIR / "index.lock"):
+            return self._index_scope_impl(scope, force)
+
     def index_all(self, force: bool = False) -> dict:
-        """Index all predefined scopes."""
+        """Index all predefined scopes (acquires write lock once for the full run)."""
+        from rag_server.core.locking import index_write_lock
         total = {"files_indexed": 0, "chunks_created": 0, "files_skipped": 0}
-        for scope in SCOPES:
-            result = self.index_scope(scope, force)
-            total["files_indexed"] += result["files_indexed"]
-            total["chunks_created"] += result["chunks_created"]
-            total["files_skipped"] += result["files_skipped"]
-        self._save_manifest()
+        with index_write_lock(RAG_INDEX_DIR / "index.lock"):
+            for scope in SCOPES:
+                result = self._index_scope_impl(scope, force)
+                total["files_indexed"] += result["files_indexed"]
+                total["chunks_created"] += result["chunks_created"]
+                total["files_skipped"] += result["files_skipped"]
+            self._save_manifest()
         return total
 
     def _index_files(
@@ -341,13 +350,13 @@ class IndexingEngine:
         languages: list[str] | None = None,
         force: bool = False,
     ) -> dict:
-        """Index an external project's source code into a per-project store.
+        """Index an external project's source code. Acquires write lock.
 
         Creates a separate ChromaDB + manifest at <project_path>/workspace/.rag-index/.
         """
         import hashlib as _hashlib
+        from rag_server.core.locking import index_write_lock
         from rag_server.core.project import project_index_dir
-        from rag_server.core.store import ChromaStore
 
         # Compute project ID from path only — avoids subprocess (git remote) which
         # hangs when called from a run_in_executor thread in the MCP server context.
@@ -357,6 +366,20 @@ class IndexingEngine:
 
         index_dir = project_index_dir(project_path)
         index_dir.mkdir(parents=True, exist_ok=True)
+
+        with index_write_lock(index_dir / "index.lock"):
+            return self._do_index_project(project_path, languages, force, pid, index_dir)
+
+    def _do_index_project(
+        self,
+        project_path: str,
+        languages: list[str] | None,
+        force: bool,
+        pid: str,
+        index_dir: Path,
+    ) -> dict:
+        """Internal: index a project. Caller holds write lock."""
+        from rag_server.core.store import ChromaStore
 
         # Per-project vector store + graph store (separate from main ClaudeBoost index)
         project_store = ChromaStore(persist_dir=str(index_dir / "chroma"))
