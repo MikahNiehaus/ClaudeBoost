@@ -19,7 +19,13 @@ $ARGUMENTS — flexible, any of:
 
 ## Instructions
 
-1. **Health check** — call `rag_status()` first. If it fails or returns an error, stop immediately and tell the user: "RAG server not connected — run `/mcp` to reconnect, then retry."
+1. **Health check** — Before calling `rag_status()`, output this exact line to the user:
+   > Checking RAG server health...
+
+   Then call `rag_status()`. If the tool call is rejected, interrupted, times out, or returns any error — immediately output:
+   > RAG server not connected — run `/mcp` to reconnect, then retry.
+
+   Stop. Do not proceed further.
 
 2. **Resolve the project path** from `$ARGUMENTS`:
 
