@@ -84,7 +84,6 @@ BANNED_PHRASES: list[str] = [
 ]
 
 EM_DASH = "\u2014"  # —
-EM_DASH_LIMIT = 1
 
 
 def strip_noise(text: str) -> str:
@@ -146,10 +145,7 @@ def check_violations(text: str) -> list[str]:
     if found_phrases:
         violations.append(f"Banned phrases used: {', '.join(found_phrases)}")
 
-    # Em-dash overuse
-    em_count = clean.count(EM_DASH)
-    if em_count > EM_DASH_LIMIT:
-        violations.append(f"Em-dash overuse: {em_count} em-dashes in response (max {EM_DASH_LIMIT})")
+    # Em-dash check removed — preference is zero em-dashes but no hard block
 
     return violations
 

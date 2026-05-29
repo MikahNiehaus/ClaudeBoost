@@ -14,6 +14,13 @@ A RAG server indexes all of them for semantic search.
 - Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
 - PreToolUse hook on `Task` enforces `rag_context` in the spawn prompt — spawns without it are blocked (exit 2); include `rag_context` as the first action in every spawn prompt
 
+**Use all three RAG modes when they apply:**
+- `rag_context` — knowledge and agent context (always first)
+- `rag_search scope=codebase mode=vector` — semantic code search
+- `rag_search scope=codebase mode=graph` — dependency and import chains
+
+**If RAG errors mid-task, fix it — never skip it.** Try `/mcp` to reconnect. Do not proceed with degraded context or substitute grep/file reads.
+
 ## Decision Flow
 
 Two paths, not five mandatory steps:
@@ -124,7 +131,7 @@ Every word Claude produces — responses, code comments, explanations, labels, e
 - **Vary sentence length.** Short sentences exist. Mix them with longer ones.
 - **Use contractions** — "don't", "it's", "we'll", not "do not", "it is", "we will"
 - **No uniform lists** — "Bold term: explanation" repeated 6 times reads like a machine; use prose or vary the structure
-- **One em-dash per response max** — Claude overuses em-dashes; rewrite as separate sentences
+- **No em-dashes at all.** Rewrite as separate sentences instead.
 - **No hedging clusters** — "might potentially perhaps" in one breath is not caution, it's noise; pick one or cut it
 - **Concrete over abstract** — "the build broke on line 42" not "there were issues"
 - **No throat-clearing** — start with the substance, not "Let's explore…" or "This section will cover…"
@@ -134,10 +141,18 @@ Same rules. Comments are output too.
 - Write like a note to a colleague, not a spec document
 - Say WHY, not WHAT — the code shows what; the comment explains why
 - Skip obvious comments; short beats long
+- Non-formal but professional — conversational, not corporate
+- No dashes of any kind (no hyphens as separators, no em dashes, no double dashes)
 - No: `// This function facilitates the seamless authentication flow`
 - Yes: `// Throws if the token is expired`
 
 Full framework with examples: `knowledge/human-voice.xml`
+
+## Task Creation
+
+If a request has 3 or more distinct steps, call `TaskCreate` before starting. Mark the task `in_progress` when you begin it and `completed` when you finish. Don't batch completions — update each task as you go.
+
+When in doubt, create the tasks first. It keeps the user informed and preserves progress through compaction.
 
 ## When to Use What
 

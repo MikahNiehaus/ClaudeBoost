@@ -39,6 +39,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def consult_mode_active(home: Path) -> bool:
+    mode_file = home / "state" / "claudeboost-mode.json"
+    if not mode_file.exists():
+        return True  # default is CONSULT when file is missing
+    try:
+        data = json.loads(mode_file.read_text(encoding="utf-8"))
+        return data.get("mode", "CONSULT").upper() != "AUTO"
+    except Exception:
+        return True  # default to CONSULT on read error
+
+
 def rag_verified() -> bool:
     temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
     return (Path(temp) / "claudeboost_rag_ok").exists()
@@ -176,8 +187,11 @@ def main() -> int:
         "Do not accumulate findings in your head; write them down as you go. "
         "(4) Cite file:line — for every finding. "
         "(5) Evaluator — spawn evaluator-agent, never self-verify. "
-        "(6) CONSULT — before new endpoints/tables/dependencies. "
-        "(7) rag_context first — in every agent spawn prompt. "
+        "(6) rag_context first — in every agent spawn prompt. "
+        "(7) RAG all modes — use rag_context for knowledge, rag_search mode=vector for semantic "
+        "code search, and rag_search mode=graph for import and dependency chains. "
+        "When RAG errors mid-task, fix it (run /mcp to reconnect) — never skip RAG and "
+        "substitute grep or file reads. "
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
         "do NOT self-recover by searching files; tell the user RAG is offline and wait. "
         "(9) Human voice — every word you write must sound like a human wrote it. "
@@ -186,8 +200,22 @@ def main() -> int:
         "pivotal, facilitate, harness, foster, transformative, paradigm, synergy, holistic, empower. "
         "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
         "It's worth noting, In today's rapidly evolving. "
-        "Max one em-dash per response. The Stop hook will block you if you violate this."
+        "No em-dashes at all. Rewrite as separate sentences instead. "
+        "(10) Code comments — non-formal but professional, concise, say why not what. "
+        "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
+        "(11) Tasks — if work has 3 or more distinct steps, call TaskCreate before starting. "
+        "Mark in_progress when you begin a task, completed when you finish it. "
+        "Update as you go, not in a batch at the end."
     )
+
+    if consult_mode_active(home):
+        standing_orders += (
+            " (CONSULT MODE IS ACTIVE) Before making any architectural decision the user has not "
+            "already approved — new endpoint, table, dependency, module, middleware, auth strategy, "
+            "API design, config change, or concurrency model — STOP and present your proposal using "
+            "AskUserQuestion. Do not proceed until the user approves. This applies even when the "
+            "change seems small or obviously correct."
+        )
 
     if clear_context:
         context = clear_context + "\n\n" + standing_orders
