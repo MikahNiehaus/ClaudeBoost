@@ -414,12 +414,12 @@ class IndexingEngine:
         index_dir: Path,
     ) -> dict:
         """Internal: index a project. Caller holds write lock."""
+        import gc
+        import shutil
         from rag_server.core.store import ChromaStore
-
-        # Per-project vector store + graph store (separate from main ClaudeBoost index)
-        project_store = ChromaStore(persist_dir=str(index_dir / "chroma"))
         from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
-        graph_store = SQLiteGraphStore(index_dir / "graph.db")
+
+        chroma_dir = index_dir / "chroma"
         project_manifest_path = index_dir / "manifest.json"
         project_manifest = {}
         stored_version = MANIFEST_VERSION
@@ -430,8 +430,13 @@ class IndexingEngine:
 
         collection = "codebase"
 
-        # Health check: detect broken/stale index before scanning
+        # When not forcing: open stores for health check and dimension detection.
+        # When forcing: skip opening entirely so we can wipe on Windows without file-lock errors.
         if not force:
+            project_store = ChromaStore(persist_dir=str(chroma_dir))
+            graph_store = SQLiteGraphStore(index_dir / "graph.db")
+
+            # Health check: detect broken/stale index before scanning
             health_issues = self._check_project_health(
                 index_dir, project_store, graph_store, project_manifest, stored_version
             )
@@ -443,24 +448,45 @@ class IndexingEngine:
                     "suggestion": "Run rag_index_project with force=True to rebuild cleanly, or pass force=True to continue anyway.",
                 }
 
-        # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d).
-        # If the stored vectors don't match the current model, force a full re-index so
-        # searches don't fail with dimension errors. Mirrors the same check in sync_init().
-        if not force and project_store.collection_exists(collection) and project_store.count(collection) > 0:
-            sample_dim = project_store.sample_dimension(collection)
-            if sample_dim and sample_dim != self._embedder.dimensions():
-                logger.warning(
-                    "Dimension mismatch in project codebase: index=%dd, model=%dd. Forcing re-index.",
-                    sample_dim, self._embedder.dimensions(),
-                )
-                force = True
+            # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d).
+            if project_store.collection_exists(collection) and project_store.count(collection) > 0:
+                sample_dim = project_store.sample_dimension(collection)
+                if sample_dim and sample_dim != self._embedder.dimensions():
+                    logger.warning(
+                        "Dimension mismatch in project codebase: index=%dd, model=%dd. Forcing re-index.",
+                        sample_dim, self._embedder.dimensions(),
+                    )
+                    # Release file handles before wiping (critical on Windows)
+                    del project_store
+                    del graph_store
+                    gc.collect()
+                    force = True
 
-        if force and project_store.collection_exists(collection):
-            try:
-                project_store.delete_collection(collection)
-            except Exception as e:
-                logger.error("Failed to drop collection for re-index: %s", e)
-                return {"error": f"Re-index aborted: could not drop collection: {e}"}
+        if force:
+            # Wipe the stale chroma directory so a fresh store is created below.
+            if chroma_dir.exists():
+                last_err = None
+                for attempt in range(4):
+                    try:
+                        shutil.rmtree(chroma_dir)
+                        last_err = None
+                        break
+                    except PermissionError as e:
+                        # Windows: SQLite WAL file still held by a previous connection.
+                        # Force GC to release any lingering ChromaDB handles, then retry.
+                        last_err = e
+                        gc.collect()
+                        time.sleep(0.5 * (attempt + 1))
+                    except Exception as e:
+                        last_err = e
+                        break
+                if last_err:
+                    logger.error("Failed to wipe chroma dir after retries: %s", last_err)
+                    return {"error": f"Re-index aborted: could not wipe chroma dir: {last_err}"}
+                logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
+            project_store = ChromaStore(persist_dir=str(chroma_dir))
+            graph_store = SQLiteGraphStore(index_dir / "graph.db")
+
         project_store.create_collection(collection)
 
         # Scan project — respects .gitignore, filters generated/large files

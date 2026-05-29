@@ -71,14 +71,20 @@ $ARGUMENTS — flexible, any of:
 
    | Signal | Action |
    |--------|--------|
-   | User passed `force` as argument | Force — user explicitly requested it |
-   | `needs_reindex: true` in response | Force — broken index detected |
-   | `rag_status` shows `files_indexed` < 50% of scan's `files_to_index`, AND incremental returned 0 | Force — manifest thinks files are indexed but they weren't (stale/corrupt manifest) |
-   | Graph resolution < 5% (edges > 0 but resolved ≈ 0) | Force — file map lookup failed |
-   | Manifest file missing | Force — rebuild required |
+   | User passed `force` as argument | Force — **already have permission, proceed immediately** |
+   | `needs_reindex: true` in response | **STOP — ask permission** before forcing |
+   | `rag_status` shows `files_indexed` < 50% of scan's `files_to_index`, AND incremental returned 0 | **STOP — ask permission** before forcing |
+   | Graph resolution < 5% (edges > 0 but resolved ≈ 0) | **STOP — ask permission** before forcing |
+   | Manifest file missing | **STOP — ask permission** before forcing |
    | Incremental returns 0 (all files skipped) AND coverage looks healthy | **Do NOT force** — files haven't changed, index is current |
    | Branch just switched with N changed files → incremental returned N updates | **Do NOT force** — incremental correctly picked up only the changed files |
    | Branch just switched → incremental returned 0 AND rag_status shows healthy file count | **Do NOT force** — branch contents match what's indexed |
+
+   **Permission gate for auto-force** — when any signal above says "STOP — ask permission":
+   - Explain what health issue was detected
+   - Use `AskUserQuestion` to ask: "Force re-index will wipe and rebuild the index from scratch. Proceed?"
+   - Only call `rag_index_project(force=true)` after the user confirms YES
+   - Never auto-force without explicit user confirmation
 
    **If the result contains `needs_reindex: true`** (broken index detected):
    - Show the user the `health_issues` list explaining what's wrong

@@ -141,6 +141,16 @@ class ChromaStore(StorePort):
             pass
         return None
 
+    def count_sources(self, collection: str) -> int:
+        """Fast distinct-source count using ChromaDB metadata (no full scan)."""
+        try:
+            col = self._get_collection(collection)
+            results = col.get(include=["metadatas"])
+            sources = {m.get("source_file") for m in results["metadatas"] if m.get("source_file")}
+            return len(sources)
+        except Exception:
+            return 0
+
     def list_sources(self, collection: str) -> list[str]:
         col = self._get_collection(collection)
         results = col.get(include=["metadatas"])

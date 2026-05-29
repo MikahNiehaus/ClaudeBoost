@@ -424,7 +424,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 col = scope_config["collection"]
                 collections_status[scope_name] = {
                     "chunks": store.count(col),
-                    "files": len(store.list_sources(col)) if store.collection_exists(col) else 0,
+                    "files": store.count_sources(col) if store.collection_exists(col) else 0,
                 }
             # Load per-project graph registry written by rag_index_project
             registry_path = RAG_INDEX_DIR / "projects.json"
@@ -434,18 +434,9 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                     indexed_projects = json.loads(registry_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
-            # Run health checks on each indexed project so issues are visible
-            # without requiring a re-index run.
-            for proj in indexed_projects.values():
-                project_path = proj.get("project_path", "")
-                if not project_path:
-                    continue
-                try:
-                    issues = engine.check_project_health(project_path)
-                    if issues:
-                        proj["health_issues"] = issues
-                except Exception as e:
-                    proj["health_issues"] = [f"health check failed: {e}"]
+            # Health issues are stored in projects.json by rag_index_project at index time.
+            # Do NOT run live check_project_health() here — it opens a ChromaDB connection
+            # per project, and with 60+ projects this causes rag_status to hang for minutes.
             return {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
@@ -505,6 +496,10 @@ def sync_init() -> FileWatcher:
     global embedder, store, engine
 
     logger.info("Starting RAG server. Project root: %s", PROJECT_ROOT)
+
+    # Write heartbeat immediately — guard needs a fresh timestamp before any tool call arrives.
+    # The background startup will update it again once model+indexing complete.
+    _write_heartbeat()
 
     embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
@@ -621,6 +616,33 @@ def _background_startup() -> None:
         logger.exception(
             "Background: startup indexing failed — server is up but index may be empty or stale"
         )
+    finally:
+        # Write heartbeat file so the PreToolUse hook knows the server is alive.
+        # Written even on startup failure so rag_status can surface the error.
+        _write_heartbeat()
+        _start_heartbeat_thread()
+
+
+def _heartbeat_path() -> Path:
+    return RAG_INDEX_DIR / ".heartbeat"
+
+
+def _write_heartbeat() -> None:
+    try:
+        _heartbeat_path().parent.mkdir(parents=True, exist_ok=True)
+        _heartbeat_path().write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _start_heartbeat_thread() -> None:
+    import threading
+    def _beat():
+        while True:
+            time.sleep(30)
+            _write_heartbeat()
+    t = threading.Thread(target=_beat, daemon=True, name="rag-heartbeat")
+    t.start()
 
 
 async def main(watcher: FileWatcher) -> None:
