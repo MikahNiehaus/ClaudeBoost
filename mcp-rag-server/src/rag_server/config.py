@@ -51,7 +51,7 @@ _cb_home = os.environ.get("CLAUDEBOOST_HOME", "")
 if _cb_home:
     import hashlib as _hl
     _cb_path_hash = _hl.sha256(_cb_home.replace("\\", "/").encode()).hexdigest()[:12]
-    _proj_key = "C--" + _cb_home.replace(":", "").replace("\\", "-").replace("/", "-").strip("-")
+    _proj_key = _cb_home.replace("\\", "-").replace(":", "-").replace("/", "-").strip("-")
     _default_memory_dir = str(
         Path(os.environ.get("USERPROFILE", os.environ.get("HOME", "")))
         / ".claude" / "projects" / _proj_key / "memory"
