@@ -5,9 +5,6 @@ Hard-blocks file searching when Claude has made too many file reads without
 calling a RAG tool first. RAG finds the relevant file; Grep/Read reads it.
 Doing it backwards (Read first, RAG never) is the pattern this guard catches.
 
-Also blocks if RAG is available but Claude proceeds after a RAG error --
-the session-primer HARD STOP should have caught this, but this is the backstop.
-
 Thresholds:
   RAG_THRESHOLD: consecutive Grep/Read calls without any RAG call before blocking
   EXEMPTED_PATHS: file paths that are always allowed (config, workspace files, etc.)
@@ -38,22 +35,59 @@ def is_exempted(tool_input: dict) -> bool:
     path_str = str(tool_input.get("file_path", "") or tool_input.get("path", "") or "").lower()
     pattern_str = str(tool_input.get("pattern", "")).lower()
 
-    # Allow reads on workspace/state/config files
     if any(frag in path_str for frag in EXEMPTED_NAME_FRAGMENTS):
         return True
     if Path(path_str).suffix in EXEMPTED_SUFFIXES:
         return True
-    # .md reads are only exempt inside workspace/ and state/ (context.md, ticket.md, etc.)
-    # All other .md files (skills, knowledge docs) count toward the RAG threshold
     if Path(path_str).suffix == ".md":
         if "workspace/" in path_str or "/workspace" in path_str or "state/" in path_str:
             return True
         return False
-    # Allow glob/grep on non-source patterns (e.g. workspace/**)
     if "workspace" in pattern_str or "state/" in pattern_str:
         return True
-
     return False
+
+
+def _rag_is_live() -> bool:
+    """Return True only if the RAG server is both activated AND currently running.
+
+    Two checks:
+    1. Sentinel ($TEMP/claudeboost_rag_ok) -- set by /boost. If missing, RAG was never
+       activated this session.
+    2. Heartbeat ($RAG_INDEX_DIR/.heartbeat) -- written every 30s by the live server
+       process. If stale (>90s old) or missing, the server has died since /boost ran.
+
+    Both must pass. If either fails, reads are allowed -- blocking reads when RAG is
+    down creates a circular dependency that makes debugging impossible.
+    """
+    import time as _time
+
+    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
+    sentinel = Path(temp) / "claudeboost_rag_ok"
+    if not sentinel.exists():
+        return False  # /boost hasn't run this session
+
+    # Check heartbeat freshness.
+    _local_appdata = os.environ.get("LOCALAPPDATA", "")
+    _rag_index_dir = os.environ.get(
+        "RAG_INDEX_DIR",
+        str(Path(_local_appdata) / "rag-server-index") if _local_appdata else "",
+    )
+    if not _rag_index_dir:
+        return True  # can't locate index dir -- assume live (original behaviour)
+
+    _heartbeat = Path(_rag_index_dir) / ".heartbeat"
+    if not _heartbeat.exists():
+        return False  # server hasn't written a heartbeat -- not running
+
+    try:
+        _age = _time.time() - float(_heartbeat.read_text(encoding="utf-8").strip())
+        if _age > 150:
+            return False  # heartbeat stale -- server has died
+    except Exception:
+        pass  # unreadable heartbeat -- assume live to avoid false blocks
+
+    return True
 
 
 def main() -> int:
@@ -68,11 +102,8 @@ def main() -> int:
     if is_exempted(tool_input):
         return 0
 
-    # Only block if RAG is actually available -- no point enforcing when RAG is offline
-    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    sentinel = Path(temp) / "claudeboost_rag_ok"
-    if not sentinel.exists():
-        return 0  # RAG unavailable -- let reads through, session-primer handles the rest
+    if not _rag_is_live():
+        return 0
 
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
     tracker_path = home / "state" / "behavior-tracker.json"
@@ -80,14 +111,13 @@ def main() -> int:
     try:
         behavior = json.loads(tracker_path.read_text(encoding="utf-8"))
     except Exception:
-        behavior = {"reads_since_rag": 0}  # no tracker yet -- start counting fresh
+        behavior = {"reads_since_rag": 0}
 
     reads_since_rag = behavior.get("reads_since_rag", 0)
 
     if reads_since_rag < RAG_THRESHOLD:
         return 0
 
-    tool_name = payload.get("tool_name", "Grep/Read")
     print(
         f"BLOCKED -- {reads_since_rag} file searches since last RAG call. "
         "Call rag_search FIRST before reading more files. "

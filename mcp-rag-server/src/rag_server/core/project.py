@@ -39,6 +39,11 @@ LANGUAGE_EXTENSIONS = {
     "json":       {".json"},
     "toml":       {".toml"},
     "yaml":       {".yaml", ".yml"},
+    # Document formats — chunked via markdown/pdf pipeline, not code chunker
+    "markdown":   {".md", ".mdx"},
+    "rst":        {".rst"},
+    "text":       {".txt"},
+    "pdf":        {".pdf"},
 }
 
 # Reverse lookup: extension -> language name

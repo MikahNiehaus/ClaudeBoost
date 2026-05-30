@@ -481,8 +481,26 @@ class IndexingEngine:
                         last_err = e
                         break
                 if last_err:
-                    logger.error("Failed to wipe chroma dir after retries: %s", last_err)
-                    return {"error": f"Re-index aborted: could not wipe chroma dir: {last_err}"}
+                    # Python shutil.rmtree failed on Windows (file lock or OneDrive holding the
+                    # directory). Try PowerShell Remove-Item which handles these cases better.
+                    import sys as _sys, subprocess as _sub
+                    if _sys.platform == "win32":
+                        logger.info("shutil.rmtree failed (%s), trying PowerShell Remove-Item", last_err)
+                        _ps = _sub.run(
+                            ["powershell", "-Command",
+                             f"Remove-Item -Path '{chroma_dir}' -Recurse -Force -ErrorAction Stop"],
+                            capture_output=True, text=True,
+                        )
+                        if _ps.returncode == 0:
+                            logger.info("PowerShell Remove-Item succeeded on %s", chroma_dir)
+                            last_err = None
+                        else:
+                            last_err = Exception(
+                                f"shutil.rmtree + PowerShell both failed: {_ps.stderr.strip()}"
+                            )
+                    if last_err:
+                        logger.error("Failed to wipe chroma dir after retries: %s", last_err)
+                        return {"error": f"Re-index aborted: could not wipe chroma dir: {last_err}"}
                 logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
             project_store = ChromaStore(persist_dir=str(chroma_dir))
             graph_store = SQLiteGraphStore(index_dir / "graph.db")
@@ -553,15 +571,31 @@ class IndexingEngine:
             except ValueError:
                 rel_path = file_path.replace("\\", "/")
 
-            try:
-                content = Path(file_path).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as e:
-                logger.warning("Failed to read %s: %s", rel_path, e)
-                files_failed += 1
-                file_errors.append({"file": rel_path, "type": "read_error", "message": str(e)})
-                continue
+            _ext = Path(rel_path).suffix.lower()
+            _is_pdf = _ext == ".pdf"
+            _is_doc = _ext in {".md", ".mdx", ".rst", ".txt"}
 
-            current_hash = file_hash(content)
+            # PDFs need binary reads; all other file types use UTF-8 text
+            content = None
+            if _is_pdf:
+                try:
+                    _pdf_bytes = Path(file_path).read_bytes()
+                except OSError as e:
+                    logger.warning("Failed to read %s: %s", rel_path, e)
+                    files_failed += 1
+                    file_errors.append({"file": rel_path, "type": "read_error", "message": str(e)})
+                    continue
+                import hashlib as _hl
+                current_hash = _hl.sha256(_pdf_bytes).hexdigest()[:16]
+            else:
+                try:
+                    content = Path(file_path).read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as e:
+                    logger.warning("Failed to read %s: %s", rel_path, e)
+                    files_failed += 1
+                    file_errors.append({"file": rel_path, "type": "read_error", "message": str(e)})
+                    continue
+                current_hash = file_hash(content)
 
             if not force and project_manifest.get(rel_path) == current_hash:
                 files_unchanged += 1
@@ -570,27 +604,40 @@ class IndexingEngine:
             project_store.delete_by_source(collection, rel_path)
             graph_store.delete_edges_for_file(rel_path)
 
-            # Always use code chunker for project files
-            from rag_server.indexing.code_chunker import chunk_code, extract_edges
-            raw_chunks = chunk_code(
-                content, rel_path,
-                max_tokens=MAX_CHUNK_TOKENS,
-                min_tokens=MIN_CHUNK_TOKENS,
-            )
+            # Route to the correct chunker by file type
+            if _is_pdf:
+                from rag_server.indexing.pdf_chunker import chunk_pdf_file
+                raw_chunks = chunk_pdf_file(file_path, source_url=rel_path)
+            elif _is_doc:
+                raw_chunks = chunk_markdown(
+                    content, rel_path,
+                    max_tokens=MAX_CHUNK_TOKENS,
+                    min_tokens=MIN_CHUNK_TOKENS,
+                )
+            else:
+                from rag_server.indexing.code_chunker import chunk_code
+                raw_chunks = chunk_code(
+                    content, rel_path,
+                    max_tokens=MAX_CHUNK_TOKENS,
+                    min_tokens=MIN_CHUNK_TOKENS,
+                )
+
             if not raw_chunks:
                 files_unchanged += 1
                 continue
 
-            # Extract and store graph edges (import/inherit/calls)
-            from rag_server.core.project import extension_to_language
-            file_language = extension_to_language(Path(rel_path).suffix)
-            if file_language:
-                edges = extract_edges(content, file_language, rel_path)
-                if edges:
-                    try:
-                        graph_store.add_edges(edges)
-                    except Exception as e:
-                        logger.warning("Graph edge add failed for %s: %s", rel_path, e)
+            # Graph edges — code files only, not docs
+            if not _is_pdf and not _is_doc:
+                from rag_server.core.project import extension_to_language
+                from rag_server.indexing.code_chunker import extract_edges
+                file_language = extension_to_language(Path(rel_path).suffix)
+                if file_language:
+                    edges = extract_edges(content, file_language, rel_path)
+                    if edges:
+                        try:
+                            graph_store.add_edges(edges)
+                        except Exception as e:
+                            logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
             try:
                 texts = [c.content for c in raw_chunks]
@@ -670,6 +717,20 @@ class IndexingEngine:
             graph_store.delete_ghost_edges(current_files)
         except Exception as e:
             logger.warning("Ghost edge pruning failed: %s", e)
+
+        # SCIP graph enrichment (optional — augments tree-sitter with resolved edges).
+        # Only runs for Python files; silently skips if scip-python is not installed.
+        if files_indexed > 0:
+            try:
+                from rag_server.indexing.scip_extractor import extract_project_edges, is_available
+                if is_available():
+                    py_files = [p for p in project_manifest.keys() if p.endswith(".py")]
+                    scip_edges = extract_project_edges(project_path, py_files)
+                    if scip_edges:
+                        graph_store.add_edges(scip_edges)
+                        logger.info("SCIP: added %d reference edges", len(scip_edges))
+            except Exception:
+                logger.debug("SCIP pass failed (non-fatal)", exc_info=True)
 
         # Community detection + summaries (optional deps — never blocks indexing).
         if files_indexed > 0 and graph_store.has_graph():

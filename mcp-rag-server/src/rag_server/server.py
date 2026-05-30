@@ -147,6 +147,20 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="rag_warmup",
+            description=(
+                "Wait for the embedding model to finish loading after a server restart. "
+                "Blocks for up to 60 seconds, then returns. "
+                "Call this immediately after /mcp reconnect instead of sleep. "
+                "Returns {ready: true, elapsed_s: N} when model is loaded, "
+                "or {ready: false, error: ...} if it did not load within 60s."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
             name="rag_index_project",
             description=(
                 "Index a project's source code for semantic codebase search. "
@@ -310,8 +324,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     loop = _asyncio.get_running_loop()
     # Index operations are long-running by nature (10-15 min for large projects).
     # Query tools (search, context, status, scan) get the short 90s guard.
-    _LONG_RUNNING = {"rag_index", "rag_index_project", "rag_index_research"}
-    _timeout = 900.0 if name in _LONG_RUNNING else 90.0
+    _LONG_RUNNING = {"rag_index", "rag_index_project", "rag_index_research", "rag_warmup"}
+    _timeout = 130.0 if name == "rag_warmup" else (900.0 if name in _LONG_RUNNING else 90.0)
     try:
         result = await _asyncio.wait_for(
             loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments)),
@@ -417,6 +431,25 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 result = engine.index_scope(scope, force=force)
                 result["scope"] = scope
             return result
+
+        elif name == "rag_warmup":
+            if embedder.is_loaded:
+                return {"ready": True, "elapsed_s": 0.0, "model": EMBEDDING_MODEL}
+            # Kick off model load immediately (idempotent if already loading).
+            from rag_server.tools.search import _ensure_warmup
+            _ensure_warmup(embedder)
+            _warmup_start = time.monotonic()
+            _deadline = _warmup_start + 120.0
+            while not embedder.is_loaded and time.monotonic() < _deadline:
+                time.sleep(0.5)
+            _elapsed = round(time.monotonic() - _warmup_start, 1)
+            if embedder.is_loaded:
+                return {"ready": True, "elapsed_s": _elapsed, "model": EMBEDDING_MODEL}
+            return {
+                "ready": False,
+                "elapsed_s": _elapsed,
+                "error": "Model did not load within 120s — run /mcp and retry.",
+            }
 
         elif name == "rag_status":
             collections_status = {}
@@ -562,6 +595,13 @@ def _background_startup() -> None:
     Must be called via run_in_executor — ChromaDB must not run inside an
     asyncio coroutine.
     """
+    # Start heartbeat thread immediately so the PreToolUse hook sees a live server
+    # even if model loading takes a long time. The initial heartbeat from sync_init()
+    # lasts only 90s — starting the thread here means it ticks independently of
+    # how long model loading or indexing takes.
+    _write_heartbeat()
+    _start_heartbeat_thread()
+
     try:
         # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
         # embedder.dimensions() triggers model load here — intentional, but done in
@@ -617,10 +657,9 @@ def _background_startup() -> None:
             "Background: startup indexing failed — server is up but index may be empty or stale"
         )
     finally:
-        # Write heartbeat file so the PreToolUse hook knows the server is alive.
-        # Written even on startup failure so rag_status can surface the error.
+        # Write a fresh heartbeat at the end of startup (belt-and-suspenders).
+        # The thread was already started at the top of this function.
         _write_heartbeat()
-        _start_heartbeat_thread()
 
 
 def _heartbeat_path() -> Path:

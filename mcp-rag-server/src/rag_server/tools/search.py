@@ -87,6 +87,7 @@ def rag_search(
 
     warnings: list[str] = []
     _graph_augmented = False
+    _community_summaries: dict[str, str] = {}  # source_file -> community summary text
 
     # Research search uses a per-task workspace store
     if scope == "research":
@@ -176,10 +177,32 @@ def rag_search(
                     warnings.append(
                         "graph mode: skipping graph expansion because vector search returned 0 results"
                     )
+
+            # Annotate results with cached community summaries when available
+            _csum_db = idx_dir / "graph.db"
+            if _csum_db.exists() and all_results:
+                try:
+                    from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+                    _csum_gs = SQLiteGraphStore(_csum_db)
+                    if _csum_gs.has_graph():
+                        for _r in all_results:
+                            _src = _r.metadata.get("source_file", "").replace("\\", "/")
+                            if not _src or _src in _community_summaries:
+                                continue
+                            _cid = _csum_gs.get_community_for_file(_src)
+                            if _cid is None:
+                                continue
+                            _row = _csum_gs.get_community_summary(_cid)
+                            if _row and _row.get("summary"):
+                                _community_summaries[_src] = _row["summary"]
+                except Exception:
+                    logger.debug("Community summary lookup failed", exc_info=True)
+
         elif project_store.collection_exists(collection) and project_store.count(collection) == 0:
             warnings.append("Codebase collection exists but is empty — run rag_index_project first.")
         else:
             warnings.append("Codebase collection not found — run rag_index_project first.")
+        project_store.close()
     else:
         # Standard scopes: knowledge, agents, or all
         if scope == "all":
@@ -223,18 +246,23 @@ def rag_search(
 
     elapsed_ms = int((time.time() - start) * 1000)
 
+    _results_out = []
+    for r in all_results:
+        _src = r.metadata.get("source_file", "unknown").replace("\\", "/")
+        _item: dict = {
+            "content": r.content,
+            "source": _src,
+            "section": r.metadata.get("section", ""),
+            "scope": r.metadata.get("scope", ""),
+            "score": r.score,
+            "line_start": r.metadata.get("line_start", 0),
+        }
+        if _src in _community_summaries:
+            _item["community_summary"] = _community_summaries[_src]
+        _results_out.append(_item)
+
     result = {
-        "results": [
-            {
-                "content": r.content,
-                "source": r.metadata.get("source_file", "unknown"),
-                "section": r.metadata.get("section", ""),
-                "scope": r.metadata.get("scope", ""),
-                "score": r.score,
-                "line_start": r.metadata.get("line_start", 0),
-            }
-            for r in all_results
-        ],
+        "results": _results_out,
         "total_found": len(all_results),
         "query_time_ms": elapsed_ms,
         "mode": mode,
@@ -247,6 +275,9 @@ def rag_search(
     return result
 
 
+_RRF_K = 60  # standard constant from Cormack et al. 2009
+
+
 def _augment_with_graph(
     seed_results: list,
     idx_dir: "Path",
@@ -255,17 +286,14 @@ def _augment_with_graph(
 ) -> "tuple[list, bool, str | None]":
     """Expand seed results with structural neighbours from the graph store.
 
-    Graph neighbours compete naturally with vector results by score — no slots
-    are reserved. Returns (results, was_augmented, warning_or_none).
+    Merges vector results and graph neighbours using reciprocal rank fusion (RRF).
+    Each list is ranked independently; the combined RRF score is 1/(k+rank) summed
+    across lists. This gives graph neighbours a fair shot without the brittle
+    score-nudge heuristic.
 
-    was_augmented=True means graph neighbours were found and merged into the
-    candidate pool; it does not guarantee any neighbour survived into the
-    final top-k (a strong vector result at the same limit position will beat
-    a weaker structural neighbour).
-
-    warning_or_none is a non-None string when graph mode was requested but
-    couldn't deliver — e.g. graph.db missing, no edges, or a runtime error.
-    The caller surfaces this in the response warnings list so it's visible.
+    Returns (results, was_augmented, warning_or_none).
+    was_augmented=True means graph neighbours were found and merged.
+    warning_or_none is set when graph mode was requested but failed.
     """
     from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
     from rag_server.ports.store_port import SearchResult
@@ -314,13 +342,32 @@ def _augment_with_graph(
             # No structural neighbours for these seed files — not an error
             return seed_results, False, None
 
-        # Merge graph neighbours with vector results and let scores compete.
-        # Neighbours are scored at (seed.score - 0.15), so only structurally
-        # related files that are also semantically close will rank highly.
-        # Forcing slot reservation caused low-relevance structural files to
-        # displace stronger semantic matches — natural competition is cleaner.
-        combined = sorted(seed_results + extra, key=lambda r: r.score, reverse=True)
-        return combined[:limit], True, None
+        # Reciprocal rank fusion: rank each list independently, score = 1/(k+rank).
+        # Disjoint lists means each item contributes exactly one rank term.
+        # Re-emit SearchResult objects with RRF scores so the caller's sort is correct.
+        from rag_server.ports.store_port import SearchResult as _SR
+
+        rrf_scores: dict[int, float] = {}
+        rrf_items: dict[int, object] = {}
+
+        for rank, r in enumerate(seed_results, 1):
+            uid = id(r)
+            rrf_items[uid] = r
+            rrf_scores[uid] = 1.0 / (_RRF_K + rank)
+
+        graph_sorted = sorted(extra, key=lambda r: r.score, reverse=True)
+        for rank, r in enumerate(graph_sorted, 1):
+            uid = id(r)
+            rrf_items[uid] = r
+            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (_RRF_K + rank)
+
+        ordered = sorted(rrf_items.keys(), key=lambda u: rrf_scores[u], reverse=True)
+        merged = [
+            _SR(content=rrf_items[u].content, metadata=rrf_items[u].metadata,
+                score=round(rrf_scores[u], 6))
+            for u in ordered[:limit]
+        ]
+        return merged, True, None
     except Exception as e:
         logger.error("Graph augmentation failed: %s", e)
         return seed_results, False, f"graph augmentation failed: {e}"

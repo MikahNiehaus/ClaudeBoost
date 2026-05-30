@@ -46,6 +46,9 @@ graph = [
 ollama = [
     "ollama>=0.3",
 ]
+scip = [
+    "scip-python>=0.3",
+]
 
 [build-system]
 requires = ["setuptools>=68.0"]

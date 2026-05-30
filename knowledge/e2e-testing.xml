@@ -130,6 +130,12 @@
     <tc>TC-SMOKE-01: Home page loads without console errors</tc>
     <tc>TC-SMOKE-02: All primary nav links resolve without 404 or error page</tc>
   </always-include>
+
+  <pre-generation-requirement>
+    Build flow-map.md BEFORE writing any test cases.
+    Every TC must reference its parent flow: TC-NNN [Flow: name, Step N] — description.
+    Do not write a single test case until the flow map is written to workspace/[task-id]/flow-map.md.
+  </pre-generation-requirement>
 </intelligent-test-generation>
 
 <token-efficiency-protocol>
@@ -270,6 +276,88 @@
   </coordinate-guidance>
 </screenshot-annotation-technique>
 
+<visual-analysis-protocol>
+  <description>Claude analyzes every screenshot for visual problems before marking PASS.
+  The accessibility tree confirms DOM structure. Vision confirms what the user actually sees.
+  No external API. No separate tool. Claude's vision is already available on every screenshot.</description>
+
+  <mandatory-questions>
+    After every browser_take_screenshot, answer all of these before marking PASS:
+    1. Is any important element visually clipped by the viewport edge?
+    2. Is text overlapping other elements?
+    3. Are there broken images (alt text visible instead of rendered image)?
+    4. Does the layout look correct at this viewport? No unexpected overflow or stacking?
+    5. Is the element being verified actually visible — not behind a modal or off-screen?
+    6. For responsive tests: is there horizontal scroll where there shouldn't be?
+  </mandatory-questions>
+
+  <verdict>
+    Any YES answer above = FAIL, even if DOM snapshot passed.
+    Evidence: describe the visual problem in plain text. No extra screenshot needed for visual FAIL.
+    Include in evidence table: TC-NNN | Visual: [description] | FAIL | (no screenshot)
+  </verdict>
+
+  <dom-pass-is-not-enough>
+    The accessibility tree reports element presence and ARIA roles.
+    It does not report: visual position, overlap, clipping, color, image load status.
+    A button with correct ARIA that is visually hidden behind a modal = user cannot click it = FAIL.
+    Always check both.
+  </dom-pass-is-not-enough>
+</visual-analysis-protocol>
+
+<pixelmatch-baseline-protocol>
+  <description>Local pixel diff against saved baseline screenshots. Catches visual regressions
+  that Claude's per-test vision misses because it has no memory of what the page looked like
+  in a prior session. Pure npm, no external API, runs offline.</description>
+
+  <setup>pixelmatch ships as an npm package. One-time install per project:
+    npm install pixelmatch pngjs --save-dev
+  </setup>
+
+  <first-run>
+    When no baseline exists for the current page:
+    1. Save screenshot to workspace/[task-id]/baselines/[page-slug].png
+    2. Log: "Baseline saved for [page-slug]. Future runs will compare against this."
+    3. Do NOT mark FAIL — baseline is being established.
+  </first-run>
+
+  <comparison-run>
+    When a baseline exists:
+    1. Save current screenshot to workspace/[task-id]/snapshots/TC-NNN-current.png
+    2. Run comparison via Bash:
+       node -e "
+         const fs = require('fs');
+         const { PNG } = require('pngjs');
+         const pixelmatch = require('pixelmatch');
+         const img1 = PNG.sync.read(fs.readFileSync('baselines/[page-slug].png'));
+         const img2 = PNG.sync.read(fs.readFileSync('snapshots/TC-NNN-current.png'));
+         const diff = new PNG({ width: img1.width, height: img1.height });
+         const changed = pixelmatch(img1.data, img2.data, diff.data, img1.width, img1.height, { threshold: 0.03 });
+         fs.writeFileSync('snapshots/TC-NNN-visual-diff.png', PNG.sync.write(diff));
+         console.log(changed + ' pixels changed (' + (changed / (img1.width * img1.height) * 100).toFixed(2) + '%)');
+         process.exit(changed > img1.width * img1.height * 0.03 ? 1 : 0);
+       "
+    3. If exit code 1 (more than 3% pixels changed):
+       - Add to evidence table: TC-NNN | Visual regression: N% pixel change | FAIL | TC-NNN-visual-diff.png
+    4. If exit code 0: visual baseline matches, log "Visual: baseline match (within 3%)"
+  </comparison-run>
+
+  <threshold-guidance>
+    0.03 (3%) is the default. Fine-tune per project:
+    - Apps with animations or live data: increase to 0.08
+    - Pixel-perfect design systems: decrease to 0.01
+    Store threshold in workspace/[task-id]/visual-config.json if customized.
+  </threshold-guidance>
+
+  <page-slug-convention>
+    Derive from URL path: replace / with - and strip leading dash.
+    / → home
+    /products/list → products-list
+    /settings → settings
+    /admin/users/new → admin-users-new
+  </page-slug-convention>
+</pixelmatch-baseline-protocol>
+
 <ui-consistency-pass>
   <description>Detect structural mismatches across instances of the same component type. One TC per component type with multiple instances.</description>
 
@@ -371,6 +459,36 @@
   </standard>
 </evidence-standards>
 
+<cross-session-memory>
+  <description>Three persistent files per task workspace that survive across sessions.
+  Load at start. Write during the session. Never delete entries.</description>
+
+  <file name="ui-quirks.md" path="workspace/[task-id]/ui-quirks.md">
+    <purpose>Records tricky UI elements — wrong-click corrections, unstable selectors,
+    elements that behave differently from their ARIA role suggests.</purpose>
+    <write-when>Immediately after any navigation correction or unexpected element behavior.</write-when>
+    <format>| Element | Page | Quirk | Discovered |</format>
+    <example>| "Save" button | /settings | click parent div[data-action="save"], not the button | TC-007 |</example>
+  </file>
+
+  <file name="known-failures.md" path="workspace/[task-id]/known-failures.md">
+    <purpose>Records flows that were BLOCKED — the exact step that failed and what was tried.
+    Prevents wasting time re-discovering the same blocker.</purpose>
+    <write-when>Immediately after marking any test case BLOCKED.</write-when>
+    <format>| Flow | Step | Blocking reason | Tried | Date |</format>
+    <example>| Checkout | Step 2: payment form | iframe not accessible via MCP | direct nav + evaluate | 2026-05-29 |</example>
+    <re-attempt-rule>If the same flow and step appear in known-failures.md: try ONE different approach.
+    If that also fails: mark BLOCKED immediately, do not repeat the same approaches.</re-attempt-rule>
+  </file>
+
+  <file name="baselines/" path="workspace/[task-id]/baselines/">
+    <purpose>Reference screenshots for pixelmatch comparison. One PNG per page visited.</purpose>
+    <write-when>First time a page is tested in a new session (no baseline exists).</write-when>
+    <naming>[page-slug].png where slug = URL path with / replaced by - (e.g. /products/list → products-list.png)</naming>
+    <never>Never overwrite a baseline automatically. Only update when user explicitly approves.</never>
+  </file>
+</cross-session-memory>
+
 <temp-logging-protocol>
   <purpose>Allow verification of backend operations that produce no visible UI confirmation</purpose>
 
@@ -401,6 +519,37 @@
   <absolute-rule>NEVER leave temp-log statements in the codebase after the test session ends. Verify removal in Step 7.</absolute-rule>
 </temp-logging-protocol>
 
+<flow-map-generation>
+  <description>Required phase between discovery and test plan. Maps every multi-step user flow
+  before any test cases are written. Tests come from flows — not from what's visible on one page.</description>
+
+  <why>The biggest cause of skipped test coverage is building test cases from page observation alone.
+  A page shows what's on it right now — not what happens after you interact with it,
+  not what state is required before you arrive, not how the flow branches on error.
+  The flow map captures all of that before a single test case is written.</why>
+
+  <required-flows>
+    <flow>All authentication flows (login, logout, register, forgot password)</flow>
+    <flow>Every CRUD operation spanning more than one page</flow>
+    <flow>Every multi-step wizard or checkout process</flow>
+    <flow>Any flow that requires prior state (login-gated, cart-required, etc.)</flow>
+    <flow>Any flow that differs by user role</flow>
+  </required-flows>
+
+  <source-reference-rule>
+    Every step in the flow map must name the triggering UI element.
+    "click button 'Place Order'" not "proceed to next step".
+    During test execution: if that element isn't in the DOM at that URL, the test is BLOCKED.
+    Never silently skip a step because the element isn't found.
+  </source-reference-rule>
+
+  <test-case-linkage>
+    Every test case in plan.md references its parent flow.
+    Format: TC-NNN [Flow: Checkout, Step 2] — description
+    A test case without a flow reference is not a valid test case.
+  </test-case-linkage>
+</flow-map-generation>
+
 <app-discovery-methodology>
   <purpose>Understand an unfamiliar app before generating test cases. Two legal channels: RAG codebase search and browser navigation. No database access.</purpose>
 
@@ -417,7 +566,11 @@
     <step>From the snapshot, enumerate ALL nav links, buttons, and top-level interactive elements</step>
     <step>Follow each top-level nav link, take browser_snapshot, record: page title, forms, lists, buttons, component types</step>
     <step>Limit to 2 levels deep — this is reconnaissance, not exhaustive crawl</step>
-    <step>On each page, note: component types and their HTML structure (for component registry)</step>
+    <step>On each page, record for EVERY interactive element: HTML element type, ARIA role, visible label,
+    and interaction model (click / keyboard / drag). This is the basis for the flow map steps and
+    prevents wrong-click failures during test execution.</step>
+    <step>Note any elements that appear interactive but have unusual DOM structure
+    (e.g. a div with onClick that looks like a button — record this as a potential quirk)</step>
   </browser-discovery>
 
   <app-map-format><![CDATA[

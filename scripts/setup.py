@@ -694,6 +694,22 @@ def install_rag_server() -> None:
     else:
         _ok("RAG server installed (editable mode)")
 
+    _info("Installing optional graph deps (graspologic + networkx)...")
+    rc_graph, out_graph = _pip_install(["-e", f"{rag_dir}[graph]"])
+    if rc_graph != 0:
+        _warn("graspologic install failed — community detection will be skipped (non-fatal)")
+        _warn("  To install manually: pip install 'rag-server[graph]'")
+    else:
+        _ok("Graph extras installed (graspologic + networkx)")
+
+    _info("Installing optional SCIP deps (scip-python for type-resolved edges)...")
+    rc_scip, out_scip = _pip_install(["-e", f"{rag_dir}[scip]"])
+    if rc_scip != 0:
+        _warn("scip-python install failed — SCIP graph edges will be skipped (non-fatal)")
+        _warn("  To install manually: pip install 'rag-server[scip]'")
+    else:
+        _ok("SCIP extras installed (scip-python)")
+
     _info("Upgrading ML deps (sentence-transformers + transformers + tokenizers)...")
     rc, out = _pip_install([
         "--upgrade", "--upgrade-strategy", "eager",

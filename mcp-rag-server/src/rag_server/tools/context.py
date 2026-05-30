@@ -255,6 +255,44 @@ def build_context(
                         except Exception as e:
                             logger.error("Tier 4b: graph expansion failed: %s", e)
                             tier_errors.append({"tier": "codebase_graph", "error": str(e)})
+
+                    # --- Tier 4c: Community summaries for files in scope ---
+                    _graph_db_4c = idx_dir / "graph.db"
+                    if _graph_db_4c.exists() and tier4_chunks:
+                        try:
+                            from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore as _SGS4c
+                            _gs4c = _SGS4c(_graph_db_4c)
+                            if _gs4c.has_graph():
+                                _seen_cids: set[int] = set()
+                                _community_budget = min(400, max(0, remaining_budget - tier4_tokens))
+                                _community_tokens = 0
+                                for _ck in list(tier4_chunks):
+                                    if _community_tokens >= _community_budget:
+                                        break
+                                    _cid4 = _gs4c.get_community_for_file(_ck["source"])
+                                    if _cid4 is None or _cid4 in _seen_cids:
+                                        continue
+                                    _seen_cids.add(_cid4)
+                                    _crow = _gs4c.get_community_summary(_cid4)
+                                    if not _crow or not _crow.get("summary"):
+                                        continue
+                                    _ctokens = estimate_tokens(_crow["summary"])
+                                    if _community_tokens + _ctokens > _community_budget:
+                                        break
+                                    tier4_chunks.append({
+                                        "source": f"community:{_cid4}",
+                                        "section": "community_summary",
+                                        "content": _crow["summary"],
+                                        "score": 0.85,
+                                        "tier": "community_summary",
+                                    })
+                                    _community_tokens += _ctokens
+                                    tier4_tokens += _ctokens
+                        except Exception as _e4c:
+                            logger.debug("Tier 4c: community summary lookup failed: %s", _e4c)
+
+                project_store.close()
+
         except Exception as e:
             logger.error("Tier 4: codebase search failed for project %r: %s", project_path, e)
             tier_errors.append({"tier": "codebase", "error": str(e)})
@@ -273,7 +311,8 @@ def build_context(
             "guardrails": len(tier1_chunks),
             "declared": len(tier2_chunks),
             "search": len(tier3_chunks),
-            "codebase": len(tier4_chunks),
+            "codebase": sum(1 for c in tier4_chunks if c["tier"] != "community_summary"),
+            "community_summaries": sum(1 for c in tier4_chunks if c["tier"] == "community_summary"),
         },
     }
     if agent_tokens > max_tokens:

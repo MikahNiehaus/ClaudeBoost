@@ -34,6 +34,16 @@ class ChromaStore(StorePort):
         self._client = chromadb.PersistentClient(path=str(self._persist_dir), settings=chroma_settings)
         logger.info("ChromaDB initialized at %s", self._persist_dir)
 
+    def close(self) -> None:
+        """Explicitly release SQLite file handles. On Windows, open handles block shutil.rmtree
+        during force re-index. Call this after any read-only use of a short-lived store."""
+        try:
+            self._client._system.stop()
+        except Exception:
+            pass
+        import gc
+        gc.collect()
+
     def _get_collection(self, name: str):
         return self._client.get_collection(name)
 
