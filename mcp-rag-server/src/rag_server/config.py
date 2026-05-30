@@ -39,6 +39,25 @@ MANIFEST_PATH = RAG_INDEX_DIR / "manifest.json"
 # Override per-machine via RAG_EMBEDDING_MODEL env var if needed.
 EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+# Code-specific embedding model (optional). If set, codebase indexing and search
+# uses this model instead of EMBEDDING_MODEL. Must be downloaded locally first.
+# Example: export RAG_CODE_EMBEDDING_MODEL="nomic-ai/nomic-embed-code"
+CODE_EMBEDDING_MODEL = os.environ.get("RAG_CODE_EMBEDDING_MODEL", "")
+
+# Memory system path — where the file-based memory files live.
+# Defaults to the ClaudeBoost-project memory dir derived from CLAUDEBOOST_HOME.
+_default_memory_dir = ""
+_cb_home = os.environ.get("CLAUDEBOOST_HOME", "")
+if _cb_home:
+    import hashlib as _hl
+    _cb_path_hash = _hl.sha256(_cb_home.replace("\\", "/").encode()).hexdigest()[:12]
+    _proj_key = "C--" + _cb_home.replace(":", "").replace("\\", "-").replace("/", "-").strip("-")
+    _default_memory_dir = str(
+        Path(os.environ.get("USERPROFILE", os.environ.get("HOME", "")))
+        / ".claude" / "projects" / _proj_key / "memory"
+    )
+MEMORY_DIR = Path(os.environ.get("RAG_MEMORY_DIR", _default_memory_dir)) if _default_memory_dir else None
+
 # Scoped collection paths (relative to PROJECT_ROOT)
 SCOPES = {
     "knowledge": {
@@ -48,6 +67,10 @@ SCOPES = {
     "agents": {
         "patterns": ["agents/*.md", "agents/*.xml"],
         "collection": "agents",
+    },
+    "memories": {
+        "patterns": [],  # indexed via rag_index_memories, not file patterns
+        "collection": "memories",
     },
 }
 

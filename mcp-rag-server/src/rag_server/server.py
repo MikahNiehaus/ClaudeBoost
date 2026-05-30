@@ -1,4 +1,10 @@
-"""MCP RAG server entry point. Stdio transport."""
+"""MCP RAG server — stdio or HTTP/SSE transport.
+
+Run modes:
+  python -m rag_server                     stdio (MCP subprocess, legacy)
+  python -m rag_server --http              HTTP on default port 8612
+  python -m rag_server --http --port N     HTTP on custom port
+"""
 
 import json
 import logging
@@ -11,6 +17,7 @@ from mcp.types import TextContent, Tool
 
 from rag_server.config import (
     CHROMA_DIR,
+    CODE_EMBEDDING_MODEL,
     DEFAULT_MIN_SCORE,
     DEFAULT_SEARCH_LIMIT,
     EMBEDDING_MODEL,
@@ -37,6 +44,7 @@ app = Server("rag-server")
 
 # Components initialized in main(), accessed via module-level refs
 embedder: SentenceTransformerEmbedding | None = None
+code_embedder: SentenceTransformerEmbedding | None = None  # separate model for codebase scope (optional)
 store: ChromaStore | None = None
 engine: IndexingEngine | None = None
 
@@ -60,11 +68,12 @@ async def list_tools() -> list[Tool]:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "knowledge", "agents", "codebase", "research"],
+                        "enum": ["all", "knowledge", "agents", "codebase", "research", "memories"],
                         "description": (
                             "Which collection to search. "
                             "'codebase' requires project_path. "
-                            "'research' requires workspace_path."
+                            "'research' requires workspace_path. "
+                            "'memories' searches the indexed memory system."
                         ),
                         "default": "all",
                     },
@@ -261,6 +270,24 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="rag_index_memories",
+            description=(
+                "Index the ClaudeBoost file-based memory system into a 'memories' RAG collection. "
+                "Reads all *.md memory files and makes them searchable via rag_search scope='memories' "
+                "or scope='all'. Incremental: skips unchanged files. Run after adding new memories."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "force": {
+                        "type": "boolean",
+                        "description": "Re-index even if memory files haven't changed.",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        Tool(
             name="rag_context",
             description=(
                 "Build a curated context package for an agent. Given an agent name and "
@@ -370,11 +397,13 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
     _start = time.monotonic()
     try:
         if name == "rag_search":
+            _scope = arguments.get("scope", "all")
+            _active_embedder = code_embedder if _scope == "codebase" else embedder
             return rag_search(
-                embedder=embedder,
+                embedder=_active_embedder,
                 store=store,
                 query=arguments["query"],
-                scope=arguments.get("scope", "all"),
+                scope=_scope,
                 project_path=arguments.get("project_path"),
                 workspace_path=arguments.get("workspace_path"),
                 limit=arguments.get("limit", DEFAULT_SEARCH_LIMIT),
@@ -415,6 +444,16 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 embedder=embedder,
                 sources=arguments["sources"],
                 workspace_path=arguments["workspace_path"],
+                force=arguments.get("force", False),
+            )
+
+        elif name == "rag_index_memories":
+            from rag_server.config import MEMORY_DIR
+            from rag_server.tools.memory import rag_index_memories
+            return rag_index_memories(
+                embedder=embedder,
+                store=store,
+                memory_dir=MEMORY_DIR,
                 force=arguments.get("force", False),
             )
 
@@ -510,6 +549,7 @@ def _build_context(
         max_tokens=max_tokens,
         store=store,
         embedder=embedder,
+        code_embedder=code_embedder,
         project_root=PROJECT_ROOT,
         weight=weight,
         project_path=project_path,
@@ -526,17 +566,21 @@ def sync_init() -> FileWatcher:
     inside an asyncio coroutine. ChromaDB calls in background tasks must use
     run_in_executor (see main()).
     """
-    global embedder, store, engine
+    global embedder, code_embedder, store, engine
 
     logger.info("Starting RAG server. Project root: %s", PROJECT_ROOT)
 
     # Write heartbeat immediately — guard needs a fresh timestamp before any tool call arrives.
-    # The background startup will update it again once model+indexing complete.
-    _write_heartbeat()
+    _write_heartbeat(model_loaded=False, index_ok=False)
 
     embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
+    if CODE_EMBEDDING_MODEL and CODE_EMBEDDING_MODEL != EMBEDDING_MODEL:
+        logger.info("Code embedding model: %s", CODE_EMBEDDING_MODEL)
+        code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+    else:
+        code_embedder = embedder  # same model for all scopes
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
-    engine = IndexingEngine(embedder=embedder, store=store)
+    engine = IndexingEngine(embedder=code_embedder, store=store)
 
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()
@@ -595,11 +639,8 @@ def _background_startup() -> None:
     Must be called via run_in_executor — ChromaDB must not run inside an
     asyncio coroutine.
     """
-    # Start heartbeat thread immediately so the PreToolUse hook sees a live server
-    # even if model loading takes a long time. The initial heartbeat from sync_init()
-    # lasts only 90s — starting the thread here means it ticks independently of
-    # how long model loading or indexing takes.
-    _write_heartbeat()
+    # Start heartbeat thread immediately — ticks independently of model load time.
+    _write_heartbeat(model_loaded=False, index_ok=False)
     _start_heartbeat_thread()
 
     try:
@@ -657,19 +698,30 @@ def _background_startup() -> None:
             "Background: startup indexing failed — server is up but index may be empty or stale"
         )
     finally:
-        # Write a fresh heartbeat at the end of startup (belt-and-suspenders).
-        # The thread was already started at the top of this function.
-        _write_heartbeat()
+        _write_heartbeat(
+            model_loaded=embedder.is_loaded if embedder else False,
+            index_ok=True,
+        )
+
+
+RAG_HTTP_PORT = 8612  # SHA256("ClaudeBoost-rag-server") % 900 + 8100
 
 
 def _heartbeat_path() -> Path:
     return RAG_INDEX_DIR / ".heartbeat"
 
 
-def _write_heartbeat() -> None:
+def _server_info_path() -> Path:
+    return RAG_INDEX_DIR / ".server.json"
+
+
+def _write_heartbeat(model_loaded: bool = False, index_ok: bool = False) -> None:
     try:
         _heartbeat_path().parent.mkdir(parents=True, exist_ok=True)
-        _heartbeat_path().write_text(str(time.time()), encoding="utf-8")
+        _heartbeat_path().write_text(
+            json.dumps({"ts": time.time(), "model_loaded": model_loaded, "index_ok": index_ok}),
+            encoding="utf-8",
+        )
     except Exception:
         pass
 
@@ -679,9 +731,24 @@ def _start_heartbeat_thread() -> None:
     def _beat():
         while True:
             time.sleep(30)
-            _write_heartbeat()
+            _write_heartbeat(
+                model_loaded=embedder.is_loaded if embedder else False,
+                index_ok=True,
+            )
     t = threading.Thread(target=_beat, daemon=True, name="rag-heartbeat")
     t.start()
+
+
+def _write_server_info(port: int) -> None:
+    import os
+    try:
+        _server_info_path().parent.mkdir(parents=True, exist_ok=True)
+        _server_info_path().write_text(
+            json.dumps({"pid": os.getpid(), "port": port, "started_at": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 async def main(watcher: FileWatcher) -> None:
@@ -690,26 +757,94 @@ async def main(watcher: FileWatcher) -> None:
     logger.info("MCP stdio transport starting")
     try:
         async with stdio_server() as (read_stream, write_stream):
-            # Schedule slow startup work (model load + indexing) as a background
-            # thread so the MCP handshake completes before it runs.
             loop = asyncio.get_running_loop()
             asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
             logger.info("MCP server ready — accepting tool calls")
             await app.run(read_stream, write_stream, app.create_initialization_options())
         logger.info("MCP stdio connection closed cleanly")
     except Exception:
-        logger.exception("MCP server crashed — unhandled exception in main()")
+        logger.exception("MCP server crashed")
         raise
     finally:
         logger.info("MCP server shutting down, stopping file watchers")
         watcher.stop()
 
 
-if __name__ == "__main__":
+async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
+    """Run the MCP server over HTTP/SSE. Call sync_init() before this.
+
+    Claude Code connects via: {"type": "sse", "url": "http://HOST:PORT/sse"}
+    The server is a persistent daemon — Claude Code auto-reconnects on disconnect.
+    """
     import asyncio
+    try:
+        from mcp.server.sse import SseServerTransport
+        from starlette.applications import Starlette
+        from starlette.routing import Mount, Route
+        import uvicorn
+    except ImportError as e:
+        logger.error(
+            "HTTP mode requires starlette and uvicorn. Run: "
+            "pip install starlette 'uvicorn[standard]'. Error: %s", e
+        )
+        raise SystemExit(1)
+
+    sse = SseServerTransport("/messages")
+
+    async def handle_sse(request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await app.run(*streams, app.create_initialization_options())
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Mount("/messages", app=sse.handle_post_message),
+        ]
+    )
+
+    # Write server info so rag-server-start.py knows we're up
+    _write_server_info(port)
+
+    # Schedule background startup (model load + indexing) once at server start
+    loop = asyncio.get_running_loop()
+    asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
+
+    logger.info("HTTP/SSE RAG server on http://%s:%d/sse", host, port)
+    logger.info("Configure Claude Code: claude mcp add --transport sse rag-server http://%s:%d/sse", host, port)
+
+    config = uvicorn.Config(
+        starlette_app,
+        host=host,
+        port=port,
+        log_level="warning",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    try:
+        await server.serve()
+    finally:
+        logger.info("HTTP server stopped")
+        watcher.stop()
+
+
+if __name__ == "__main__":
+    import argparse
+    import asyncio
+
+    parser = argparse.ArgumentParser(description="ClaudeBoost RAG server")
+    parser.add_argument("--http", action="store_true", help="Run as persistent HTTP/SSE server (recommended)")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=RAG_HTTP_PORT, help=f"HTTP port (default: {RAG_HTTP_PORT})")
+    args = parser.parse_args()
+
     _watcher = sync_init()
     try:
-        asyncio.run(main(_watcher))
+        if args.http:
+            asyncio.run(main_http(_watcher, args.host, args.port))
+        else:
+            asyncio.run(main(_watcher))
     except KeyboardInterrupt:
         logger.info("RAG server stopped (KeyboardInterrupt)")
     except Exception:

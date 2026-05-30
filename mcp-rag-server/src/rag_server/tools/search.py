@@ -34,7 +34,7 @@ def _ensure_warmup(embedder: EmbeddingPort) -> None:
     t.start()
     logger.info("Started background model warmup thread (id=%d)", eid)
 
-VALID_SCOPES = ["all", "knowledge", "agents", "codebase", "research"]
+VALID_SCOPES = ["all", "knowledge", "agents", "codebase", "research", "memories"]
 
 
 def rag_search(
@@ -204,9 +204,12 @@ def rag_search(
             warnings.append("Codebase collection not found — run rag_index_project first.")
         project_store.close()
     else:
-        # Standard scopes: knowledge, agents, or all
+        # Standard scopes: knowledge, agents, memories, or all
         if scope == "all":
+            # Include memories only if the collection has content
             collections = [s["collection"] for s in SCOPES.values()]
+        elif scope == "memories":
+            collections = ["memories"]
         else:
             collections = [scope]
 

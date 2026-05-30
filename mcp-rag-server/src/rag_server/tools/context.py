@@ -20,6 +20,7 @@ def build_context(
     project_root: Path,
     weight: str = "standard",
     project_path: str | None = None,
+    code_embedder=None,
 ) -> dict:
     """Build a tiered context package for an agent.
 
@@ -144,9 +145,7 @@ def build_context(
     tier3_tokens = 0
 
     if remaining_budget > 200 and store.collection_exists("knowledge"):
-        # Guard: skip embedding call if model isn't loaded yet — avoids blocking on
-        # _load_lock for minutes during background startup. Tiers 0-2 already loaded
-        # without the model, so caller gets useful context even during warmup.
+        # Guard: skip embedding call if model isn't loaded yet.
         if not embedder.is_loaded:
             tier_errors.append({
                 "tier": "search",
@@ -154,11 +153,28 @@ def build_context(
             })
         else:
             try:
-                query_embedding = embedder.embed_query(task_description)
-                search_results = store.search(
-                    "knowledge", query_embedding, limit=15, min_score=0.4,
-                )
-                for r in search_results:
+                # Multi-query: 3 variants cover vocabulary gaps between task description
+                # and knowledge file language. Deduplicate by source before budget gating.
+                _agent_label = agent.replace("-agent", "").replace("-", " ")
+                _queries = [
+                    task_description,
+                    f"{_agent_label} {task_description}",
+                    f"how to {task_description}",
+                ]
+                _seen_ids: set[str] = set()
+                _all_hits: list = []
+                for _q in _queries:
+                    _qe = embedder.embed_query(_q)
+                    _hits = store.search("knowledge", _qe, limit=10, min_score=0.4)
+                    for _h in _hits:
+                        _src = _h.metadata.get("source_file", "")
+                        _uid = f"{_src}::{_h.content[:60]}"
+                        if _uid not in _seen_ids:
+                            _seen_ids.add(_uid)
+                            _all_hits.append(_h)
+                # Sort merged results by score descending
+                _all_hits.sort(key=lambda r: r.score, reverse=True)
+                for r in _all_hits:
                     source = r.metadata.get("source_file", "")
                     if source in all_included_sources:
                         continue
@@ -183,7 +199,8 @@ def build_context(
     tier4_chunks = []
     tier4_tokens = 0
 
-    if project_path and (tier4_reserved > 100 or remaining_budget > 200) and embedder.is_loaded:
+    _code_emb = code_embedder if code_embedder is not None else embedder
+    if project_path and (tier4_reserved > 100 or remaining_budget > 200) and _code_emb.is_loaded:
         try:
             from rag_server.core.project import project_index_dir
             from rag_server.core.store import ChromaStore as _ChromaStore
@@ -194,7 +211,7 @@ def build_context(
                 project_store = _ChromaStore(persist_dir=str(chroma_dir))
                 if project_store.collection_exists("codebase") and project_store.count("codebase") > 0:
                     tier4_budget = tier4_reserved if tier4_reserved > 0 else min(600, remaining_budget)
-                    query_embedding = embedder.embed_query(task_description)
+                    query_embedding = _code_emb.embed_query(task_description)
                     codebase_results = project_store.search(
                         "codebase", query_embedding, limit=10, min_score=0.35,
                     )

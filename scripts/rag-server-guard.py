@@ -24,7 +24,13 @@ if not heartbeat.exists():
     sys.exit(0)
 
 try:
-    age = time.time() - float(heartbeat.read_text(encoding="utf-8").strip())
+    raw = heartbeat.read_text(encoding="utf-8").strip()
+    try:
+        data = json.loads(raw)
+        ts = float(data.get("ts", 0))
+    except (ValueError, KeyError):
+        ts = float(raw)
+    age = time.time() - ts
 except Exception:
     sys.exit(0)  # Can't read it? Allow through rather than false-block.
 

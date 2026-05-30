@@ -73,7 +73,13 @@ def check_heartbeat() -> tuple[bool, float]:
     if not HEARTBEAT_FILE.exists():
         return False, float("inf")
     try:
-        age = time.time() - float(HEARTBEAT_FILE.read_text(encoding="utf-8").strip())
+        raw = HEARTBEAT_FILE.read_text(encoding="utf-8").strip()
+        try:
+            data = json.loads(raw)
+            ts = float(data.get("ts", 0))
+        except (ValueError, KeyError):
+            ts = float(raw)
+        age = time.time() - ts
         return age < 90, age
     except Exception:
         return False, float("inf")

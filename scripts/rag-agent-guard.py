@@ -1,56 +1,67 @@
 """
 ClaudeBoost RAG agent guard — PreToolUse hook on Agent.
 
-Hard-blocks agent spawning when RAG has not been verified this session.
-The sentinel file ($TEMP/claudeboost_rag_ok) is created by /boost only after
-RAG health checks pass, and removed at the start of each /boost run.
-
-If the sentinel is absent, no agent may be spawned — the user must run /boost
-to verify RAG before multi-agent workflows proceed.
-
-Also checks that the ChromaDB index directory exists as a secondary signal
-that the index was actually built.
+Checks that the RAG server heartbeat is fresh before allowing agent spawns.
+With HTTP transport, Claude Code auto-reconnects — no session sentinel needed.
 
 Exit codes:
-  0 = RAG verified — allow agent spawn
-  2 = RAG not verified — hard block, stderr message shown to Claude
+  0 = RAG server is live — allow agent spawn
+  0 = RAG server not detected — allow anyway (fail-open so debugging works)
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
+def _heartbeat_age() -> float | None:
+    """Return heartbeat age in seconds, or None if missing/unreadable."""
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    rag_index_dir = os.environ.get(
+        "RAG_INDEX_DIR",
+        str(Path(local_appdata) / "rag-server-index") if local_appdata else "",
+    )
+    if not rag_index_dir:
+        return None
+    hb = Path(rag_index_dir) / ".heartbeat"
+    if not hb.exists():
+        return None
+    try:
+        raw = hb.read_text(encoding="utf-8").strip()
+        try:
+            data = json.loads(raw)
+            ts = float(data.get("ts", 0))
+        except (ValueError, KeyError):
+            ts = float(raw)
+        return time.time() - ts
+    except Exception:
+        return None
+
+
 def main() -> int:
-    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    sentinel = Path(temp) / "claudeboost_rag_ok"
+    age = _heartbeat_age()
 
-    claudeboost_home = os.environ.get("CLAUDEBOOST_HOME", "")
-    chroma_dir = Path(claudeboost_home) / "mcp-rag-server" / ".rag-index" / "chroma" if claudeboost_home else None
-
-    sentinel_ok = sentinel.exists()
-    index_ok = chroma_dir.exists() if chroma_dir else True  # if path unknown, don't block on it
-
-    if sentinel_ok and index_ok:
+    if age is None:
+        # Can't detect server state — allow spawn (fail-open)
         return 0
 
-    reasons = []
-    if not sentinel_ok:
-        reasons.append("RAG not verified this session (sentinel missing)")
-    if not index_ok:
-        reasons.append("ChromaDB index not found at mcp-rag-server/.rag-index/chroma")
+    if age <= 90:
+        # Server is alive and ticking
+        return 0
 
+    # Heartbeat stale — server may be down, but we still allow spawn.
+    # The agent will get a clear MCP error if RAG is actually unavailable.
+    # We warn but don't block — blocking creates a circular dependency where
+    # you can't spawn a debug agent to investigate a dead RAG server.
     print(
-        "BLOCKED — cannot spawn agent: "
-        + "; ".join(reasons)
-        + ". "
-        "Run /boost to verify RAG before spawning agents. "
-        "Do NOT proceed with the current workflow. "
-        "Tell the user: 'RAG is not connected — run /boost first.'",
+        f"WARNING: RAG server heartbeat is {age:.0f}s old — server may be down. "
+        "If RAG tools fail inside the agent, run: python \"$CLAUDEBOOST_HOME/scripts/rag-server-start.py\"",
         file=sys.stderr,
     )
-    return 2
+    return 0
 
 
 if __name__ == "__main__":

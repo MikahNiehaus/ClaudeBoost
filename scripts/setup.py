@@ -250,12 +250,14 @@ def _is_junction(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Settings.json: env + statusLine + hooks.
 # ---------------------------------------------------------------------------
-STATUSLINE_CMD = (
-    "printf '\\033[32;1m> ClaudeBoost\\033[0m'; "
-    "[ -f \"$TEMP/claudeboost_rag_ok\" ] && printf ' \\033[2m|\\033[0m \\033[32;1mBoost RAG\\033[0m'; "
-    "[ -f \"$TEMP/claudeboost_project_rag_ok\" ] && printf ' \\033[2m|\\033[0m \\033[36;1mProject RAG\\033[0m'; "
-    "command -v gt >/dev/null 2>&1 && printf ' \\033[2m|\\033[0m \\033[33;1mGT\\033[0m'"
-)
+def _statusline_cmd() -> str:
+    """Build the status line command using the current Python interpreter.
+
+    Uses the interpreter that ran setup.py — portable across venvs and platforms.
+    CLAUDEBOOST_HOME is expanded at runtime from the env var (set in settings.json env).
+    """
+    interp = Path(sys.executable).as_posix()
+    return f'"{interp}" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
 
 
 def _load_settings() -> dict:
@@ -619,18 +621,14 @@ def update_settings() -> None:
     env = settings.setdefault("env", {})
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
 
-    # statusLine — create if missing, repair old $LOCALAPPDATA/Temp paths
+    # statusLine — always use the Python-based RAG health script (cross-platform)
+    new_sl_cmd = _statusline_cmd()
     sl = settings.get("statusLine")
-    if isinstance(sl, dict):
-        cmd = sl.get("command", "")
-        if "$LOCALAPPDATA/Temp" in cmd:
-            sl["command"] = cmd.replace("$LOCALAPPDATA/Temp", "$TEMP")
-            _ok("statusLine - fixed to use $TEMP")
-        else:
-            _skip("statusLine - already configured")
+    if isinstance(sl, dict) and sl.get("command") == new_sl_cmd:
+        _skip("statusLine - already configured")
     else:
-        settings["statusLine"] = {"type": "command", "command": STATUSLINE_CMD}
-        _ok("statusLine - created ClaudeBoost status bar")
+        settings["statusLine"] = {"type": "command", "command": new_sl_cmd}
+        _ok("statusLine - configured RAG health indicator")
 
     _install_all_hooks(settings)
 
@@ -733,15 +731,85 @@ def install_rag_server() -> None:
         else:
             _warn("Could not remove torchvision")
 
+    _info("Installing HTTP server deps (starlette + uvicorn)...")
+    rc, out = _pip_install(["starlette>=0.37", "uvicorn[standard]>=0.29"])
+    if rc != 0:
+        _warn(f"starlette/uvicorn install failed: {out}")
+    else:
+        _ok("HTTP server deps installed (starlette + uvicorn)")
+
     health_script = BOOST_HOME / "scripts" / "check-rag-health.py"
     rc, out = run_cmd([sys.executable, str(health_script)])
     if rc == 0:
-        _ok(f"RAG server healthy: {out}")
+        _ok(f"RAG modules healthy: {out}")
     else:
-        _warn(f"RAG server health check failed (exit {rc})")
+        _warn(f"RAG health check failed (exit {rc})")
         if out:
             _warn(out)
         _warn(f"  Run manually: {sys.executable} {BOOST_HOME / 'scripts' / 'reinstall-rag.py'}")
+
+    # Start the HTTP server as background daemon
+    _info("Starting RAG HTTP server (port 8612)...")
+    start_script = BOOST_HOME / "scripts" / "rag-server-start.py"
+    rc, out = run_cmd([sys.executable, str(start_script)])
+    if rc == 0:
+        _ok(f"RAG HTTP server running: {out.splitlines()[-1] if out else 'port 8612'}")
+    else:
+        _warn("RAG HTTP server did not start — run it manually:")
+        _warn(f"  {sys.executable} \"{start_script}\"")
+
+    # Migrate MCP config from stdio to HTTP (idempotent)
+    _migrate_mcp_to_http()
+
+
+# ---------------------------------------------------------------------------
+# MCP config migration: stdio → HTTP transport
+# ---------------------------------------------------------------------------
+def _migrate_mcp_to_http() -> None:
+    """Switch the rag-server MCP config from stdio subprocess to HTTP/SSE.
+
+    Idempotent — safe to run multiple times. Works across machines because
+    it uses the CLAUDEBOOST_HOME env var path, not a hardcoded absolute path.
+    Reads/writes ~/.claude.json (user-scoped MCP config).
+    """
+    import subprocess as _sub
+
+    RAG_HTTP_PORT = 8612
+    rag_url = f"http://127.0.0.1:{RAG_HTTP_PORT}/sse"
+
+    # Try `claude mcp list` to see current configs
+    rc, out = run_cmd(["claude", "mcp", "list"])
+    if rc != 0:
+        _warn("  claude CLI not found — skipping MCP migration. Run manually:")
+        _warn(f"    claude mcp add --transport sse rag-server {rag_url}")
+        return
+
+    # Check if already configured as SSE/HTTP pointing at our port
+    if rag_url in out or f":{RAG_HTTP_PORT}" in out:
+        _skip(f"MCP config - rag-server already on HTTP port {RAG_HTTP_PORT}")
+        return
+
+    # Remove old stdio config if it exists
+    if "rag-server" in out:
+        rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server", "--scope", "user"])
+        if rc_rm != 0:
+            # Try without scope flag (older Claude Code versions)
+            run_cmd(["claude", "mcp", "remove", "rag-server"])
+        _ok("MCP config - removed old stdio rag-server")
+
+    # Add HTTP config (user-scoped so it's available in all projects)
+    rc_add, out_add = run_cmd([
+        "claude", "mcp", "add",
+        "--transport", "sse",
+        "--scope", "user",
+        "rag-server",
+        rag_url,
+    ])
+    if rc_add == 0:
+        _ok(f"MCP config - rag-server now on HTTP {rag_url}")
+    else:
+        _warn(f"MCP add failed: {out_add}")
+        _warn(f"  Run manually: claude mcp add --transport sse rag-server {rag_url}")
 
 
 # ---------------------------------------------------------------------------

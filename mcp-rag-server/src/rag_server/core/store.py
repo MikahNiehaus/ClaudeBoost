@@ -35,10 +35,14 @@ class ChromaStore(StorePort):
         logger.info("ChromaDB initialized at %s", self._persist_dir)
 
     def close(self) -> None:
-        """Explicitly release SQLite file handles. On Windows, open handles block shutil.rmtree
-        during force re-index. Call this after any read-only use of a short-lived store."""
+        """Release references so GC can reclaim SQLite file handles.
+
+        Avoids calling _client._system.stop() — that stops shared ChromaDB components
+        and breaks other live ChromaStore instances in the same process. With project
+        indexes now stored outside OneDrive, plain GC is sufficient.
+        """
         try:
-            self._client._system.stop()
+            del self._client
         except Exception:
             pass
         import gc

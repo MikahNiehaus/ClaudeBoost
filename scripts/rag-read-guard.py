@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 RAG_THRESHOLD = 2  # block after this many consecutive file searches without RAG
@@ -49,45 +50,38 @@ def is_exempted(tool_input: dict) -> bool:
 
 
 def _rag_is_live() -> bool:
-    """Return True only if the RAG server is both activated AND currently running.
+    """Return True only if the RAG server heartbeat is fresh.
 
-    Two checks:
-    1. Sentinel ($TEMP/claudeboost_rag_ok) -- set by /boost. If missing, RAG was never
-       activated this session.
-    2. Heartbeat ($RAG_INDEX_DIR/.heartbeat) -- written every 30s by the live server
-       process. If stale (>90s old) or missing, the server has died since /boost ran.
-
-    Both must pass. If either fails, reads are allowed -- blocking reads when RAG is
-    down creates a circular dependency that makes debugging impossible.
+    Reads the JSON heartbeat written by the server every 30s.
+    If stale (>90s) or missing, the server is down — allow reads so debugging isn't blocked.
+    The old session sentinel is no longer required (HTTP transport handles reconnect automatically).
     """
     import time as _time
 
-    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    sentinel = Path(temp) / "claudeboost_rag_ok"
-    if not sentinel.exists():
-        return False  # /boost hasn't run this session
-
-    # Check heartbeat freshness.
     _local_appdata = os.environ.get("LOCALAPPDATA", "")
     _rag_index_dir = os.environ.get(
         "RAG_INDEX_DIR",
         str(Path(_local_appdata) / "rag-server-index") if _local_appdata else "",
     )
     if not _rag_index_dir:
-        return True  # can't locate index dir -- assume live (original behaviour)
+        return False
 
     _heartbeat = Path(_rag_index_dir) / ".heartbeat"
     if not _heartbeat.exists():
-        return False  # server hasn't written a heartbeat -- not running
+        return False
 
     try:
-        _age = _time.time() - float(_heartbeat.read_text(encoding="utf-8").strip())
-        if _age > 150:
-            return False  # heartbeat stale -- server has died
+        raw = _heartbeat.read_text(encoding="utf-8").strip()
+        # Support both old plain-float format and new JSON format
+        try:
+            data = json.loads(raw)
+            ts = float(data.get("ts", 0))
+        except (ValueError, KeyError):
+            ts = float(raw)
+        _age = _time.time() - ts
+        return _age <= 90
     except Exception:
-        pass  # unreadable heartbeat -- assume live to avoid false blocks
-
-    return True
+        return False
 
 
 def main() -> int:
