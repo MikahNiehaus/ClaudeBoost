@@ -282,13 +282,20 @@ Context:
 
 Your task — do ALL of these:
 
-1. Semantic search (use rag_search scope="codebase" project_path="$PROJECT_PATH"):
-   - Query 1 (vector): "[key entity or feature from ticket] implementation"
-   - Query 2 (vector): "[main action from ticket] handler controller service"
-   - Query 3 (vector): "[affected area] tests spec"
-   - Query 4 (graph): repeat Query 1 with mode="graph" to surface structural neighbours — files that import, inherit from, or are called by the seed results. This reveals callers, middlewares, and cross-file dependencies not visible through semantic similarity alone.
+0. Read $WORKSPACE_ABS/analysis.md and extract the `### Code Entities` section.
+   If entities are present, use them as specific graph seeds (steps 1-2 below).
+   If the section is empty or missing, fall back to generic queries derived from the ticket summary.
 
-2. Targeted Glob + Grep to find:
+1. Semantic search — vector (find semantically similar code):
+   - For each entity in Code Entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="vector", limit=3)
+   - If no entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="vector", limit=5)
+
+2. Structural search — graph (find structural neighbours of the vector seeds):
+   - For each entity: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="graph", limit=3)
+   - Collect all unique source files from graph results. These are the starting "Files in Scope" map — files that import, inherit from, or are called by the seed results.
+   - If no entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="graph", limit=5)
+
+3. Targeted Glob + Grep to find:
    - Entry points (routes, controllers, handlers) relevant to the ticket
    - Service/business logic files touched by this ticket
    - Data models or schemas involved
@@ -319,6 +326,12 @@ Your task — do ALL of these:
    ## Key Dependencies
    - [internal deps that affect scope]
    - [external packages involved]
+
+   ## Files in Scope (Graph Map)
+   Files identified via graph search on ticket entities — structural neighbours from imports/inheritance:
+   | File | Relation | Source Entity |
+   |------|----------|--------------|
+   | path/to/file.py | imports from | TicketService |
 
    ## Risk Areas
    [Anything that could break, needs care, or has side effects]

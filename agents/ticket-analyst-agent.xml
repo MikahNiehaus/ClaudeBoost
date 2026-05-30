@@ -168,6 +168,14 @@ THEN [expected outcome]
 |---|---------|--------------|--------|-----------------|
 | 1 | [Task] | None | [Domain] | [agent-name] |
 
+### Code Entities
+Explicit names extracted from the ticket text (used as graph search seeds):
+- Files/paths: [any file paths or filenames mentioned]
+- Services/classes: [any PascalCase names, service names, or module names]
+- Endpoints: [any URL paths or API routes]
+- Models/tables: [any data model or table names]
+(Leave a section empty if nothing was mentioned for it. Do not invent names.)
+
 ### Definition of Done
 - [ ] [Specific, testable completion criterion]
 - [ ] All acceptance criteria pass

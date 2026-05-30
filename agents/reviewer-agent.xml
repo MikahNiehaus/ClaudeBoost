@@ -125,6 +125,8 @@
     <check>Spec Precision (trigger: UI copy/labels/field names): Word-for-word match on user-facing text</check>
     <check>Manual Smoke Test (trigger: UI/JS widget changes): Actually used feature in browser per AC scenario</check>
     <check>Migration/Schema (trigger: model property changes): Every add/remove has matching migration</check>
+    <check>Enum/Static Gate Completeness (trigger: enum value added OR static filter/whitelist lists like status lists, role lists, notification enrollment statuses): Enumerate ALL values in the enum family and verify each is explicitly INCLUDED or explicitly EXCLUDED with documented intent. A missing value silently bypasses any downstream gate — no compile error, no failing test. Example: adding PendingApproval to an enum without adding it to AddressChangeAlertEnrollmentStatuses silently suppresses notifications for that status.</check>
+    <check>Tests Asserting Silence on Notifications/Alerts (trigger: test uses Assert.Null, Assert.Empty, or Assert.Equal(0) on message, alert, or notification output): Verify the assertion reflects INTENTIONAL AC-defined silence, NOT a documented gap standing in as expected behavior. A test named DoesNotNotify or with a comment like "known gap" is a red flag — verify against ticket AC before accepting it.</check>
   </pass>
   <pass name="Code Smells">
     <description>Detect structural indicators of deeper design problems (see knowledge/coding-standards.xml)</description>
@@ -185,6 +187,8 @@ Evaluate each pass trigger against the diff. Run passes whose triggers fire. Mar
 | 9 | Spec Precision | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
 | 10 | Manual Smoke Test | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
 | 11 | Migration/Schema | YES/N/A: [reason] | PASS/FAIL/SKIP | [finding or skip reason] |
+| 12 | Enum/Static Gate Completeness | YES/N/A: [reason] | PASS/FAIL/SKIP | [list every enum value; note which are included/excluded and why] |
+| 13 | Tests Asserting Silence (null/0/empty on notifications) | YES/N/A: [reason] | PASS/FAIL/SKIP | [verify against AC — intentional silence or documented gap?] |
 
 #### Convention Compliance Detail (when trigger fires)
 - **Existing page/file**: [name]

@@ -37,6 +37,7 @@ Scope tiers:
 Steps:
 1. Create `workspace/[task-id]/` — announce with one line
 2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
+2b. Scope graph — after ticket analysis, run `rag_search mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Write the result to `context.md` as "Files in Scope". This is your starting navigation map for the task.
 3. Spawn the right agent(s)
 
 Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
@@ -132,6 +133,7 @@ Every word Claude produces — responses, code comments, explanations, labels, e
 - **Use contractions** — "don't", "it's", "we'll", not "do not", "it is", "we will"
 - **No uniform lists** — "Bold term: explanation" repeated 6 times reads like a machine; use prose or vary the structure
 - **No em-dashes at all.** Rewrite as separate sentences instead.
+- **No hyphenated compound jargon.** "no-go", "hard-block", "soft-fail", "non-trivial" used as standalone terms are AI-speak. Say what you mean: "not allowed", "blocks the task", "fails gracefully", "takes some work".
 - **No hedging clusters** — "might potentially perhaps" in one breath is not caution, it's noise; pick one or cut it
 - **Concrete over abstract** — "the build broke on line 42" not "there were issues"
 - **No throat-clearing** — start with the substance, not "Let's explore…" or "This section will cover…"
@@ -150,7 +152,7 @@ Full framework with examples: `knowledge/human-voice.xml`
 
 ## Task Creation
 
-If a request has 3 or more distinct steps, call `TaskCreate` before starting. Mark the task `in_progress` when you begin it and `completed` when you finish. Don't batch completions — update each task as you go.
+For any multi-step or non-trivial work, call `TaskCreate` before starting. Mark the task `in_progress` when you begin it and `completed` when you finish. Don't batch completions — update each task as you go.
 
 When in doubt, create the tasks first. It keeps the user informed and preserves progress through compaction.
 

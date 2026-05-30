@@ -23,6 +23,7 @@
     <check>What assumptions does this line make?</check>
     <check>What inputs would break this?</check>
     <check>Are edge cases handled (null, empty, negative, overflow)?</check>
+    <check>If this is a static list filtering by enum values (statuses, types, roles, notification enrollment), are ALL relevant enum variants either included or explicitly excluded with documented intent? A missing enum value silently bypasses the gate with no compiler or runtime error.</check>
   </category>
   <category name="Abstraction">
     <check>Is this the right abstraction level?</check>

@@ -163,6 +163,44 @@ Call `rag_index_project(project_path=<cwd output>)`. Report: "X files indexed."
 
 This enables RAG search over the app's routes, components, and entities during discovery.
 
+**0g — UI Scope Graph (runs when TICKET_ID is set and project is indexed).**
+
+Skip if `TICKET_ID` was not provided or project indexing failed.
+
+Extract UI-relevant entities from the ticket workspace in this order:
+
+1. Read `$WORKSPACE_ABS/analysis.md` — look for the `### Code Entities` section (written by ticket-analyst-agent). Extract names from Files/paths, Services/classes, and Endpoints.
+2. If analysis.md is absent or Code Entities is empty: read `$WORKSPACE_ABS/ticket.md` and extract PascalCase names, `/api/` paths, component names, and page/route references from the ticket text.
+
+For each entity found, run **both** calls — never just one:
+
+```
+rag_search(scope="codebase", project_path=<cwd>, query="[entity]", mode="vector", limit=3)
+rag_search(scope="codebase", project_path=<cwd>, query="[entity]", mode="graph", limit=3)
+```
+
+Vector finds files that do the same thing as the entity. Graph finds files that import, render, or call the entity — route files, page components, API handlers, and form validators that are structurally connected to it.
+
+From the combined results, identify:
+- **Route / page files** that render or navigate to the entity (e.g., `OrdersPage.tsx`, `OrdersController.cs`)
+- **Form / action files** that submit or mutate the entity
+- **API handler files** the ticket changes
+
+Map each file to its most likely URL route using filename and path conventions (e.g., `src/pages/orders/index.tsx` → `/orders`, `controllers/OrdersController.cs` → `/orders`).
+
+Append a **UI Pages in Scope** section to `$WORKSPACE_ABS/context.md` (create context.md if it doesn't exist yet):
+
+```markdown
+## UI Pages in Scope (Graph Map)
+Seeded from ticket entities — vector + graph RAG. Prioritize these in browser crawl and test plan.
+| URL / Route | File | Seed Entity | How Connected |
+|-------------|------|-------------|---------------|
+| /orders | src/pages/orders/index.tsx | OrderService | imports |
+| /orders/:id | src/pages/orders/detail.tsx | OrderService | imports |
+```
+
+If no entities are found or graph returns no results: skip silently — Phase 1b's general searches cover the case.
+
 ---
 
 ## Phase 1: App Discovery
@@ -212,7 +250,9 @@ Only continue past this probe if ALL checks pass.
 
 **1b — RAG-powered codebase scan.**
 
-Run these 3 searches before crawling the UI (gives you a head start on what to expect):
+If `UI Pages in Scope` was built in Phase 0g: read it from context.md now. Those pages are higher-confidence targets — use them as the starting point for what to look for in the browser.
+
+Run these 3 general searches as a complement (they catch things the entity seeds miss — global nav, auth, and shared forms):
 
 ```
 rag_search(scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6, mode="graph")
@@ -220,13 +260,21 @@ rag_search(scope="codebase", project_path=<cwd>, query="authentication login ses
 rag_search(scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5, mode="graph")
 ```
 
-Extract from results: known route paths, entity names, auth mechanism, form structures.
+Merge the Phase 0g entity-seeded results with these general results. Deduplicate by route. The combined list is what the browser crawl targets.
+
+Extract from all results: known route paths, entity names, auth mechanism, form structures.
 
 **1c — Browser crawl (snapshots only, max 2 levels deep).**
 
 Call `browser_snapshot`. From the accessibility tree, extract ALL nav links, buttons, and top-level interactive elements. Record each.
 
-For each top-level nav link found:
+**Crawl order — pages from UI Pages in Scope go first:**
+If Phase 0g built a UI Pages in Scope map, navigate to those routes before the general nav crawl. They're the highest-priority pages for this ticket. For each in-scope route:
+- `browser_navigate` to the route (confirm it exists — note if 404)
+- `browser_snapshot` — record: page title, forms, tables, interactive elements, component types
+- Return to `$TARGET_URL`
+
+Then crawl remaining top-level nav links found in the snapshot:
 - `browser_navigate` to the link
 - `browser_snapshot` — record: page title, forms present, lists/tables present, buttons, component types
 - Do NOT go deeper than one level from here
@@ -274,6 +322,9 @@ Write `$WORKSPACE_ABS/context.md`:
 
 ## Component Registry
 [table from step 1d]
+
+## UI Pages in Scope (Graph Map)
+[copy from Phase 0g if built — otherwise 'N/A — no ticket provided']
 
 ## Startup Console Errors
 [any errors from browser_console_messages on load]
@@ -332,6 +383,7 @@ If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed
 
 **Coverage completeness mandate (anti-laziness — enforce before writing draft):**
 
+- Every **page in UI Pages in Scope** (from Phase 0g) → mandatory coverage. At minimum: 1 navigation TC confirming the page loads, plus 1 TC per form or action on that page. These cannot be omitted or marked BLOCKED for difficulty.
 - Every **form** in the component registry → at minimum: 1 happy-path TC + 1 required-field-blank TC
 - Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists)
 - Every **nav link** in the App Map → at least one TC that navigates to it and confirms it loads

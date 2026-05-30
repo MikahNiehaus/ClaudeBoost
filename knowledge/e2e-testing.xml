@@ -451,4 +451,48 @@
   ]]></app-map-format>
 </app-discovery-methodology>
 
+<ui-scope-graph-strategy>
+  <overview>Before opening a browser, use ticket entities to build a "UI Pages in Scope" map. This tells you which pages THIS ticket actually touches — so you know where to focus testing and what gets mandatory coverage. Works the same way as the code exploration scope graph, adapted for UI routes instead of source files.</overview>
+
+  <when-to-run>When a ticket ID or ticket content is available at test start. If there is no ticket, skip this and proceed with general app discovery.</when-to-run>
+
+  <step order="1">Extract entities from the ticket. Sources in priority order:
+    - analysis.md "Code Entities" section (file paths, PascalCase class/service names, endpoint paths, model/table names)
+    - ticket.md raw text — look for route paths (/users, /admin), component names, feature names, model names
+    - Fall back to key noun phrases from the ticket summary
+    Cap at 10 most specific entities.
+  </step>
+
+  <step order="2">For each entity, run BOTH searches. Never skip either.
+    Call 1 — vector: rag_search(scope="codebase", project_path=..., query="[entity]", mode="vector", limit=3)
+    Call 2 — graph: rag_search(scope="codebase", project_path=..., query="[entity]", mode="graph", limit=3)
+    Vector finds semantically similar files; graph finds structural neighbours via imports and inheritance.
+  </step>
+
+  <step order="3">From all results, identify files that render UI or define routes:
+    - Route files (*Router*, *routes*, *Routes*, app.tsx, _app.tsx, pages/)
+    - Page components (page, Page, View, Screen in name or path)
+    - Controller actions with [HttpGet] / [Route] attributes
+    Map each file to its URL path (from the route definition or page directory structure).
+  </step>
+
+  <step order="4">Write "## UI Pages in Scope (Graph Map)" to context.md:
+    | URL/Route | File | Seed Entity | How Connected |
+    |-----------|------|-------------|---------------|
+    | /products  | src/pages/Products.tsx | ProductService | graph neighbour |
+    Update this map as you discover more pages during browser crawl.
+  </step>
+
+  <rule>NEVER run only vector or only graph. Both calls are mandatory. Graph traversal finds the route wiring and middleware that semantic search alone misses.</rule>
+
+  <mandatory-coverage>Every page in the UI Pages in Scope map gets mandatory test coverage:
+    - At minimum: 1 navigation TC confirming the page loads
+    - Plus 1 TC per form or interactive action on that page
+    These cannot be omitted or marked BLOCKED for difficulty.
+    Pages NOT in the scope map still get smoke test coverage — just not mandatory per-action coverage.
+  </mandatory-coverage>
+
+  <fallback>If no ticket is available, or if the project is not indexed, skip this step. Use the general app-discovery-methodology queries instead. Note the gap in context.md.</fallback>
+</ui-scope-graph-strategy>
+
 </knowledge-base>

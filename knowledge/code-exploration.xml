@@ -21,12 +21,14 @@
     <output>High-level structure map, tech stack, entry points</output>
   </workflow>
   <workflow name="Feature Understanding" duration="5-15 min">
+    <step>Extract entities from the ticket or goal: file paths, PascalCase class/service names, API endpoint paths, model names</step>
+    <step>For each entity, run BOTH: rag_search(scope="codebase", mode="vector") to find semantically similar code, AND rag_search(scope="codebase", mode="graph") to find structural neighbours (imports, inheritance, callers). Never run only one — they find different things.</step>
+    <step>Collect unique file paths from graph results into a "Files in Scope" starting map</step>
     <step>Identify feature entry point (API route, UI component)</step>
-    <step>Trace imports and dependencies</step>
     <step>Map call chain through execution path</step>
     <step>Find related tests</step>
     <step>Check for configuration/feature flags</step>
-    <output>Execution flow diagram, key files list, test locations</output>
+    <output>Files in Scope map (from graph seeds), execution flow, key files list, test locations</output>
   </workflow>
   <workflow name="Dependency Analysis" duration="10-20 min">
     <step>Start from target file/module</step>
@@ -107,6 +109,16 @@
   <pattern name="Controller" search="Controller, route handlers" example="UserController.list()"/>
   <pattern name="Middleware" search="use, next" example="app.use(authMiddleware)"/>
 </pattern-recognition>
+
+<graph-rag-strategy>
+  <overview>Use both vector and graph RAG together at task start. Vector finds semantically similar code; graph finds structural neighbours via imports and inheritance. They are complementary — each finds files the other misses.</overview>
+  <step order="1">Extract entities from the ticket: file paths, PascalCase names, endpoint paths, model/table names. These are the graph seeds.</step>
+  <step order="2">For each entity: rag_search(scope="codebase", project_path=..., query="[entity]", mode="vector", limit=3)</step>
+  <step order="3">For each entity: rag_search(scope="codebase", project_path=..., query="[entity]", mode="graph", limit=3)</step>
+  <step order="4">Collect unique file paths from all results. Write as "Files in Scope" to context.md. This is the starting navigation map — update it as you discover more files.</step>
+  <fallback>If the ticket has no explicit entity names, use key noun phrases from the ticket summary as seeds. If the project is not indexed, skip graph search and flag it.</fallback>
+  <rule>NEVER run only vector or only graph. Both calls are required. Graph traversal finds callers, middleware, and cross-file dependencies that semantic search alone misses.</rule>
+</graph-rag-strategy>
 
 <large-codebase-strategies>
   <strategy>Never read all files: Use targeted search</strategy>

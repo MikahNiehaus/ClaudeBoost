@@ -201,9 +201,11 @@ def main() -> int:
         "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
         "It's worth noting, In today's rapidly evolving. "
         "No em-dashes at all. Rewrite as separate sentences instead. "
+        "No hyphenated compound jargon (no-go, hard-block, soft-fail, non-trivial). "
+        "Say what you mean in plain words instead. "
         "(10) Code comments — non-formal but professional, concise, say why not what. "
         "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
-        "(11) Tasks — if work has 3 or more distinct steps, call TaskCreate before starting. "
+        "(11) Tasks — for any multi-step or non-trivial work, call TaskCreate before starting. "
         "Mark in_progress when you begin a task, completed when you finish it. "
         "Update as you go, not in a batch at the end."
     )

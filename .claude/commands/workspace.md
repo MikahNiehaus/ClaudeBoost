@@ -261,6 +261,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
 | `/research-rag <topic>` | Build a research RAG from URLs/PDFs/docs, then query it during implementation |
 | `/index-project <path>` | Index project codebase for semantic search via `rag_search(scope="codebase")` |
+| `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
 | `/spawn-agent <agent>` | Spawn a specific agent with RAG knowledge loaded |
 | `/self-improve` | ClaudeBoost self-improvement audit cycle (meta-work only) |
@@ -362,6 +363,35 @@ rag_search(scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1
 > Falling back to direct Grep/Glob for code exploration."
 
 Record the index status in `context.md` under **Key Decisions**: "Project RAG: [active / not indexed — using Grep/Glob]"
+
+---
+
+## Phase 4.6: Scope Graph
+
+Runs only when Phase 4.5 confirmed the project is indexed.
+
+1. Read `$WORKSPACE_ABS/ticket.md` (or `goal.md`) for entity names: file paths, PascalCase class/service names, API endpoint paths, and data model names.
+
+2. For each entity found, run:
+   ```
+   rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="graph", limit=3)
+   ```
+
+3. Collect unique file paths from all graph results.
+
+4. Append to `$WORKSPACE_ABS/context.md`:
+
+   ```markdown
+   ## Files in Scope (Graph Map)
+   Seeded from ticket entities. Graph structural neighbours via imports/inheritance.
+   | File | Relation | Seed Entity |
+   |------|----------|------------|
+   | [file] | [imports/inherits] | [entity] |
+
+   Update this table as you discover more files during the task.
+   ```
+
+If no entities are found in the ticket, or the project is not indexed: skip silently.
 
 ---
 
