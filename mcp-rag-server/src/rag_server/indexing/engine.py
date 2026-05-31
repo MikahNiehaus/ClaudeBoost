@@ -7,6 +7,7 @@ from glob import glob
 from pathlib import Path
 
 from rag_server.config import (
+    DEGENERATE_CHUNK_MIN_TOKENS,
     MANIFEST_PATH,
     MAX_CHUNK_TOKENS,
     MIN_CHUNK_TOKENS,
@@ -512,6 +513,17 @@ class IndexingEngine:
 
         project_store.create_collection(collection)
 
+        # FTS5 store — optional BM25 layer alongside ChromaDB vectors.
+        # Silently disabled if SQLite FTS5 isn't available in this Python build.
+        fts_store = None
+        try:
+            from rag_server.adapters.fts_store import FTSStore
+            fts_store = FTSStore(index_dir / "fts.db")
+            if force:
+                fts_store.clear()
+        except Exception as _fts_init_err:
+            logger.debug("FTS store init skipped (non-fatal): %s", _fts_init_err)
+
         # Scan project — respects .gitignore, filters generated/large files
         from rag_server.core.scanner import scan_project
         scan = scan_project(project_path, languages=languages)
@@ -608,6 +620,8 @@ class IndexingEngine:
 
             project_store.delete_by_source(collection, rel_path)
             graph_store.delete_edges_for_file(rel_path)
+            if fts_store:
+                fts_store.delete_by_source(rel_path)
 
             # Route to the correct chunker by file type
             if _is_pdf:
@@ -657,6 +671,9 @@ class IndexingEngine:
 
                 store_chunks = []
                 for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                    # Fix 3: skip truly degenerate chunks (empty stubs, import-only lines)
+                    if raw.token_count_approx < DEGENERATE_CHUNK_MIN_TOKENS:
+                        continue
                     cid = chunk_id(rel_path, i)
                     metadata = build_metadata(
                         source_file=rel_path,
@@ -676,6 +693,17 @@ class IndexingEngine:
                     ))
 
                 added = project_store.add_chunks(collection, store_chunks)
+                # Fix 2: write to FTS5 index alongside ChromaDB
+                if fts_store and store_chunks:
+                    fts_store.insert_chunks([
+                        {
+                            "content": c.content,
+                            "source_file": c.metadata.get("source_file", rel_path),
+                            "section": c.metadata.get("section", ""),
+                            "line_start": c.metadata.get("line_start", 0),
+                        }
+                        for c in store_chunks
+                    ])
                 chunks_created += added
                 files_indexed += 1
                 project_manifest[rel_path] = current_hash

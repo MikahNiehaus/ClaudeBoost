@@ -2,11 +2,12 @@
 
 import json
 import logging
+import math
 import threading
 import time
 from pathlib import Path
 
-from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, RAG_INDEX_DIR, SCOPES
+from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, RAG_INDEX_DIR, RERANKER_ENABLED, SCOPES
 from rag_server.ports.embedding_port import EmbeddingPort
 from rag_server.ports.store_port import StorePort
 
@@ -15,6 +16,30 @@ logger = logging.getLogger(__name__)
 # Track which embedder objects have had a warmup thread started.
 # Keyed by id(embedder) so we don't spam threads across calls/hot-reloads.
 _warmup_started: set[int] = set()
+
+# Cross-encoder reranker — lazy-loaded on first codebase search.
+_reranker = None
+_reranker_lock = threading.Lock()
+_reranker_unavailable = False  # prevents retry noise after a failed load
+
+
+def _get_reranker():
+    """Lazy-load the cross-encoder. Returns None if unavailable."""
+    global _reranker, _reranker_unavailable
+    if _reranker is not None or _reranker_unavailable:
+        return _reranker
+    with _reranker_lock:
+        if _reranker is not None or _reranker_unavailable:
+            return _reranker
+        try:
+            from sentence_transformers.cross_encoder import CrossEncoder
+            from rag_server.config import RERANKER_MODEL
+            _reranker = CrossEncoder(RERANKER_MODEL, max_length=512)
+            logger.info("Cross-encoder reranker loaded: %s", RERANKER_MODEL)
+        except Exception as e:
+            logger.warning("Cross-encoder reranker unavailable (%s) — reranking disabled", e)
+            _reranker_unavailable = True
+        return _reranker
 
 
 def _ensure_warmup(embedder: EmbeddingPort) -> None:
@@ -192,6 +217,16 @@ def rag_search(
                         score = round(score * 0.80, 4)
                     _boosted[_key] = r if score == r.score else _SR(r.content, r.metadata, score)
                 results = sorted(_boosted.values(), key=lambda r: r.score, reverse=True)[:limit]
+
+                # Fix 2: BM25/FTS5 hybrid — merge vector results with BM25 via RRF.
+                # Helps short/exact queries (type sigs, function names) that confuse MiniLM.
+                results = _fts_hybrid(results, query, idx_dir, limit)
+
+                # Fix 1: cross-encoder reranking — re-scores candidates jointly with the query.
+                # Fixes near-duplicate confusions where vector scores are nearly identical.
+                if RERANKER_ENABLED and results:
+                    results = _rerank(results, query)
+
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Codebase store search failed: %s", e)
@@ -312,6 +347,94 @@ def rag_search(
 
 
 _RRF_K = 60  # standard constant from Cormack et al. 2009
+
+
+def _fts_hybrid(
+    vector_results: list,
+    query: str,
+    idx_dir: "Path",
+    limit: int,
+) -> list:
+    """Merge vector results with BM25/FTS5 results via RRF.
+
+    Falls back to vector-only if the FTS store doesn't exist or query yields nothing.
+    FTS-only hits (found by BM25 but missed by vector) are included in the merged list.
+    """
+    fts_db = idx_dir / "fts.db"
+    if not fts_db.exists():
+        return vector_results
+
+    try:
+        from rag_server.adapters.fts_store import FTSStore
+        from rag_server.ports.store_port import SearchResult as _SR
+
+        fts = FTSStore(fts_db)
+        fts_rows = fts.search(query, limit=limit * 2)
+        if not fts_rows:
+            return vector_results
+
+        rrf_scores: dict[str, float] = {}
+        rrf_items: dict[str, object] = {}
+
+        for rank, r in enumerate(vector_results, 1):
+            key = r.metadata.get("source_file", "") + "|" + r.content[:40]
+            rrf_scores[key] = 1.0 / (_RRF_K + rank)
+            rrf_items[key] = r
+
+        for rank, row in enumerate(fts_rows, 1):
+            key = row["source_file"] + "|" + row["content"][:40]
+            rrf_val = 1.0 / (_RRF_K + rank)
+            if key in rrf_scores:
+                rrf_scores[key] += rrf_val
+            else:
+                meta = {
+                    "source_file": row["source_file"],
+                    "section": row.get("section", ""),
+                    "scope": "codebase",
+                    "line_start": row.get("line_start", 0),
+                }
+                rrf_scores[key] = rrf_val
+                rrf_items[key] = _SR(content=row["content"], metadata=meta, score=0.0)
+
+        ordered = sorted(rrf_items.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        return [
+            _SR(
+                content=rrf_items[k].content,
+                metadata=rrf_items[k].metadata,
+                score=round(rrf_scores[k], 6),
+            )
+            for k in ordered[:limit]
+        ]
+    except Exception as e:
+        logger.warning("FTS hybrid failed, using vector only: %s", e)
+        return vector_results
+
+
+def _rerank(results: list, query: str) -> list:
+    """Re-score results using a cross-encoder. Returns results in new ranked order.
+
+    Scores are sigmoid-normalised logits (0-1 range, higher = more relevant).
+    Falls back to original order if the reranker is unavailable or errors.
+    """
+    reranker = _get_reranker()
+    if reranker is None:
+        return results
+    try:
+        from rag_server.ports.store_port import SearchResult as _SR
+        pairs = [(query, r.content[:512]) for r in results]
+        logits = reranker.predict(pairs)
+        rescored = sorted(
+            zip(results, logits),
+            key=lambda x: float(x[1]),
+            reverse=True,
+        )
+        return [
+            _SR(r.content, r.metadata, round(1.0 / (1.0 + math.exp(-float(s))), 4))
+            for r, s in rescored
+        ]
+    except Exception as e:
+        logger.warning("Reranker predict failed, using vector order: %s", e)
+        return results
 
 
 def _augment_with_graph(

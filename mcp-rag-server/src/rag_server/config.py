@@ -81,3 +81,15 @@ MIN_CHUNK_TOKENS = 50
 # Search defaults
 DEFAULT_SEARCH_LIMIT = 5
 DEFAULT_MIN_SCORE = 0.5
+
+# Cross-encoder reranker — re-scores top-k codebase candidates jointly with the query.
+# Fixes near-duplicate confusions (get_content vs post_content, two "wrapper" functions).
+# CPU-compatible: ms-marco-MiniLM-L6-v2 is 22M params, ~100ms for 10 candidates on CPU.
+# Set RAG_RERANKER_ENABLED=0 to disable.
+RERANKER_MODEL = os.environ.get("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L6-v2")
+RERANKER_ENABLED = os.environ.get("RAG_RERANKER_ENABLED", "1").strip().lower() not in ("0", "false", "off")
+
+# Minimum token count for a chunk to be indexed.
+# Belt-and-suspenders below MIN_CHUNK_TOKENS for edge cases (PDF/URL chunkers,
+# tiny stubs) that might slip through with nearly empty content.
+DEGENERATE_CHUNK_MIN_TOKENS = 10
