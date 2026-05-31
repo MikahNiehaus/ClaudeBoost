@@ -36,7 +36,7 @@ def detect_communities(graph_store: "SQLiteGraphStore") -> dict[str, int]:
         if G.number_of_nodes() == 0:
             return {}
 
-        partition, _ = leiden(G)
+        partition = leiden(G)
         return dict(partition)
     except Exception:
         logger.exception("Community detection failed")

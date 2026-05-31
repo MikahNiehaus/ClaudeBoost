@@ -214,9 +214,9 @@ PERSISTENT: "**MODE: PERSISTENT** | Progress: 23/45 files | Next: Convert src/se
 
 <size-management>
   <limits>
-    <limit metric="File size" target="< 30 KB" warning="> 30 KB" action="Archive old contributions"/>
-    <limit metric="Agent contributions" target="< 10 active" warning="> 10" action="Move resolved to archive"/>
-    <limit metric="Parallel findings" target="< 20 rows" warning="> 20" action="Consolidate into summary"/>
+    <limit metric="File size" target="&lt; 30 KB" warning="&gt; 30 KB" action="Archive old contributions"/>
+    <limit metric="Agent contributions" target="&lt; 10 active" warning="&gt; 10" action="Move resolved to archive"/>
+    <limit metric="Parallel findings" target="&lt; 20 rows" warning="&gt; 20" action="Consolidate into summary"/>
   </limits>
   <keep-active>Current status, unresolved questions, recent contributions (3-5), next steps, key files</keep-active>
   <archive-to>outputs/archive/context-history.md</archive-to>

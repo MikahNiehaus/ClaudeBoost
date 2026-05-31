@@ -85,6 +85,53 @@ Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
 
 ---
 
+## Phase 1.5: Research
+
+Spawn a `research-agent` to surface external knowledge that could reveal gaps the audit would otherwise miss. This step runs BEFORE the audit so findings can inform what to look for.
+
+**SELF mode:**
+
+Spawn `research-agent` with this task:
+```
+Search for recent improvements in: RAG retrieval quality, knowledge graph techniques,
+LLM agent orchestration patterns, vector search accuracy, and self-improving AI systems.
+Focus on practical techniques applicable to a local Python RAG server.
+Return: top 3-5 concrete improvement ideas with enough detail to act on.
+End your response with ## Summary (≤300 words): key findings and which ones are actionable.
+```
+
+After the agent completes, extract its top findings and note any that match the current `FOCUS`.
+Write a **Research Findings** block to `workspace/self-improvement/context.md`:
+```
+### R[N+1] Research Findings — [date]
+[1-3 sentences per finding, labelled as ACTIONABLE or INFORMATIONAL]
+```
+
+**WORKSPACE mode:**
+
+Spawn `research-agent` with the workspace goal extracted from `goal.md`:
+```
+Research best practices and common pitfalls for: [goal keywords].
+Focus on security, correctness, and code quality patterns.
+Return: top 3-5 concrete risks or improvement patterns the implementation might have missed.
+End your response with ## Summary (≤300 words).
+```
+
+Use findings to seed the Phase 2 `code` and `security` lenses.
+
+**PROJECT mode:**
+
+Spawn `research-agent` with the project type (inferred from package.json / pyproject.toml / etc.):
+```
+Research common bugs and quality issues in [project type] projects.
+Return: top 3-5 patterns to look for in a code audit.
+End your response with ## Summary (≤300 words).
+```
+
+Use findings as extra audit checklist items in Phase 2.
+
+---
+
 ## Phase 2: Audit
 
 Every finding **MUST** cite `file:line` — no citation = drop the finding.
@@ -154,6 +201,9 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
 | ST-13 | `rag_search("rag search implementation", scope="codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
 | ST-14 | `rag_context(agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME)` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
+| ST-15 | Graph resolution quality: `rag_index_project(project_path=$CLAUDEBOOST_HOME)` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved). External deps don't count as unresolved. |
+| ST-16 | Neighbor relevance spot-check: `rag_search(scope="codebase", query="build_context tier4 codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`). Confirms graph edges connect semantically related files, not random ones. |
+| ST-17 | CodeSearchNet MRR benchmark: `python "C:/Users/grayw/OneDrive/prj/rag-benchmarks/codesearchnet_benchmark.py" --sample 100 --lang python --no-index`. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |
 
 ### WORKSPACE mode tests (run all)
 

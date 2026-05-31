@@ -101,6 +101,19 @@ _CS_EXTERNAL_PREFIXES = frozenset({
     "StackExchange", "MongoDB", "Npgsql", "MySql", "Oracle",
     "JWT", "IdentityModel", "Humanizer", "CsvHelper",
     "Kendo",  # NuGet: Kendo.Mvc, Kendo.Mvc.UI, Kendo.Mvc.Infrastructure
+    "Org",    # NuGet: Org.BouncyCastle.*, Org.Apache.*, etc.
+})
+
+# Java stdlib and common third-party top-level packages that are always external.
+# Project-internal Java classes use the project's own base package (e.g. io.github.ccxt).
+_JAVA_EXTERNAL_PREFIXES = frozenset({
+    "java", "javax", "jakarta",       # JDK stdlib
+    "sun", "com.sun", "jdk",          # JDK internals
+    "org.junit", "org.testng",        # test frameworks
+    "org.apache", "org.slf4j",        # Apache / logging
+    "org.springframework",            # Spring
+    "com.google", "com.fasterxml",    # Guava, Jackson
+    "android", "kotlin",              # Android / Kotlin stdlib
 })
 
 
@@ -145,6 +158,16 @@ def _is_external_symbol(
         # so they don't inflate the unresolved-edge count.
         first_segment = symbol.split(".")[0]
         return first_segment in _CS_EXTERNAL_PREFIXES
+
+    if source_file.endswith(".java"):
+        # Java: mark JDK stdlib and common third-party packages as external.
+        # Project-internal imports (e.g. io.github.ccxt.*) are NOT in _JAVA_EXTERNAL_PREFIXES
+        # and will fall through to the file-map resolver.
+        dotted = symbol.split(".")
+        # Check single-segment (java, javax) and two-segment (org.junit, com.google) prefixes
+        one = dotted[0]
+        two = ".".join(dotted[:2]) if len(dotted) >= 2 else ""
+        return one in _JAVA_EXTERNAL_PREFIXES or two in _JAVA_EXTERNAL_PREFIXES
 
     if not source_file.endswith(".go"):
         return False
@@ -211,7 +234,14 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
         parts = source_dir.split("/") if source_dir else []
         if levels_up > 0:
             parts = parts[:-levels_up] if levels_up <= len(parts) else []
-        rel_slash = "/".join(parts + [stripped.replace(".", "/")]) if stripped else "/".join(parts)
+        # Only convert dots to slashes for dotted module names (e.g. foo.bar.baz).
+        # File paths already contain slashes and may have extensions — applying
+        # replace(".", "/") to "src/base/Exchange.js" produces "src/base/Exchange/js",
+        # breaking all TS/JS relative imports that include a file extension.
+        if "/" in stripped:
+            rel_slash = "/".join(parts + [stripped]) if stripped else "/".join(parts)
+        else:
+            rel_slash = "/".join(parts + [stripped.replace(".", "/")]) if stripped else "/".join(parts)
         if rel_slash in file_map:
             return file_map[rel_slash]
         rel_dot = rel_slash.replace("/", ".")
@@ -219,6 +249,13 @@ def _resolve_symbol(target_symbol: str, source_file: str, file_map: dict[str, st
             return file_map[rel_dot]
         # 5. Extension-less JS/TS relative imports: ./Foo → Foo.jsx, Foo/index.js, etc.
         if source_file.endswith(_JS_SOURCE_EXTS):
+            # TypeScript ESM imports write ./foo.js but the actual file is .ts/.tsx.
+            # Try swapping the .js extension before adding more extensions.
+            if rel_slash.endswith(".js") and source_file.endswith((".ts", ".tsx")):
+                stem = rel_slash[:-3]
+                for ts_ext in (".ts", ".tsx"):
+                    if stem + ts_ext in file_map:
+                        return file_map[stem + ts_ext]
             for ext in _JS_EXTENSIONS:
                 if rel_slash + ext in file_map:
                     return file_map[rel_slash + ext]

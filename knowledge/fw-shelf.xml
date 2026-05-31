@@ -196,9 +196,9 @@ class UsersHandler {
     r.post('/register', _register);
     r.post('/login',    _login);
     r.get('/',          _withAuth(_getAll));
-    r.get('/<id>',      _withAuth(_getById));
-    r.put('/<id>',      _withAuth(_update));
-    r.delete('/<id>',   _withAuth(_delete));
+    r.get('/&lt;id>',      _withAuth(_getById));
+    r.put('/&lt;id>',      _withAuth(_update));
+    r.delete('/&lt;id>',   _withAuth(_delete));
     return r;
   }
 
@@ -371,7 +371,7 @@ void main() {
   <item key="handler rule">Parse, delegate to service, serialize, return — under 20 lines</item>
   <item key="body read">readAsString() once only — stream is consumed on first read</item>
   <item key="pass data downstream">request.change(context: {...request.context, 'key': value})</item>
-  <item key="path parameters">Angle brackets in shelf_router: /<id> — extra String args in handler signature</item>
+  <item key="path parameters">Angle brackets in shelf_router: /&lt;id> — extra String args in handler signature</item>
   <item key="sub-routers">..mount('/prefix', router.call) — always call .call</item>
   <item key="cascade">Cascade().add(apiRouter).add(staticHandler) — specific before generic</item>
   <item key="exceptions">Typed exceptions (NotFoundException, etc.) — map to HTTP codes in error middleware only</item>

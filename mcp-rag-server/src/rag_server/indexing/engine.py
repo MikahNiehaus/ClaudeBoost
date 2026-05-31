@@ -234,6 +234,11 @@ class IndexingEngine:
         scope_config = SCOPES[scope]
         collection = scope_config["collection"]
 
+        # Scopes with no file patterns are managed by dedicated indexers (e.g. rag_index_memories).
+        # Skip them here so force=True doesn't wipe their collection.
+        if not scope_config["patterns"]:
+            return {"files_indexed": 0, "chunks_created": 0, "files_unchanged": 0, "files_failed": 0}
+
         # If force and collection exists, drop it first to handle dimension changes
         # (e.g. switching from 384d to 768d embedding model)
         if force and self._store.collection_exists(collection):
@@ -818,6 +823,7 @@ class IndexingEngine:
             "graph": {
                 "edges": graph_store.count_edges() if hasattr(graph_store, "count_edges") else 0,
                 "resolved": graph_store.count_resolved_edges() if hasattr(graph_store, "count_resolved_edges") else 0,
+                "unresolved": graph_store.count_unresolved_edges() if hasattr(graph_store, "count_unresolved_edges") else 0,
             },
             "index_path": str(index_dir),
         }
@@ -903,28 +909,45 @@ class IndexingEngine:
         )
 
     def _chunk_file(self, content: str, rel_path: str):
-        """Route to the right chunker based on file extension."""
-        from rag_server.core.project import extension_to_language
-        from rag_server.indexing.code_chunker import chunk_code
-        if extension_to_language(Path(rel_path).suffix):
-            return chunk_code(
+        """Route to the right chunker based on file extension.
+
+        Document formats must be checked before extension_to_language() because
+        .md/.rst/.txt/.pdf are all in LANGUAGE_EXTENSIONS (truthy) but need their
+        own chunkers — code chunker produces nothing for them.
+        """
+        suffix = Path(rel_path).suffix.lower()
+
+        # Document formats — must come first
+        if suffix in {".md", ".mdx"}:
+            return chunk_markdown(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
             )
-        if rel_path.endswith(".xml"):
+        if suffix in {".rst", ".txt"}:
+            return chunk_markdown(
+                content, rel_path,
+                max_tokens=MAX_CHUNK_TOKENS,
+                min_tokens=MIN_CHUNK_TOKENS,
+            )
+        if suffix == ".xml":
             from rag_server.indexing.xml_chunker import chunk_xml
             return chunk_xml(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
             )
-        if rel_path.endswith(".md"):
-            return chunk_markdown(
+
+        # Code files — only after document types are ruled out
+        from rag_server.core.project import extension_to_language
+        from rag_server.indexing.code_chunker import chunk_code
+        if extension_to_language(suffix):
+            return chunk_code(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
             )
+
         # Unsupported file type — skip
         return []
 

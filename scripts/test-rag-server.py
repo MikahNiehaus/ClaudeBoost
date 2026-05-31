@@ -29,6 +29,12 @@ import subprocess
 import time
 from pathlib import Path
 
+# Force UTF-8 output on Windows (avoids cp1252 UnicodeEncodeError for ✓/✗/⚠ chars)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # Resolve ClaudeBoost home
 # ---------------------------------------------------------------------------
@@ -192,18 +198,20 @@ def run_direct_test(project_path: str | None) -> int:
         fail(f"Search failed: {e}")
         return 2
 
-    # Optional: force-index project
+    # Optional: index project (force wipe if possible, incremental fallback)
     if project_path:
-        print(f"\n  Force-indexing project: {project_path}")
-        chroma_proj = Path(project_path) / "workspace" / ".rag-index" / "chroma"
+        from rag_server.core.project import project_index_dir
+        idx_dir = project_index_dir(project_path)
+        chroma_proj = idx_dir / "chroma"
 
-        # Wipe existing index first (using PowerShell if needed on Windows)
+        use_force = False
         if chroma_proj.exists():
             info(f"Wiping existing chroma dir: {chroma_proj}")
             import shutil
             try:
                 shutil.rmtree(chroma_proj)
                 ok("Wiped with shutil.rmtree")
+                use_force = True
             except Exception as e:
                 warn(f"shutil.rmtree failed ({e}) — trying PowerShell...")
                 result_ps = subprocess.run(
@@ -213,18 +221,22 @@ def run_direct_test(project_path: str | None) -> int:
                 )
                 if result_ps.returncode == 0:
                     ok("Wiped with PowerShell Remove-Item")
+                    use_force = True
                 else:
-                    fail(f"PowerShell wipe also failed: {result_ps.stderr.strip()}")
-                    info("Is a process holding the ChromaDB files open?")
-                    info("Try: tasklist /fi \"STATUS eq running\" or close Claude Code and retry")
-                    return 1
+                    warn(f"Wipe failed (server holds files open) — falling back to incremental indexing")
+                    use_force = False
+        else:
+            use_force = True
+
+        mode_label = "Force-indexing" if use_force else "Incremental-indexing"
+        print(f"\n  {mode_label} project: {project_path}")
 
         try:
             engine = IndexingEngine(embedder=embedder, store=store)
             index_result = engine.index_project(
                 project_path=project_path,
                 languages=None,
-                force=True,
+                force=use_force,
             )
             if "error" in index_result:
                 fail(f"Index failed: {index_result['error']}")

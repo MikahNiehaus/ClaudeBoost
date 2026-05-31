@@ -13,7 +13,7 @@
 <guardrails>
 
   <guardrail id="G-001" severity="BLOCKER">
-    <rule>Every PHP file must begin with `declare(strict_types=1)` immediately after the opening `<?php` tag. Never omit it.</rule>
+    <rule>Every PHP file must begin with `declare(strict_types=1)` immediately after the opening `&lt;?php` tag. Never omit it.</rule>
     <bad><![CDATA[<?php
 
 namespace App\Domain;
@@ -390,7 +390,7 @@ final class EmailTest extends TestCase
 </dev-dependencies>
 
 <quick-reference>
-  <item key="strict_types">Every file: `declare(strict_types=1);` after `<?php`</item>
+  <item key="strict_types">Every file: `declare(strict_types=1);` after `&lt;?php`</item>
   <item key="types">All parameters and return types required; use `string|int` over `mixed`</item>
   <item key="match">Prefer `match` over `switch` — strict, expression-based, no fallthrough</item>
   <item key="enums">PHP 8.1+ backed enums with methods over class constants</item>

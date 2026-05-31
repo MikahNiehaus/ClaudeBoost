@@ -119,8 +119,8 @@ end]]></good>
   </guardrail>
 
   <guardrail id="G-011" severity="HIGH">
-    <rule>Use `{}` for single-line blocks, `do...end` for multi-line. Prefer `block_given?` + `yield` over explicit `&block` parameter unless the proc must be stored.</rule>
-    <bad><![CDATA[def each(&block)
+    <rule>Use `{}` for single-line blocks, `do...end` for multi-line. Prefer `block_given?` + `yield` over explicit `&amp;block` parameter unless the proc must be stored.</rule>
+    <bad><![CDATA[def each(&amp;block)
   items.each { |i| block.call(i) }  # unnecessary explicit block object
 end]]></bad>
     <good><![CDATA[def each
@@ -430,7 +430,7 @@ end]]></example>
   <item key="eval">String eval is banned — use define_method or block form of class_eval</item>
   <item key="method_missing">Must always be paired with respond_to_missing?</item>
   <item key="guard clauses">Prefer over nested conditionals — return early</item>
-  <item key="blocks">{ } for single-line, do...end for multi-line; yield over &block when not stored</item>
+  <item key="blocks">{ } for single-line, do...end for multi-line; yield over &amp;block when not stored</item>
   <item key="lambdas vs procs">Lambda: strict arity, returns from lambda; Proc: flexible, returns from enclosing method</item>
   <item key="enumerable">Chain select/map/reduce over manual loops; lazy for large collections</item>
   <item key="pattern matching">Use case/in with Ruby 3.x for hash/array destructuring</item>

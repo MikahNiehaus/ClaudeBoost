@@ -324,9 +324,9 @@ READ knowledge/[topic].xml for domain expertise.
   <action>Check context, batch if needed, compact between batches</action>
   <escalates-to>BLOCK if context exhaustion occurs</escalates-to>
   <context-thresholds>
-    <threshold usage="< 50%" max-parallel="3">Proceed normally</threshold>
+    <threshold usage="&lt; 50%" max-parallel="3">Proceed normally</threshold>
     <threshold usage="50-75%" max-parallel="2">Consider /compact first</threshold>
-    <threshold usage="> 75%" max-parallel="1">Run sequentially, no parallel</threshold>
+    <threshold usage="&gt; 75%" max-parallel="1">Run sequentially, no parallel</threshold>
   </context-thresholds>
   <batching-protocol>
     <step order="1">Split into batches of 3 agents max</step>

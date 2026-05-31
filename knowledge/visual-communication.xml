@@ -88,7 +88,7 @@
 
 <framework id="CleanCode">
   <principle name="Meaningful Names" annotation="Clean: Named [intent]" rule="Classes=nouns, Methods=verbs"/>
-  <principle name="Small Functions" annotation="Clean: Small [lines]" rule="< 20 lines ideal"/>
+  <principle name="Small Functions" annotation="Clean: Small [lines]" rule="&lt; 20 lines ideal"/>
   <principle name="Single Purpose" annotation="Clean: Single purpose [what]" rule="One thing well"/>
   <principle name="No Side Effects" annotation="Clean: Pure function" rule="Input to output only"/>
 </framework>

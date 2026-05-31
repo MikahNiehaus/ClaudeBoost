@@ -19,7 +19,7 @@
     </dont>
   </pillar>
 
-  <pillar name="Select" focus="Tool & Example Curation">
+  <pillar name="Select" focus="Tool &amp; Example Curation">
     <principle>Design minimal viable toolsets. Each unused tool wastes attention budget.</principle>
     <tool-design-rules>
       <rule>Self-contained (no implicit dependencies)</rule>

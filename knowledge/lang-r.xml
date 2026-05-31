@@ -19,7 +19,7 @@
   </guardrail>
 
   <guardrail id="G-002" severity="BLOCKER">
-    <rule>Never use T/F as TRUE/FALSE aliases. They can be overwritten: T <- FALSE is valid R.</rule>
+    <rule>Never use T/F as TRUE/FALSE aliases. They can be overwritten: T &lt;- FALSE is valid R.</rule>
     <bad><![CDATA[if (T) do_something()]]></bad>
     <good><![CDATA[if (TRUE) do_something()]]></good>
   </guardrail>

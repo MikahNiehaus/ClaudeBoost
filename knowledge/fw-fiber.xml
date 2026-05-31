@@ -242,7 +242,7 @@ func RequireRole(roles ...string) fiber.Handler {
   <pattern name="Generic Body Validator">
     <example><![CDATA[func ValidateBody[T any](c *fiber.Ctx, v *CustomValidator) (*T, error) {
     var body T
-    if err := c.BodyParser(&body); err != nil {
+    if err := c.BodyParser(&amp;body); err != nil {
         return nil, fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
     }
     if err := v.Validate(&body); err != nil {
@@ -334,7 +334,7 @@ github.com/swaggo/swag
 
 <quick-reference>
   <item key="error handler">fiber.Config{ErrorHandler: customErrorHandler} — always set</item>
-  <item key="body parse">c.BodyParser(&body) then ValidateBody generic helper</item>
+  <item key="body parse">c.BodyParser(&amp;body) then ValidateBody generic helper</item>
   <item key="context">c.Context() for context.Context to services</item>
   <item key="locals">c.Locals("key", value) to share between middleware and handlers</item>
   <item key="errors">fiber.NewError(code, message) for HTTP errors; falls to ErrorHandler</item>

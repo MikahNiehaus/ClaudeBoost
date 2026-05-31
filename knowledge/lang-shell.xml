@@ -243,7 +243,7 @@ bash -n script.sh                           # Syntax check (no execution)]]></co
   <item key="temp files">mktemp + trap EXIT; never hardcode /tmp paths</item>
   <item key="function vars">Always local; use local -r for constants</item>
   <item key="find + loop">find -print0 + while IFS= read -r -d ''; never for in $(find)</item>
-  <item key="errors">To stderr (>&2); meaningful exit codes (0/1/2)</item>
+  <item key="errors">To stderr (&gt;&amp;2); meaningful exit codes (0/1/2)</item>
   <item key="portability">command -v not which; $() not backticks; printf not echo</item>
   <item key="shellcheck">Zero warnings before commit; suppress with SC code comment</item>
   <item key="testing">bats-core; setup/teardown per test; test/ or spec/ directory</item>
