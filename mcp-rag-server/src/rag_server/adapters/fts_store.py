@@ -16,6 +16,28 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _expand_code_tokens(text: str) -> str:
+    """Return extra sub-tokens from camelCase and underscore identifiers in text.
+
+    Only returns the NEW tokens (not originals) so they can be appended to content
+    before FTS insertion. FTS5 then matches both the full identifier and its parts.
+
+    "getUserById" → "get user by id"
+    "parse_xml_doc" → "parse xml doc"
+    Words already all-lowercase with no separators, or ≤3 chars, are skipped.
+    """
+    extra: set[str] = set()
+    for ident in re.findall(r'\b[a-zA-Z][a-zA-Z0-9_]{3,}\b', text):
+        # Split camelCase boundaries
+        split = re.sub(r'([a-z])([A-Z])', r'\1 \2', ident)
+        split = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', split)
+        # Split underscores
+        parts = [p.lower() for p in re.split(r'[_\s]+', split) if len(p) >= 3]
+        if len(parts) > 1:
+            extra.update(parts)
+    return ' '.join(sorted(extra))
+
+
 class FTSStore:
     """BM25 full-text search over indexed code chunks using SQLite FTS5."""
 
@@ -58,7 +80,12 @@ class FTSStore:
                 "INSERT INTO chunks_fts(content, source_file, section, line_start) "
                 "VALUES (?, ?, ?, ?)",
                 [
-                    (c["content"], c["source_file"], c.get("section", ""), c.get("line_start", 0))
+                    (
+                        _fts_content(c["content"]),
+                        c["source_file"],
+                        c.get("section", ""),
+                        c.get("line_start", 0),
+                    )
                     for c in chunks
                 ],
             )
@@ -98,6 +125,18 @@ class FTSStore:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()
             return row[0] if row else 0
+
+
+def _fts_content(content: str) -> str:
+    """Append expanded code tokens to content before FTS insertion.
+
+    Keeps original content intact for display; appends split sub-tokens so
+    FTS5 can match both "getUserById" and "get", "user", "by", "id".
+    """
+    extra = _expand_code_tokens(content)
+    if extra:
+        return content + " " + extra
+    return content
 
 
 def to_fts5_query(query: str) -> str:

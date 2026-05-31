@@ -373,6 +373,10 @@ def _fts_hybrid(
         if not fts_rows:
             return vector_results
 
+        # Short queries (≤3 words) are exact-term lookups — type sigs, function names.
+        # BM25 outperforms vector here, so lower k gives BM25 ~3x more weight in RRF.
+        _rrf_k_bm25 = 20 if len(query.split()) <= 3 else _RRF_K
+
         rrf_scores: dict[str, float] = {}
         rrf_items: dict[str, object] = {}
 
@@ -383,7 +387,7 @@ def _fts_hybrid(
 
         for rank, row in enumerate(fts_rows, 1):
             key = row["source_file"] + "|" + row["content"][:40]
-            rrf_val = 1.0 / (_RRF_K + rank)
+            rrf_val = 1.0 / (_rrf_k_bm25 + rank)
             if key in rrf_scores:
                 rrf_scores[key] += rrf_val
             else:
