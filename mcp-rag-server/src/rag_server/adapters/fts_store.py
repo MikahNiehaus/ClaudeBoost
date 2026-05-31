@@ -22,17 +22,20 @@ def _expand_code_tokens(text: str) -> str:
     Only returns the NEW tokens (not originals) so they can be appended to content
     before FTS insertion. FTS5 then matches both the full identifier and its parts.
 
-    "getUserById" → "get user by id"
-    "parse_xml_doc" → "parse xml doc"
-    Words already all-lowercase with no separators, or ≤3 chars, are skipped.
+    "getUserById"            -> "by get id user"
+    "parse_xml_doc"          -> "doc parse xml"
+    "_cancellationTokenSource" -> "cancellation source token"
+    Pure prose with no identifiers returns "".
     """
     extra: set[str] = set()
-    for ident in re.findall(r'\b[a-zA-Z][a-zA-Z0-9_]{3,}\b', text):
+    # _* prefix handles C# private fields like _cancellationTokenSource
+    for ident in re.findall(r'_*[a-zA-Z][a-zA-Z0-9_]{3,}', text):
+        ident = ident.lstrip('_')
         # Split camelCase boundaries
         split = re.sub(r'([a-z])([A-Z])', r'\1 \2', ident)
         split = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', split)
-        # Split underscores
-        parts = [p.lower() for p in re.split(r'[_\s]+', split) if len(p) >= 3]
+        # Split underscores; keep parts >= 2 chars so "id", "db", "by" are kept
+        parts = [p.lower() for p in re.split(r'[_\s]+', split) if len(p) >= 2]
         if len(parts) > 1:
             extra.update(parts)
     return ' '.join(sorted(extra))
