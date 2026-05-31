@@ -5,5 +5,8 @@
 # Gas Town runtime — ~1000 Go files unrelated to ClaudeBoost's own source
 gastown/
 
+# Playwright MCP page captures — not source code
+.playwright-mcp/
+
 # Scripts that are generated or vendored (add more as needed)
 # example: vendor/

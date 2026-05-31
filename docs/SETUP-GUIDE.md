@@ -45,7 +45,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 39 slash commands | `~/.claude/commands/` |
+| 4 | Links 41 slash commands | `~/.claude/commands/` |
 | 5 | Links agents + knowledge to GT directives (if GT installed) | `~/gt/directives/` |
 | 6 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
@@ -74,7 +74,7 @@ Open any project in Claude Code and try:
 That's it. Every Claude Code session now has:
 - Semantic search over 96 knowledge files (46 domain, 17 language, 33 framework) and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 39 slash commands for task management
+- 41 slash commands for task management
 
 ### How RAG works after install
 
@@ -408,7 +408,7 @@ but the actual workspace it creates is at `~/gt/<project-name>/crew/<your-userna
 # Standalone (always works)
 rag_status                    # In Claude Code — shows collection counts
 rag_search "SQL injection"    # Should return security.xml results
-ls ~/.claude/commands/        # 39 slash commands
+ls ~/.claude/commands/        # 41 slash commands
 cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 
 # Gas Town (if installed)

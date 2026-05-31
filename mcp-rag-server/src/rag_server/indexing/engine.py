@@ -645,7 +645,14 @@ class IndexingEngine:
                             logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
             try:
-                texts = [c.content for c in raw_chunks]
+                # Path+section prepend at embed time: adds file identity to the vector
+                # so constant-name files (e.g. config.py with MAX_CHUNK_TOKENS) match
+                # natural-language queries. Only for code files — docs already have
+                # rich prose and the prefix adds noise. Stored content is unchanged.
+                if not _is_doc and not _is_pdf:
+                    texts = [f"[{rel_path}] [{c.section}]\n{c.content}" for c in raw_chunks]
+                else:
+                    texts = [c.content for c in raw_chunks]
                 embeddings = self._embedder.embed(texts)
 
                 store_chunks = []
@@ -738,7 +745,10 @@ class IndexingEngine:
                 logger.debug("SCIP pass failed (non-fatal)", exc_info=True)
 
         # Community detection + summaries (optional deps — never blocks indexing).
-        if files_indexed > 0 and graph_store.has_graph():
+        # Run when files were indexed OR when communities table is empty (recovery from
+        # a previous failed run — e.g. pre-leiden-fix index where detection silently threw).
+        _need_communities = files_indexed > 0 or not graph_store.get_all_community_ids()
+        if _need_communities and graph_store.has_graph():
             try:
                 from rag_server.core.community import detect_communities
                 from rag_server.core.summarizer import summarize_community

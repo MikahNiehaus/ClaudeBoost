@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08 (counts updated 2026-05-23)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 96 knowledge XMLs (46 domain + 17 lang + 33 framework), 39 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 96 knowledge XMLs (46 domain + 17 lang + 33 framework), 41 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1900,7 +1900,7 @@ not run in time.
 **Transport:** stdio (MCP protocol)  
 **Installed at:** `mcp-rag-server/` via `pip install -e`
 
-### 8.1 Tools (6 total)
+### 8.1 Tools (9 total)
 
 | Tool | Purpose |
 |------|---------|

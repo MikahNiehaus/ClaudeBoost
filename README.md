@@ -10,7 +10,7 @@ ClaudeBoost/
 ├── agents/              25 specialist agent definitions (XML)
 ├── knowledge/           96 knowledge files (46 domain, 17 lang, 33 framework) (XML)
 ├── mcp-rag-server/      Semantic search MCP server (Python)
-├── .claude/commands/    39 slash commands
+├── .claude/commands/    41 slash commands
 ├── scripts/             Setup and maintenance scripts
 ├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
@@ -56,7 +56,7 @@ Open any project in Claude Code. You now have:
 - `rag_index` — index new content
 - `rag_status` — check server health
 - `/boost` — activate ClaudeBoost (RAG + GT primed)
-- 39 slash commands for task management
+- 41 slash commands for task management
 
 ## Features
 

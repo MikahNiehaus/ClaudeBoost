@@ -1,7 +1,9 @@
-"""Per-community LLM summaries via local Ollama. Synchronous, best-effort.
+"""Per-community LLM summaries via local Ollama, with a path-based fallback.
 
-Requires Ollama running at localhost:11434 with the target model pulled.
-If Ollama is unreachable, summarize_community returns "" — never raises.
+Tries Ollama at localhost:11434 first. If unreachable, generates a heuristic
+summary from file paths and caches it as model="heuristic". A real Ollama
+summary will replace the heuristic the next time Ollama is available, because
+the model name won't match on cache lookup.
 """
 
 import hashlib
@@ -86,11 +88,13 @@ def summarize_community(
             )
         return text
     except OSError:
-        logger.info("Ollama not reachable — community %d summary skipped", community_id)
-        return ""
+        logger.info("Ollama not reachable — using heuristic summary for community %d", community_id)
+        text = _heuristic_summary(members)
+        graph_store.save_community_summary(community_id, text, member_hash, "heuristic")
+        return text
     except Exception:
         logger.warning("Community %d summary failed", community_id, exc_info=True)
-        return ""
+        return _heuristic_summary(members)
 
 
 def _build_context(members: list[str], project_path: str) -> str:
@@ -106,3 +110,23 @@ def _build_context(members: list[str], project_path: str) -> str:
             snippet = "(unreadable)"
         lines.append(f"{member}:\n{snippet}")
     return "\n\n".join(lines)
+
+
+def _heuristic_summary(members: list[str]) -> str:
+    """Path-based summary when Ollama is unavailable.
+
+    Groups files by their immediate parent directory, names the top dirs,
+    and lists up to 4 file stems. Replaced by a real LLM summary when Ollama
+    becomes available (cache key includes model name, so 'heuristic' != 'qwen2.5-coder:7b').
+    """
+    from collections import Counter
+    dirs: Counter = Counter()
+    for m in members:
+        parts = Path(m).parts
+        dirs[parts[-2] if len(parts) >= 2 else "(root)"] += 1
+
+    top_dirs = ", ".join(f"{d}/" for d, _ in dirs.most_common(3))
+    stems = [Path(m).stem for m in members[:4]]
+    extra = max(0, len(members) - 4)
+    stem_str = ", ".join(stems) + (f" +{extra} more" if extra else "")
+    return f"{len(members)} files in {top_dirs} — {stem_str}"

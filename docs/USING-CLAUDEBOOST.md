@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 96 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 39 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work. Gas Town, if installed, adds multi-agent coordination, persistent identity, and cross-session work tracking on top of all that.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 96 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 41 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work. Gas Town, if installed, adds multi-agent coordination, persistent identity, and cross-session work tracking on top of all that.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -14,7 +14,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 ## 2. Getting started
 
-Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 39 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
+Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 41 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
 Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG, activates Gas Town if installed, and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 

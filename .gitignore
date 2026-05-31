@@ -1,4 +1,5 @@
 workspace/
+.playwright-mcp/
 references/
 mcp-rag-server/.rag-index/
 indexes/

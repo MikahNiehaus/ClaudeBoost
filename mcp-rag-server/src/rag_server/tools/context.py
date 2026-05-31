@@ -215,6 +215,15 @@ def build_context(
                     codebase_results = project_store.search(
                         "codebase", query_embedding, limit=10, min_score=0.35,
                     )
+                    # Prose docs (.md/.rst/.txt) match query vocabulary well but rarely
+                    # contain what agents need — penalise them so source code ranks first.
+                    _DOC_EXTS = {".md", ".mdx", ".rst", ".txt"}
+                    codebase_results.sort(
+                        key=lambda r: r.score * (0.80 if any(
+                            r.metadata.get("source_file", "").endswith(ext) for ext in _DOC_EXTS
+                        ) else 1.0),
+                        reverse=True,
+                    )
                     for r in codebase_results:
                         chunk_tokens = r.metadata.get("token_count", estimate_tokens(r.content))
                         # Always include the first chunk even if it exceeds the budget —

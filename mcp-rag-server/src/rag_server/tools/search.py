@@ -153,12 +153,45 @@ def rag_search(
 
         if project_store.collection_exists(collection) and project_store.count(collection) > 0:
             try:
-                results = project_store.search(
-                    collection=collection,
-                    query_embedding=query_embedding,
-                    limit=limit,
-                    min_score=min_score,
-                )
+                # Multi-query expansion: run 2 extra variants to cover vocabulary gaps.
+                # MiniLM-L6-v2 at 384d misses synonyms — one embedding often misses the
+                # right file when query terms don't appear verbatim in source code.
+                _q_variants = [
+                    query,
+                    query.replace("_", " ").replace(".", " "),
+                    f"function {query}",
+                    f"config {query}",
+                    f"settings {query}",
+                ]
+                _seen: dict[str, object] = {}
+                for _qv in _q_variants:
+                    try:
+                        _qe = embedder.embed_query(_qv) if _qv != query else query_embedding
+                    except Exception:
+                        _qe = query_embedding
+                    for r in project_store.search(collection, _qe, limit=limit * 2, min_score=min_score):
+                        _key = r.metadata.get("source_file", "") + r.content[:40]
+                        if _key not in _seen or r.score > _seen[_key].score:
+                            _seen[_key] = r
+                from pathlib import Path as _PPath
+                _q_words = set(query.lower().replace("_", " ").replace(".", " ").split())
+                from rag_server.ports.store_port import SearchResult as _SR
+                _DOC_EXTS_S = {".md", ".mdx", ".rst", ".txt"}
+                _boosted: dict[str, object] = {}
+                for _key, r in _seen.items():
+                    src = r.metadata.get("source_file", "")
+                    _stem = _PPath(src).stem.lower()
+                    score = r.score
+                    # Exact-stem filename boost: only when a query word is the whole stem.
+                    # Substring matching produced false positives ("cache" boosting "precache_utils.py").
+                    if _stem in _q_words:
+                        score = min(1.0, round(score * 1.15, 4))
+                    # Doc dampening: prose docs match NL queries well but rarely contain what
+                    # agents actually need when asking about code. Same 0.80 applied in context.py.
+                    if any(src.endswith(ext) for ext in _DOC_EXTS_S):
+                        score = round(score * 0.80, 4)
+                    _boosted[_key] = r if score == r.score else _SR(r.content, r.metadata, score)
+                results = sorted(_boosted.values(), key=lambda r: r.score, reverse=True)[:limit]
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Codebase store search failed: %s", e)

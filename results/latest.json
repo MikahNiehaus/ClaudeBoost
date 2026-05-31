@@ -1,0 +1,21 @@
+{
+  "lang": "python",
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "n": 100,
+  "mrr": 0.7354166666666667,
+  "recall": {
+    "1": 0.69,
+    "5": 0.78,
+    "10": 0.82
+  },
+  "skipped": 0,
+  "elapsed_s": 26.0,
+  "baselines": {
+    "BM25 (keyword)": 0.43,
+    "all-MiniLM-L6-v2": 0.55,
+    "nomic-embed-text-v1.5": 0.63,
+    "CodeBERT (Microsoft)": 0.68,
+    "GraphCodeBERT (Microsoft)": 0.69,
+    "nomic-embed-code": 0.7
+  }
+}
