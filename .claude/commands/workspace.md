@@ -1,7 +1,7 @@
 ---
 argument-hint: <description of what you want to build or accomplish>
 description: Create a workspace and generate a ClaudeBoost-aware implementation plan with optimal skill/agent routing
-allowed-tools: Read, Write, Bash, Glob, Grep, Agent, AskUserQuestion, mcp__rag-server__rag_context, mcp__rag-server__rag_search
+allowed-tools: Read, Write, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
 
 # /workspace — ClaudeBoost Workspace Planner
@@ -37,7 +37,7 @@ Call `rag_status()` before loading any context.
 
 **If `rag_status()` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG server is not responding. Run `/mcp` to reconnect, then retry `/workspace $ARGUMENTS`."
+> Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/workspace $ARGUMENTS`."
 
 **Step 2 — Load context (only if Step 1 passes):**
 
@@ -45,7 +45,7 @@ Call `rag_context(agent="architect-agent", task_description="workspace planning:
 
 **If `rag_context` returns an "error" key:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG context load failed: [error message]. Run `/mcp` to reconnect."
+> Tell the user: "RAG context load failed: [error message]. Run `/rag` to start the server."
 
 This loads architecture, workflow, orchestration, and model-selection knowledge so the plan is grounded in real ClaudeBoost capabilities.
 

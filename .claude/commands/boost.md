@@ -1,9 +1,32 @@
 ---
-description: Activate ClaudeBoost - start RAG HTTP server, prime GT, and load session state
+description: "<true|false|verify>  true: always-on rules only  |  false: off  |  verify: full RAG activation"
 allowed-tools: Bash, Read, Glob
 ---
 
 # ClaudeBoost Activation
+
+## Arguments: $ARGUMENTS
+
+Check $ARGUMENTS first.
+
+If $ARGUMENTS is "true":
+```bash
+echo '{"mode":"true"}' > "$CLAUDEBOOST_HOME/state/boost-injection.json"
+```
+Report: "Switched to: ON. Always-on rules will inject on every prompt. RAG standing orders are skipped until you run /boost verify." Then stop — do not run the full activation flow.
+
+If $ARGUMENTS is "false":
+```bash
+echo '{"mode":"false"}' > "$CLAUDEBOOST_HOME/state/boost-injection.json"
+```
+Report: "Switched to: OFF. No rules will inject until you run /boost true or /boost verify." Then stop — do not run the full activation flow.
+
+If $ARGUMENTS is "verify" or empty — write verify state and run the full activation flow below:
+```bash
+echo '{"mode":"verify"}' > "$CLAUDEBOOST_HOME/state/boost-injection.json"
+```
+
+---
 
 ## Step 0: Banner and Clear Caches
 
@@ -25,19 +48,44 @@ The RAG server runs as a persistent HTTP daemon on port 8612. Start it if not al
 python "$CLAUDEBOOST_HOME/scripts/rag-server-start.py"
 ```
 
-If the script prints "already running" or "ready" — proceed. If it fails after 60s, run `/mcp` to check MCP connection, then retry.
+If the script prints "already running" or "ready" — proceed. If it fails after 60s, stop and tell the user.
 
-Call `rag_status` to verify the server is connected and has indexed content.
-
-Then **actively load RAG context** — this primes the session:
+Verify via HTTP:
+```bash
+python3 -c "
+import json, urllib.request, sys, time
+deadline = time.time() + 60
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8612/status', timeout=3) as r:
+            data = json.loads(r.read())
+            if data.get('status') == 'ready':
+                print(json.dumps(data, indent=2)); sys.exit(0)
+            print('waiting:', data.get('status'))
+    except: print('waiting...')
+    time.sleep(3)
+sys.exit(1)
+"
 ```
-rag_context(agent="debug-agent", task_description="test", max_tokens=2000)
+
+If the server is ready, write the RAG sentinel and prime the session:
+```bash
+touch "$TEMP/claudeboost_rag_ok"
 ```
 
-Check the response for `tier_summary`:
-- `guardrails > 0` AND `declared > 0`: tiered RAG working
-- All zeros or `tier_errors` present: server warming up — wait 30s and retry rag_context
-- `rag_status` fails entirely: tell user to run `setup.ps1`
+Then load RAG context via HTTP:
+```bash
+python3 -c "
+import json, urllib.request
+body = json.dumps({'agent': 'debug-agent', 'task_description': 'session start', 'max_tokens': 2000}).encode()
+req = urllib.request.Request('http://127.0.0.1:8612/context', data=body, headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(req, timeout=15) as r:
+    data = json.loads(r.read())
+    print('token_count:', data.get('token_count'), 'sources:', len(data.get('sources', [])))
+"
+```
+
+If this returns a token_count, tiered RAG is working. If it errors, the model may still be loading — wait 30s and retry.
 
 The status line will show `RAG ●` (green) when live and `RAG ○` (yellow) while the model loads.
 
@@ -50,14 +98,20 @@ Keep the ClaudeBoost codebase index current so `rag_search(scope="codebase")` wo
 echo "$CLAUDEBOOST_HOME"
 ```
 
-Call `rag_index_project(project_path=<value from above>)`. Incremental — only re-embeds changed files. Skip if RAG failed in Step 2.
+Call `POST http://127.0.0.1:8612/index` with `{"project_path":"<value from above>"}`. Incremental — only re-embeds changed files. Skip if RAG failed in Step 2.
 
-Also index memories if not already done:
-```
-rag_index_memories()
+Also index memories via HTTP:
+```bash
+python3 -c "
+import json, urllib.request
+body = json.dumps({'scope': 'memories'}).encode()
+req = urllib.request.Request('http://127.0.0.1:8612/index', data=body, headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(req, timeout=30) as r:
+    print(json.loads(r.read()))
+"
 ```
 
-Report: "X files updated, Y chunks, Z/W graph edges resolved." Check `rag_status` for ClaudeBoost project entry.
+Report: "X files updated, Y chunks, Z/W graph edges resolved." Check `GET http://127.0.0.1:8612/status` for ClaudeBoost project entry.
 
 ## Step 2.6: Project Index Check
 
@@ -66,7 +120,7 @@ Check if active project workspaces have their code indexed:
 for d in workspace/*/; do if [ -f "${d}context.md" ]; then grep -i "Project:" "${d}context.md" | head -1; fi; done 2>/dev/null | grep -v "N/A" | grep -v "none" | head -5
 ```
 
-For each project path found, call `rag_status` and check if that project appears in `indexed_projects`.
+For each project path found, call `GET http://127.0.0.1:8612/status` and check if that project appears in `indexed_projects`.
 
 **If not indexed**: report "Project RAG: not indexed — run `/index-project [path]`"
 **If indexed**: report file/chunk/graph counts and set the project RAG sentinel:
@@ -147,7 +201,7 @@ python "$CLAUDEBOOST_HOME/scripts/boost-inline.py" --done
 - If fresh: "No active workspaces"
 
 ### Session Directives
-- "RAG is active on HTTP port 8612. I will call `rag_context` first when spawning agents, and `rag_search` when I need knowledge."
+- "RAG is active on HTTP port 8612. I will call POST /context first when spawning agents, and POST /search when I need knowledge."
 - "Gas Town is active. I will use `gt prime`, `gt sling`, and `gt handoff` for session transitions."
 - If GT failed: append "(GT not found on PATH — install or add to PATH to enable)"
 

@@ -105,4 +105,8 @@
   <hook location="PreToolUse Task" purpose="Reinforce PROPOSAL_ONLY contract when spawning architect-agent"/>
   <hook location="PreCompact" purpose="Re-inject CONSULT/AUTO rule after context compaction"/>
 </hook-enforcement>
+
+  <see-also>
+    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+  </see-also>
 </knowledge-base>

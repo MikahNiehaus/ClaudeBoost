@@ -772,6 +772,24 @@ class IndexingEngine:
             except Exception:
                 logger.debug("SCIP pass failed (non-fatal)", exc_info=True)
 
+        # C# namespace-resolution graph enrichment (pure Python, no external tools).
+        # Skipped on zero-change incremental runs unless this is the first time CSHARP
+        # edges are being built (e.g. after a ClaudeBoost update that added this extractor).
+        try:
+            cs_files = [p for p in project_manifest.keys() if p.endswith(".cs")]
+            _needs_cs = cs_files and (
+                files_indexed > 0
+                or graph_store.count_edges_by_confidence("CSHARP") == 0
+            )
+            if _needs_cs:
+                from rag_server.indexing.csharp_extractor import extract_project_edges as extract_cs_edges
+                cs_edges = extract_cs_edges(project_path, cs_files)
+                if cs_edges:
+                    graph_store.add_edges(cs_edges)
+                    logger.info("C# extractor: added %d reference edges", len(cs_edges))
+        except Exception:
+            logger.debug("C# extractor pass failed (non-fatal)", exc_info=True)
+
         # Community detection + summaries (optional deps — never blocks indexing).
         # Run when files were indexed OR when communities table is empty (recovery from
         # a previous failed run — e.g. pre-leiden-fix index where detection silently threw).

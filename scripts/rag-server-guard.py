@@ -1,12 +1,9 @@
-"""PreToolUse guard for mcp__rag-server__ tools.
+"""DEPRECATED — no longer used.
 
-Reads the heartbeat file written by the RAG server every 30 seconds.
-- If heartbeat is MISSING: server is running old code without heartbeat support — allow through.
-- If heartbeat is FRESH (<90s): server is alive — allow.
-- If heartbeat is STALE (>90s): server was alive but died — block.
+Previously a PreToolUse guard for mcp__rag-server__ MCP tools. The RAG server
+no longer uses MCP. All RAG access goes through the HTTP API on port 8612.
 
-This way enforcement only activates once the new server code has written
-at least one heartbeat. Old/fresh installs are not broken.
+This file is kept for reference but no hook references it.
 """
 import json
 import os

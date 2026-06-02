@@ -74,4 +74,8 @@
   <point>False positives erode trust faster than missed issues. It is better to report 3 verified findings than 10 where half are wrong.</point>
 </rationale>
 
+  <see-also>
+    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+  </see-also>
+
 </knowledge-base>

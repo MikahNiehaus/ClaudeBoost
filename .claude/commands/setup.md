@@ -1,6 +1,6 @@
 ---
 description: Full ClaudeBoost setup and verification — works for fresh installs and git pull updates
-allowed-tools: Bash, Read, Write, Glob, mcp__rag-server__rag_index, mcp__rag-server__rag_status
+allowed-tools: Bash, Read, Write, Glob
 ---
 
 # /setup — ClaudeBoost Setup & Verification
@@ -161,7 +161,7 @@ print('PRESENT' if 'ClaudeBoost' in cmd else 'MISSING')
 "
 ```
 
-If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/mcp` to reconnect.
+If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/rag` to start the server.
 
 ---
 
@@ -205,7 +205,7 @@ Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 
 **If ALL checks pass:**
 > "Setup complete. All systems operational."
-> - **Fresh install:** "Run `/mcp` to reconnect, then run `/boost`."
+> - **Fresh install:** "Run `/rag` to start the server, then run `/boost`."
 > - **After git pull:** "Run `/boost` to activate the updated ClaudeBoost for this session."
 
 **If any checks fail after all retries:**

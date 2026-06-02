@@ -1,7 +1,7 @@
 ---
 argument-hint: <task-id> [project-path]
 description: Build a Files in Scope map using both vector and graph RAG seeded from ticket entities
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, mcp__rag-server__rag_status, mcp__rag-server__rag_search, mcp__rag-server__rag_context
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 # /graph — Scope Graph Builder
@@ -51,16 +51,22 @@ Set:
 
 ## Phase 1: RAG Health Check
 
-Call `rag_status()`.
+Call `GET /status``.
 
 If it fails or the tool is unavailable:
-> "RAG server is not responding. Run `/mcp` to reconnect, then retry `/graph $ARGUMENTS`."
+> "RAG server is not responding. Run `/rag` to start it, then retry `/graph $ARGUMENTS`."
 
 Stop. Do not proceed.
 
 If it returns successfully: check that the project is indexed.
-```
-rag_search(scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1)
+```bash
+python3 -c "
+import json, urllib.request
+body = json.dumps({'query': 'test', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'limit': 1}).encode()
+req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(req, timeout=10) as r:
+    print(json.loads(r.read()))
+"
 ```
 
 If this returns nothing:
@@ -103,13 +109,25 @@ Report how many entities were found and from which source.
 For each entity, run BOTH calls. Never skip either.
 
 **Call 1 — Vector** (semantic similarity — finds code that does the same thing):
-```
-rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="vector", limit=3)
+```bash
+python3 -c "
+import json, urllib.request
+body = json.dumps({'query': '[entity]', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'mode': 'vector', 'limit': 3}).encode()
+req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(req, timeout=10) as r:
+    data = json.loads(r.read()); [print(h['score'], h['source']) for h in data.get('results', [])]
+"
 ```
 
 **Call 2 — Graph** (structural neighbours — finds code that imports, inherits, or calls the seed):
-```
-rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="graph", limit=3)
+```bash
+python3 -c "
+import json, urllib.request
+body = json.dumps({'query': '[entity]', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'mode': 'graph', 'limit': 3}).encode()
+req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(req, timeout=10) as r:
+    data = json.loads(r.read()); [print(h['score'], h['source']) for h in data.get('results', [])]
+"
 ```
 
 Collect results from all searches. For each result record:
@@ -155,7 +173,62 @@ then re-run /graph to build the map.
 
 ---
 
-## Phase 5: Report
+## Phase 5: Completeness Check
+
+Read the ticket acceptance criteria and check whether the in-scope files actually implement each AC item. This catches missing conditions, missing handlers, and untested paths that a file-scope map alone cannot surface.
+
+### 5a — Extract acceptance criteria
+
+Read `$WORKSPACE_ABS/ticket.md` (or the AC section of `$WORKSPACE_ABS/context.md` if ticket.md is absent).
+Extract each distinct acceptance criterion as a numbered list. If no explicit AC exists, derive expected behaviors from the ticket summary.
+
+If no ticket file exists and no AC can be derived: skip Phase 5 entirely and note "No AC found — completeness check skipped."
+
+### 5b — Read key in-scope files
+
+For each file in the scope map that is a primary implementation file (not a reference/parallel pattern):
+- Read the file (or the relevant section if large)
+- Note what conditions, branches, guards, and cases are present
+
+Focus on files that directly implement the AC behaviors: processors, controllers, page models, enums, and test files. Skip pure model/migration files unless the AC is about data shape.
+
+### 5c — Check each AC item
+
+For each AC item, answer: **Is there specific code in the in-scope files that implements this?**
+
+Flag a gap if ANY of the following are true:
+- The condition/handler/branch required by the AC does not exist in the relevant file
+- A guard or filter list is missing a value that the AC requires
+- An AC item has no corresponding test (check test files for a test method that covers the scenario)
+- A toggle, flag, or config that the AC requires is absent from the implementation
+
+Do NOT flag a gap if the AC is implemented but the code is stylistically different from what you'd expect — only flag functional absences.
+
+### 5d — Write completeness results
+
+Append a `## Completeness Check` section to `$WORKSPACE_ABS/context.md` after the Files in Scope section:
+
+**If all AC items are covered:**
+```markdown
+## Completeness Check
+Run by /graph on [date]. All [N] AC items verified with specific file:line evidence.
+```
+
+**If gaps exist:**
+```markdown
+## Completeness Check
+Run by /graph on [date]. [N] of [total] AC items verified. [N] gaps found:
+
+### Gaps
+| AC | Gap | File | Detail |
+|----|-----|------|--------|
+| AC2 | No unit test for DP email model | AddressChangeAlertProcessorUnitTests.cs | Tests assert result count only; AdminSiteBaseUrl=null skips email send — no assertion on AddressChangeAlertDeliveryProviderModel |
+| AC5 | Toggle shown to dual-role food+sponsor admin | Account/Index.cshtml.cs:62–68 | ShowAddressChangeAlertToggle has no !IsFoodProviderAdmin guard — a food+sponsor admin would see the toggle |
+```
+
+---
+
+## Phase 6: Report
 
 Print:
 ```
@@ -167,6 +240,8 @@ Scope map built for workspace/$TASK_ID
   Combined      : N files (N from both modes, N vector only, N graph only)
 
   Written to: $WORKSPACE_ABS/context.md → ## Files in Scope (Graph Map)
+
+Completeness: N/N AC items verified (or "N gaps — see ## Completeness Check in context.md")
 
 Top files by score:
   1. path/to/file.ts  [imports/inherits — TicketService]
@@ -180,8 +255,9 @@ To refresh this map at any point: /graph $TASK_ID $PROJECT_PATH
 
 ## Notes
 
-- Re-running `/graph` on the same workspace replaces the Files in Scope section — it does not append.
+- Re-running `/graph` on the same workspace replaces both the Files in Scope and Completeness Check sections — it does not append.
 - Vector and graph are complementary: vector finds files that do similar things; graph finds files that are structurally connected (imports, inheritance chains). Both are needed for a complete picture.
 - If the ticket has no explicit entity names, the map will be less precise but still useful as a starting point.
 - The scope map is informational — it does not replace reactive RAG queries during the task. Use it as a starting navigation map, not a complete picture.
-- Graph search requires the project to be indexed with `rag_index_project`. Run `/index-project $PROJECT_PATH` if the project hasn't been indexed yet.
+- Graph search requires the project to be indexed. Run `/index-project $PROJECT_PATH` if the project has not been indexed yet.
+- Completeness check reads files directly — it is not a substitute for `/audit` which runs parallel dimension agents. Use `/graph` to find gaps early; use `/audit` to verify the full analysis before shipping.

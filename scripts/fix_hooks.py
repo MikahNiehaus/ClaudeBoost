@@ -122,7 +122,7 @@ def main() -> int:
     print("")
     print(f"{_YELLOW}Next steps:{_RESET}")
     print(f"  1. Run full setup:  {sys.executable} {Path(__file__).parent / 'setup.py'}")
-    print( "  2. Run /mcp in Claude Code")
+    print( "  2. Run /rag in Claude Code to start the RAG server")
     return 0
 
 

@@ -8,18 +8,18 @@ You have 25 agents (`agents/*.xml`) and 96 knowledge files (`knowledge/*.xml`) �
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
-- Spawned agents MUST call `rag_context` as their FIRST action
-- Use `rag_search` when unsure which knowledge file applies or when reviewing code for standards
+- Spawned agents MUST call `POST http://127.0.0.1:8612/context` as their FIRST action
+- Use `POST http://127.0.0.1:8612/search` when unsure which knowledge file applies or when reviewing code for standards
 - NEVER guess which file to read — search for it
 - Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
-- PreToolUse hook on `Task` enforces `rag_context` in the spawn prompt — spawns without it are blocked (exit 2); include `rag_context` as the first action in every spawn prompt
+- PreToolUse hook on `Task` enforces a RAG context call in the spawn prompt — spawns without it are blocked (exit 2); include `POST http://127.0.0.1:8612/context` as the first action in every spawn prompt
 
 **Use all three RAG modes when they apply:**
-- `rag_context` — knowledge and agent context (always first)
-- `rag_search scope=codebase mode=vector` — semantic code search
-- `rag_search scope=codebase mode=graph` — dependency and import chains
+- `POST /context` — knowledge and agent context (always first, via HTTP REST)
+- `POST /search` with `scope=codebase` — semantic code search
+- `POST /search` with `scope=codebase&mode=graph` — dependency and import chains
 
-**If RAG errors mid-task, fix it — never skip it.** Try `/mcp` to reconnect. Do not proceed with degraded context or substitute grep/file reads.
+**If RAG errors mid-task, fix it — never skip it.** Run `/rag` to restart the server. Do not proceed with degraded context or substitute grep/file reads.
 
 ## Decision Flow
 
@@ -37,7 +37,7 @@ Scope tiers:
 Steps:
 1. Create `workspace/[task-id]/` — announce with one line
 2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
-2b. Scope graph — after ticket analysis, run `rag_search mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Write the result to `context.md` as "Files in Scope". This is your starting navigation map for the task.
+2b. Scope graph — after ticket analysis, POST /search with `mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Write the result to `context.md` as "Files in Scope". This is your starting navigation map for the task.
 3. Spawn the right agent(s)
 
 Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
@@ -188,12 +188,16 @@ Claude Code auto-loads these when working in subdirectories.
 
 Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`, `gt handoff`, beads.
 
+## RAG HTTP API
+
+The RAG server exposes an HTTP REST API on port 8612. All RAG access — from Claude Code, scripts, agents, and external tools — uses this API directly. No MCP required. See `knowledge/rag-http-api.xml` for full docs.
+
 ## RAG Unavailable Protocol
 
 When RAG tools are missing from your tool list OR return a connection/server error:
 
 1. **STOP immediately** — no investigation, no agent spawning, no file reading as a substitute
-2. Tell the user exactly: *"RAG is not connected. Run `/boost` to reconnect, then retry."*
+2. Tell the user exactly: *"RAG is not connected. Run `/rag` to reconnect, then retry."*
 3. Do NOT attempt to recover by grepping, reading files, or proceeding with degraded context
 4. Do NOT rationalize past this — "I can be helpful anyway" is the wrong call
 
@@ -201,19 +205,19 @@ When RAG errors mid-task: `rag-error-guard.py` surfaces the error automatically.
 
 The `session-primer.py` UserPromptSubmit hook injects a HARD STOP directive when the sentinel is missing — treat it as a hard requirement, not a soft suggestion.
 
-**Agent spawn blocked by sentinel guard?** Run `/boost` immediately. Do not investigate the sentinel file, do not try to set it manually, do not look for workarounds. The block means `/boost` hasn't run this session — that's the fix, full stop.
+**Agent spawn blocked by sentinel guard?** Run `/rag` immediately. Do not investigate the sentinel file, do not try to set it manually, do not look for workarounds. The block means `/rag` hasn't run this session — that's the fix, full stop.
 
 ## RAG Health Check Protocol
 
 At the start of any investigation or multi-step codebase task:
 
-1. **Call `rag_status()` FIRST** — before `rag_context`, before spawning agents, before anything.
-   - `rag_status` does not use the embedding model, so it responds in under 1 second if the server is up.
-   - If it returns an error or the tool is unavailable: **STOP. Do not proceed.** Tell the user: "RAG server is not responding. Run `/mcp` to reconnect."
-2. **Then call `rag_context(agent="...", task_description="...", project_path="...")`**
-   - If `rag_context` returns an `"error"` key: **STOP. Do not proceed.** Report the error and tell the user to run `/mcp`.
-3. **Also check `rag_status`** for unresolved graph edges, index errors, or stale collections.
-4. If index is stale (`reindex-check.py` warned at session start): call `rag_index_project(force=true)` before searching.
+1. **Call `GET http://127.0.0.1:8612/status` FIRST** — before loading context, before spawning agents.
+   - Returns in under 1 second if the server is up.
+   - If it fails: **STOP. Do not proceed.** Tell the user: "RAG server is not responding. Run `/rag` to start it."
+2. **Then call `POST http://127.0.0.1:8612/context`** with `{"agent":"...","task_description":"...","project_path":"..."}`
+   - If the response contains an `"error"` key: **STOP. Do not proceed.** Report the error and tell the user to run `/rag`.
+3. **Check the status response** for collection counts and indexed projects to spot stale indexes.
+4. If index is stale (`reindex-check.py` warned at session start): POST /index with `{"project_path":"<path>","force":true}` before searching.
 
 **Any RAG tool returning an error is a hard stop** — do not continue with degraded or missing context. Do not rationalize past it ("I can grep instead"). Stop and tell the user to fix RAG.
 
@@ -236,17 +240,17 @@ Two distinct RAG indexes — always distinguish between them:
 
 | Term | What it is | Tools |
 |------|-----------|-------|
-| **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `rag_search scope=agents/knowledge/all`, `rag_index`, `rag_context` |
-| **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `rag_index_project`, `rag_search scope=codebase`, `/index-project` |
-| **GraphRAG** | Structural code graph (imports, inherits) stored in `graph.db` alongside Project RAG | `rag_search scope=codebase mode=graph` — auto-built at index time, auto-augments `rag_context` Tier 4b |
+| **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `POST /search scope=agents/knowledge/all`, `POST /index`, `POST /context` |
+| **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `POST /index`, `POST /search scope=codebase`, `/index-project` |
+| **GraphRAG** | Structural code graph (imports, inherits) stored in `graph.db` alongside Project RAG | `POST /search scope=codebase mode=graph` — auto-built at index time, auto-augments `/context` Tier 4b |
 
 When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
 When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.
-`rag_context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG (vector), tier 4b pulls structural graph neighbours when a graph index exists.
+`POST /context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG (vector), tier 4b pulls structural graph neighbours when a graph index exists.
 
 **GraphRAG usage:**
-- `rag_search scope=codebase mode=graph` — vector seed + structural neighbours (files that import/inherit from seed files)
-- `rag_search scope=codebase mode=vector` — semantic only (default, backwards compatible)
+- `POST /search` with `scope=codebase mode=graph` — vector seed + structural neighbours (files that import/inherit from seed files)
+- `POST /search` with `scope=codebase mode=vector` — semantic only (default, backwards compatible)
 - Graph index is built automatically during `rag_index_project` — no extra step needed
 - Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
 
@@ -255,11 +259,11 @@ When the user says "Project RAG" or "project index" → they mean the codebase i
 Spawn a lightweight agent to run the reindex. The main agent stays unblocked.
 
 Spawn prompt must include:
-1. `rag_context(agent="rag-indexing-agent", task_description="reindex project at <path>")` as first action
-2. Call `rag_index_project(project_path=<path>, force=True)`
+1. Call `POST http://127.0.0.1:8612/context` with `{"agent":"rag-indexing-agent","task_description":"reindex project at <path>"}` as first action
+2. Call `POST http://127.0.0.1:8612/index` with `{"project_path":"<path>","force":true}`
 3. Read the result: if `files_failed > 0`, log each entry in `errors[]` (file, type, message)
 4. If `errors[]` contains `embed_error` entries: retry once with `force=True`; if still failing, report the specific files
-5. Call `rag_status()` and confirm graph shows `graph_active: true` for the project
+5. Call `GET http://127.0.0.1:8612/status` and confirm graph shows `graph_active: true` for the project
 6. Return summary: files_indexed, chunks_created, files_failed, elapsed_s, graph edges/resolved, any unresolved errors
 
 **Reading reindex results** — `rag_index_project` returns:

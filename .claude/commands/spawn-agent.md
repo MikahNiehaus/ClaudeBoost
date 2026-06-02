@@ -10,7 +10,7 @@ allowed-tools: Read, Glob, Task
 
 Call `rag_context(agent="workflow-agent", task_description="agent spawn with RAG knowledge loading", max_tokens=3000)`.
 
-This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
 ---
 

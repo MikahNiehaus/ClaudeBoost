@@ -1,7 +1,7 @@
 ---
 argument-hint: <input — text, URL, file path, code snippet, config, claim, or process description>
 description: Parallel audit — chunks input into dimensions, spawns parallel auditors, synthesizes a final 'is it legit' verdict
-allowed-tools: Read, Write, Bash, Glob, Grep, Agent, mcp__rag-server__rag_context, mcp__rag-server__rag_search, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate
+allowed-tools: Read, Write, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate
 ---
 
 # /audit — Parallel Audit with Verdict

@@ -118,44 +118,36 @@ def preflight() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# MCP registration: merge rag-server into ~/.claude/mcp.json and ~/.claude.json
-# without clobbering other servers.
+# MCP cleanup: remove rag-server from mcp.json if it was registered by an
+# older version of setup. The RAG server is now a standalone HTTP daemon on
+# port 8612 — no MCP registration needed or wanted.
 # ---------------------------------------------------------------------------
 def update_mcp_configs() -> None:
-    rag_cwd = (BOOST_HOME / "mcp-rag-server").as_posix()
-    rag_entry = {
-        "command": "python",
-        "args": ["-m", "rag_server"],
-        "cwd": rag_cwd,
-        "env": {"RAG_PROJECT_ROOT": BOOST_HOME_POSIX},
-    }
-
-    # ~/.claude/mcp.json
+    # ~/.claude/mcp.json — remove rag-server if present from old installs
     mcp = read_json(MCP_PATH, {"mcpServers": {}})
     mcp.setdefault("mcpServers", {})
-    mcp["mcpServers"]["rag-server"] = rag_entry
-    write_json(MCP_PATH, mcp)
-    _ok("mcp.json - rag-server merged (existing MCP servers preserved)")
+    if "rag-server" in mcp["mcpServers"]:
+        del mcp["mcpServers"]["rag-server"]
+        write_json(MCP_PATH, mcp)
+        _ok("mcp.json - removed old rag-server stdio entry (RAG uses HTTP now)")
+    else:
+        _skip("mcp.json - rag-server not present, nothing to clean up")
 
-    # ~/.claude.json (only if it already exists — don't create it)
+    # ~/.claude.json — remove rag-server if present
     if CLAUDE_JSON_PATH.exists():
         try:
             cj = read_json(CLAUDE_JSON_PATH, {})
         except json.JSONDecodeError:
-            _warn(f".claude.json is malformed; skipping merge (path: {CLAUDE_JSON_PATH})")
+            _warn(f".claude.json is malformed; skipping cleanup (path: {CLAUDE_JSON_PATH})")
             return
-        cj.setdefault("mcpServers", {})
-        cj["mcpServers"]["rag-server"] = {
-            "type": "stdio",
-            "command": "python",
-            "args": ["-m", "rag_server"],
-            "env": {"RAG_PROJECT_ROOT": BOOST_HOME_POSIX},
-            "cwd": rag_cwd,
-        }
-        write_json(CLAUDE_JSON_PATH, cj)
-        _ok(".claude.json - RAG server registered with cwd")
+        if "rag-server" in cj.get("mcpServers", {}):
+            del cj["mcpServers"]["rag-server"]
+            write_json(CLAUDE_JSON_PATH, cj)
+            _ok(".claude.json - removed old rag-server entry")
+        else:
+            _skip(".claude.json - rag-server not present, nothing to clean up")
     else:
-        _skip(".claude.json - not found (will use mcp.json)")
+        _skip(".claude.json - not found, skipping")
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +404,7 @@ def _install_all_hooks(settings: dict) -> None:
                 "Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. "
                 "Field: ``mode``. Default CONSULT.\n\n"
                 "If mode=CONSULT, for any architectural decision you MUST:\n"
-                "  1. rag_search(feature keywords) + read 2-3 project files. Cite file:line.\n"
+                "  1. POST http://127.0.0.1:8612/search (feature keywords) + read 2-3 project files. Cite file:line.\n"
                 "  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.\n"
                 "  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.\n"
                 "  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.\n"
@@ -438,15 +430,22 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Always",
         "hooks": [{
             "type": "prompt",
-            "prompt": ("CODEBASE RAG: When calling rag_context or instructing agents to call "
-                       "rag_context, always include project_path set to the primary working "
-                       "directory. This enables Tier 4 codebase search so agents automatically "
-                       "get relevant source code from the target project. When using rag_search "
-                       "for code understanding, use scope='codebase' with the project_path. "
-                       "If the project has not been indexed yet, suggest /index-project first."),
-            "statusMessage": "Loading codebase RAG...",
+            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8612. "
+                       "All RAG access uses HTTP — no MCP tools are needed. "
+                       "Key endpoints: POST /context (load agent context), "
+                       "POST /search (semantic + graph search), "
+                       "GET /status (server health), "
+                       "POST /index (reindex files). "
+                       "When loading context for an agent, POST to /context with "
+                       "{\"agent\":\"...\",\"task_description\":\"...\",\"project_path\":\"...\"} "
+                       "using project_path set to the primary working directory. "
+                       "When searching code, POST to /search with "
+                       "{\"query\":\"...\",\"scope\":\"codebase\",\"project_path\":\"...\"}. "
+                       "If the project has not been indexed, run /index-project first. "
+                       "Use mode=graph for import and dependency chains."),
+            "statusMessage": "Loading RAG HTTP API config...",
         }],
-    }, sentinel="CODEBASE RAG", label="codebase RAG reminder")
+    }, sentinel="RAG HTTP API", label="RAG HTTP API config")
 
     # --- SessionStart: compaction restore ---
     _install_hook(settings, "SessionStart", {
@@ -548,12 +547,6 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Edit|Write",
         "hooks": [{"type": "command", "command": _py_cmd("comment-humanness-check.py"), "timeout": 5000}],
     }, sentinel="comment-humanness-check.py", label="comment humanness check (command-type)")
-
-    # --- PostToolUse: project RAG flag ---
-    _install_hook(settings, "PostToolUse", {
-        "matcher": "mcp__rag-server__rag_index_project",
-        "hooks": [{"type": "command", "command": _py_cmd("project-rag-flag.py"), "timeout": 3000}],
-    }, sentinel="project-rag-flag.py", label="project RAG flag (command-type)")
 
     # --- PreCompact: context preservation + compaction save ---
     _install_hook(settings, "PreCompact", {
@@ -758,58 +751,39 @@ def install_rag_server() -> None:
         _warn("RAG HTTP server did not start — run it manually:")
         _warn(f"  {sys.executable} \"{start_script}\"")
 
-    # Migrate MCP config from stdio to HTTP (idempotent)
-    _migrate_mcp_to_http()
+    # Clean up any stale MCP registration (idempotent)
+    _cleanup_mcp_registration()
 
 
 # ---------------------------------------------------------------------------
-# MCP config migration: stdio → HTTP transport
+# MCP cleanup: remove rag-server from `claude mcp` if it was registered by an
+# older setup. The RAG server is now accessed entirely via HTTP on port 8612.
 # ---------------------------------------------------------------------------
-def _migrate_mcp_to_http() -> None:
-    """Switch the rag-server MCP config from stdio subprocess to HTTP/SSE.
+def _cleanup_mcp_registration() -> None:
+    """Remove the rag-server MCP registration if it still exists.
 
-    Idempotent — safe to run multiple times. Works across machines because
-    it uses the CLAUDEBOOST_HOME env var path, not a hardcoded absolute path.
-    Reads/writes ~/.claude.json (user-scoped MCP config).
+    Idempotent — safe to run multiple times. The RAG server no longer uses MCP;
+    it runs as a standalone HTTP daemon on port 8612.
     """
-    import subprocess as _sub
-
-    RAG_HTTP_PORT = 8612
-    rag_url = f"http://127.0.0.1:{RAG_HTTP_PORT}/sse"
-
     # Try `claude mcp list` to see current configs
     rc, out = run_cmd(["claude", "mcp", "list"])
     if rc != 0:
-        _warn("  claude CLI not found — skipping MCP migration. Run manually:")
-        _warn(f"    claude mcp add --transport sse rag-server {rag_url}")
+        _skip("claude CLI not found — skipping MCP cleanup")
         return
 
-    # Check if already configured as SSE/HTTP pointing at our port
-    if rag_url in out or f":{RAG_HTTP_PORT}" in out:
-        _skip(f"MCP config - rag-server already on HTTP port {RAG_HTTP_PORT}")
+    if "rag-server" not in out:
+        _skip("MCP config - rag-server not registered, nothing to remove")
         return
 
-    # Remove old stdio config if it exists
-    if "rag-server" in out:
-        rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server", "--scope", "user"])
-        if rc_rm != 0:
-            # Try without scope flag (older Claude Code versions)
-            run_cmd(["claude", "mcp", "remove", "rag-server"])
-        _ok("MCP config - removed old stdio rag-server")
-
-    # Add HTTP config (user-scoped so it's available in all projects)
-    rc_add, out_add = run_cmd([
-        "claude", "mcp", "add",
-        "--transport", "sse",
-        "--scope", "user",
-        "rag-server",
-        rag_url,
-    ])
-    if rc_add == 0:
-        _ok(f"MCP config - rag-server now on HTTP {rag_url}")
+    # Remove the rag-server entry (try with scope flag first)
+    rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server", "--scope", "user"])
+    if rc_rm != 0:
+        rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server"])
+    if rc_rm == 0:
+        _ok("MCP config - removed stale rag-server entry (RAG is HTTP-only now)")
     else:
-        _warn(f"MCP add failed: {out_add}")
-        _warn(f"  Run manually: claude mcp add --transport sse rag-server {rag_url}")
+        _warn("Could not remove rag-server from MCP config — remove it manually: "
+              "claude mcp remove rag-server")
 
 
 # ---------------------------------------------------------------------------
@@ -860,11 +834,11 @@ def main() -> int:
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")
-    print(f"  RAG server registered in {MCP_PATH}")
+    print( "  RAG HTTP server started on port 8612")
     print( "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, "
            "PreCompact, UserPromptSubmit, Stop)")
     _say("\nNext steps:", "yellow")
-    print("  1. Run /mcp in Claude Code to reconnect")
+    print("  1. Run /rag in Claude Code to verify the RAG server")
     print("  2. Run /boost to verify all systems")
     if not IS_LINUX:
         print("  3. Run /speak on to enable text-to-speech")

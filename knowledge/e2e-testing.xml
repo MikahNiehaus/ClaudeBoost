@@ -648,4 +648,8 @@
   <fallback>If no ticket is available, or if the project is not indexed, skip this step. Use the general app-discovery-methodology queries instead. Note the gap in context.md.</fallback>
 </ui-scope-graph-strategy>
 
+  <see-also>
+    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+  </see-also>
+
 </knowledge-base>

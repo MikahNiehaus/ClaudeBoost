@@ -1,7 +1,7 @@
 ---
 argument-hint: <task-id> [project-path]
 description: Ticket exploration — workspace setup, ticket analysis, project indexing, code exploration, and implementation planning
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion, mcp__rag-server__rag_context, mcp__rag-server__rag_search, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_status
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
 
 # /explore — Ticket Exploration Pipeline
@@ -157,7 +157,7 @@ This is a fast probe. `rag_status` does not use the embedding model, so it respo
 
 **If `rag_status()` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG server is not responding. Run `/mcp` to reconnect, then retry `/explore $ARGUMENTS`."
+> Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/explore $ARGUMENTS`."
 
 **If `rag_status()` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
 
@@ -177,7 +177,7 @@ Spawn `ticket-analyst-agent` (Sonnet) with this prompt:
 You are analyzing a ticket for task $TASK_ID.
 
 FIRST ACTION: call rag_context(agent="ticket-analyst-agent", task_description="analyze ticket $TASK_ID and produce analysis + definition of done", max_tokens=4000)
-If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /mcp to reconnect."
+If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
 
 Then:
 
@@ -232,7 +232,7 @@ Skip this phase entirely if `PROJECT_PATH = none`.
 
 **2a — RAG health check.**
 
-Call `rag_status()`. If it fails: "RAG server not responding — reconnect via `/mcp` and retry."
+Call `rag_status()`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
 
 **2b — Scan the project.**
 
@@ -273,7 +273,7 @@ Spawn `explore-agent` (Sonnet) with this prompt:
 You are exploring a codebase to understand what code is relevant to ticket $TASK_ID.
 
 FIRST ACTION: call rag_context(agent="explore-agent", task_description="find code relevant to $TASK_ID in project at $PROJECT_PATH", max_tokens=4000)
-If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /mcp to reconnect."
+If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
 
 Context:
 - Project path: $PROJECT_PATH
@@ -352,7 +352,7 @@ Print the agent's summary when it returns.
 
 Call `rag_context(agent="architect-agent", task_description="implementation plan for ticket $TASK_ID", max_tokens=5000)`.
 
-**If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/mcp` to reconnect, then retry."**
+**If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/rag` to start the server, then retry."**
 
 This loads architecture, workflow, testing, and security knowledge to validate the plan.
 

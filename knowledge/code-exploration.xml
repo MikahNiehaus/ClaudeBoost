@@ -182,4 +182,8 @@ Current coupling issues found in /src/services/user.ts"
 ]]></handoff>
 </handoff-templates>
 
+  <see-also>
+    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+  </see-also>
+
 </knowledge-base>

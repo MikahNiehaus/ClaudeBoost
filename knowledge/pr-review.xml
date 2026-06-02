@@ -273,4 +273,8 @@
   </communication>
 </anti-patterns>
 
+  <see-also>
+    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+  </see-also>
+
 </knowledge-base>

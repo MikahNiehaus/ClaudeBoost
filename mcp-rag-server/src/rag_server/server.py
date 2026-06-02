@@ -797,10 +797,68 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
         ) as streams:
             await app.run(*streams, app.create_initialization_options())
 
+    # REST handlers — plain HTTP, no MCP protocol required.
+
+    async def handle_rest_search(request):
+        from starlette.responses import JSONResponse
+        if embedder is None or store is None:
+            return JSONResponse({"error": "Server is still initializing, retry in a moment."}, status_code=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_search", body
+        )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
+    async def handle_rest_context(request):
+        from starlette.responses import JSONResponse
+        if embedder is None or store is None:
+            return JSONResponse({"error": "Server is still initializing, retry in a moment."}, status_code=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+        if "agent" not in body or "task_description" not in body:
+            return JSONResponse({"error": "Required fields: agent, task_description"}, status_code=400)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_context", body
+        )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
+    async def handle_rest_status(request):
+        from starlette.responses import JSONResponse
+        if embedder is None or store is None:
+            return JSONResponse({"status": "initializing"}, status_code=503)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_status", {}
+        )
+        return JSONResponse(result)
+
+    async def handle_rest_index(request):
+        from starlette.responses import JSONResponse
+        if embedder is None or store is None:
+            return JSONResponse({"error": "Server is still initializing, retry in a moment."}, status_code=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+        if not body.get("project_path"):
+            return JSONResponse({"error": "project_path is required."}, status_code=400)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_index_project", body
+        )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
     starlette_app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
             Mount("/messages", app=sse.handle_post_message),
+            Route("/search", endpoint=handle_rest_search, methods=["POST"]),
+            Route("/context", endpoint=handle_rest_context, methods=["POST"]),
+            Route("/status", endpoint=handle_rest_status, methods=["GET"]),
+            Route("/index", endpoint=handle_rest_index, methods=["POST"]),
         ]
     )
 

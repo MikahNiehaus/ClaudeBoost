@@ -1,13 +1,14 @@
 """
-restart-rag.py — Kill the rag-server MCP process to force a clean restart.
+restart-rag.py — Kill the RAG HTTP server process to force a clean restart.
 
-Claude Code does NOT auto-restart stdio MCP servers after an external kill.
-After this script runs, the user must reconnect via /mcp in Claude Code.
+The RAG server is a standalone HTTP daemon on port 8612, not an MCP process.
+After killing it, restart with: python scripts/rag-server-start.py
 
 Use this when the RAG server is stuck or needs to pick up code changes.
 
 Usage (Claude can call this directly):
   python "C:/Development/ClaudeBoost/scripts/restart-rag.py"
+  python "C:/Development/ClaudeBoost/scripts/rag-server-start.py"
 """
 from __future__ import annotations
 
@@ -60,19 +61,20 @@ def main() -> int:
             print(f"  Failed to kill PID {pid}: {e}")
             return 1
 
-    # Give Claude Code a moment to restart the server
-    print("Waiting for Claude Code to restart rag-server...")
-    time.sleep(3)
+    # Give the process a moment to exit
+    print("Waiting for process to exit...")
+    time.sleep(2)
 
-    # Verify it restarted
+    # Verify it stopped
     new_pids = find_rag_server_pids()
-    if new_pids and new_pids != pids:
-        print(f"rag-server restarted (new PID: {new_pids})")
+    if not new_pids:
+        print("RAG server stopped. Restart with:")
+        print("  python scripts/rag-server-start.py")
+        print("Or run /rag in Claude Code.")
     elif new_pids == pids:
         print("Warning: same PID still running — SIGTERM may have been ignored")
     else:
-        print("rag-server process not yet visible — Claude Code may still be restarting it")
-        print("Call rag_status to confirm when ready.")
+        print(f"New rag_server process found (PID: {new_pids}) — may have auto-restarted")
 
     return 0
 

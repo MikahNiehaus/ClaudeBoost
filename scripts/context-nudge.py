@@ -155,7 +155,13 @@ def main() -> int:
     )
 
     # Update RAG/file counters
-    if tool_name in RAG_TOOLS:
+    # An HTTP call to the RAG REST API (port 8612) counts the same as an MCP RAG tool call.
+    _bash_cmd = str(tool_input.get("command", "")) if tool_name == "Bash" else ""
+    _is_http_rag = bool(_bash_cmd) and (
+        "127.0.0.1:8612" in _bash_cmd or "localhost:8612" in _bash_cmd
+    )
+
+    if tool_name in RAG_TOOLS or _is_http_rag:
         behavior["reads_since_rag"] = 0
     elif tool_name in FILE_TOOLS:
         behavior["reads_since_rag"] = behavior.get("reads_since_rag", 0) + 1
@@ -234,8 +240,8 @@ def main() -> int:
     elif reads >= RAG_THRESHOLD and reads % RAG_THRESHOLD == 0:
         nudges.append(
             f"RAG REMINDER ({reads} file searches since last RAG call): "
-            "STOP reading files. Call rag_search('what you need') FIRST — "
-            "it finds the relevant file faster than grep. "
+            "STOP reading files. Search RAG FIRST — "
+            "POST http://127.0.0.1:8612/search (or call rag_search if MCP is connected). "
             "Only read files after RAG confirms which ones are relevant."
         )
     elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0:
@@ -276,11 +282,11 @@ def main() -> int:
     elif total > 0 and total % COMPREHENSIVE_INTERVAL == 0:
         nudges.append(
             "BEHAVIOR CHECKPOINT — five rules you tend to skip: "
-            "(1) STUCK? -> rag_search('question') before more file reads. "
+            "(1) STUCK? -> POST http://127.0.0.1:8612/search before more file reads. "
             "(2) FINDING? -> cite file:line, then spawn evaluator-agent. "
             "(3) NEW endpoint/table/dependency? -> CONSULT mode, spawn architect-agent. "
             "(4) COMPLEX task? -> workspace/[task-id]/context.md. "
-            "(5) SPAWNING AGENT? -> rag_context as FIRST step in prompt."
+            "(5) SPAWNING AGENT? -> call curl http://127.0.0.1:8612/context as FIRST step."
         )
 
     # --- CHANNEL B: Workspace checkpoint (independent — fires even when Channel A fired) ---

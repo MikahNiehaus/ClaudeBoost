@@ -50,8 +50,12 @@ class FTSStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db))
+        conn = sqlite3.connect(str(self._db), timeout=30)
         conn.row_factory = sqlite3.Row
+        # WAL allows concurrent readers during writes; busy_timeout retries instead of
+        # raising "database is locked" immediately.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_db(self) -> None:
@@ -121,7 +125,8 @@ class FTSStore:
                     (fts_query, limit),
                 ).fetchall()
             return [dict(r) for r in rows]
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            logger.warning("FTS search failed (returning empty): %s", e)
             return []
 
     def count(self) -> int:

@@ -1,6 +1,6 @@
 ---
 description: Index a project's codebase for semantic search
-allowed-tools: mcp__rag-server__rag_status, mcp__rag-server__rag_scan, mcp__rag-server__rag_index_project, mcp__rag-server__rag_index, mcp__rag-server__rag_search, mcp__rag-server__rag_context, AskUserQuestion
+allowed-tools: AskUserQuestion
 ---
 
 # Index Project for Codebase RAG
@@ -23,7 +23,7 @@ $ARGUMENTS — flexible, any of:
    > Checking RAG server health...
 
    Then call `rag_status()`. If the tool call is rejected, interrupted, times out, or returns any error — immediately output:
-   > RAG server not connected — run `/mcp` to reconnect, then retry.
+   > RAG server not connected — run `/rag` to start the server, then retry.
 
    Stop. Do not proceed further.
 

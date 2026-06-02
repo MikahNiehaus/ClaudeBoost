@@ -1,7 +1,7 @@
 ---
 argument-hint: <task-id> [topic] [url1 url2 ...]
 description: Build a workspace-scoped research RAG from web pages, PDFs, and docs — then search it during implementation
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebSearch, WebFetch, mcp__rag-server__rag_index_research, mcp__rag-server__rag_search, mcp__rag-server__rag_status
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebSearch, WebFetch
 ---
 
 Build a per-task research RAG from external sources (web pages, PDFs, docs) scoped to the

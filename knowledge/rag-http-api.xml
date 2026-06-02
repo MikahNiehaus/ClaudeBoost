@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<knowledge-base name="rag-http-api" version="1.0">
+  <description>
+    HTTP REST API for the ClaudeBoost RAG server. Any script, tool, or service can call
+    RAG without MCP by sending plain JSON requests to the server running on localhost.
+    Same data as the MCP tools, different transport.
+  </description>
+
+  <when-to-use>
+    <use-case>Scripts that need semantic search but can't use MCP (shell scripts, Python scripts, CI jobs)</use-case>
+    <use-case>Other AI tools or agent frameworks that speak HTTP but not MCP</use-case>
+    <use-case>Debugging RAG results directly with curl</use-case>
+    <use-case>Building tools on top of ClaudeBoost RAG from outside Claude Code</use-case>
+    <not-for>
+      <item>Inside Claude Code sessions — use the MCP tools (rag_search, rag_context, rag_status) instead</item>
+      <item>Production external traffic — the server binds to 127.0.0.1 only, no auth, localhost only</item>
+    </not-for>
+  </when-to-use>
+
+  <prerequisites>
+    <step>Start the RAG server: run <code>/rag</code> in your Claude Code session</step>
+    <step>Wait for model load (~30-60s on first start). The /status endpoint returns 503 until ready.</step>
+    <step>Base URL: <code>http://127.0.0.1:8612</code></step>
+    <note>No authentication required. The server only accepts connections from localhost.</note>
+  </prerequisites>
+
+  <endpoints>
+
+    <endpoint method="GET" path="/status">
+      <description>Check if the server is up and the embedding model is loaded.</description>
+      <request>No body.</request>
+      <response-ready>
+        <field name="status">always "ready" when model is loaded</field>
+        <field name="model">embedding model name</field>
+        <field name="embedding_dimensions">vector size, or "not loaded yet"</field>
+        <field name="collections">object with chunk/file counts per scope (knowledge, agents, memories)</field>
+        <field name="indexed_projects">map of project paths that have been indexed for codebase search</field>
+      </response-ready>
+      <response-not-ready status="503">
+        <field name="status">"initializing"</field>
+      </response-not-ready>
+      <example-curl>
+curl http://127.0.0.1:8612/status
+      </example-curl>
+      <example-python>
+import requests
+r = requests.get("http://127.0.0.1:8612/status")
+print(r.json()["status"])  # "ready" or 503
+      </example-python>
+    </endpoint>
+
+    <endpoint method="POST" path="/search">
+      <description>
+        Semantic search across ClaudeBoost knowledge bases, agents, or a project codebase.
+        Returns the top matching chunks ranked by relevance score.
+      </description>
+      <request-fields>
+        <field name="query" required="true" type="string">What to search for</field>
+        <field name="scope" required="false" type="string" default="all">
+          Which index to search. Valid values:
+          "all" (knowledge + agents + memories),
+          "knowledge" (knowledge/*.xml files),
+          "agents" (agents/*.xml files),
+          "memories" (user memory files),
+          "codebase" (project source code, requires project_path),
+          "research" (indexed URLs/PDFs, requires workspace_path)
+        </field>
+        <field name="project_path" required="false" type="string">
+          Absolute path to the project root. Required when scope="codebase".
+        </field>
+        <field name="workspace_path" required="false" type="string">
+          Absolute path to the workspace directory. Required when scope="research".
+        </field>
+        <field name="limit" required="false" type="int" default="5">Max results to return</field>
+        <field name="min_score" required="false" type="float" default="0.5">Minimum relevance score (0.0-1.0)</field>
+        <field name="mode" required="false" type="string" default="vector">
+          "vector" for semantic search, "graph" for structural neighbours (codebase only)
+        </field>
+      </request-fields>
+      <response-fields>
+        <field name="results">array of matching chunks</field>
+        <field name="results[].content">chunk text</field>
+        <field name="results[].source">file path the chunk came from</field>
+        <field name="results[].score">relevance score (0.0-1.0)</field>
+        <field name="results[].metadata">additional metadata (scope, chunk type, etc.)</field>
+        <field name="error">present only on failure</field>
+      </response-fields>
+      <example-curl>
+# Search all knowledge and agent files
+curl -s -X POST http://127.0.0.1:8612/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "how to handle errors in Python", "scope": "knowledge"}'
+
+# Search a project codebase
+curl -s -X POST http://127.0.0.1:8612/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "authentication middleware",
+    "scope": "codebase",
+    "project_path": "/home/user/myproject",
+    "limit": 10
+  }'
+      </example-curl>
+      <example-python>
+import requests
+
+# Search knowledge files
+resp = requests.post("http://127.0.0.1:8612/search", json={
+    "query": "parameterized SQL queries",
+    "scope": "knowledge",
+    "limit": 3,
+})
+for r in resp.json()["results"]:
+    print(f"{r['score']:.2f}  {r['source']}")
+    print(r["content"][:200])
+    print()
+
+# Search a project codebase with graph mode
+resp = requests.post("http://127.0.0.1:8612/search", json={
+    "query": "UserRepository",
+    "scope": "codebase",
+    "project_path": "/home/user/myproject",
+    "mode": "graph",
+})
+      </example-python>
+    </endpoint>
+
+    <endpoint method="POST" path="/context">
+      <description>
+        Build the same curated context that rag_context builds for agent spawning: relevant
+        knowledge files, agent definitions, and (if a project is indexed) matching code chunks.
+        Use this to prime an LLM with the right background before a task.
+      </description>
+      <request-fields>
+        <field name="agent" required="true" type="string">
+          Agent name or role, e.g. "explore", "debug", "architect". Used to find matching
+          agent definitions and weight the knowledge selection.
+        </field>
+        <field name="task_description" required="true" type="string">
+          Short description of the task. Used as the search query to find relevant context.
+        </field>
+        <field name="max_tokens" required="false" type="int" default="4000">
+          Token budget for the returned context.
+        </field>
+        <field name="weight" required="false" type="string" default="standard">
+          Context depth. "lightweight" (agent def only), "standard" (agent + knowledge),
+          "full" (agent + knowledge + verify gate instructions).
+        </field>
+        <field name="project_path" required="false" type="string">
+          Absolute path to an indexed project. When provided, adds relevant code chunks
+          from the project codebase.
+        </field>
+      </request-fields>
+      <response-fields>
+        <field name="context">assembled context string ready to inject into a prompt</field>
+        <field name="sources">list of files/chunks that contributed to the context</field>
+        <field name="token_count">approximate token count of the returned context</field>
+        <field name="error">present only on failure</field>
+      </response-fields>
+      <example-curl>
+curl -s -X POST http://127.0.0.1:8612/context \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "debug",
+    "task_description": "fix authentication bug in Python FastAPI app",
+    "project_path": "/home/user/myproject"
+  }'
+      </example-curl>
+      <example-python>
+import requests
+
+resp = requests.post("http://127.0.0.1:8612/context", json={
+    "agent": "explore",
+    "task_description": "understand GraphRAG implementation",
+    "weight": "standard",
+})
+data = resp.json()
+context_text = data["context"]
+print(f"Got {data['token_count']} tokens of context from {len(data['sources'])} sources")
+
+# Inject into an LLM call
+import anthropic
+client = anthropic.Anthropic()
+msg = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=2048,
+    system=context_text,
+    messages=[{"role": "user", "content": "Explain how graph edges are resolved."}],
+)
+      </example-python>
+    </endpoint>
+
+    <endpoint method="POST" path="/index">
+      <description>
+        Index (or reindex) a project's source code into the Project RAG codebase index.
+        After indexing, the project is searchable via POST /search with scope="codebase".
+        Also builds the GraphRAG structural index (imports, inheritance chains).
+      </description>
+      <request-fields>
+        <field name="project_path" required="true" type="string">
+          Absolute path to the project root to index.
+        </field>
+        <field name="force" required="false" type="bool" default="false">
+          When true, re-embeds all files even if they haven't changed. Useful if the embedding
+          model was upgraded. Can take 30+ minutes on large projects — confirm before using.
+        </field>
+      </request-fields>
+      <response-fields>
+        <field name="files_indexed">number of files successfully embedded and stored</field>
+        <field name="files_unchanged">number of files skipped (hash unchanged)</field>
+        <field name="files_failed">number of files that errored — check errors[] if nonzero</field>
+        <field name="errors">array of {file, type, message} entries, present only when files_failed > 0</field>
+        <field name="elapsed_s">total indexing time in seconds</field>
+        <field name="graph.edges">number of graph edges built (imports/inheritance)</field>
+        <field name="graph.resolved">number of graph edges successfully resolved</field>
+      </response-fields>
+      <example-curl>
+curl -s -X POST http://127.0.0.1:8612/index \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "/home/user/myproject"}'
+      </example-curl>
+      <example-python>
+import requests
+
+resp = requests.post("http://127.0.0.1:8612/index", json={
+    "project_path": "/home/user/myproject",
+    "force": False,
+})
+data = resp.json()
+print(f"Indexed {data['files_indexed']} files, {data['files_unchanged']} unchanged, "
+      f"{data['files_failed']} failed in {data['elapsed_s']:.1f}s")
+if data.get("errors"):
+    for err in data["errors"]:
+        print(f"  ERROR {err['type']}: {err['file']} — {err['message']}")
+      </example-python>
+      <note>
+        files_failed > 0 is the signal that something went wrong. Zero failures = healthy index.
+        Retry failed embed_error entries once with force=true before escalating.
+      </note>
+    </endpoint>
+
+  </endpoints>
+
+  <error-responses>
+    <error status="400" reason="Invalid JSON body">{"error": "Request body must be valid JSON."}</error>
+    <error status="400" reason="Missing required fields (context endpoint)">{"error": "Required fields: agent, task_description"}</error>
+    <error status="400" reason="Missing required fields (index endpoint)">{"error": "project_path is required."}</error>
+    <error status="503" reason="Model still loading">{"error": "Server is still initializing, retry in a moment."}</error>
+    <error status="500" reason="Tool call failed">{"error": "..."} with the underlying exception message</error>
+  </error-responses>
+
+  <wait-for-ready-pattern>
+    <description>Poll /status until the model is loaded before making search or context calls.</description>
+    <example-python>
+import time, requests
+
+def wait_for_rag(timeout=120):
+    deadline = time.time() + timeout
+    while time.time() &lt; deadline:
+        try:
+            r = requests.get("http://127.0.0.1:8612/status", timeout=2)
+            if r.status_code == 200 and r.json().get("status") == "ready":
+                return True
+        except requests.ConnectionError:
+            pass
+        time.sleep(2)
+    raise TimeoutError("RAG server not ready after %ds" % timeout)
+
+wait_for_rag()
+# Now safe to call /search and /context
+    </example-python>
+  </wait-for-ready-pattern>
+
+  <see-also>
+    <ref>MCP tools rag_search, rag_context, rag_status — use these inside Claude Code sessions</ref>
+    <ref>knowledge/research-rag.xml — how to index URLs and PDFs for scope="research" searches</ref>
+  </see-also>
+
+</knowledge-base>

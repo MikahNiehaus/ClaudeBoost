@@ -1,7 +1,7 @@
 ---
 argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | xml | counts | rag | rules | memory | all]
 description: Self-improvement audit — ClaudeBoost internals (default), any workspace, or any project path
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion, mcp__rag-server__rag_context, mcp__rag-server__rag_index, mcp__rag-server__rag_index_project, mcp__rag-server__rag_search, mcp__rag-server__rag_status
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
 
 # /self-improve — Dynamic Self-Improvement Audit

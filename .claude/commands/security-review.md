@@ -1,7 +1,7 @@
 ---
 argument-hint: [--full]
 description: Security-focused review of pending branch changes, or full project audit with --full
-allowed-tools: Read, Write, Bash, Glob, Grep, Agent, mcp__rag-server__rag_context, mcp__rag-server__rag_search, mcp__rag-server__rag_index_project
+allowed-tools: Read, Write, Bash, Glob, Grep, Agent
 ---
 
 # /security-review — Security Review

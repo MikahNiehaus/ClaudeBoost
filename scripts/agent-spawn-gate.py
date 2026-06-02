@@ -58,18 +58,20 @@ def main() -> int:
     # "RAG context" (two words) was previously accepted but is too ambiguous —
     # it matches plain-English phrases like "ensure RAG context is available"
     # without the prompt actually instructing a rag_context() tool call.
+    # Accept MCP rag_context call OR HTTP REST call to the context endpoint
     has_rag = (
         "rag_context" in prompt_lower
         or "mcp__rag-server__rag_context" in prompt_lower
+        or "127.0.0.1:8612/context" in prompt_lower
+        or "localhost:8612/context" in prompt_lower
     )
     if not has_rag:
         nudges.append(
-            "[agent-spawn nudge] Spawn prompt does not instruct the agent to call "
-            "rag_context. For ClaudeBoost quality routing, include "
-            "'mcp__rag-server__rag_context(agent=\"...\", task_description=\"...\", project_path=\"...\")' "
-            "as the first action in the prompt."
+            "[agent-spawn nudge] Spawn prompt does not instruct the agent to load RAG context. "
+            "Include a call to POST http://127.0.0.1:8612/context "
+            "(e.g. via curl or python urllib) as the first action in the prompt."
         )
-    elif "project_path" not in prompt_lower:
+    elif "project_path" not in prompt_lower and "127.0.0.1:8612" not in prompt_lower:
         nudges.append(
             "[agent-spawn nudge] rag_context call is missing project_path. "
             "Include project_path=\"<cwd>\" so the agent loads project-specific "
@@ -105,7 +107,7 @@ def main() -> int:
     if nudges:
         for n in nudges:
             print(n, file=sys.stderr)
-        # Block when rag_context is absent from spawn prompt — hard requirement
+        # Block when RAG context call is absent from spawn prompt — hard requirement
         return 2
 
     return 0

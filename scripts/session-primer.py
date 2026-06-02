@@ -12,23 +12,20 @@ first message after /clear (regardless of prompt length).
 Skips:
 - Short prompts (<15 chars) when no clear-pending flag is present
 
-Behavior:
-- Checks clear-pending.json — if valid (< 10 min), injects restore context
-  and consumes the flag (one-shot).
-- Checks RAG sentinel file to detect offline/unverified RAG
-- If RAG offline: injects a HARD STOP directive (no workflow may proceed)
-- If RAG online: injects 6 non-negotiable standing orders
-- Exits 0 always (nudge layer — PreToolUse rag-agent-guard handles hard blocks)
+Boost injection modes (state/boost-injection.json):
+- "false"  — skip all injection entirely
+- "true"   — inject always-on rules only, skip RAG verification
+- "verify" — (default) full RAG-gated behavior
 
-The 8 standing orders (RAG-online path):
-1. RAG before file searching
-2. Health check — rag_status at investigation start (unresolved edges = stop and fix)
-3. Write findings — update context.md after each search or read that reveals something
-4. Verify Gate (file:line for every finding)
-5. Evaluator for all findings (never self-verify)
-6. CONSULT before new endpoints/tables/dependencies
-7. rag_context as first step in every agent spawn
-8. If any RAG tool is unavailable or errors mid-task: STOP, report to user
+Always-on rules (A-F) inject in both "true" and "verify" modes:
+A. Human voice
+B. Code comments, no dashes
+C. Tasks
+D. Architectural approval before changes
+E. RAG usage when available
+F. Workspace update when one exists
+
+RAG standing orders (1-8) only inject in "verify" mode when RAG is confirmed online.
 """
 from __future__ import annotations
 
@@ -37,6 +34,16 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _get_boost_injection_mode(home: Path) -> str:
+    """Return boost injection mode: 'true', 'false', or 'verify' (default)."""
+    state_path = home / "state" / "boost-injection.json"
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        return data.get("mode", "verify").lower()
+    except Exception:
+        return "verify"
 
 
 def consult_mode_active(home: Path) -> bool:
@@ -142,11 +149,53 @@ def main() -> int:
     prompt = data.get("prompt", "").strip()
     home = _get_home()
 
+    boost_mode = _get_boost_injection_mode(home)
+
+    # boost false: skip all injection entirely
+    if boost_mode == "false":
+        return 0
+
     # Always check for clear-pending flag — inject even on short prompts like "continue"
     clear_context = _consume_clear_pending(home)
 
     # Skip standing orders for short prompts with no clear-pending context
     if len(prompt) < 15 and not clear_context:
+        return 0
+
+    # Always-inject rules: fire regardless of RAG state
+    always_inject = (
+        "ALWAYS-ON RULES (apply to every response): "
+        "(A) Human voice — every word you write must sound like a human wrote it. "
+        "Use contractions. Vary sentence length. Start with the substance. "
+        "Never use: delve, leverage, utilize, seamless, robust, comprehensive, "
+        "pivotal, facilitate, harness, foster, transformative, paradigm, synergy, holistic, empower. "
+        "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
+        "It's worth noting, In today's rapidly evolving. "
+        "No em-dashes. Rewrite as separate sentences instead. "
+        "No hyphenated compound jargon (no-go, hard-block, soft-fail, non-trivial). "
+        "Say what you mean in plain words instead. "
+        "(B) Code comments — non-formal but professional, concise, say why not what. "
+        "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
+        "(C) Tasks — for any multi-step or non-trivial work, call TaskCreate before starting. "
+        "Mark in_progress when you begin a task, completed when you finish it. "
+        "Update as you go, not in a batch at the end. "
+        "(D) Architectural changes — before making any architectural change (new class, endpoint, "
+        "table, schema, service, or pattern), explain exactly what you are changing and why. "
+        "Do not proceed until the user confirms they understand and approve. "
+        "(E) RAG usage — when RAG is available, always call rag_search before reading files or grepping. "
+        "Use mode=vector for semantic code search and mode=graph for import and dependency chains. "
+        "Never substitute grep or Read for RAG when RAG is online. "
+        "If RAG is erroring or unavailable, stop and fix it (run /rag to start the server). "
+        "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
+        "(F) Workspace update — if a workspace context.md exists for the current task, "
+        "update it after each meaningful finding or decision. "
+        "Do not let findings accumulate in context only."
+    )
+
+    # boost true: inject always-on rules only, skip RAG verification entirely
+    if boost_mode == "true":
+        context = (clear_context + "\n\n" + always_inject) if clear_context else always_inject
+        print(json.dumps({"additionalContext": context}))
         return 0
 
     # Post-clear restore path — bypass RAG hard-stop.
@@ -156,58 +205,46 @@ def main() -> int:
     if clear_context and not rag_verified():
         context = (
             clear_context
-            + "\n\nNOTE: RAG not yet verified. Run /boost before spawning agents "
+            + "\n\nNOTE: RAG not yet verified. Run /rag before spawning agents "
             "or starting any investigation."
+            + "\n\n" + always_inject
         )
         print(json.dumps({"additionalContext": context}))
         return 0
 
     if not rag_verified():
-        # RAG not verified, no clear context — hard stop
+        # RAG not verified, no clear context — hard stop, but still inject always-on rules
         context = (
             "CRITICAL — RAG NOT VERIFIED: "
             "The RAG server has not been verified this session. "
-            "You MUST NOT spawn agents, call rag_context/rag_search, "
+            "You MUST NOT spawn agents or call rag search endpoints, "
             "or proceed with any multi-step workflow. "
             "Before doing ANYTHING else, stop and tell the user exactly: "
-            "'RAG is not connected. Run /boost to verify RAG before I can continue.' "
+            "'RAG is not connected. Run /rag to start the server before I can continue.' "
             "Do not attempt to self-recover by reading files or grepping. Just stop."
+            "\n\n" + always_inject
         )
         print(json.dumps({"additionalContext": context}))
         return 0
 
-    # RAG verified — inject normal standing orders (applies to slash commands too)
+    # RAG verified — inject RAG workflow standing orders on top of always-on rules
     standing_orders = (
-        "STANDING ORDERS (non-negotiable): "
-        "(1) RAG before files — rag_search before Read/Grep. "
-        "(2) Health check — at start of any investigation, call rag_status to verify index "
+        "RAG STANDING ORDERS (non-negotiable): "
+        "(1) RAG before files — POST http://127.0.0.1:8612/search before Read/Grep. "
+        "(2) Health check — at start of any investigation, call GET http://127.0.0.1:8612/status. "
         "health; if unresolved edges or errors, stop and fix before continuing. "
         "(3) Write findings — after each RAG search or file read that reveals something, "
         "update workspace/[task-id]/context.md with what you found before moving on. "
         "Do not accumulate findings in your head; write them down as you go. "
         "(4) Cite file:line — for every finding. "
         "(5) Evaluator — spawn evaluator-agent, never self-verify. "
-        "(6) rag_context first — in every agent spawn prompt. "
-        "(7) RAG all modes — use rag_context for knowledge, rag_search mode=vector for semantic "
-        "code search, and rag_search mode=graph for import and dependency chains. "
-        "When RAG errors mid-task, fix it (run /mcp to reconnect) — never skip RAG and "
+        "(6) RAG context first — call POST http://127.0.0.1:8612/context as first step in every agent spawn prompt. "
+        "(7) RAG all modes — use /context for knowledge, /search?scope=codebase for semantic "
+        "code search, and /search?mode=graph for import and dependency chains. "
+        "When RAG errors mid-task, fix it (run /rag to start the server) — never skip RAG and "
         "substitute grep or file reads. "
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
-        "do NOT self-recover by searching files; tell the user RAG is offline and wait. "
-        "(9) Human voice — every word you write must sound like a human wrote it. "
-        "Use contractions. Vary sentence length. Start with the substance. "
-        "Never use: delve, leverage, utilize, seamless, robust, comprehensive, "
-        "pivotal, facilitate, harness, foster, transformative, paradigm, synergy, holistic, empower. "
-        "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
-        "It's worth noting, In today's rapidly evolving. "
-        "No em-dashes at all. Rewrite as separate sentences instead. "
-        "No hyphenated compound jargon (no-go, hard-block, soft-fail, non-trivial). "
-        "Say what you mean in plain words instead. "
-        "(10) Code comments — non-formal but professional, concise, say why not what. "
-        "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
-        "(11) Tasks — for any multi-step or non-trivial work, call TaskCreate before starting. "
-        "Mark in_progress when you begin a task, completed when you finish it. "
-        "Update as you go, not in a batch at the end."
+        "do NOT self-recover by searching files; tell the user RAG is offline and wait."
     )
 
     if consult_mode_active(home):
@@ -220,9 +257,9 @@ def main() -> int:
         )
 
     if clear_context:
-        context = clear_context + "\n\n" + standing_orders
+        context = clear_context + "\n\n" + always_inject + "\n\n" + standing_orders
     else:
-        context = standing_orders
+        context = always_inject + "\n\n" + standing_orders
 
     print(json.dumps({"additionalContext": context}))
     return 0

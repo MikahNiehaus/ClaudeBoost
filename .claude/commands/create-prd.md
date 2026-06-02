@@ -1,7 +1,7 @@
 ---
 description: Create a PRD and task checklist in workspace — Phase 1 generates prd.md, Phase 2 generates tasks.md
 argument-hint: "<task-id> [feature description]"
-allowed-tools: Read, Write, Bash, Glob, Grep, mcp__rag-server__rag_context, mcp__rag-server__rag_search
+allowed-tools: Read, Write, Bash, Glob, Grep
 ---
 
 # /create-prd

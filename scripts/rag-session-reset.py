@@ -40,8 +40,8 @@ def main() -> int:
             "additionalContext": (
                 "RAG SENTINEL CLEARED: The previous session's RAG verification has expired. "
                 "RAG must be re-verified before agents or investigation tasks can proceed. "
-                "Run /boost to reconnect and verify RAG, then continue your work. "
-                "Do NOT proceed with any codebase task until /boost confirms RAG is online."
+                "Run /rag to start the server and verify RAG, then continue your work. "
+                "Do NOT proceed with any codebase task until /rag confirms RAG is online."
             )
         }))
 

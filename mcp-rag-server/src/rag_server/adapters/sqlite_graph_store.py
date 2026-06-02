@@ -286,14 +286,26 @@ class SQLiteGraphStore(GraphStorePort):
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path))
+        conn = sqlite3.connect(str(self._db_path), timeout=30)
         conn.row_factory = sqlite3.Row
+        # WAL allows concurrent readers during writes; busy_timeout retries instead of
+        # raising "database is locked" immediately.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
         logger.debug("Graph store initialised at %s", self._db_path)
+
+    def count_edges_by_confidence(self, confidence: str) -> int:
+        """Return the number of edges stored with the given confidence tag."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE confidence = ?", (confidence,)
+            ).fetchone()
+            return row[0]
 
     def add_edges(self, edges: Sequence[GraphEdge]) -> None:
         if not edges:
