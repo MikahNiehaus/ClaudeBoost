@@ -177,6 +177,8 @@ then re-run /graph to build the map.
 
 Read the ticket acceptance criteria and check whether the in-scope files actually implement each AC item. This catches missing conditions, missing handlers, and untested paths that a file-scope map alone cannot surface.
 
+This phase uses three research-backed techniques: **specification-first enumeration** (enumerate expected values from the AC before touching code), **upstream data flow tracing** (trace where filtered values are set to discover the full input domain), and **iterative second-pass** (when any gap is found, sweep all other filters for the same missing value).
+
 ### 5a — Extract acceptance criteria
 
 Read `$WORKSPACE_ABS/ticket.md` (or the AC section of `$WORKSPACE_ABS/context.md` if ticket.md is absent).
@@ -184,27 +186,59 @@ Extract each distinct acceptance criterion as a numbered list. If no explicit AC
 
 If no ticket file exists and no AC can be derived: skip Phase 5 entirely and note "No AC found — completeness check skipped."
 
-### 5b — Read key in-scope files
+### 5b — Build scenario output maps (specification-first)
 
-For each file in the scope map that is a primary implementation file (not a reference/parallel pattern):
-- Read the file (or the relevant section if large)
-- Note what conditions, branches, guards, and cases are present
+**Do this before reading any implementation file.** For each AC item, write a "scenario output map": the explicit, exhaustive list of states, values, statuses, roles, or types that this AC scenario can produce or involve. This is the specification — the ground truth you will verify code against.
 
-Focus on files that directly implement the AC behaviors: processors, controllers, page models, enums, and test files. Skip pure model/migration files unless the AC is about data shape.
+Example: AC says "users receive notifications when their address changes." Scenario output map:
+- Enrollment statuses that can exist at time of address change: Active, Hold, Waitlisted, PendingApproval, Cancelled, Completed
+- Roles that can trigger the change: AgencyAdmin, AgencyProgramAdmin, GlobalAdmin, the member themselves
+- Notification types: email to DP admin, email to sponsor admin
 
-### 5c — Check each AC item
+Write the scenario output map for each AC item before proceeding to 5c. Do not skip this step or defer it.
 
-For each AC item, answer: **Is there specific code in the in-scope files that implements this?**
+### 5c — Investigate key in-scope files
+
+Do not assume a file is correct just because it is in scope. Treat every primary implementation file as a suspect: read it and actively look for what it does NOT handle, not just what it does.
+
+For each primary implementation file (processors, controllers, page models, enums, service classes, test files):
+
+1. **Read it** — the full relevant section, not just a summary
+2. **Map what it handles** — every condition, branch, filter, status, role, type, or case it covers
+3. **Map what it does NOT handle** — ask "what inputs or states could reach this code that are not covered here?" For every filter or allowlist, ask what is excluded. For every branch, ask what falls through. For every role check, ask which roles are absent.
+4. **Follow references** — if the file references an enum, constant list, config value, or helper defined elsewhere, read that definition too. Do not assume a referenced value is complete or correct without reading it.
+5. **Trace the data path upstream** — for every gate, filter list, or allowlist, trace the filtered value backward: where is it set? Read the controller, trigger, migration, or upstream caller that writes that value. What are ALL the values it can carry when it arrives at the gate? A filter can only be complete if you know the full input domain from upstream code, not just what the filter currently lists.
+
+The goal is to build a complete picture of what each file handles AND what it silently ignores, with the full upstream input domain known for every gate.
+
+### 5d — Check each AC item against its scenario output map
+
+For each AC item: take its scenario output map from 5b, then check whether the implementation covers every item in that map.
+
+This is **specification-first**: you are checking "does the code cover everything the scenario can produce?" — not "does the scenario match what the code does?" The scenario output map is the authority; the code is the thing being verified.
 
 Flag a gap if ANY of the following are true:
-- The condition/handler/branch required by the AC does not exist in the relevant file
-- A guard or filter list is missing a value that the AC requires
-- An AC item has no corresponding test (check test files for a test method that covers the scenario)
-- A toggle, flag, or config that the AC requires is absent from the implementation
+- An item in the scenario output map has no corresponding handler/branch/test in the implementation
+- A filter list is missing a value that the upstream data path can produce (found via upstream tracing in 5c step 5)
+- A role check is missing a role that the AC scenario involves
+- An AC item has no corresponding test
+- A toggle, flag, or config that the AC requires is absent
 
 Do NOT flag a gap if the AC is implemented but the code is stylistically different from what you'd expect — only flag functional absences.
 
-### 5d — Write completeness results
+### 5e — Iterative second-pass: propagate any gap found
+
+If any gap was found in 5d — specifically a missing value in a filter, gate, or allowlist — do not stop. Use that missing value as a new seed:
+
+1. Search all other in-scope files for any other filter list, status gate, role check, or allowlist that handles the same domain (same enum type, same field, same concept)
+2. For each one found, check whether the same missing value is absent there too
+3. Repeat until no new related filters remain
+
+This catches the pattern where a missing status in one filter (e.g., `AddressChangeAlertEnrollmentStatuses`) is also missing from a related filter elsewhere (e.g., a notification-eligibility check, a UI toggle gate, or a test fixture). A gap in one filter is a signal that the same value was likely overlooked everywhere that domain is filtered.
+
+Add any newly discovered gaps to the gap list before writing results.
+
+### 5f — Write completeness results
 
 Append a `## Completeness Check` section to `$WORKSPACE_ABS/context.md` after the Files in Scope section:
 
@@ -242,6 +276,7 @@ Scope map built for workspace/$TASK_ID
   Written to: $WORKSPACE_ABS/context.md → ## Files in Scope (Graph Map)
 
 Completeness: N/N AC items verified (or "N gaps — see ## Completeness Check in context.md")
+  Second-pass: ran / skipped (ran if any gap found in 5d)
 
 Top files by score:
   1. path/to/file.ts  [imports/inherits — TicketService]
@@ -261,3 +296,4 @@ To refresh this map at any point: /graph $TASK_ID $PROJECT_PATH
 - The scope map is informational — it does not replace reactive RAG queries during the task. Use it as a starting navigation map, not a complete picture.
 - Graph search requires the project to be indexed. Run `/index-project $PROJECT_PATH` if the project has not been indexed yet.
 - Completeness check reads files directly — it is not a substitute for `/audit` which runs parallel dimension agents. Use `/graph` to find gaps early; use `/audit` to verify the full analysis before shipping.
+- Phase 5 uses three research-backed techniques: (1) specification-first — enumerate what values/states/roles the AC scenario produces BEFORE looking at code; (2) upstream data flow tracing — for every gate or filter, follow the filtered value back to where it is set to find the full input domain; (3) iterative second-pass — any gap found in one filter is used as a seed to sweep all other in-scope filters for the same missing value.
