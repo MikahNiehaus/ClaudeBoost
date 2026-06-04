@@ -11,6 +11,7 @@ Phase A — base behavior:
 Phase B — evaluator routing:
   - NEEDS_VERIFICATION flag set, non-evaluator spawn  -> exit 2
   - NEEDS_VERIFICATION flag set, evaluator spawn      -> exit 0, flag cleared
+  - NEEDS_VERIFICATION + audit-in-progress both set   -> exit 0 (audit bypasses gate)
 """
 from __future__ import annotations
 
@@ -41,17 +42,25 @@ def _spawn(prompt: str, description: str = "test spawn") -> dict:
 # Happy paths
 # ---------------------------------------------------------------------------
 
-def test_passes_with_http_context_call():
+def test_passes_with_http_context_call(boost_home):
     """Prompt includes the HTTP context call with project_path — should pass."""
-    result = run_hook("agent-spawn-gate.py", _spawn(_BASE_PROMPT))
+    result = run_hook(
+        "agent-spawn-gate.py",
+        _spawn(_BASE_PROMPT),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
     assert result.returncode == 0
     assert result.stderr == b""
 
 
-def test_passes_with_legacy_rag_context():
+def test_passes_with_legacy_rag_context(boost_home):
     """Legacy rag_context keyword still accepted for backward compat."""
     prompt = "Call rag_context with project_path='/test/project' as first action"
-    result = run_hook("agent-spawn-gate.py", _spawn(prompt))
+    result = run_hook(
+        "agent-spawn-gate.py",
+        _spawn(prompt),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
     assert result.returncode == 0
 
 
@@ -92,7 +101,7 @@ def test_blocks_architect_missing_proposal_only():
     assert b"PROPOSAL_ONLY" in result.stderr
 
 
-def test_passes_architect_with_full_contract():
+def test_passes_architect_with_full_contract(boost_home):
     """architect-agent spawn with PROPOSAL_ONLY + 2 citations exits 0."""
     prompt = (
         _BASE_PROMPT + "\n"
@@ -102,6 +111,7 @@ def test_passes_architect_with_full_contract():
     result = run_hook(
         "agent-spawn-gate.py",
         _spawn(prompt, description="architect-agent spawn"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
 
@@ -154,3 +164,19 @@ def test_passes_normally_without_flag(boost_home):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
+
+
+def test_passes_during_active_audit(boost_home):
+    """NEEDS_VERIFICATION flag does not block spawns when audit-in-progress.json is active."""
+    _write_flag(boost_home)
+    audit_flag = boost_home / "state" / "audit-in-progress.json"
+    audit_flag.write_text('{"active":true}', encoding="utf-8")
+    try:
+        result = run_hook(
+            "agent-spawn-gate.py",
+            _spawn(_BASE_PROMPT, description="audit dimension: security analysis"),
+            env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+        )
+        assert result.returncode == 0
+    finally:
+        audit_flag.unlink(missing_ok=True)

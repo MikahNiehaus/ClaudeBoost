@@ -419,17 +419,8 @@ def _write_server_info(port: int) -> None:
 
 
 def _update_project_rag_flag(result: dict) -> None:
-    """Write or clear the project-RAG sentinel and stale-index head file.
-
-    Called after a successful /index for a project. Replaces the old
-    project-rag-flag.py PostToolUse hook (which was MCP-only).
-    """
-    flag_path = Path(tempfile.gettempdir()) / "claudeboost_project_rag_ok"
+    """Update the stale-index head file after a successful /index run."""
     if "files_indexed" in result and "error" not in result:
-        try:
-            flag_path.write_text("ok", encoding="utf-8")
-        except Exception:
-            pass
         try:
             head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=str(PROJECT_ROOT), stderr=subprocess.DEVNULL
@@ -443,11 +434,6 @@ def _update_project_rag_flag(result: dict) -> None:
                 "branch": branch,
                 "indexed_at": datetime.now(timezone.utc).isoformat(),
             }), encoding="utf-8")
-        except Exception:
-            pass
-    else:
-        try:
-            flag_path.unlink(missing_ok=True)
         except Exception:
             pass
 

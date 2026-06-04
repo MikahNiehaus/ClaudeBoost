@@ -20,9 +20,16 @@ Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_descr
 
 This loads coding-standards, security, scope-governance guardrails. Read the result — it primes your knowledge for pass selection.
 
-**0b — Project RAG index** (ensure codebase search works):
+**0b — Verify project is indexed** (required for codebase search to work):
 
-Wait until Phase 1b resolves `REPO_PATH`, then call `POST http://127.0.0.1:8612/index with project_path=<REPO_PATH>`. Report: "X files updated."
+Wait until Phase 1b resolves `REPO_PATH`, then:
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `REPO_PATH`.
+
+- **Indexed and fresh**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<REPO_PATH>")` before continuing.
+- **Indexed but stale** (last indexed > 24h ago or new commits since): call `POST http://127.0.0.1:8612/index` with `project_path=<REPO_PATH>` to refresh. Report: "X files updated."
+- **RAG offline**: stop and tell the user to run `/rag` first.
 
 ---
 
@@ -335,9 +342,23 @@ After all pass batches complete and before spawning the Evaluator, the orchestra
 
 **Permission note:** This phase runs Bash commands (`npx jest`, `python -m pytest`, `npm test`, etc.) in the target repo. These are real test runners — they may install dependencies, write build artifacts, or take time. Announce the detected command to the user before running: "Running tests: `<command>`". If the command requires a permission prompt you can't auto-approve, tell the user what to allow and continue with the review; mark TEST_RESULTS as "Not run — permission required for `<command>`".
 
+**Step 0 — Build verification (runs BEFORE test detection, for any repo):**
+
+Check for a compilable project:
+```bash
+ls "<REPO_PATH>"/*.sln "<REPO_PATH>"/**/*.csproj 2>/dev/null | head -1
+```
+
+If a `.sln` or `.csproj` is found:
+- Announce: "Building: `dotnet build <solution> --no-restore -v quiet`"
+- Run: `dotnet build "<REPO_PATH>/<solution>.sln" --no-restore -v quiet 2>&1 | tail -5`
+- If exit code ≠ 0 or output contains `Error(s)` with a non-zero error count → this is an **automatic BLOCKER**: "Build failed — fix compile errors before merge". Record in TEST_RESULTS and surface to evaluator.
+- If build succeeds (0 errors): note "Build: 0 errors" and continue.
+
 **Step 1 — Detect test framework:**
 ```bash
 # Check for common test configs in order
+ls "<REPO_PATH>"/*.sln 2>/dev/null                                                                  # .NET solution
 ls "<REPO_PATH>/package.json" 2>/dev/null && grep -E '"(jest|vitest|mocha|jasmine)"' "<REPO_PATH>/package.json"
 ls "<REPO_PATH>/pytest.ini" "<REPO_PATH>/pyproject.toml" "<REPO_PATH>/setup.cfg" 2>/dev/null
 ls "<REPO_PATH>/Makefile" 2>/dev/null && grep -E '^test' "<REPO_PATH>/Makefile"
@@ -365,6 +386,7 @@ done
 *If the diff changes a file with broad usage (e.g. a shared utility):* run the full test suite.
 
 Detect and use the right command:
+- .NET (`.sln` found): `dotnet test "<REPO_PATH>/<solution>.sln" --no-build -v quiet` — `--no-build` because Step 0 already built it. If specific test project(s) exist for changed files, target them: `dotnet test "<REPO_PATH>/<TestProject>.csproj" --no-build -v quiet`
 - Jest/Vitest: `npx jest --testPathPattern="<test-file>" --passWithNoTests` or `npx vitest run <test-file>`
 - pytest: `python -m pytest <test-file> -v`
 - Makefile: `make test`

@@ -161,6 +161,18 @@ This is a fast probe. `GET /status` does not use the embedding model, so it resp
 
 **If `GET http://127.0.0.1:8612/status` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
 
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Detect the project path:
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+
+- **Indexed**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/rag` first.
+
 ---
 
 ## Phase 1: Ticket Analysis

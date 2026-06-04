@@ -12,7 +12,9 @@
   <capability>Snapshot-first verification — text confirmation before screenshot capture</capability>
   <capability>Claude vision analysis — analyzes screenshots for visual problems before marking PASS</capability>
   <capability>Pixelmatch baseline comparison — local pixel diff against saved baselines, no external API</capability>
-  <capability>Screenshot annotation via JS overlay injection (red box on point of interest)</capability>
+  <capability>Screenshot annotation via JS overlay injection (red box on point of interest) with scroll-offset correction</capability>
+  <capability>Code-level step-through via mcp-debugger after every UI pass (C#/.NET, Node.js, TypeScript) — always on, no flag required</capability>
+  <capability>Debug evidence capture — variables at breakpoint saved to TC-NNN-debug.json alongside screenshots</capability>
   <capability>UI consistency pass — detects structural mismatches across same-type components</capability>
   <capability>Browser console monitoring for errors and temp-log verification</capability>
   <capability>Backtrack-and-retry — detects wrong navigation and tries alternative path before BLOCKED</capability>
@@ -215,9 +217,13 @@ Last updated: [date]
     }
   }
   if (!el) return;
+  // Scroll into view so getBoundingClientRect returns accurate viewport coordinates
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const rect = el.getBoundingClientRect();
+  // Guard: element not rendered or zero-size — do not place overlay on empty space
+  if (rect.width === 0 && rect.height === 0) return;
   const existing = document.getElementById('__e2e_ann__');
   if (existing) existing.remove();
-  const rect = el.getBoundingClientRect();
   const ann = document.createElement('div');
   ann.id = '__e2e_ann__';
   ann.style.cssText = `position:fixed;left:${rect.left-4}px;top:${rect.top-4}px;width:${rect.width+8}px;height:${rect.height+8}px;border:3px solid #FF0000;background:rgba(255,0,0,0.08);border-radius:4px;pointer-events:none;z-index:999999`;
@@ -226,14 +232,19 @@ Last updated: [date]
   ]]></text-find-snippet>
 
   <coordinate-inject-snippet><![CDATA[
-// FALLBACK: Use when element has no unique text label, or coordinates are already known
-// Replace TOP_PX, LEFT_PX, W_PX, H_PX with values from browser_snapshot
+// FALLBACK: Use when element has no unique text label, or coordinates are already known.
+// TOP_PX, LEFT_PX, W_PX, H_PX must be page-absolute coordinates (e.g. from browser_snapshot).
+// This snippet converts them to viewport-relative by subtracting the current scroll position,
+// which is required for position:fixed to land on the correct element.
 (function() {
   const existing = document.getElementById('__e2e_ann__');
   if (existing) existing.remove();
+  // Convert page-absolute coords to viewport-relative (position:fixed uses viewport origin)
+  const top  = TOP_PX  - window.scrollY;
+  const left = LEFT_PX - window.scrollX;
   const overlay = document.createElement('div');
   overlay.id = '__e2e_ann__';
-  overlay.style.cssText = 'position:fixed;top:TOP_PXpx;left:LEFT_PXpx;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:4px;';
+  overlay.style.cssText = `position:fixed;top:${top}px;left:${left}px;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:4px;`;
   document.body.appendChild(overlay);
 })();
   ]]></coordinate-inject-snippet>

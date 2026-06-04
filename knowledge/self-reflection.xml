@@ -66,13 +66,13 @@
 </anti-hallucination-patterns>
 
 <model-selection>
-  <model name="Opus 4.6" strength="Deep reasoning, complex analysis" cost="$5/$25">
+  <model name="Opus 4.8" strength="Deep reasoning, complex analysis, 128k output" cost="$5/$25">
     <use-for>Architecture decisions, complex bug analysis, final code review</use-for>
   </model>
-  <model name="Sonnet 4.6" strength="Balanced intelligence, coding" cost="$3/$15">
+  <model name="Sonnet 4.6" strength="Balanced intelligence, coding, extended thinking" cost="$3/$15">
     <use-for>Standard development, frontend/UI, research synthesis</use-for>
   </model>
-  <model name="Haiku 4.5" strength="Speed, high-volume tasks" cost="$1/$5">
+  <model name="Haiku 4.5" strength="Speed, high-volume tasks, extended thinking" cost="$1/$5">
     <use-for>Parallel subtasks, quick exploration, high-volume validation</use-for>
   </model>
   <orchestration-pattern>
@@ -86,7 +86,7 @@
   <scenario tokens="&lt;10K">Any model suitable</scenario>
   <scenario tokens="10K-50K">Sonnet preferred</scenario>
   <scenario tokens=">50K">Sonnet or Opus (Haiku "loses track fast")</scenario>
-  <scenario tokens=">200K">Sonnet 4.6 or Opus 4.6 (both support 1M context)</scenario>
+  <scenario tokens=">200K">Sonnet 4.6 or Opus 4.8 (both support 1M context; Haiku tops out at 200k)</scenario>
 </context-length-guidance>
 
 </knowledge-base>

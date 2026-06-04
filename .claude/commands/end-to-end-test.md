@@ -1,7 +1,7 @@
 ---
 argument-hint: <target-url> [scope — auth | crud | nav | errors | responsive | all]
 description: End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with screenshot evidence
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
 ---
 
 # /end-to-end-test — Browser-Only E2E Test Suite
@@ -16,6 +16,18 @@ Arguments: **$ARGUMENTS**
 Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="end-to-end UI test planning and execution", max_tokens=3000`.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Detect the project path:
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+
+- **Indexed**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/rag` first.
 
 ---
 
@@ -248,21 +260,25 @@ Only continue past this probe if ALL checks pass.
 
 **Switch to snapshots-only from here forward during discovery.**
 
-**1b — RAG-powered codebase scan.**
+**1b — Parallel discovery: spawn codebase analysis agent while browser crawl runs.**
 
-If `UI Pages in Scope` was built in Phase 0g: read it from context.md now. Those pages are higher-confidence targets — use them as the starting point for what to look for in the browser.
+Do not wait for codebase analysis before starting the browser crawl. Dispatch both at the same time.
 
-Run these 3 general searches as a complement (they catch things the entity seeds miss — global nav, auth, and shared forms):
+**Spawn `workflow-agent` (background) for codebase analysis.** The spawn prompt must include:
+1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for E2E discovery"`, `project_path=<cwd>`
+2. Run all three RAG searches in parallel:
+   - `POST /search scope=codebase project_path=<cwd> query="routes pages navigation URL paths" mode=graph limit=6`
+   - `POST /search scope=codebase project_path=<cwd> query="authentication login session user roles" mode=graph limit=5`
+   - `POST /search scope=codebase project_path=<cwd> query="form submit create update delete entity model" mode=graph limit=5`
+3. Also search for server-side handlers: `POST /search scope=codebase query="controller handler action endpoint API" mode=graph limit=6`
+4. Return: a deduplicated list of (route path → source file → method/function name) mappings, plus auth mechanism and form structures found.
+5. End with `## Summary` (≤200 words): route list, auth type, entity names, top controller files.
 
-```
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6, mode="graph"
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="authentication login session user roles", limit=5, mode="graph"
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5, mode="graph"
-```
+**Main agent — immediately start the browser crawl (Phase 1c) in parallel.**
 
-Merge the Phase 0g entity-seeded results with these general results. Deduplicate by route. The combined list is what the browser crawl targets.
+Read `UI Pages in Scope` from context.md (built in Phase 0g) while the agent runs — these are the highest-confidence targets for the browser.
 
-Extract from all results: known route paths, entity names, auth mechanism, form structures.
+Merge results when the agent returns: combine the agent's route/entity findings with the browser crawl's direct observations. Deduplicate by route. The combined list becomes the app map and test plan seed.
 
 **1c — Browser crawl (snapshots only, max 2 levels deep).**
 
@@ -473,6 +489,48 @@ If `plan.md` already contains result entries from a previous run (lines starting
 
 ---
 
+**Phase 3 Pre-flight: Attach Debugger (runs once, before any TC executes).**
+
+Code-level step-through is always part of every E2E session. This block runs after the prior-session check and before the first TC.
+
+**Step A — Production guard (re-checked here — never skip).**
+
+Before attaching to ANY process: confirm `TARGET_URL` passed Phase 0b. If the URL contains `staging`, `stg`, `stage`, `prod`, `prd`, `production`, or ends with `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.app` → **STOP immediately**. Do not attach the debugger. Do not run tests. This is the same hard stop as Phase 0b — it is checked again here to prevent race conditions if Phase 0b was somehow bypassed.
+
+Only attach to processes running on the LOCAL machine. Never use `mcp__mcp-debugger__attach_to_process` with a remote host, IP outside 127.0.0.1/localhost, or credentials from a config file.
+
+**Step B — Detect the running server process.**
+
+Run on Windows:
+```bash
+tasklist /FI "IMAGENAME eq dotnet.exe" /FO CSV 2>nul && tasklist /FI "IMAGENAME eq node.exe" /FO CSV 2>nul
+```
+
+Parse the output into a table:
+```
+Detected server processes:
+  [PID]  dotnet.exe
+  [PID]  node.exe
+```
+
+**Step B — Determine language and attach.**
+
+- If only dotnet processes found → language = `csharp`, pick the first PID.
+- If only node processes found → language = `javascript`, pick the first PID.
+- If both found → print the table and ask: "Which process should the debugger attach to? (Enter PID)"
+- If neither found → set `DEBUG_ENABLED = false`. Print: "No server process found — tests will run UI-only. Start the app in debug mode and re-run to enable code verification." Skip to the TC loop.
+
+Call `mcp__mcp-debugger__create_debug_session` with `language=<detected>` and `name="e2e-session"` → store result as `DEBUG_SESSION_ID`.
+
+Call `mcp__mcp-debugger__attach_to_process` with `sessionId=DEBUG_SESSION_ID` and `processId=<PID>`.
+
+- Success → set `DEBUG_ENABLED = true`. Print: "Debugger attached (PID <PID>, session <DEBUG_SESSION_ID>)."
+- Failure → set `DEBUG_ENABLED = false`. Print: "Debugger attach failed: <error>. Tests will run UI-only." Call `mcp__mcp-debugger__close_debug_session` to clean up.
+
+Keep `DEBUG_SESSION_ID` open for the entire Phase 3 session.
+
+---
+
 **Print this block BEFORE running any test:**
 
 ```
@@ -559,7 +617,11 @@ Inject annotation overlay:
   if (e) e.remove();
   const d = document.createElement('div');
   d.id = '__e2e_ann__';
-  d.style.cssText = 'position:fixed;top:TOP_PXpx;left:LEFT_PXpx;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:2px;';
+  // browser_snapshot returns page-absolute coordinates; subtract scroll offset so
+  // position:fixed (which is viewport-relative) lands on the correct element.
+  const top  = TOP_PX  - window.scrollY;
+  const left = LEFT_PX - window.scrollX;
+  d.style.cssText = `position:fixed;top:${top}px;left:${left}px;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:2px;`;
   document.body.appendChild(d);
 })();
 ```
@@ -572,6 +634,58 @@ Remove overlay:
 ```
 
 If coordinates unknown from snapshot: annotate the relevant viewport region (e.g., `top:0,left:0,width:full-width,height:80` for nav bar tests).
+
+**Step 4b — Debug step-through (always runs after Step 4 if DEBUG_ENABLED = true and TC is not FAIL/BLOCKED).**
+
+Skip if `DEBUG_ENABLED = false`.
+
+1. **Figure out what code to step through (three-tier lookup — stop at first hit):**
+
+   **Tier 1 — Ticket code entities (highest confidence):**
+   If `TICKET_ID` is set and `$WORKSPACE_ABS/analysis.md` exists, read the `### Code Entities` section. For this TC, find the entity whose name or route matches the TC's primary action (e.g., TC "create order" → `OrdersController`, `/api/orders`). Use that file + line as the breakpoint target. Skip tiers 2–3 if found.
+
+   **Tier 2 — Files in Scope graph map (good confidence):**
+   Read the `## Files in Scope (Graph Map)` table from `$WORKSPACE_ABS/context.md`. Find the file whose seed entity or route is most relevant to this TC's primary action verb and noun. For example, TC "submit login form" → look for files seeded by `AuthController`, `Login`, or `/api/auth`. Use that file's line_start as the breakpoint target.
+
+   **Tier 3 — RAG graph search (fallback):**
+   ```
+   POST http://127.0.0.1:8612/search scope=codebase project_path=<cwd> query="[TC primary action — e.g. 'create order controller handler']" mode=graph limit=3
+   ```
+   Use the top result's `source` and `line_start`.
+
+   If all three tiers return nothing: write `{ "verdict": "no code path found — TC may be client-side only" }` and skip to Step 5.
+
+2. **Set breakpoint** at the entry of the relevant code:
+   Call `mcp__mcp-debugger__set_breakpoint` with `sessionId=DEBUG_SESSION_ID`, `file=<source path>`, `line=<line_start>`.
+
+3. **Trigger the code path** by re-running the TC's primary server-calling step in the browser (the step that submits a form, navigates, or calls an API — not navigation-only steps).
+
+4. **Call `mcp__mcp-debugger__continue_execution`** with `sessionId=DEBUG_SESSION_ID` and wait for the breakpoint to hit (up to 5 seconds).
+
+5. **If breakpoint hits:**
+   - Call `mcp__mcp-debugger__get_stack_trace` — record the call stack
+   - Call `mcp__mcp-debugger__get_variables` — capture local variables and parameters
+   - Call `mcp__mcp-debugger__step_over` 2–3 times through the key logic
+   - Call `mcp__mcp-debugger__get_variables` again — capture post-step state
+   - Call `mcp__mcp-debugger__continue_execution` to let the request complete
+   - Write debug evidence to `$SNAPSHOTS_DIR/TC-NNN-debug.json`:
+     ```json
+     {
+       "tc": "TC-NNN",
+       "breakpoint": "file:line",
+       "stack": [ ... ],
+       "variables_at_entry": { ... },
+       "variables_after_steps": { ... },
+       "verdict": "breakpoint hit — code path executed"
+     }
+     ```
+
+6. **If breakpoint does NOT hit within 5 seconds:**
+   - Write: `{ "tc": "TC-NNN", "verdict": "breakpoint not hit — may be client-side only or async handler", "breakpoint_attempted": "file:line" }`
+   - Call `mcp__mcp-debugger__continue_execution` to unblock.
+
+7. **Remove the breakpoint** before the next TC to avoid it accumulating:
+   Call `mcp__mcp-debugger__set_breakpoint` with `enabled=false` (or call the appropriate disable/remove API).
 
 **Step 5 — Console check.**
 Call `browser_console_messages`. Record any errors.
@@ -590,7 +704,9 @@ Call `browser_console_messages`. Record any errors.
 **Step 7 — Update plan.md.**
 
 Edit `plan.md`, replacing the checkbox:
-- PASS: `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png`
+- PASS (with debug): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: TC-NNN-debug.json (breakpoint at file:line)`
+- PASS (no debug hit): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: no server breakpoint hit`
+- PASS (debug disabled): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: UI-only (no server process found)`
 - FAIL: `- [F] TC-NNN: ... FAIL | observed: [snapshot text describing what was seen]`
 - BLOCKED: `- [B] TC-NNN: ... BLOCKED | reason: [specific verifiable reason]`
 - NEEDS-RERUN: `- [S] TC-NNN: ... NEEDS-RERUN | reason: [prior session result not re-executed / precondition changed]`
@@ -722,6 +838,13 @@ For each screenshot the evaluator marks `RETAKE`:
 If a retake is not possible (page state cannot be reproduced without side-effects): note in plan.md: `screenshot retake skipped — [reason]`.
 
 Print after the pass: "Screenshot audit complete. Evaluator flagged N / M screenshots for retake. [N] retaken, [K] skipped."
+
+**Close debug session (runs after all TCs and evaluator pass complete).**
+
+If `DEBUG_ENABLED = true`:
+Call `mcp__mcp-debugger__close_debug_session` with `sessionId=DEBUG_SESSION_ID`.
+Print: "Debug session closed. N TCs had breakpoint hits, M had no server code path found."
+Set `DEBUG_ENABLED = false`.
 
 ---
 

@@ -65,6 +65,12 @@ def main() -> int:
     desc = str(tool_input.get("description", "") or "").lower()
     response_lower = tool_response.lower()
 
+    # Suppress during active parallel batch runs (/audit, etc.).
+    # audit-in-progress.json is set by /audit Phase 0 and cleared at Phase 5.
+    # Writing NEEDS_VERIFICATION during a batch flow would block the next agent batch.
+    if (BOOST_HOME / "state" / "audit-in-progress.json").exists():
+        return 0
+
     # Suppress during code-review batch runs — they have their own evaluator (Pass 15)
     if any(marker in desc for marker in REVIEW_PASS_MARKERS):
         return 0

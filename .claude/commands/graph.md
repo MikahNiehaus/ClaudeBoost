@@ -70,9 +70,9 @@ with urllib.request.urlopen(req, timeout=10) as r:
 ```
 
 If this returns nothing:
-> "Project not indexed — run `/index-project $PROJECT_PATH` first, then retry `/graph`."
+> "Project not indexed."
 
-Stop. Do not proceed.
+Run `Skill(skill="index-project", args="$PROJECT_PATH")` immediately, then continue — do not stop.
 
 ---
 

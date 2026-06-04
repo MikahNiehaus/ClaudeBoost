@@ -122,7 +122,7 @@ Is agent architect/ticket-analyst/reviewer?
     <best-for>Implementation, testing, debugging, documentation</best-for>
     <avoid-for>Tasks requiring deep architectural reasoning</avoid-for>
   </model>
-  <context-note>Both Opus 4.6 and Sonnet 4.6 support 1M context; for very large contexts requiring deep synthesis, prefer Opus</context-note>
+  <context-note>Opus 4.8 and Sonnet 4.6 support 1M context; Haiku 4.5 has 200k context. For very large contexts requiring deep synthesis, prefer Opus.</context-note>
 </model-characteristics>
 
 <anti-patterns>

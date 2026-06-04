@@ -7,6 +7,7 @@ Phase A — base behavior:
   - Response has bare "blocker:" keyword  -> exit 0, stderr has nudge
   - Description is a code-review pass     -> exit 0, silent (suppressed)
   - Description contains "evaluator"      -> exit 0, silent (suppressed)
+  - audit-in-progress.json active         -> exit 0, silent (suppressed, no flag written)
 
 Phase B — flag file:
   - Findings detected                     -> needs-verification.json written
@@ -104,6 +105,25 @@ def test_silent_when_evaluator_ran():
     )
     assert result.returncode == 0
     assert result.stderr == b""
+
+
+def test_silent_during_audit_run(boost_home):
+    """During an active /audit run, suppress regardless of finding severity — no flag written."""
+    audit_flag = boost_home / "state" / "audit-in-progress.json"
+    audit_flag.write_text('{"active":true}', encoding="utf-8")
+    try:
+        response = '"severity": "blocker", "message": "critical issue found"'
+        result = run_hook(
+            "verify-gate-cmd.py",
+            _task_response(response),
+            env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+        )
+        assert result.returncode == 0
+        assert result.stderr == b""
+        # Critically: NEEDS_VERIFICATION must NOT be written during a batch run
+        assert not (boost_home / "state" / "needs-verification.json").exists()
+    finally:
+        audit_flag.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

@@ -105,9 +105,9 @@ cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 
 ## Current Tested Versions
 
-As of 2026-03-31:
+As of 2026-06-04:
 - **Python**: 3.11+
 - **Claude Code**: v2.1.88
-- **Model**: Claude Opus 4.6 (1M context)
+- **Model**: Claude Opus 4.8 (1M context)
 - **sentence-transformers**: 3.0+ (all-MiniLM-L6-v2, 384 dimensions)
 - **ChromaDB**: 0.5+ (embedded SQLite mode)

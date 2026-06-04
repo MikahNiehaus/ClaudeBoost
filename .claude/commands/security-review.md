@@ -16,6 +16,18 @@ Performs a security-focused review. Without arguments, reviews pending branch ch
 
 Call `POST http://127.0.0.1:8612/context with agent="security-agent", task_description="security review $ARGUMENTS", max_tokens=5000` as your FIRST action.
 
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Detect the project path:
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+
+- **Indexed**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/rag` first.
+
 ---
 
 ## Branch Changes Mode (default — no arguments)

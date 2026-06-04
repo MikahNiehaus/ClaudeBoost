@@ -15,11 +15,25 @@ Input: **$ARGUMENTS**
 ## Phase 0: Setup
 
 **Set audit flag** (suppresses verify-gate hook during this audit — it fires on every agent and would serialize the parallel flow):
+
+Run this Bash command to set the flag (resolves CLAUDEBOOST_HOME dynamically):
 ```bash
-echo '{"active":true}' > "$CLAUDEBOOST_HOME/state/audit-in-progress.json"
+python -c "import os,json,pathlib; p=pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','C:/Development/ClaudeBoost'))/'state'/'audit-in-progress.json'; p.write_text(json.dumps({'active':True}))"
 ```
 
 Then call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000`.
+
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Detect the project path:
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+
+- **Indexed**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/rag` first.
 
 ---
 
@@ -302,7 +316,7 @@ If AUDIT_SCOPE = completion-verification, use these verdict labels instead of LE
 
 **Clear audit flag first** (before any output — ensures cleanup even if interrupted):
 ```bash
-rm -f "$CLAUDEBOOST_HOME/state/audit-in-progress.json"
+python -c "import os,pathlib; pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','C:/Development/ClaudeBoost')).joinpath('state','audit-in-progress.json').unlink(missing_ok=True)"
 ```
 
 Output the full verdict report. Lead with the severity count header on the very first line:

@@ -23,7 +23,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 GREEN  = "\033[32;1m"
-CYAN   = "\033[36;1m"
 YELLOW = "\033[33;1m"
 DIM    = "\033[2m"
 RESET  = "\033[0m"

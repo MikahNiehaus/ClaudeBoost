@@ -174,9 +174,9 @@ $ARGUMENTS — flexible, any of:
         **Auto-fix when WARN:** The server loaded old code. Clear pycache and reconnect:
         ```bash
         find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
-        echo "Restart MCP server via /mcp, then re-run /index-project force"
+        echo "Restart the RAG HTTP server (run /rag), then re-run /index-project force"
         ```
-        Report: "WARN — .ragignore not active. Clear pycache and reconnect MCP server."
+        Report: "WARN — .ragignore not active. Clear pycache and restart the RAG server (/rag)."
 
    g. **Community summary health** — verify that all knowledge communities have LLM summaries:
       Run this exact command:
@@ -213,7 +213,7 @@ $ARGUMENTS — flexible, any of:
    c. Relevance         ✓ / ⚠ [top score, query used] [→ FIXED via fallback query]
    d. Manifest          ✓ / ⚠
    e. Context pipeline  ✓ / ⚠ [→ FIXED via knowledge re-index]
-   f. .ragignore        ✓ / ⚠ [excluded dirs verified / not active → reconnect MCP]
+   f. .ragignore        ✓ / ⚠ [excluded dirs verified / not active → restart RAG server (/rag)]
    g. Summaries         ✓ N/N / ⚠ N/N — background regen triggered / SKIP
    ────────────────────────────────────────────────────────
    ```

@@ -133,9 +133,11 @@ def main() -> int:
     # Evaluator routing check: if a NEEDS_VERIFICATION flag is pending,
     # block any spawn that isn't an evaluator-agent. Clear the flag on
     # evaluator spawn so normal work can resume immediately after.
+    # Exception: bypass during active parallel batch runs (audit-in-progress.json).
     boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
     flag = boost_home / "state" / "needs-verification.json"
-    if flag.exists():
+    audit_active = (boost_home / "state" / "audit-in-progress.json").exists()
+    if flag.exists() and not audit_active:
         is_evaluator = "evaluator-agent" in prompt_lower or "evaluator_agent" in prompt_lower
         if is_evaluator:
             try:

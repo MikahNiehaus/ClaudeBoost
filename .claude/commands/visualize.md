@@ -15,6 +15,18 @@ Call `POST http://127.0.0.1:8612/context` with:
 
 If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Detect the project path:
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+
+- **Indexed**: note file/chunk counts and continue.
+- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/rag` first.
+
 ---
 
 ## Step 1: Detect Mode
@@ -326,6 +338,349 @@ function downloadSVG() {
 - `COMPONENTS` map must have an entry for every `onclick="showDetail('id')"` id on the page
 - Colors: always set `border-left-color` on each card to match its component type
 - Never use pixel positions, `position: absolute`, or SVG coordinate math
+
+---
+
+## Step 3b: Add Audio Tour (MANDATORY)
+
+Every visualization MUST include an interactive audio walkthrough using the Web Speech API. This is non-negotiable — users expect it in every diagram.
+
+### COMPONENTS pattern — ALWAYS use `html:` not `desc:`/`items:`
+
+```javascript
+// Define these helper functions at the top of the COMPONENTS block:
+const FLOW_ROW = (color, text, sub) => `<div style="background:#0f172a;border-left:3px solid ${color};border-radius:4px;padding:6px 9px;font-size:10px;color:#f1f5f9;margin-bottom:3px">${text}${sub ? `<br><span style="font-size:9px;color:#475569">${sub}</span>` : ''}</div>`;
+const ARROW = () => `<div style="color:#334155;font-size:10px;padding:0 0 3px 10px">↓</div>`;
+
+// Every COMPONENTS entry uses html: (a template literal with flow diagrams, before/after code, truth tables):
+const COMPONENTS = {
+  'my-component': {
+    title: 'Component Name',
+    badge: '🔴 Modify',
+    file: 'path/to/file.cs',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Brief description of what changes.</div>
+${FLOW_ROW('#f97316','🚩 Trigger')}${ARROW()}${FLOW_ROW('#06b6d4','💉 Effect')}`,
+  },
+};
+```
+
+**Detail panel must render html: with innerHTML, not textContent:**
+```javascript
+function showDetail(id) {
+  const c = COMPONENTS[id];
+  if (!c) return;
+  document.getElementById('detail-title').textContent = c.title;
+  document.getElementById('detail-badge').textContent = c.badge || '';
+  document.getElementById('detail-file').textContent = c.file || '';
+  // Use innerHTML for rich diagrams:
+  document.getElementById('detail-body').innerHTML = c.html || '';
+  document.getElementById('detail').classList.remove('hidden');
+}
+```
+Detail panel HTML must have `<div id="detail-body"></div>` instead of separate `<p>` and `<ul>`.
+
+### TOUR_SEGMENTS — one per layer/major component
+
+```javascript
+const TOUR_SEGMENTS = [
+  { label: 'Introduction', text: 'Narration text here...', highlights: [], scrollTo: null },
+  { label: 'Component Name', text: 'Detail about this component...', highlights: ['component-id'], scrollTo: 'component-id' },
+  // ... one segment per major area
+];
+```
+
+### CSS additions (add to `<style>` block)
+
+```css
+body { padding-bottom: 110px; } /* room for audio bar */
+
+/* === AUDIO TOUR BAR (two-row) === */
+.audio-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #334155; padding: 10px 20px 8px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.audio-row-top { display: flex; align-items: center; gap: 12px; }
+.audio-btn { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 50%; width: 34px; height: 34px; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.1s, border-color 0.1s; }
+.audio-btn:hover { background: #334155; }
+.audio-btn.active { background: #1d4ed8; border-color: #3b82f6; }
+.audio-btn.stop-btn:hover { background: #7f1d1d; border-color: #ef4444; }
+.audio-info { flex: 1; min-width: 0; }
+.audio-section-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 2px; }
+.audio-section-text { font-size: 12px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.audio-section-text.idle { color: #475569; font-style: italic; font-weight: 400; }
+.audio-counter { font-size: 11px; color: #64748b; flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.audio-select-group { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.audio-select-label { font-size: 9px; color: #475569; letter-spacing: 1px; text-transform: uppercase; }
+.audio-select { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 5px; padding: 3px 6px; font-size: 10px; cursor: pointer; }
+/* Scrub track */
+.audio-row-track { position: relative; height: 22px; display: flex; align-items: center; }
+.audio-track-outer { width: 100%; height: 22px; display: flex; align-items: center; cursor: pointer; position: relative; user-select: none; }
+.audio-track-bg { width: 100%; height: 6px; background: #1e293b; border-radius: 3px; position: relative; overflow: visible; border: 1px solid #334155; }
+.audio-track-fill { height: 100%; background: linear-gradient(90deg, #2563eb, #3b82f6); border-radius: 3px 0 0 3px; transition: width 0.35s linear; width: 0%; position: relative; z-index: 1; }
+.audio-thumb { position: absolute; width: 14px; height: 14px; background: #60a5fa; border-radius: 50%; border: 2px solid #1d4ed8; top: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 4; left: 0%; }
+.audio-track-outer:hover .audio-thumb { opacity: 1; }
+.audio-tick { position: absolute; top: -4px; width: 1px; height: 14px; background: #334155; z-index: 3; transform: translateX(-50%); transition: background 0.25s; pointer-events: none; }
+.audio-tick.passed { background: #60a5fa; }
+/* Card highlight during narration */
+@keyframes narrate-pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } 50% { box-shadow: 0 0 28px 6px rgba(59,130,246,0.55); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
+.card.narrating, .rail-card.narrating { outline: 2.5px solid #3b82f6; outline-offset: 3px; background: #172554 !important; animation: narrate-pulse 1.6s ease-in-out infinite; }
+/* Chapters panel */
+.chapters-panel { position: fixed; bottom: 105px; left: 20px; right: 20px; max-width: 640px; margin: 0 auto; background: #0f172a; border: 1px solid #334155; border-radius: 10px; z-index: 210; display: none; padding: 12px 14px 8px; box-shadow: 0 -8px 32px rgba(0,0,0,0.6); }
+.chapters-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
+.chapters-header span { font-size: 11px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.5px; }
+.chapters-close { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; line-height: 1; }
+.chapter-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 3px; transition: background 0.1s; }
+.chapter-row:hover { background: #1e293b; }
+.chapter-row.active { background: #172554 !important; border-color: #3b82f6; }
+.chapter-num { font-size: 10px; color: #475569; min-width: 18px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.chapter-label { font-size: 12px; color: #f1f5f9; flex: 1; }
+.chapter-cards { font-size: 10px; color: #475569; flex-shrink: 0; }
+/* Transcript panel */
+.transcript-panel { position: fixed; right: 0; top: 0; height: calc(100vh - 100px); width: 320px; background: #0b1220; border-left: 1px solid #334155; z-index: 115; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.2s ease; }
+.transcript-panel.open { transform: translateX(0); }
+.transcript-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 10px; background: #0f172a; border-bottom: 1px solid #1e293b; flex-shrink: 0; }
+.transcript-header-title { font-size: 11px; font-weight: 600; color: #f1f5f9; }
+.transcript-close { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
+.transcript-body { overflow-y: auto; flex: 1; padding: 8px 0 12px; }
+.transcript-seg { padding: 10px 14px; cursor: pointer; border-left: 3px solid transparent; transition: background 0.1s; }
+.transcript-seg:hover { background: #1e293b; }
+.transcript-seg.active { background: #0f2040; border-left-color: #3b82f6; }
+.tseg-num { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+.transcript-seg.active .tseg-num { color: #60a5fa; }
+.tseg-label { font-size: 11px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; }
+.transcript-seg.active .tseg-label { color: #f1f5f9; }
+.tseg-text { font-size: 10.5px; color: #475569; line-height: 1.65; }
+.transcript-seg.active .tseg-text { color: #94a3b8; }
+.tseg-divider { height: 1px; background: #1e293b; margin: 0 14px; }
+.board.transcript-open { padding-right: 340px; }
+```
+
+### HTML additions (add just before `</body>`)
+
+```html
+<!-- AUDIO TOUR BAR -->
+<div class="audio-bar" id="audioBar">
+  <div class="audio-row-top">
+    <button class="audio-btn" id="playPauseBtn" title="Play / Pause" onclick="togglePlayPause()">▶</button>
+    <button class="audio-btn stop-btn" id="stopBtn" title="Stop" onclick="stopTour()" style="font-size:12px;">■</button>
+    <button class="audio-btn" id="chaptersBtn" title="Jump to segment" onclick="toggleChapters()" style="font-size:13px;">☰</button>
+    <button class="audio-btn" id="transcriptBtn" title="Show transcript" onclick="toggleTranscript()" style="font-size:11px;font-weight:700;">T</button>
+    <div class="audio-info">
+      <div class="audio-section-label">Now playing</div>
+      <div class="audio-section-text idle" id="audioSectionText">Press ▶ for the audio walkthrough</div>
+    </div>
+    <div class="audio-counter" id="audioProgressLabel">0 / N</div>
+    <div class="audio-select-group">
+      <div class="audio-select-label">Speed</div>
+      <select class="audio-select" id="speedSelect">
+        <option value="0.85">0.85×</option>
+        <option value="0.95" selected>0.95×</option>
+        <option value="1.05">1.05×</option>
+        <option value="1.15">1.15×</option>
+      </select>
+    </div>
+    <div class="audio-select-group">
+      <div class="audio-select-label">Voice</div>
+      <select class="audio-select" id="voiceSelect" style="max-width:160px;"><option>Loading…</option></select>
+    </div>
+  </div>
+  <div class="audio-row-track">
+    <div class="audio-track-outer" id="audioTrackOuter" onclick="scrubTrack(event)">
+      <div class="audio-track-bg" id="audioTrackBg">
+        <div class="audio-track-fill" id="audioProgressFill"></div>
+      </div>
+      <div class="audio-thumb" id="audioThumb"></div>
+    </div>
+  </div>
+</div>
+
+<!-- TRANSCRIPT PANEL -->
+<div class="transcript-panel" id="transcriptPanel">
+  <div class="transcript-header">
+    <span class="transcript-header-title">📄 &nbsp;Transcript</span>
+    <button class="transcript-close" onclick="closeTranscript()">✕</button>
+  </div>
+  <div class="transcript-body" id="transcriptBody"></div>
+</div>
+
+<!-- CHAPTERS PANEL -->
+<div class="chapters-panel" id="chaptersPanel">
+  <div class="chapters-header">
+    <span>☰ &nbsp;Jump to segment</span>
+    <button class="chapters-close" onclick="closeChapters()">✕</button>
+  </div>
+  <div id="chaptersList"></div>
+</div>
+```
+
+### JS additions (full audio engine — paste into `<script>`)
+
+```javascript
+// === AUDIO ENGINE ===
+let voices = [], tourIndex = 0, isPlaying = false, isPaused = false, currentUtterance = null;
+
+function loadVoices() {
+  voices = speechSynthesis.getVoices();
+  const sel = document.getElementById('voiceSelect');
+  if (!voices.length) return;
+  sel.innerHTML = '';
+  const scored = voices.filter(v => v.lang.startsWith('en')).map(v => {
+    let s=0, n=v.name.toLowerCase();
+    if(n.includes('mark')&&n.includes('natural'))s+=100; if(n.includes('andrew')&&n.includes('natural'))s+=95;
+    if(n.includes('guy')&&n.includes('natural'))s+=90; if(n.includes('mark')&&n.includes('online'))s+=88;
+    if(n.includes('mark'))s+=70; if(n.includes('david')&&n.includes('desktop'))s+=60;
+    if(n.includes('google')&&n.includes('us')&&n.includes('male'))s+=50;
+    if(v.lang==='en-US')s+=10; return {v,s};
+  }).sort((a,b)=>b.s-a.s);
+  scored.forEach(({v},i) => {
+    const o=document.createElement('option'); o.value=v.name;
+    o.textContent=v.name.replace('Microsoft ','').replace(' Online (Natural)',' ✦').replace(' Desktop','');
+    if(i===0)o.selected=true; sel.appendChild(o);
+  });
+}
+if(typeof speechSynthesis!=='undefined'){speechSynthesis.onvoiceschanged=loadVoices;loadVoices();}
+
+function getSelectedVoice(){const n=document.getElementById('voiceSelect').value;return voices.find(v=>v.name===n)||voices.find(v=>v.lang.startsWith('en'))||null;}
+function getSelectedRate(){return parseFloat(document.getElementById('speedSelect').value);}
+
+function setNarratingCards(ids){
+  document.querySelectorAll('.card.narrating,.rail-card.narrating').forEach(el=>el.classList.remove('narrating'));
+  let first=null;
+  ids.forEach(id=>{
+    const el=document.querySelector(`[onclick*="'${id}'"]`)||document.querySelector(`[onclick*="${id}"]`);
+    if(el){el.classList.add('narrating');if(!first)first=el;}
+  });
+  if(first)first.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function updateUI(i){
+  const seg=TOUR_SEGMENTS[i],total=TOUR_SEGMENTS.length,pct=((i+1)/total)*100;
+  document.getElementById('audioProgressFill').style.width=pct+'%';
+  document.getElementById('audioThumb').style.left=pct+'%';
+  document.getElementById('audioProgressLabel').textContent=`${i+1} / ${total}`;
+  document.querySelectorAll('.audio-tick').forEach((t,j)=>t.classList.toggle('passed',j<i));
+  const txt=document.getElementById('audioSectionText');txt.textContent=seg.label;txt.classList.remove('idle');
+  document.getElementById('playPauseBtn').textContent='⏸';document.getElementById('playPauseBtn').classList.add('active');
+  syncChapterHighlight(i);syncTranscriptHighlight(i);
+}
+
+function speakSegment(index){
+  if(index>=TOUR_SEGMENTS.length){finishTour();return;}
+  tourIndex=index;const seg=TOUR_SEGMENTS[index];
+  updateUI(index);setNarratingCards(seg.highlights||[]);
+  if(seg.highlights&&seg.highlights.length>0)showDetail(seg.highlights[0]);else closeDetail();
+  const utt=new SpeechSynthesisUtterance(seg.text);
+  utt.voice=getSelectedVoice();utt.rate=getSelectedRate();utt.pitch=1.0;utt.volume=1.0;
+  utt.onend=()=>{if(isPlaying)speakSegment(index+1);};
+  utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakSegment(index+1);};
+  currentUtterance=utt;speechSynthesis.speak(utt);
+}
+
+function finishTour(){
+  isPlaying=false;isPaused=false;currentUtterance=null;setNarratingCards([]);
+  document.getElementById('audioProgressFill').style.width='100%';
+  document.getElementById('audioThumb').style.left='100%';
+  document.getElementById('audioProgressLabel').textContent=`${TOUR_SEGMENTS.length} / ${TOUR_SEGMENTS.length}`;
+  document.querySelectorAll('.audio-tick').forEach(t=>t.classList.add('passed'));
+  document.getElementById('audioSectionText').textContent='Tour complete — click any card to explore';
+  document.getElementById('audioSectionText').classList.remove('idle');
+  document.getElementById('playPauseBtn').textContent='↺';document.getElementById('playPauseBtn').classList.remove('active');
+}
+
+function togglePlayPause(){
+  if(!isPlaying&&!isPaused){isPlaying=true;isPaused=false;speechSynthesis.cancel();speakSegment(0);return;}
+  if(isPlaying&&!isPaused){speechSynthesis.pause();isPaused=true;isPlaying=false;document.getElementById('playPauseBtn').textContent='▶';document.getElementById('playPauseBtn').classList.remove('active');return;}
+  if(isPaused){speechSynthesis.resume();isPaused=false;isPlaying=true;document.getElementById('playPauseBtn').textContent='⏸';document.getElementById('playPauseBtn').classList.add('active');return;}
+  isPlaying=true;isPaused=false;speechSynthesis.cancel();speakSegment(0);
+}
+
+function stopTour(){
+  isPlaying=false;isPaused=false;speechSynthesis.cancel();currentUtterance=null;setNarratingCards([]);
+  document.getElementById('playPauseBtn').textContent='▶';document.getElementById('playPauseBtn').classList.remove('active');
+  document.getElementById('audioProgressFill').style.width='0%';document.getElementById('audioThumb').style.left='0%';
+  document.getElementById('audioProgressLabel').textContent=`0 / ${TOUR_SEGMENTS.length}`;
+  document.querySelectorAll('.audio-tick').forEach(t=>t.classList.remove('passed'));
+  document.getElementById('audioSectionText').textContent='Press ▶ for the audio walkthrough';
+  document.getElementById('audioSectionText').classList.add('idle');
+}
+
+function buildTicks(){
+  const bg=document.getElementById('audioTrackBg'),total=TOUR_SEGMENTS.length;
+  TOUR_SEGMENTS.forEach((seg,i)=>{if(i===0)return;const t=document.createElement('div');t.className='audio-tick';t.style.left=(i/total*100)+'%';t.title=seg.label;bg.appendChild(t);});
+}
+
+function scrubTrack(event){
+  const outer=document.getElementById('audioTrackOuter'),rect=outer.getBoundingClientRect();
+  const pct=Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));
+  const idx=Math.min(Math.floor(pct*TOUR_SEGMENTS.length),TOUR_SEGMENTS.length-1);
+  speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(idx);
+}
+
+// Drag scrubbing
+(function(){
+  let dragging=false;
+  function doScrub(cx){
+    const o=document.getElementById('audioTrackOuter');if(!o)return 0;
+    const r=o.getBoundingClientRect(),pct=Math.max(0,Math.min(1,(cx-r.left)/r.width));
+    const idx=Math.min(Math.floor(pct*TOUR_SEGMENTS.length),TOUR_SEGMENTS.length-1);
+    document.getElementById('audioProgressFill').style.width=(pct*100)+'%';
+    document.getElementById('audioThumb').style.left=(pct*100)+'%';
+    return idx;
+  }
+  document.addEventListener('DOMContentLoaded',()=>{
+    const o=document.getElementById('audioTrackOuter');if(!o)return;
+    o.addEventListener('mousedown',e=>{dragging=true;doScrub(e.clientX);e.preventDefault();});
+    document.addEventListener('mousemove',e=>{if(dragging)doScrub(e.clientX);});
+    document.addEventListener('mouseup',e=>{if(!dragging)return;dragging=false;const idx=doScrub(e.clientX);speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(idx);});
+  });
+})();
+
+// Chapters panel
+function buildChaptersList(){
+  const list=document.getElementById('chaptersList');list.innerHTML='';
+  TOUR_SEGMENTS.forEach((seg,i)=>{
+    const row=document.createElement('div');row.id=`chapter-${i}`;
+    row.className='chapter-row'+(i===tourIndex&&isPlaying?' active':'');
+    const cc=seg.highlights.length;
+    row.innerHTML=`<span class="chapter-num">${i+1}</span><span class="chapter-label">${seg.label}</span><span class="chapter-cards">${cc?cc+' card'+(cc>1?'s':''):''}</span>`;
+    row.onclick=()=>{speechSynthesis.cancel();isPlaying=true;isPaused=false;closeChapters();speakSegment(i);};
+    list.appendChild(row);
+  });
+}
+function toggleChapters(){const p=document.getElementById('chaptersPanel');if(p.style.display==='block'){closeChapters();}else{buildChaptersList();p.style.display='block';document.getElementById('chaptersBtn').classList.add('active');}}
+function closeChapters(){document.getElementById('chaptersPanel').style.display='none';document.getElementById('chaptersBtn').classList.remove('active');}
+function syncChapterHighlight(i){document.querySelectorAll('.chapter-row').forEach((r,j)=>r.classList.toggle('active',j===i));}
+
+// Transcript panel
+function buildTranscript(){
+  const body=document.getElementById('transcriptBody');body.innerHTML='';
+  TOUR_SEGMENTS.forEach((seg,i)=>{
+    if(i>0){const d=document.createElement('div');d.className='tseg-divider';body.appendChild(d);}
+    const div=document.createElement('div');
+    div.className='transcript-seg'+(i===tourIndex&&isPlaying?' active':'');div.id=`tseg-${i}`;
+    div.innerHTML=`<div class="tseg-num">${i+1} / ${TOUR_SEGMENTS.length}</div><div class="tseg-label">${seg.label}</div><div class="tseg-text">${seg.text}</div>`;
+    div.onclick=()=>{speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(i);};
+    body.appendChild(div);
+  });
+}
+function toggleTranscript(){
+  const p=document.getElementById('transcriptPanel');
+  if(p.classList.contains('open')){closeTranscript();}
+  else{buildTranscript();p.classList.add('open');document.getElementById('transcriptBtn').classList.add('active');document.getElementById('board').classList.add('transcript-open');syncTranscriptHighlight(tourIndex);}
+}
+function closeTranscript(){document.getElementById('transcriptPanel').classList.remove('open');document.getElementById('transcriptBtn').classList.remove('active');document.getElementById('board').classList.remove('transcript-open');}
+function syncTranscriptHighlight(i){
+  const p=document.getElementById('transcriptPanel');if(!p.classList.contains('open'))return;
+  document.querySelectorAll('.transcript-seg').forEach((el,j)=>el.classList.toggle('active',j===i));
+  const a=document.getElementById(`tseg-${i}`);if(a)a.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+buildTicks();
+```
+
+### TOUR_SEGMENTS writing guide
+
+- Write 1 segment per major layer/section, plus 1 intro and 1 summary
+- Keep each segment 3–6 sentences — enough to explain but not overwhelming
+- `highlights` should list the card IDs that get the blue pulse outline during narration
+- Spell out abbreviations phonetically if TTS mangles them (e.g., "T F F dash 1040" not "TFF-1040")
 
 ---
 

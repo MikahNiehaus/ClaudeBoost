@@ -131,10 +131,7 @@ for d in workspace/*/; do if [ -f "${d}context.md" ]; then grep -i "Project:" "$
 For each project path found, call `GET http://127.0.0.1:8612/status` and check if that project appears in `indexed_projects`.
 
 **If not indexed**: report "Project RAG: not indexed — run `/index-project [path]`"
-**If indexed**: report file/chunk/graph counts and set the project RAG sentinel:
-```bash
-touch "$TEMP/claudeboost_project_rag_ok"
-```
+**If indexed**: report file/chunk/graph counts.
 
 ---
 

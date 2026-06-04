@@ -25,15 +25,18 @@
 <collaboration>
   <request-from agent="test-agent">Regression tests after identifying fix</request-from>
   <request-from agent="architect-agent">Architectural issues revealed by bug</request-from>
+  <request-from agent="e2e-agent">Complex variable state analysis during E2E step-through (when breakpoint hits unexpected values)</request-from>
   <provides-to agent="test-agent">Root cause analysis for targeted tests</provides-to>
   <provides-to agent="reviewer-agent">Bug context for reviewing fixes</provides-to>
   <provides-to agent="workflow-agent">Fix verification steps</provides-to>
+  <provides-to agent="e2e-agent">Root cause when debug step-through reveals unexpected code behaviour</provides-to>
 </collaboration>
 
 <handoff-triggers>
   <trigger to="test-agent">Root cause identified, need regression tests to prevent recurrence</trigger>
   <trigger to="architect-agent">Bug reveals design flaw needing architectural attention</trigger>
   <trigger from="test-agent">Tests failing unexpectedly, need diagnosis</trigger>
+  <trigger from="e2e-agent">Step-through captured unexpected variable state — needs root cause analysis</trigger>
   <trigger status="BLOCKED">Can't reproduce, missing logs, need access to production data</trigger>
 </handoff-triggers>
 

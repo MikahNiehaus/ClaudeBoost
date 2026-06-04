@@ -9,18 +9,18 @@
       "Bash(sqlite3 \"C:/Development/*/workspace/.rag-index/graph.db\" *)",
       "Bash(rm -f \"$CLAUDEBOOST_HOME/state/*.json\")",
       "Bash(rm -f \"$TEMP/claudeboost_*\")",
-      "Bash(grep *)",
-      "Bash(ls *)",
-      "Bash(wc *)",
-      "Bash(head *)",
-      "Bash(tail *)",
-      "Bash(cat *)",
-      "Bash(find *)",
-      "Bash(mkdir *)"
+      "Bash(grep **)",
+      "Bash(ls **)",
+      "Bash(wc **)",
+      "Bash(head **)",
+      "Bash(tail **)",
+      "Bash(cat **)",
+      "Bash(find **)",
+      "Bash(mkdir **)",
+      "Bash(curl **)",
+      "Bash(echo **)"
     ],
-    "ask": [
-      "Bash(echo *)"
-    ],
+    "ask": [],
     "deny": [
       "Bash(rm -rf *)",
       "Bash(git push --force*)"
