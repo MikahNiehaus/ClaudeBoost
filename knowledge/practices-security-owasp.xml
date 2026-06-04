@@ -1,0 +1,278 @@
+<knowledge-base name="practices-security-owasp" version="1.0">
+<triggers>OWASP, SQL injection, XSS, cross-site scripting, authentication security, session management, secrets management, secret rotation, parameterized query, prepared statement, cookie security, session fixation, credential stuffing, password storage, MFA, input validation, CSP, content security policy, XSS encoding</triggers>
+<overview>Concrete mitigations from OWASP cheat sheets for the most common web security vulnerabilities. Focuses on what to DO, with code examples. Complements knowledge/security.xml which covers architecture-level patterns.</overview>
+
+<sql-injection>
+  <rule priority="1">Use prepared statements (parameterized queries) for ALL database queries. Never concatenate user input into SQL strings.</rule>
+
+  <example language="Java"><![CDATA[
+// WRONG — concatenation opens injection
+String query = "SELECT * FROM users WHERE name = '" + userInput + "'";
+
+// CORRECT — parameterized
+String query = "SELECT account_balance FROM user_data WHERE user_name = ?";
+PreparedStatement pstmt = connection.prepareStatement(query);
+pstmt.setString(1, customerName);
+ResultSet results = pstmt.executeQuery();
+  ]]></example>
+
+  <example language="C#"><![CDATA[
+// CORRECT — OleDb parameterized query
+String query = "SELECT account_balance FROM user_data WHERE user_name = ?";
+OleDbCommand command = new OleDbCommand(query, connection);
+command.Parameters.Add(new OleDbParameter("customerName", CustomerName.Text));
+OleDbDataReader reader = command.ExecuteReader();
+  ]]></example>
+
+  <example language="Hibernate HQL"><![CDATA[
+// CORRECT — named parameter
+Query safeHQLQuery = session.createQuery("from Inventory where productID=:productid");
+safeHQLQuery.setParameter("productid", userSuppliedParameter);
+  ]]></example>
+
+  <stored-procedures>
+    <rule>Stored procedures are safe only when parameterized. Dynamic SQL inside a stored proc is still vulnerable.</rule>
+    <example language="Java"><![CDATA[
+CallableStatement cs = connection.prepareCall("{call sp_getAccountBalance(?)}");
+cs.setString(1, custname);
+    ]]></example>
+  </stored-procedures>
+
+  <dynamic-sql-exceptions>
+    <rule>When table names, column names, or sort order must be dynamic, use an allow-list — never concatenate directly.</rule>
+    <example language="Java"><![CDATA[
+// Allow-list for table names
+String tableName;
+switch(PARAM) {
+   case "Value1": tableName = "fooTable"; break;
+   case "Value2": tableName = "barTable"; break;
+   default: throw new InputValidationException("unexpected value");
+}
+
+// Allow-list for sort order
+String sql = "SELECT * FROM orders ORDER BY amount " + (sortAsc ? "ASC" : "DESC");
+    ]]></example>
+  </dynamic-sql-exceptions>
+
+  <least-privilege>
+    <rule>Application DB accounts get only the permissions they need — SELECT only if they never write.</rule>
+    <rule>Never grant DBA or admin privileges to application accounts.</rule>
+    <rule>Use separate DB users for different applications.</rule>
+    <rule>Run the database process under a restricted OS account.</rule>
+  </least-privilege>
+
+  <escaping-warning>String escaping as a primary defense is strongly discouraged — it's unreliable across database platforms and easy to miss.</escaping-warning>
+</sql-injection>
+
+<xss-prevention>
+  <rule priority="1">Every variable rendered into HTML must be encoded for its output context. The context determines the encoding method.</rule>
+  <rule>Use modern frameworks (React, Angular, Vue) — they encode output by default. Never bypass their safe defaults without a deliberate, audited reason.</rule>
+
+  <context-rules>
+    <context name="HTML body">
+      <rule>Encode: &amp; → &amp;amp;  &lt; → &amp;lt;  &gt; → &amp;gt;  " → &amp;quot;  ' → &amp;#x27;</rule>
+      <rule>Use element.textContent (safe sink), never element.innerHTML with user data</rule>
+    </context>
+    <context name="HTML attributes">
+      <rule>Keep all attributes quoted: &lt;div attr="$userValue"&gt;</rule>
+      <rule>Encode all characters as &amp;#xHH; format for untrusted attribute values</rule>
+      <rule>Use setAttribute() for safe attributes like id or class</rule>
+    </context>
+    <context name="JavaScript">
+      <rule>Only place variables inside quoted data values, never in raw script blocks</rule>
+      <rule>Encode using \xHH or \uXXXX format</rule>
+      <rule>Never put untrusted data in event handlers or script URLs</rule>
+    </context>
+    <context name="URL parameters">
+      <rule>Percent-encode (%HH) parameters, then HTML-attribute-encode the whole URL when putting it in an href</rule>
+      <example><![CDATA[
+url = "https://site.com?data=" + encodeURIComponent(parameter)
+// then in HTML: <a href="<htmlAttributeEncode(url)>">
+      ]]></example>
+    </context>
+    <context name="CSS">
+      <rule>Only place variables in CSS property values, never in selectors or property names</rule>
+      <rule>Encode using \XX or \XXXXXX format</rule>
+      <rule>Use element.style.property = x (safe sink) rather than cssText with user data</rule>
+    </context>
+  </context-rules>
+
+  <safe-sinks>
+    <sink>element.textContent</sink>
+    <sink>element.insertAdjacentText()</sink>
+    <sink>element.className</sink>
+    <sink>element.setAttribute() for safe attribute names</sink>
+    <sink>document.createTextNode()</sink>
+    <sink>formfield.value</sink>
+  </safe-sinks>
+
+  <dangerous-patterns>
+    <pattern>element.innerHTML with user data</pattern>
+    <pattern>React dangerouslySetInnerHTML</pattern>
+    <pattern>Angular bypassSecurityTrustAs*</pattern>
+    <pattern>eval(), setTimeout(string), setInterval(string)</pattern>
+    <pattern>Inline event handlers: onclick="userValue"</pattern>
+    <pattern>document.write() with user data</pattern>
+  </dangerous-patterns>
+
+  <sanitization>
+    <rule>For rich user-authored HTML (WYSIWYG editors), use DOMPurify. Don't write your own sanitizer.</rule>
+    <example language="JavaScript"><![CDATA[
+import DOMPurify from 'dompurify';
+const clean = DOMPurify.sanitize(userHtml);
+// Do NOT mutate the sanitized output afterward
+element.innerHTML = clean;
+    ]]></example>
+  </sanitization>
+
+  <content-security-policy>
+    <rule>Use CSP as defense-in-depth, not as your primary XSS defense.</rule>
+    <rule>For modern browsers, Trusted Types can reject plain strings to DOM sinks: Content-Security-Policy: require-trusted-types-for 'script'</rule>
+    <rule>Set HttpOnly and Secure flags on all cookies to limit XSS-based cookie theft.</rule>
+  </content-security-policy>
+</xss-prevention>
+
+<authentication>
+  <password-storage>
+    <rule>Never store plaintext passwords. Use a password hashing algorithm (bcrypt, scrypt, Argon2).</rule>
+    <rule>Use constant-time comparison functions — never == or .equals() on password strings.</rule>
+    <rule>Language-specific: PHP password_verify(), Python bcrypt.checkpw(), C# PasswordHasher.</rule>
+    <rule>Ensure comparisons have a maximum input length to prevent long-password DoS.</rule>
+  </password-storage>
+
+  <password-policy>
+    <rule>Minimum 8 characters with MFA, minimum 15 characters without MFA.</rule>
+    <rule>Allow up to 64+ characters to support passphrases.</rule>
+    <rule>Allow all characters including unicode and whitespace.</rule>
+    <rule>Drop complexity rules (uppercase + number + symbol requirements) — they don't help and frustrate users.</rule>
+    <rule>Block breached passwords using services like HaveIBeenPwned's Pwned Passwords API.</rule>
+    <rule>Never silently truncate passwords.</rule>
+  </password-policy>
+
+  <mfa>
+    <rule>MFA is the single most effective defense against password-related attacks. Offer it on all accounts.</rule>
+    <rule>Require MFA for sensitive operations: money movement, profile changes, admin access.</rule>
+    <rule>Supported methods: TOTP apps (Google Authenticator, Authy), hardware keys (FIDO2/WebAuthn), passkeys.</rule>
+  </mfa>
+
+  <account-lockout>
+    <rule>Lock or slow accounts after repeated failed login attempts.</rule>
+    <rule>Use exponential backoff: start at 1 second, double after each failure.</rule>
+    <rule>Tie lockout to accounts, not source IPs — attackers use distributed infrastructure.</rule>
+    <rule>Add CAPTCHA after a small threshold (not on the first attempt).</rule>
+  </account-lockout>
+
+  <error-messages>
+    <rule>Return identical error messages whether the username, password, or account status is wrong. Never reveal which part failed.</rule>
+    <correct>Login failed; Invalid user ID or password.</correct>
+    <wrong>Username not found. | Incorrect password.</wrong>
+    <rule>Generic password reset message: "If that email is in our database, we will send a reset link."</rule>
+    <rule>Be aware that timing differences can still leak information — use constant-time auth flows.</rule>
+  </error-messages>
+
+  <re-authentication>
+    <rule>Require re-authentication (not just an active session) before: password changes, email changes, payment method changes, adding/removing MFA.</rule>
+    <rule>Verify current password before allowing a password change.</rule>
+    <rule>After recovery or password reset, require a fresh login rather than inheriting the recovery session.</rule>
+  </re-authentication>
+
+  <transport>
+    <rule>Login page and ALL subsequent authenticated pages must use TLS only.</rule>
+    <rule>Never transmit passwords or session tokens over HTTP.</rule>
+  </transport>
+
+  <logging>
+    <rule>Log all authentication failures in real time.</rule>
+    <rule>Log all account lockouts.</rule>
+    <rule>Do NOT log passwords, partial passwords, or security questions.</rule>
+  </logging>
+</authentication>
+
+<session-management>
+  <session-id-properties>
+    <rule>Generate session IDs with a CSPRNG (cryptographically secure random number generator) — minimum 128 bits.</rule>
+    <rule>Session IDs must be meaningless and opaque. Never embed user data or PII in a session ID.</rule>
+    <rule>Use generic cookie names (id, sess) rather than framework defaults (PHPSESSID, JSESSIONID) to avoid technology fingerprinting.</rule>
+    <rule>Store all business logic and sensitive data server-side in the session object — never in the cookie itself.</rule>
+  </session-id-properties>
+
+  <cookie-attributes>
+    <attribute name="Secure">Mandatory. Transmits cookie only over HTTPS.</attribute>
+    <attribute name="HttpOnly">Prevents JavaScript access via document.cookie — blocks XSS-based token theft.</attribute>
+    <attribute name="SameSite">Set to Strict (preferred) or Lax. Never use None without Secure. Configure explicitly — don't rely on browser defaults.</attribute>
+    <attribute name="Path">Set as restrictively as possible — only the application path, not /.</attribute>
+    <attribute name="Domain">Omit the Domain attribute to restrict cookies to the origin server only.</attribute>
+    <attribute name="Expires / Max-Age">Omit both for auth cookies — session cookies are not persisted to disk.</attribute>
+    <attribute name="Name prefix __Host-">Strongest: requires Secure, no Domain, Path=/. Use when subdomain isolation is needed.</attribute>
+  </cookie-attributes>
+
+  <session-lifecycle>
+    <rule>Regenerate the session ID after login, password change, privilege upgrade, or role change.</rule>
+    <rule>Use framework methods: session_regenerate_id(true) (PHP), Session.Abandon() (ASP.NET), HttpSession.invalidate() (Java EE).</rule>
+    <rule>Reject any session ID that was not generated by the application (strict mode).</rule>
+    <rule>Never accept session IDs from URL parameters if you're using cookies.</rule>
+  </session-lifecycle>
+
+  <timeouts>
+    <rule>Idle timeout: 2-5 minutes for high-value apps, 15-30 minutes for low-risk apps.</rule>
+    <rule>Absolute timeout: 4-8 hours typical for authenticated sessions.</rule>
+    <rule>Enforce timeouts server-side. Never trust client-side time tracking.</rule>
+    <rule>Provide a clearly visible logout button on every authenticated page.</rule>
+    <rule>On logout, invalidate the session server-side and send Cache-Control: no-store.</rule>
+  </timeouts>
+
+  <cache-control>
+    <rule>Include Cache-Control: no-store in responses that contain session IDs or sensitive data.</rule>
+    <rule>On logout, send Clear-Site-Data: "cache", "cookies", "storage" to purge browser storage.</rule>
+  </cache-control>
+</session-management>
+
+<secrets-management>
+  <storage>
+    <rule>Never hardcode secrets (API keys, DB credentials, private keys) in source code or config files.</rule>
+    <rule>Use a secrets manager: AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, or HashiCorp Vault.</rule>
+    <rule>In CI/CD: use the pipeline's built-in secrets store (GitHub Secrets, GitLab Variables) for non-critical values. Use a secrets manager for sensitive credentials.</rule>
+    <rule>In containers: mount secrets via orchestrator volumes, not baked into images or passed via ENV.</rule>
+  </storage>
+
+  <what-not-to-do>
+    <rule>Never transmit secrets in plaintext — always TLS.</rule>
+    <rule>Never store secrets in git history. If a secret was committed, rotate it immediately and rewrite history.</rule>
+    <rule>Avoid environment variables as a primary method — they're accessible to all processes and may leak in crash logs.</rule>
+    <rule>Never use Docker ENV or ARG commands for actual secret values.</rule>
+    <rule>Don't log secrets. Mask or redact them before writing to any log system.</rule>
+    <rule>Avoid immutable String types for secrets in Java/.NET — use char[] or byte[] so memory can be zeroed.</rule>
+  </what-not-to-do>
+
+  <rotation>
+    <rule>Automate secret rotation. Manual rotation processes are error-prone and slow.</rule>
+    <rule>Use dynamic secrets where possible — they expire and are regenerated on each application restart.</rule>
+    <rule>Rotate API keys and service credentials on a schedule appropriate to sensitivity. Rotate immediately on suspected exposure.</rule>
+  </rotation>
+
+  <access-control>
+    <rule>Apply least privilege: no engineer or service account should have access to all secrets.</rule>
+    <rule>Grant access at the individual secret level, not the vault level when possible.</rule>
+    <rule>Scope CI/CD credentials to only the secrets that pipeline needs.</rule>
+  </access-control>
+
+  <detection>
+    <rule>Enable secret scanning in your CI/CD pipeline. Tools: Yelp detect-secrets, TruffleHog, GitHub secret scanning.</rule>
+    <rule>Use pre-commit hooks to catch secrets before they reach the remote.</rule>
+    <rule>Detect: API keys, private keys (SSH, TLS), connection strings, tokens, cloud provider credentials.</rule>
+  </detection>
+
+  <incident-response>
+    <rule>On exposure: revoke immediately, rotate, delete from all known locations (code, logs, environment), then investigate.</rule>
+    <rule>Use audit logs to determine who accessed the secret and when.</rule>
+    <rule>Document the incident, rotation history, and exposure scope.</rule>
+  </incident-response>
+
+  <encryption>
+    <rule>Encrypt secrets at rest using AES-256-GCM or ChaCha20-Poly1305.</rule>
+    <rule>Store encryption keys separately from the secrets they protect (envelope encryption).</rule>
+    <rule>Enforce TLS for all secret transmission.</rule>
+  </encryption>
+</secrets-management>
+
+</knowledge-base>

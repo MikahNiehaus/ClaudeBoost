@@ -1,12 +1,18 @@
 """Re-run graph edge resolution on an existing graph.db with updated classifier rules."""
 import sys, sqlite3, pathlib, traceback
-sys.path.insert(0, "C:/Users/grayw/OneDrive/prj/ClaudeBoost/mcp-rag-server/src")
+
+# Add mcp-rag-server/src to path relative to this script's location
+_repo_root = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(_repo_root / "mcp-rag-server" / "src"))
 
 from rag_server.core.project import project_index_dir, ALL_CODE_EXTENSIONS
 from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
 from rag_server.indexing.engine import _find_go_modules
 
-PROJECT = sys.argv[1] if len(sys.argv) > 1 else "C:/Users/grayw/OneDrive/prj/ccxt-polyglot"
+if len(sys.argv) < 2:
+    print("Usage: fix-graph-resolution.py <project_path>")
+    sys.exit(1)
+PROJECT = sys.argv[1]
 idx_dir = project_index_dir(PROJECT)
 db_path = str(idx_dir / "graph.db")
 

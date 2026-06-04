@@ -45,7 +45,7 @@ Announce: `ClaudeBoost home: <path>`
 Installs hooks, registers MCP server, seeds state files, installs Python deps. All steps are idempotent.
 
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/setup.py"
+python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/setup.py']).returncode)"
 ```
 
 (On macOS/Linux where only `python3` is on PATH, use `python3` instead.)
@@ -67,7 +67,7 @@ Read the output. Summarize:
 
 ### Step 0 — Re-index ClaudeBoost RAG (MANDATORY, runs every time)
 
-Call `rag_index(force=true)` to force a full re-index of all ClaudeBoost agents and knowledge bases.
+Call `POST http://127.0.0.1:8612/index with force=true` to force a full re-index of all ClaudeBoost agents and knowledge bases.
 
 Report: "Re-indexed: N files, M chunks."
 
@@ -78,14 +78,14 @@ This ensures every subsequent check and all future sessions see the latest agent
 ### Check 1 — RAG Server Health
 
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/check-rag-health.py"; echo "EXIT=$?"
+python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; r=subprocess.run([sys.executable,h+'/scripts/check-rag-health.py']); print('EXIT='+str(r.returncode))"
 ```
 
 | Exit | Meaning | Repair |
 |------|---------|--------|
 | 0 | **PASS** | — |
-| 2 | Dependency drift (tokenizers/transformers mismatch) | `python "$CLAUDEBOOST_HOME/scripts/reinstall-rag.py"` then retry |
-| 3 | Wrong install path | `python "$CLAUDEBOOST_HOME/scripts/reinstall-rag.py"` then retry |
+| 2 | Dependency drift (tokenizers/transformers mismatch) | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
+| 3 | Wrong install path | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
 | 1 | Unknown error | Mark FAIL, include output — manual fix needed |
 
 ---
@@ -96,7 +96,7 @@ All seven hook types must be registered in `~/.claude/settings.json`:
 
 ```bash
 for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
-  python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" "$hook" && echo "OK: $hook" || echo "MISSING: $hook"
+  python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/check-hooks.py','$hook'],capture_output=True).returncode)" && echo "OK: $hook" || echo "MISSING: $hook"
 done
 ```
 

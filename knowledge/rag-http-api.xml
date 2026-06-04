@@ -12,7 +12,7 @@
     <use-case>Debugging RAG results directly with curl</use-case>
     <use-case>Building tools on top of ClaudeBoost RAG from outside Claude Code</use-case>
     <not-for>
-      <item>Inside Claude Code sessions — use the MCP tools (rag_search, rag_context, rag_status) instead</item>
+      <item>Inside Claude Code sessions — use the HTTP API directly (POST /search, POST /context, GET /status). No MCP required.</item>
       <item>Production external traffic — the server binds to 127.0.0.1 only, no auth, localhost only</item>
     </not-for>
   </when-to-use>
@@ -127,9 +127,18 @@ resp = requests.post("http://127.0.0.1:8612/search", json={
 
     <endpoint method="POST" path="/context">
       <description>
-        Build the same curated context that rag_context builds for agent spawning: relevant
+        Build the same curated context that POST http://127.0.0.1:8612/context builds for agent spawning: relevant
         knowledge files, agent definitions, and (if a project is indexed) matching code chunks.
+        Also includes workspace-scoped research (Tier 3c) when workspace_path is provided.
         Use this to prime an LLM with the right background before a task.
+
+        Context tiers assembled:
+        - Tier 0: Agent definition
+        - Tier 1: Guardrails (security, observability, coding-standards)
+        - Tier 2: Agent-declared knowledge
+        - Tier 3: Semantic knowledge search (stack-boosted if project_path provided)
+        - Tier 3c: Workspace research (if workspace_path provided and research index exists)
+        - Tier 4: Codebase search + graph neighbours + community summaries (if project indexed)
       </description>
       <request-fields>
         <field name="agent" required="true" type="string">
@@ -139,25 +148,33 @@ resp = requests.post("http://127.0.0.1:8612/search", json={
         <field name="task_description" required="true" type="string">
           Short description of the task. Used as the search query to find relevant context.
         </field>
-        <field name="max_tokens" required="false" type="int" default="4000">
-          Token budget for the returned context.
+        <field name="max_tokens" required="false" type="int" default="6000">
+          Token budget for the returned context. Raised from 4000 to 6000 to accommodate
+          new tiers (Tier 3c workspace research, stack-boosted Tier 3 queries).
         </field>
         <field name="weight" required="false" type="string" default="standard">
-          Context depth. "lightweight" (agent def only), "standard" (agent + knowledge),
-          "full" (agent + knowledge + verify gate instructions).
+          Context depth. "lightweight" (agent def only, skips guardrails and Tier 3c),
+          "standard" (all tiers), "full" (standard + verify gate instructions).
         </field>
         <field name="project_path" required="false" type="string">
-          Absolute path to an indexed project. When provided, adds relevant code chunks
-          from the project codebase.
+          Absolute path to an indexed project. Enables Tier 4 codebase search and
+          auto-detects the project stack to boost Tier 3 knowledge queries.
+        </field>
+        <field name="workspace_path" required="false" type="string">
+          Absolute path to the task workspace directory (e.g. "$CLAUDEBOOST_HOME/workspace/ASC-1199").
+          When provided and a research index exists (built by POST http://127.0.0.1:8612/index_research or /research-task),
+          Tier 3c injects up to 400 tokens of task-specific research docs into context.
         </field>
       </request-fields>
       <response-fields>
-        <field name="context">assembled context string ready to inject into a prompt</field>
-        <field name="sources">list of files/chunks that contributed to the context</field>
-        <field name="token_count">approximate token count of the returned context</field>
+        <field name="agent_definition">full agent definition text</field>
+        <field name="relevant_knowledge">array of knowledge/codebase/research chunks with source, tier, score</field>
+        <field name="total_tokens_approx">approximate token count of the full context package</field>
+        <field name="tier_summary">chunk counts per tier: guardrails, declared, search, workspace_research, codebase, community_summaries</field>
         <field name="error">present only on failure</field>
       </response-fields>
       <example-curl>
+# Basic context call
 curl -s -X POST http://127.0.0.1:8612/context \
   -H "Content-Type: application/json" \
   -d '{
@@ -165,29 +182,52 @@ curl -s -X POST http://127.0.0.1:8612/context \
     "task_description": "fix authentication bug in Python FastAPI app",
     "project_path": "/home/user/myproject"
   }'
+
+# Full context with workspace research (Tier 3c)
+curl -s -X POST http://127.0.0.1:8612/context \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "workflow",
+    "task_description": "implement email notifications for address changes",
+    "project_path": "C:/Development/MyApp",
+    "workspace_path": "C:/Development/ClaudeBoost/workspace/TASK-1234",
+    "max_tokens": 8000
+  }'
       </example-curl>
       <example-python>
-import requests
+import urllib.request, json
 
-resp = requests.post("http://127.0.0.1:8612/context", json={
-    "agent": "explore",
-    "task_description": "understand GraphRAG implementation",
-    "weight": "standard",
-})
-data = resp.json()
-context_text = data["context"]
-print(f"Got {data['token_count']} tokens of context from {len(data['sources'])} sources")
+def get_context(agent, task, project_path=None, workspace_path=None, max_tokens=6000):
+    body = json.dumps({
+        "agent": agent,
+        "task_description": task,
+        "max_tokens": max_tokens,
+        **({"project_path": project_path} if project_path else {}),
+        **({"workspace_path": workspace_path} if workspace_path else {}),
+    }).encode()
+    req = urllib.request.Request(
+        "http://127.0.0.1:8612/context",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
 
-# Inject into an LLM call
-import anthropic
-client = anthropic.Anthropic()
-msg = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=2048,
-    system=context_text,
-    messages=[{"role": "user", "content": "Explain how graph edges are resolved."}],
+ctx = get_context(
+    "workflow-agent",
+    "implement address change email notifications in ASP.NET Core",
+    project_path="C:/Development/MyApp",
+    workspace_path="C:/Development/ClaudeBoost/workspace/TASK-1234",
 )
+print(f"{ctx['total_tokens_approx']} tokens | tiers: {ctx['tier_summary']}")
       </example-python>
+      <note>
+        workspace_path enables Tier 3c only when a research index exists at
+        workspace_path/.rag-index/research/. Build it with /research-rag (primary —
+        interactive, user-approved sources, evaluator-verified) or /research-task
+        (auto-seeded shortcut). Then pass workspace_path to /context and the
+        research loads automatically.
+      </note>
     </endpoint>
 
     <endpoint method="POST" path="/index">
@@ -272,7 +312,7 @@ wait_for_rag()
   </wait-for-ready-pattern>
 
   <see-also>
-    <ref>MCP tools rag_search, rag_context, rag_status — use these inside Claude Code sessions</ref>
+    <ref>MCP tools rag_search, POST http://127.0.0.1:8612/context, GET /status — use these inside Claude Code sessions</ref>
     <ref>knowledge/research-rag.xml — how to index URLs and PDFs for scope="research" searches</ref>
   </see-also>
 

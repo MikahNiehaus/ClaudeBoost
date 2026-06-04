@@ -7,6 +7,7 @@ from glob import glob
 from pathlib import Path
 
 from rag_server.config import (
+    CHUNK_OVERLAP_TOKENS,
     DEGENERATE_CHUNK_MIN_TOKENS,
     MANIFEST_PATH,
     MAX_CHUNK_TOKENS,
@@ -22,7 +23,7 @@ from rag_server.ports.store_port import Chunk, StorePort
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 
 
 def _find_go_modules(project_path: str) -> dict[str, str]:
@@ -280,8 +281,26 @@ class IndexingEngine:
                 total["files_failed"] += result.get("files_failed", 0)
                 all_errors.extend(result.get("errors", []))
             self._save_manifest()
+            # Build category-based graph over knowledge/agents files and run
+            # community detection. Runs after all scopes so the full file list
+            # is in the manifest. Non-critical — never blocks the index result.
+            community_stats: dict = {"communities": 0, "summaries_generated": 0, "summaries_failed": 0}
+            if total["files_indexed"] > 0 or total["files_unchanged"] > 0:
+                try:
+                    community_stats = self._build_knowledge_communities()
+                except Exception:
+                    logger.error("Knowledge community detection failed", exc_info=True)
+                    community_stats["summaries_failed"] = -1  # signals total failure
         if all_errors:
             total["errors"] = all_errors
+        total["communities"] = community_stats
+        # Summaries run in background — log that they're pending so callers know to check later.
+        if community_stats.get("communities", 0) > 0 and community_stats.get("summaries_generated") == "pending":
+            logger.info(
+                "Community summaries running in background — check server logs in ~60s "
+                "to confirm all %d communities got summaries.",
+                community_stats["communities"],
+            )
         return total
 
     def _index_files(
@@ -321,8 +340,13 @@ class IndexingEngine:
                 continue
 
             try:
-                # Embed all chunks in one batch
-                texts = [c.content for c in raw_chunks]
+                # Prepend file path + section to each chunk before embedding so the
+                # vector captures where the content lives, not just what it says.
+                # This matches the pattern used for code files in _do_index_project
+                # and improves recall for knowledge/agents queries like "security XML".
+                texts = [
+                    f"[{rel_path}] [{c.section}]\n{c.content}" for c in raw_chunks
+                ]
                 embeddings = self._embedder.embed(texts)
 
                 # Build storage chunks
@@ -375,6 +399,160 @@ class IndexingEngine:
         if file_errors:
             result["errors"] = file_errors
         return result
+
+    def _build_knowledge_communities(self) -> dict:
+        """Build a category graph over knowledge/agents files and detect communities.
+
+        Groups files into four categories:
+          fw-*    → all framework guides (33 files)
+          lang-*  → all language guides (17+ files)
+          _agents → all agent definitions (regardless of filename prefix)
+          _domain → everything else in knowledge/
+
+        Communities are assigned directly from the groups — no external Leiden
+        dependency needed. Edges are still written to kb_graph.db so has_graph()
+        returns True and the search annotator can find summaries.
+        """
+        import re
+        from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+        from rag_server.core.summarizer import summarize_community
+        from rag_server.ports.graph_port import GraphEdge
+
+        kb_graph_db = RAG_INDEX_DIR / "kb_graph.db"
+
+        # Collect knowledge/agents files from the manifest
+        kb_files = [
+            f for f in self._manifest.keys()
+            if f.startswith("knowledge/") or f.startswith("agents/")
+        ]
+        if not kb_files:
+            return {"communities": 0, "summaries_generated": 0, "summaries_failed": 0}
+
+        # Only fw- and lang- have enough files to be useful standalone communities.
+        # Everything else in knowledge/ is domain knowledge; all agents/ files are agents.
+        _KNOWN_PREFIXES = {"fw", "lang"}
+        prefix_groups: dict[str, list[str]] = {}
+        for f in kb_files:
+            if f.startswith("agents/"):
+                group = "_agents"
+            else:
+                name = Path(f).stem
+                m = re.match(r"^([a-z]+)-", name)
+                group = m.group(1) if (m and m.group(1) in _KNOWN_PREFIXES) else "_domain"
+            prefix_groups.setdefault(group, []).append(f)
+
+        # Build undirected edges: every pair within a group (2+ members)
+        edges = []
+        for members in prefix_groups.values():
+            if len(members) < 2:
+                continue
+            for i, a in enumerate(members):
+                for b in members[i + 1:]:
+                    edges.append(GraphEdge(
+                        source_file=a, source_symbol="<kb>",
+                        target_file=b, target_symbol="<kb>",
+                        edge_type="same_category",
+                        confidence="PATTERN",
+                    ))
+
+        if not edges:
+            logger.debug("Knowledge community detection: no multi-file groups — skipping")
+            return {"communities": 0, "summaries_generated": 0, "summaries_failed": 0}
+
+        # Rebuild graph structure while preserving existing summaries as cache.
+        # Deleting kb_graph.db on every index run throws away valid summaries —
+        # each regeneration takes 4+ minutes per community on typical hardware.
+        # Instead: clear edges + communities, then repopulate. Summaries survive.
+        graph_store = SQLiteGraphStore(kb_graph_db)
+        graph_store.clear_graph_structure()
+        graph_store.add_edges(edges)
+
+        # Assign community IDs directly from prefix groups — no Leiden needed.
+        # Each group (fw, lang, _agents, _domain) becomes one community.
+        communities: dict[str, int] = {}
+        for cid, (_, members) in enumerate(prefix_groups.items()):
+            for f in members:
+                communities[f] = cid
+
+        graph_store.save_communities(communities)
+        num_communities = len(set(communities.values()))
+        logger.info(
+            "Knowledge communities: %d files in %d communities",
+            len(communities), num_communities,
+        )
+
+        # Count how many summaries already exist (cache hits — no LLM call needed).
+        existing_summaries = len(graph_store.get_all_community_ids_with_summaries())
+        communities_needing_summary = num_communities - existing_summaries
+        if existing_summaries == num_communities:
+            logger.info(
+                "Community summaries: all %d cached — no LLM calls needed",
+                num_communities,
+            )
+            return {
+                "communities": num_communities,
+                "summaries_generated": existing_summaries,
+                "summaries_cached": existing_summaries,
+                "summaries_failed": 0,
+            }
+
+        # Run summarization in a background thread so it never blocks the index response.
+        # Results are logged and written to kb_graph.db; callers can check summaries
+        # via the status endpoint after a short wait (~30-60s for 4 communities).
+        import threading
+
+        def _run_summaries():
+            generated = 0
+            cached = 0
+            failed = 0
+            for cid in graph_store.get_all_community_ids():
+                members = graph_store.get_community_members(cid)
+                try:
+                    result = summarize_community(cid, members, graph_store, str(PROJECT_ROOT))
+                    if result:
+                        # summarize_community returns cached text on cache hit
+                        existing = graph_store.get_community_summary(cid)
+                        if existing and existing.get("summary") == result:
+                            cached += 1
+                        else:
+                            generated += 1
+                    else:
+                        failed += 1
+                        logger.error(
+                            "Community %d summary returned empty — Ollama or Claude API may be failing",
+                            cid,
+                        )
+                except Exception:
+                    failed += 1
+                    logger.error("Community %d summary FAILED", cid, exc_info=True)
+
+            # Health check: validate ALL communities have summaries
+            final_count = len(graph_store.get_all_community_ids_with_summaries())
+            if final_count < num_communities:
+                logger.error(
+                    "SUMMARY HEALTH CHECK FAILED: only %d/%d community summaries exist "
+                    "(%d generated, %d cached, %d failed). "
+                    "Run POST /index with force=true to retry.",
+                    final_count, num_communities, generated, cached, failed,
+                )
+            else:
+                logger.info(
+                    "Community summaries: %d/%d complete (%d generated, %d cached, %d failed)",
+                    final_count, num_communities, generated, cached, failed,
+                )
+
+        threading.Thread(target=_run_summaries, daemon=True, name="kb-summarizer").start()
+        logger.info(
+            "Community summarization started in background: %d cached, %d need generation",
+            existing_summaries, communities_needing_summary,
+        )
+
+        return {
+            "communities": num_communities,
+            "summaries_generated": "pending",  # background thread running
+            "summaries_cached": existing_summaries,
+            "summaries_failed": 0,
+        }
 
     def index_project(
         self,
@@ -632,6 +810,7 @@ class IndexingEngine:
                     content, rel_path,
                     max_tokens=MAX_CHUNK_TOKENS,
                     min_tokens=MIN_CHUNK_TOKENS,
+                    chunk_overlap=CHUNK_OVERLAP_TOKENS,
                 )
             else:
                 from rag_server.indexing.code_chunker import chunk_code
@@ -639,6 +818,7 @@ class IndexingEngine:
                     content, rel_path,
                     max_tokens=MAX_CHUNK_TOKENS,
                     min_tokens=MIN_CHUNK_TOKENS,
+                    chunk_overlap=CHUNK_OVERLAP_TOKENS,
                 )
 
             if not raw_chunks:
@@ -772,6 +952,47 @@ class IndexingEngine:
             except Exception:
                 logger.debug("SCIP pass failed (non-fatal)", exc_info=True)
 
+        # TypeScript SCIP enrichment (optional — runs if scip-typescript is installed globally).
+        # Install: npm install -g @sourcegraph/scip-typescript
+        if files_indexed > 0:
+            try:
+                ts_files = [p for p in project_manifest.keys() if p.endswith((".ts", ".tsx"))]
+                if ts_files:
+                    from rag_server.indexing.scip_extractor import extract_typescript_edges
+                    ts_edges = extract_typescript_edges(project_path)
+                    if ts_edges:
+                        graph_store.add_edges(ts_edges)
+                        logger.info("SCIP TypeScript: added %d reference edges", len(ts_edges))
+            except Exception:
+                logger.debug("SCIP TypeScript pass failed (non-fatal)", exc_info=True)
+
+        # Go SCIP enrichment (optional — runs if scip-go is installed).
+        # Install: go install github.com/sourcegraph/scip-go/cmd/scip-go@latest
+        if files_indexed > 0:
+            try:
+                go_files = [p for p in project_manifest.keys() if p.endswith(".go")]
+                if go_files:
+                    from rag_server.indexing.scip_extractor import extract_go_edges
+                    go_edges = extract_go_edges(project_path)
+                    if go_edges:
+                        graph_store.add_edges(go_edges)
+                        logger.info("SCIP Go: added %d reference edges", len(go_edges))
+            except Exception:
+                logger.debug("SCIP Go pass failed (non-fatal)", exc_info=True)
+
+        # Co-change graph: files that change together in git history often have
+        # implicit coupling not captured by imports. Pairs seen in >= 2 commits become edges.
+        # Requires PyDriller: pip install pydriller
+        if files_indexed > 0:
+            try:
+                from rag_server.indexing.git_extractor import extract_co_change_edges
+                co_change_edges = extract_co_change_edges(project_path)
+                if co_change_edges:
+                    graph_store.add_edges(co_change_edges)
+                    logger.info("Co-change graph: added %d edges", len(co_change_edges))
+            except Exception:
+                logger.warning("Co-change extractor import/run failed (non-fatal)", exc_info=True)
+
         # C# namespace-resolution graph enrichment (pure Python, no external tools).
         # Skipped on zero-change incremental runs unless this is the first time CSHARP
         # edges are being built (e.g. after a ClaudeBoost update that added this extractor).
@@ -798,6 +1019,7 @@ class IndexingEngine:
             try:
                 from rag_server.core.community import detect_communities
                 from rag_server.core.summarizer import summarize_community
+                import threading
 
                 communities = detect_communities(graph_store)
                 if communities:
@@ -807,19 +1029,54 @@ class IndexingEngine:
                         "Community detection: %d files in %d communities",
                         len(communities), num_communities,
                     )
-                    for cid in graph_store.get_all_community_ids():
-                        members = graph_store.get_community_members(cid)
-                        try:
-                            summarize_community(cid, members, graph_store, project_path)
-                        except Exception:
-                            logger.exception(
-                                "Community summary failed for community %d", cid
-                            )
+                    # Summarization runs in background — each community takes ~130s with
+                    # qwen3:4b on this hardware. Don't block the HTTP index response.
+                    def _summarize_project_communities(
+                        _cids=graph_store.get_all_community_ids(),
+                        _gs=graph_store,
+                        _pp=project_path,
+                    ):
+                        generated = cached = failed = 0
+                        for cid in _cids:
+                            members = _gs.get_community_members(cid)
+                            try:
+                                result = summarize_community(cid, members, _gs, _pp)
+                                if result:
+                                    cached += 1
+                                else:
+                                    generated += 1
+                            except Exception:
+                                logger.exception("Community summary failed for community %d", cid)
+                                failed += 1
+                        logger.info(
+                            "Project community summaries complete: %d generated, %d cached, %d failed",
+                            generated, cached, failed,
+                        )
+                    t = threading.Thread(
+                        target=_summarize_project_communities, daemon=True,
+                    )
+                    t.start()
+                    logger.info(
+                        "Project community summaries running in background (%d communities).",
+                        num_communities,
+                    )
             except ImportError:
                 logger.debug("Community detection modules not available — skipping")
             except Exception:
                 logger.exception("Community detection failed unexpectedly")
                 # don't re-raise — community detection is non-critical
+
+        # PageRank: score each file by how many other files import or reference it.
+        # High-scoring files (core modules, shared utilities) get a boost in graph search.
+        # Runs on the same condition as community detection — same edge data, same timing.
+        if _need_communities and graph_store.has_graph():
+            try:
+                from rag_server.core.community import compute_pagerank
+                pr_scores = compute_pagerank(graph_store)
+                if pr_scores:
+                    graph_store.save_pagerank(pr_scores)
+            except Exception:
+                logger.debug("PageRank computation failed (non-fatal)", exc_info=True)
 
         # Save project manifest (C3: include schema version)
         try:
@@ -979,12 +1236,14 @@ class IndexingEngine:
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
+                chunk_overlap=CHUNK_OVERLAP_TOKENS,
             )
         if suffix in {".rst", ".txt"}:
             return chunk_markdown(
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
+                chunk_overlap=CHUNK_OVERLAP_TOKENS,
             )
         if suffix == ".xml":
             from rag_server.indexing.xml_chunker import chunk_xml
@@ -1002,6 +1261,7 @@ class IndexingEngine:
                 content, rel_path,
                 max_tokens=MAX_CHUNK_TOKENS,
                 min_tokens=MIN_CHUNK_TOKENS,
+                chunk_overlap=CHUNK_OVERLAP_TOKENS,
             )
 
         # Unsupported file type — skip

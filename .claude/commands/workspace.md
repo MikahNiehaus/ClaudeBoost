@@ -33,17 +33,17 @@ If BOOSTED: proceed silently.
 
 **Step 1 — Health check (REQUIRED, runs first):**
 
-Call `rag_status()` before loading any context.
+Call `GET http://127.0.0.1:8612/status` before loading any context.
 
-**If `rag_status()` returns an error OR the tool is not available:**
+**If `GET http://127.0.0.1:8612/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/workspace $ARGUMENTS`."
 
 **Step 2 — Load context (only if Step 1 passes):**
 
-Call `rag_context(agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000)`.
+Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000`.
 
-**If `rag_context` returns an "error" key:**
+**If `POST http://127.0.0.1:8612/context` returns an "error" key:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG context load failed: [error message]. Run `/rag` to start the server."
 
@@ -63,35 +63,80 @@ Derive a slug from `$ARGUMENTS`:
 
 Set `WORKSPACE_ID = [slug]`.
 
-Check for collision — if that slug already exists, append `-2`, `-3`, etc.:
+Check for collision — if that slug already exists in the registry, append `-2`, `-3`, etc.:
 ```bash
-ls "$CLAUDEBOOST_HOME/workspace/" 2>/dev/null
+python3 -c "
+import json, os
+from pathlib import Path
+home = Path(os.environ.get('CLAUDEBOOST_HOME', ''))
+try:
+    reg = json.loads((home / 'state' / 'workspaces.json').read_text(encoding='utf-8'))
+    print('\n'.join(reg.keys()))
+except Exception:
+    pass
+"
 ```
 
 ### 1b — Determine workspace root and create workspace
 
-Check CWD to decide where the workspace lives:
-```bash
-pwd
-```
-- If CWD is NOT `$CLAUDEBOOST_HOME`: `WORKSPACE_ROOT = <cwd>` (project-scoped)
-- If CWD IS `$CLAUDEBOOST_HOME`: `WORKSPACE_ROOT = $CLAUDEBOOST_HOME` (ClaudeBoost meta-work)
+**Detect project path** — do NOT use CWD as a proxy. CWD is often the ClaudeBoost directory even when the work is for a different project. Use this priority order instead:
 
+1. **Absolute path in `$ARGUMENTS`** — if the arguments contain a path like `C:/Development/...` or `/home/user/...`, use that as `PROJECT_PATH`.
+
+2. **ClaudeBoost meta-work detection** — scan `$ARGUMENTS` for these keywords: `agent`, `skill`, `knowledge base`, `knowledge file`, `ClaudeBoost`, `rag server`, `hook`, `boost`. If two or more match, set `WORKSPACE_ROOT = $CLAUDEBOOST_HOME`. This handles tasks that are literally about improving ClaudeBoost itself.
+
+3. **Most recent project from registry** — check for previously used projects:
+```bash
+python3 -c "
+import json
+from pathlib import Path
+import os
+home = Path(os.environ.get('CLAUDEBOOST_HOME', ''))
+try:
+    reg = json.loads((home / 'state' / 'workspaces.json').read_text(encoding='utf-8'))
+    projects = sorted(
+        set(v['project_path'] for v in reg.values() if v.get('project_path') and v['project_path'] != str(home)),
+        key=lambda p: max((Path(v['workspace_path']) / 'context.md').stat().st_mtime
+                         for v in reg.values() if v.get('project_path') == p
+                         and (Path(v['workspace_path']) / 'context.md').exists()),
+        reverse=True
+    )
+    [print(p) for p in projects[:3]]
+except Exception as e:
+    pass
+"
+```
+
+If this returns exactly one project path: use it as `PROJECT_PATH` and tell the user `"Using project: {PROJECT_PATH}"`.
+
+If it returns multiple: ask `"Which project is this for? (recent: {list})"`. Wait for the user's answer before proceeding.
+
+4. **Ask the user** — if none of the above resolved a path, ask: `"What project is this for? Paste the absolute path to the project directory."` Wait for the answer before continuing.
+
+Set `WORKSPACE_ROOT = PROJECT_PATH` (the project directory, not its parent).
 Set `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$WORKSPACE_ID`.
 
 ```bash
 mkdir -p "$WORKSPACE_ABS"
 ```
 
-**Register and protect:**
+**Register, protect, and mark active:**
 ```bash
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$WORKSPACE_ID','$WORKSPACE_ABS','$WORKSPACE_ROOT']).returncode)"
 
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
     echo 'workspace/' >> "$WORKSPACE_ROOT/.gitignore"
   fi
 fi
+
+python3 -c "
+import json, os
+from pathlib import Path
+home = Path(os.environ.get('CLAUDEBOOST_HOME', ''))
+active = {'workspace': '$WORKSPACE_ID', 'workspace_path': '$WORKSPACE_ABS', 'project_path': '$WORKSPACE_ROOT'}
+(home / 'state' / 'active-workspace.json').write_text(json.dumps(active, indent=2), encoding='utf-8')
+"
 ```
 
 Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
@@ -211,8 +256,8 @@ Search for the right tools. Do NOT skip — this is the core of the plan.
 ### 3a — RAG searches
 
 ```
-rag_search(scope="agents", query="[primary work type] [key goal words]", limit=5)
-rag_search(scope="knowledge", query="[primary work type] workflow best practices", limit=5)
+POST http://127.0.0.1:8612/search with scope="agents", query="[primary work type] [key goal words]", limit=5
+POST http://127.0.0.1:8612/search with scope="knowledge", query="[primary work type] workflow best practices", limit=5
 ```
 
 If multiple work types: run a second search for the secondary type.
@@ -252,7 +297,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 #### Skills / Commands
 | Skill | When to Use It |
 |-------|---------------|
-| `/boost` | Start of session — loads RAG + Gas Town; use if session isn't already boosted |
+| `/boost` | Start of session — loads RAG; use if session isn't already boosted |
 | `/explore <ticket-or-description>` | Full ticket deep-dive: ticket analysis → project indexing → code exploration → plan |
 | `/plan-task <id> <desc>` | Planning phase only (no execution) — produces checklist + subtasks + agent list |
 | `/audit <input>` | Parallel audit of code, config, URL, claim, or document with Opus verdict |
@@ -260,7 +305,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/security-review` | Security-focused review of pending branch changes |
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
 | `/research-rag <topic>` | Build a research RAG from URLs/PDFs/docs, then query it during implementation |
-| `/index-project <path>` | Index project codebase for semantic search via `rag_search(scope="codebase")` |
+| `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8612/search with scope="codebase"` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
 | `/spawn-agent <agent>` | Spawn a specific agent with RAG knowledge loaded |
@@ -309,7 +354,7 @@ For each work type, select:
 - **Primary agents** (core work) — with model
 - **Supporting agents** (validation, evaluation) — always include `evaluator-agent` for findings
 - **Skills to invoke** (exact commands)
-- **Knowledge bases** (which to load via `rag_context`)
+- **Knowledge bases** (which to load via `POST http://127.0.0.1:8612/context`)
 
 Prune ruthlessly — only include what the work genuinely needs.
 
@@ -321,7 +366,7 @@ Never bundle unrequested fixes into the same commit.
 
 **Bug Fix investigation rule:** Before finalizing the fix approach in `plan.md`:
 1. Read the **full file** for every location being changed — not just the bug line
-2. Find **all callers** of modified methods: use `rag_search(scope="codebase", mode="graph", query="[method name]", project_path=PROJECT_PATH)` if indexed, or `Grep("[method name]")` across the codebase if not
+2. Find **all callers** of modified methods: use `POST http://127.0.0.1:8612/search with scope="codebase", mode="graph", query="[method name]", project_path=PROJECT_PATH)` if indexed, or `Grep("[method name]"` across the codebase if not
 3. Confirm the caller sweep is complete — "no 4th location" must be verified, not assumed
 4. Document what was checked in the plan under a **"Pre-fix Investigation"** section, citing file:line for every location reviewed
 
@@ -350,7 +395,7 @@ Applies when `PROJECT_PATH` is set (not `none`) and WORK_TYPES includes Bug Fix,
 
 Check if the project is indexed:
 ```
-rag_search(scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1)
+POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1
 ```
 
 **If results returned**: "Project RAG active — vector + graph search available. Graph RAG will auto-trace callers/dependents."
@@ -374,7 +419,7 @@ Runs only when Phase 4.5 confirmed the project is indexed.
 
 2. For each entity found, run:
    ```
-   rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="graph", limit=3)
+   POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="graph", limit=3
    ```
 
 3. Collect unique file paths from all graph results.
@@ -392,6 +437,18 @@ Runs only when Phase 4.5 confirmed the project is indexed.
    ```
 
 If no entities are found in the ticket, or the project is not indexed: skip silently.
+
+---
+
+## Phase 4.5: Research Primer
+
+For any ticket-based task (Feature, Bug Fix, Architecture, or Research work type), suggest running `/research-rag` to build Tier 3c before handing off to implementation agents.
+
+Tell the user:
+
+> "Before I spawn implementation agents, run `/research-rag $WORKSPACE_ID` to build a task-specific research index (Tier 3c). Agents get those docs automatically via `/context`. Skip this if the task is a simple config change or typo fix with no external dependencies."
+
+Do NOT block on this — if the user wants to skip it, proceed to Phase 5.
 
 ---
 

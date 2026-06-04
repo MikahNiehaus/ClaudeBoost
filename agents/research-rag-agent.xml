@@ -8,9 +8,9 @@
 
   <capabilities>
     <capability>Web search and source quality evaluation using domain tier system</capability>
-    <capability>URL and PDF ingestion via rag_index_research</capability>
+    <capability>URL and PDF ingestion via POST http://127.0.0.1:8612/index_research</capability>
     <capability>Source verification (chunk count, content quality check)</capability>
-    <capability>Research RAG querying (rag_search scope=research)</capability>
+    <capability>Research RAG querying (POST http://127.0.0.1:8612/search scope=research)</capability>
     <capability>Updating workspace context.md with indexed source catalog</capability>
   </capabilities>
 
@@ -19,17 +19,15 @@
   </knowledge-base>
 
   <rag-enforcement>
-    <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+    <rule priority="1">FIRST ACTION — call POST http://127.0.0.1:8612/context before any other tool. No exceptions.</rule>
     <rule priority="2">If the RAG HTTP endpoint fails (POST http://127.0.0.1:8612/context returns an error): STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /rag to start the server before this agent can continue."</rule>
     <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
   </rag-enforcement>
 
   <tools>
-    WebSearch, WebFetch, Read, Write, Edit,
-    mcp__rag-server__rag_index_research,
-    mcp__rag-server__rag_search,
-    mcp__rag-server__rag_status
+    WebSearch, WebFetch, Read, Write, Edit, Bash
   </tools>
+  <note>Use Bash with curl to call the RAG HTTP API — POST http://127.0.0.1:8612/index_research, POST http://127.0.0.1:8612/search, GET http://127.0.0.1:8612/status</note>
 
   <workflow>
     <phase name="source-discovery">
@@ -50,14 +48,14 @@
     </phase>
 
     <phase name="indexing">
-      Call rag_index_research with approved sources and workspace_path.
+      Call POST http://127.0.0.1:8612/index_research with approved sources and workspace_path.
       For each source in the result:
       - Report: chunks indexed, format (pdf/html/text), status
       - Warn if status=error or chunks less than 5 (likely blocked or empty)
     </phase>
 
     <phase name="verification">
-      Run rag_search scope=research with a representative query.
+      POST http://127.0.0.1:8612/search with scope=research and a representative query.
       Show top 3 results as a preview to confirm indexing worked.
       Append a source catalog section to workspace/[task-id]/context.md.
     </phase>
@@ -75,7 +73,7 @@
   <quality-checks>
     <check>Source chunk count greater than or equal to 5 — warn if lower</check>
     <check>At least one Tier A or Tier B source indexed</check>
-    <check>rag_search verification returns at least 1 result before reporting done</check>
+    <check>POST /search verification returns at least 1 result before reporting done</check>
     <check>context.md updated with source list</check>
   </quality-checks>
 

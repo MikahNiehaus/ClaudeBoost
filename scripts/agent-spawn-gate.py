@@ -18,22 +18,24 @@ by scripts/setup.ps1. Prompt-type hooks on Task tool calls were over-firing:
      available to the main agent) were flagged as "unrecognized."
 
 This script reads the actual Task tool_input from stdin, checks whether the
-spawn prompt instructs the agent to call `rag_context` as its first action,
+spawn prompt instructs the agent to call POST http://127.0.0.1:8612/context as its first action,
 and exits 2 (blocking) if it doesn't.
 
 Behavior:
-  - Prompt mentions `rag_context` -> exit 0 silently (pass)
-  - Prompt missing `rag_context`  -> exit 2 + stderr error (blocked)
+  - Prompt mentions RAG context call (rag_context or 8612/context) -> exit 0 silently (pass)
+  - Prompt missing RAG context call  -> exit 2 + stderr error (blocked)
   - architect-agent spawn without PROPOSAL_ONLY + 2 citations
                                   -> exit 2 + stderr error (blocked)
 
-Exits 2 (blocking) when the spawn prompt does not include a rag_context call.
-Exits 0 (pass) when rag_context is present or when checking architect-agent contract only.
+Exits 2 (blocking) when the spawn prompt does not include a RAG context call (rag_context or POST http://127.0.0.1:8612/context).
+Exits 0 (pass) when a RAG context call is present or when checking architect-agent contract only.
 """
 from __future__ import annotations
 import json
+import os
 import re
 import sys
+from pathlib import Path
 
 
 def main() -> int:
@@ -53,17 +55,13 @@ def main() -> int:
     nudges: list[str] = []
 
     # Primary check: does the spawn prompt instruct the agent to call
-    # rag_context? We accept: rag_context (the function name) or
-    # mcp__rag-server__rag_context (the fully-qualified MCP tool name).
-    # "RAG context" (two words) was previously accepted but is too ambiguous —
-    # it matches plain-English phrases like "ensure RAG context is available"
-    # without the prompt actually instructing a rag_context() tool call.
-    # Accept MCP rag_context call OR HTTP REST call to the context endpoint
+    # Accept: rag_context (legacy), mcp__rag-server__rag_context (legacy MCP name),
+    # or HTTP REST call to the context endpoint (127.0.0.1:8612/context).
+    # "RAG context" (two words) is too ambiguous — matches plain-English phrases
+    # without actually instructing a context call.
     has_rag = (
-        "rag_context" in prompt_lower
-        or "mcp__rag-server__rag_context" in prompt_lower
-        or "127.0.0.1:8612/context" in prompt_lower
-        or "localhost:8612/context" in prompt_lower
+        "8612/context" in prompt_lower
+        or "rag_context" in prompt_lower  # legacy — kept for backward compat
     )
     if not has_rag:
         nudges.append(
@@ -71,19 +69,47 @@ def main() -> int:
             "Include a call to POST http://127.0.0.1:8612/context "
             "(e.g. via curl or python urllib) as the first action in the prompt."
         )
-    elif "project_path" not in prompt_lower and "127.0.0.1:8612" not in prompt_lower:
+    elif "project_path" not in prompt_lower:
         nudges.append(
-            "[agent-spawn nudge] rag_context call is missing project_path. "
+            "[agent-spawn nudge] Context call (POST http://127.0.0.1:8612/context) is missing project_path. "
             "Include project_path=\"<cwd>\" so the agent loads project-specific "
             "codebase context (Tier 4 RAG). Run `pwd` before spawning to get the path."
         )
+    if "workspace_path" not in prompt_lower:
+        # Check if there is an active workspace — only nudge when one exists.
+        import os
+        boost_home = os.environ.get("CLAUDEBOOST_HOME", "")
+        active_ws_file = os.path.join(boost_home, "state", "active-workspace.json") if boost_home else ""
+        if active_ws_file and os.path.exists(active_ws_file):
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                ws_data = _json.loads(open(active_ws_file).read())
+                # New schema has workspace_path directly; old schema has only workspace (ID)
+                ws_path = ws_data.get("workspace_path") or ws_data.get("path") or ""
+                if not ws_path:
+                    # Fall back: look up workspace_path in the registry by workspace ID
+                    ws_id = ws_data.get("workspace", "")
+                    if ws_id and boost_home:
+                        reg_file = os.path.join(boost_home, "state", "workspaces.json")
+                        if os.path.exists(reg_file):
+                            reg = _json.loads(open(reg_file).read())
+                            ws_path = (reg.get(ws_id) or {}).get("workspace_path", "")
+                if ws_path:
+                    nudges.append(
+                        "[agent-spawn nudge] Active workspace detected but workspace_path is not in the spawn prompt. "
+                        f"Include workspace_path=\"{ws_path}\" in the context call so the agent "
+                        "receives Tier 3c workspace research (task-specific docs indexed by /research-rag)."
+                    )
+            except Exception:
+                pass
 
     # Secondary check: architect-agent proposal contract.
     # Only fires when the spawn IS an architect-agent, not when the prompt merely
-    # references it (e.g. as a rag_context agent= parameter or in a description).
+    # references it (e.g. as a context call agent= parameter or in a description).
     # The description field is the reliable signal — the orchestrator sets it
     # explicitly when spawning architect-agent. Prompt body checks use identity
-    # phrases only to avoid false positives from rag_context parameter values.
+    # phrases only to avoid false positives from context call parameter values.
     is_architect = (
         "architect-agent" in description.lower()
         or "you are architect-agent" in prompt_lower
@@ -102,6 +128,25 @@ def main() -> int:
                 "and at least 2 file:line citations (format path/file.ext:line) so "
                 "architect-agent can ground its proposal. Without them it will "
                 "refuse and return BLOCKED."
+            )
+
+    # Evaluator routing check: if a NEEDS_VERIFICATION flag is pending,
+    # block any spawn that isn't an evaluator-agent. Clear the flag on
+    # evaluator spawn so normal work can resume immediately after.
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+    flag = boost_home / "state" / "needs-verification.json"
+    if flag.exists():
+        is_evaluator = "evaluator-agent" in prompt_lower or "evaluator_agent" in prompt_lower
+        if is_evaluator:
+            try:
+                flag.unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            nudges.append(
+                "[verify gate] NEEDS_VERIFICATION pending — a prior agent flagged findings "
+                "that require verification. Spawn evaluator-agent before proceeding with "
+                "other work. This gate clears automatically when evaluator-agent runs."
             )
 
     if nudges:

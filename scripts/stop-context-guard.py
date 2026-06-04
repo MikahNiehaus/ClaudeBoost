@@ -66,6 +66,23 @@ def main() -> int:
 
     # Block: context is stale at high tool count
     age_display = f"{int(age_minutes)} minutes"
+
+    # Check for unresolved NEEDS_VERIFICATION flag
+    # Only warn when the file has an actual finding (flagged_at key present)
+    verification_warning = ""
+    flag = state_dir / "needs-verification.json"
+    if flag.exists():
+        try:
+            flag_data = json.loads(flag.read_text(encoding="utf-8"))
+        except Exception:
+            flag_data = {}
+        if flag_data.get("flagged_at"):
+            verification_warning = (
+                "\n\nWARNING: NEEDS_VERIFICATION flag is set — a prior agent flagged findings "
+                "that have not been verified by evaluator-agent. Spawn evaluator-agent before "
+                "stopping, or the findings will remain unverified next session."
+            )
+
     reason = (
         f"CONTEXT CHECKPOINT — update workspace context.md before stopping.\n"
         f"You have made {edit_count} tool calls. The most recently updated "
@@ -80,6 +97,7 @@ def main() -> int:
         "If you are at a natural stopping point and context is getting full,\n"
         "run /clear-safe — it will verify context.md, show what survives,\n"
         "and confirm before clearing. The SessionEnd hook saves state automatically."
+        + verification_warning
     )
 
     print(json.dumps({"decision": "block", "reason": reason}))

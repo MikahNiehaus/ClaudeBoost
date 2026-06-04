@@ -42,7 +42,7 @@ for d in "$CLAUDEBOOST_HOME/workspace/"/*/; do
   fi
 done
 # Project-scoped workspaces from registry
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --list 2>/dev/null
+python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--list'])" 2>/dev/null
 ```
 
 **Decision logic — attempt to resolve automatically before asking anything:**
@@ -120,7 +120,7 @@ Announce: "Created `$WORKSPACE_ABS` — starting fresh exploration."
 
 ```bash
 # Register in workspaces registry so /restore and /clear-safe can find it
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$PROJECT_PATH"
+python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$TASK_ID','$WORKSPACE_ABS','$PROJECT_PATH']).returncode)"
 
 # Add workspace/ to project .gitignore if writing to a project dir (not ClaudeBoost itself)
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
@@ -151,15 +151,15 @@ Save to `$WORKSPACE_ABS/ticket.md`:
 
 ## Phase 0.5: RAG Health Check
 
-**Call `rag_status()` now — before spawning any agents or calling rag_context.**
+**Call `GET http://127.0.0.1:8612/status` now — before spawning any agents or calling POST http://127.0.0.1:8612/context.**
 
-This is a fast probe. `rag_status` does not use the embedding model, so it responds in under 1 second if the server is up.
+This is a fast probe. `GET /status` does not use the embedding model, so it responds in under 1 second if the server is up.
 
-**If `rag_status()` returns an error OR the tool is not available:**
+**If `GET http://127.0.0.1:8612/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/explore $ARGUMENTS`."
 
-**If `rag_status()` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
+**If `GET http://127.0.0.1:8612/status` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
 
 ---
 
@@ -176,8 +176,8 @@ Spawn `ticket-analyst-agent` (Sonnet) with this prompt:
 ```
 You are analyzing a ticket for task $TASK_ID.
 
-FIRST ACTION: call rag_context(agent="ticket-analyst-agent", task_description="analyze ticket $TASK_ID and produce analysis + definition of done", max_tokens=4000)
-If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
+FIRST ACTION: call POST http://127.0.0.1:8612/context with agent="ticket-analyst-agent", task_description="analyze ticket $TASK_ID and produce analysis + definition of done", max_tokens=4000
+If POST http://127.0.0.1:8612/context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
 
 Then:
 
@@ -232,11 +232,11 @@ Skip this phase entirely if `PROJECT_PATH = none`.
 
 **2a — RAG health check.**
 
-Call `rag_status()`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
+Call `GET http://127.0.0.1:8612/status`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
 
 **2b — Scan the project.**
 
-Call `rag_scan(project_path=$PROJECT_PATH)`.
+Call `POST http://127.0.0.1:8612/scan with project_path=$PROJECT_PATH`.
 
 Print a concise scan summary:
 - Files by language
@@ -245,7 +245,7 @@ Print a concise scan summary:
 
 **2c — Index the project.**
 
-Call `rag_index_project(project_path=$PROJECT_PATH)`.
+Call `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH`.
 
 Report: "Project indexed: X files, Y chunks."
 
@@ -272,8 +272,8 @@ Spawn `explore-agent` (Sonnet) with this prompt:
 ```
 You are exploring a codebase to understand what code is relevant to ticket $TASK_ID.
 
-FIRST ACTION: call rag_context(agent="explore-agent", task_description="find code relevant to $TASK_ID in project at $PROJECT_PATH", max_tokens=4000)
-If rag_context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
+FIRST ACTION: call POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="find code relevant to $TASK_ID in project at $PROJECT_PATH", max_tokens=4000
+If POST http://127.0.0.1:8612/context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
 
 Context:
 - Project path: $PROJECT_PATH
@@ -287,13 +287,13 @@ Your task — do ALL of these:
    If the section is empty or missing, fall back to generic queries derived from the ticket summary.
 
 1. Semantic search — vector (find semantically similar code):
-   - For each entity in Code Entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="vector", limit=3)
-   - If no entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="vector", limit=5)
+   - For each entity in Code Entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="vector", limit=3
+   - If no entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="vector", limit=5
 
 2. Structural search — graph (find structural neighbours of the vector seeds):
-   - For each entity: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="graph", limit=3)
+   - For each entity: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="graph", limit=3
    - Collect all unique source files from graph results. These are the starting "Files in Scope" map — files that import, inherit from, or are called by the seed results.
-   - If no entities: rag_search(scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="graph", limit=5)
+   - If no entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="graph", limit=5
 
 3. Targeted Glob + Grep to find:
    - Entry points (routes, controllers, handlers) relevant to the ticket
@@ -350,7 +350,7 @@ Print the agent's summary when it returns.
 
 **4a — Load ClaudeBoost RAG context.**
 
-Call `rag_context(agent="architect-agent", task_description="implementation plan for ticket $TASK_ID", max_tokens=5000)`.
+Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="implementation plan for ticket $TASK_ID", max_tokens=5000`.
 
 **If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/rag` to start the server, then retry."**
 
@@ -361,14 +361,14 @@ This loads architecture, workflow, testing, and security knowledge to validate t
 Run these RAG searches to inform the plan:
 
 ```
-rag_search(scope="knowledge", query="implementation planning workflow decomposition", limit=3)
-rag_search(scope="knowledge", query="testing strategy coverage acceptance criteria", limit=3)
+POST http://127.0.0.1:8612/search with scope="knowledge", query="implementation planning workflow decomposition", limit=3
+POST http://127.0.0.1:8612/search with scope="knowledge", query="testing strategy coverage acceptance criteria", limit=3
 ```
 
 If `PROJECT_PATH` is not none:
 ```
-rag_search(scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3)
-rag_search(scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3, mode="graph")
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3, mode="graph"
 ```
 Run both modes: vector finds semantically similar patterns, graph surfaces files that import or inherit from the seed files — revealing where these patterns propagate across the codebase.
 

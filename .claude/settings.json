@@ -65,15 +65,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__rag-server__",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-error-guard.py\""
-          }
-        ]
-      },
-      {
         "hooks": [
           {
             "type": "command",

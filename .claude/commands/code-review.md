@@ -16,13 +16,13 @@ Scope: **$ARGUMENTS**
 
 **0a — ClaudeBoost RAG context** (do this FIRST, before any git commands):
 
-Call `rag_context(agent="reviewer-agent", task_description="code review $ARGUMENTS", max_tokens=4000)`.
+Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code review $ARGUMENTS", max_tokens=4000`.
 
 This loads coding-standards, security, scope-governance guardrails. Read the result — it primes your knowledge for pass selection.
 
 **0b — Project RAG index** (ensure codebase search works):
 
-Wait until Phase 1b resolves `REPO_PATH`, then call `rag_index_project(project_path=<REPO_PATH>)`. Report: "X files updated."
+Wait until Phase 1b resolves `REPO_PATH`, then call `POST http://127.0.0.1:8612/index with project_path=<REPO_PATH>`. Report: "X files updated."
 
 ---
 
@@ -126,16 +126,16 @@ Store the full diff as **REVIEW_DIFF**. Do NOT truncate it.
 Summarize what changed in one sentence. Then:
 
 ```
-rag_search(scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5)
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5
 ```
 
 If the changes touch multiple interconnected files (e.g., a service + its callers, or a base class + subclasses), also run:
 ```
-rag_search(scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5, mode="graph")
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="<your one-sentence summary>", limit=5, mode="graph"
 ```
 mode=graph surfaces structural neighbours (what imports/inherits from the changed files) — useful for assessing change impact scope.
 
-Read 2-3 of the most-changed files using the Read tool to understand context and patterns. Do NOT skip this — agents need to be primed with precise instructions, not generic ones.
+Read only the files that appeared in the RAG search results above — they are already identified as the most relevant. Do NOT skip this — agents need to be primed with precise instructions, not generic ones.
 
 **1d — Ticket context:**
 
@@ -194,9 +194,9 @@ Spawn agents in batches. Wait for each batch to complete before starting the nex
 
 ```
 Your FIRST two actions (in order, no exceptions):
-1. Call rag_context(agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>")
-2. Call rag_search(scope="codebase", project_path="<cwd>", query="<a targeted query relevant to this pass>", limit=5)
-   — If your pass definition below says USE_GRAPH: yes, also call rag_search with mode="graph" using the same query. This surfaces structural neighbours (files that import/inherit from the changed files).
+1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>"
+2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<a targeted query relevant to this pass>", limit=5
+   — If your pass definition below says USE_GRAPH: yes, also call POST http://127.0.0.1:8612/search with mode="graph" using the same query. This surfaces structural neighbours (files that import/inherit from the changed files).
 
 Then review ONLY the diff below for your assigned pass. Do not review anything outside your pass scope.
 
@@ -247,7 +247,7 @@ Question: Did I add something the codebase (or a dependency) already provides?
 
 **Pass 3 — Dead Code**
 Question: For every variable/param/function: "Is this actually referenced? Trace end-to-end."
-- Grep every new identifier. Zero downstream consumers → delete.
+- For every new identifier, check consumers via `POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="[identifier]", mode="graph", limit=3`. Zero external hits → likely dead code, verify then delete.
 - Check imports — did extraction leave orphaned imports in the source file?
 
 **Pass 4 — Debug Cleanup**
@@ -436,8 +436,8 @@ After ALL batches complete and Phase 3b test results are recorded, spawn a singl
 Prompt:
 ```
 Your FIRST two actions (in order):
-1. Call rag_context(agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>")
-2. For each unique BLOCKER in FINDINGS_CITATIONS, call rag_search(scope="codebase", project_path="<cwd>", query="<symbol or pattern from the finding>", limit=3, mode="graph") to independently verify the finding exists and is not already handled elsewhere in the codebase. If a finding references a symbol that doesn't appear in search results, downgrade it to FALSE POSITIVE.
+1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>"
+2. For each unique BLOCKER in FINDINGS_CITATIONS, call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<symbol or pattern from the finding>", limit=3, mode="graph" to independently verify the finding exists and is not already handled elsewhere in the codebase. If a finding references a symbol that doesn't appear in search results, downgrade it to FALSE POSITIVE.
 
 You are the Evaluator for a code review. You do NOT re-review the code — you review the FINDINGS from passes 1-14 and the TEST RESULTS from Phase 3b.
 

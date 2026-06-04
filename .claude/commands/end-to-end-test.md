@@ -13,9 +13,9 @@ Arguments: **$ARGUMENTS**
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `rag_context(agent="workflow-agent", task_description="end-to-end UI test planning and execution", max_tokens=3000)`.
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="end-to-end UI test planning and execution", max_tokens=3000`.
 
-This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
 
 ---
 
@@ -65,7 +65,7 @@ If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
 
 First check the registry for a project-scoped workspace:
 ```bash
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" --get "$TICKET_ID" 2>/dev/null
+python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--get','$TICKET_ID'])" 2>/dev/null
 ```
 If it returns a path, use that as `WORKSPACE_ABS`. Set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
 
@@ -136,7 +136,7 @@ Announce: "Snapshots → `$SNAPSHOTS_DIR/`"
 
 ```bash
 # Register so /restore and /clear-safe can find this workspace
-python3 "$CLAUDEBOOST_HOME/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$TASK_ID','$WORKSPACE_ABS','$WORKSPACE_ROOT']).returncode)"
 
 # Add workspace/ to project .gitignore if writing to a project dir
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
@@ -149,7 +149,7 @@ fi
 
 **0e — Load knowledge via RAG (do this FIRST before any browser action).**
 
-Call `rag_context(agent="e2e-agent", task_description="end-to-end UI test of $TARGET_URL scope=$SCOPE", max_tokens=5000)`.
+Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_description="end-to-end UI test of $TARGET_URL scope=$SCOPE", max_tokens=5000`.
 
 This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test generation, annotation technique), playwright knowledge, and testing patterns.
 
@@ -159,7 +159,7 @@ This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test ge
 pwd
 ```
 
-Call `rag_index_project(project_path=<cwd output>)`. Report: "X files indexed."
+Call `POST http://127.0.0.1:8612/index with project_path=<cwd output>`. Report: "X files indexed."
 
 This enables RAG search over the app's routes, components, and entities during discovery.
 
@@ -175,8 +175,8 @@ Extract UI-relevant entities from the ticket workspace in this order:
 For each entity found, run **both** calls — never just one:
 
 ```
-rag_search(scope="codebase", project_path=<cwd>, query="[entity]", mode="vector", limit=3)
-rag_search(scope="codebase", project_path=<cwd>, query="[entity]", mode="graph", limit=3)
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="[entity]", mode="vector", limit=3
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="[entity]", mode="graph", limit=3
 ```
 
 Vector finds files that do the same thing as the entity. Graph finds files that import, render, or call the entity — route files, page components, API handlers, and form validators that are structurally connected to it.
@@ -255,9 +255,9 @@ If `UI Pages in Scope` was built in Phase 0g: read it from context.md now. Those
 Run these 3 general searches as a complement (they catch things the entity seeds miss — global nav, auth, and shared forms):
 
 ```
-rag_search(scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6, mode="graph")
-rag_search(scope="codebase", project_path=<cwd>, query="authentication login session user roles", limit=5, mode="graph")
-rag_search(scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5, mode="graph")
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="routes pages navigation URL paths", limit=6, mode="graph"
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="authentication login session user roles", limit=5, mode="graph"
+POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="form submit create update delete entity model", limit=5, mode="graph"
 ```
 
 Merge the Phase 0g entity-seeded results with these general results. Deduplicate by route. The combined list is what the browser crawl targets.
@@ -649,7 +649,7 @@ Legitimate uses: async background jobs, webhooks to external services, audit log
 NOT legitimate: UI shows a success toast or list update — use the UI instead.
 
 Protocol:
-1. `rag_search(scope="codebase", query="[operation] handler controller service")` to find the server-side function handling the operation. Add `mode="graph"` if you need to trace which module calls this function (i.e., finding the caller chain, not just the function itself).
+1. `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service")` to find the server-side function handling the operation. Add `mode="graph"` if you need to trace which module calls this function (i.e., finding the caller chain, not just the function itself.
 2. `Read` the target file
 3. Insert: `console.log('[E2E-TEMP] TC-NNN: [description]');` after the operation
 4. Perform the browser action
@@ -666,7 +666,7 @@ Legitimate uses: cron jobs, Hangfire/Sidekiq/Quartz workers, service-bus consume
 NOT legitimate: UI shows a success toast, list update, or status badge — use the UI instead. Also NOT a replacement for temp-logging when a synchronous server-side function needs verification.
 
 Protocol:
-1. `rag_search(scope="codebase", query="[job class name] job worker execute schedule", mode="graph")` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job) alongside the class itself.
+1. `POST http://127.0.0.1:8612/search with scope="codebase", query="[job class name] job worker execute schedule", mode="graph")` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job alongside the class itself.
 2. `Read` the job class file. Identify:
    - What DB table/column the job writes (the "write side" — this is what must be verified)
    - Any dev/admin endpoint that can trigger the job manually (e.g., `/admin/jobs/trigger`, `/api/internal/run-job`, a dev-only controller action)

@@ -1,136 +1,107 @@
-# Gas Town Setup — How It All Works
+# ClaudeBoost — How It Works
 
-This documents **your specific GT configuration** — the custom layer on top of
-the upstream [gastown](gastown/) repo. For core GT concepts (rigs, polecats,
-convoys, hooks, etc.), see the [gastown README](gastown/README.md).
+ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 25 specialist
+agents, 96 knowledge files, a semantic RAG server, and 41 slash commands — all wired
+together through hooks.
 
-## What You Added
-
-The upstream gastown repo is a generic multi-agent framework. Your setup adds:
-
-1. **ClaudeBoost integration** — quality directives, formulas, plugins, and guard scripts
-2. **Windows compatibility fixes** — patches to make GT run on Windows (no tmux, no Unix signals)
-3. **gtstart.bat** — one-click launcher that bootstraps any project into a GT rig
-4. **Custom directives** — behavioral rules for each agent role
-
-## Your Workspace Layout
+## Directory Layout
 
 ```
-<ClaudeBoost>/                        <-- This repo (source + config)
-  gastown/                           <-- Upstream GT source (build gt.exe from here)
-  SETUP-GUIDE.md                     <-- Windows installation guide
-  HOW-IT-WORKS.md                    <-- This file
-
-~/gt/                                <-- Live GT workspace (created by `gt install`)
-  .dolt-data/                        <-- Dolt databases (one per rig)
-  mayor/                             <-- Mayor config + town.json + overseer.json
-  deacon/                            <-- Deacon watchdog config
-  directives/                        <-- Your custom role directives
-  plugins/                           <-- Periodic quality audit plugins
-  scripts/                           <-- Guard scripts (hooks)
-  rigs.json                          <-- Registry of all rigs
-  CLAUDE.md                          <-- Base instructions for all agent sessions
-  <rig>/                             <-- Each registered project
-    crew/<your-username>/            <-- Your interactive workspace
-    polecats/                        <-- Autonomous worker workspaces
-
-~/OneDrive/prj/<project>/            <-- Your source projects
-  gtstart.bat                        <-- Drop this in any project to GT-enable it
+ClaudeBoost/
+├── agents/              25 specialist agent definitions (XML)
+├── knowledge/           96 knowledge files (XML)
+│   ├── lang-*.xml       17 language guides
+│   └── fw-*.xml         33 framework guides
+├── mcp-rag-server/      RAG HTTP server (Python, port 8612)
+├── .claude/commands/    41 slash commands
+├── scripts/             Setup and maintenance scripts
+├── docs/                Reference documentation
+└── CLAUDE.md            Orchestration rules loaded globally
 ```
 
-## The gtstart.bat Flow
+## The RAG Server
 
-When you run `gtstart.bat` from any project directory:
+The RAG server runs as an MCP subprocess on port 8612. It has two separate indexes:
 
-```
-Is this already a rig?
-  |
-  YES --> cd ~/gt/<name>/crew/<your-username> --> Session Menu --> Claude Code
-  |
-  NO  --> [1] Start Dolt
-          [2] Init git (if needed)
-          [3] Register rig (gt rig add)
-          [4] Restart Dolt (picks up new DB)
-          [5] Init beads (bd init --prefix XX)
-          [6] Create crew workspace
-          [7] Sync hooks + doctor
-          --> Session Menu --> Claude Code
-```
+| Index | What it holds | Location |
+|-------|--------------|----------|
+| **ClaudeBoost RAG** | `agents/*.xml` + `knowledge/*.xml` | `mcp-rag-server/.rag-index/` |
+| **Project RAG** | A specific project's source code | `<project>/workspace/.rag-index/` |
+| **Graph DB** | Code structure graph (imports, inheritance) | alongside Project RAG |
 
-Session menu:
-- **[1] New session** — `claude -p "gt prime"` (fresh, auto-primes)
-- **[2] Continue** — `claude --continue -p "gt prime"` (resume last session)
-- **[3] Resume** — `claude --resume` (pick from list)
+`POST /context` combines both — ClaudeBoost RAG for knowledge, Project RAG for codebase
+context. This is the first call every spawned agent makes.
 
-## ClaudeBoost Integration
+## Agents
 
-### Directives (`~/gt/directives/`)
+25 specialist agents, each defined as an XML file in `agents/`. They are not
+scripts — they are prompts loaded by the RAG server and injected via `POST /context`
+when an agent is spawned.
 
-Behavioral rules injected into each agent role:
+Model routing:
+- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent
+- **Sonnet**: all others
 
-| File | Role | Key Rules |
-|------|------|-----------|
-| `mayor.md` | Mayor | 7-domain planning checklist, alternatives analysis, SOLID design review, model routing (Opus vs Sonnet) |
-| `polecat.md` | Polecat | Self-critique table, teaching section, SOLID spot-check, code metrics, ticket verbatim rule |
-| `crew.md` | Crew | Same quality standards as polecats, but interactive (report + wait for input) |
-| `witness.md` | Witness | Output validation, MAST failure detection (design 32%, alignment 28%, verification 24%, infra 16%) |
+Agent weight routing:
+- **Full** (reviewer, security, performance): verify gate + evaluator-agent
+- **Standard** (workflow, debug, test, refactor, ui, etc.): no verify gate
+- **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
-### Formulas (`~/gt/.beads/formulas/`)
+## Knowledge Files
 
-10 specialist formulas, each extending `mol-polecat-work`:
+96 XML files in `knowledge/`, organized as:
+- **Domain bases** (46): coding standards, security, architecture, debugging, testing, etc.
+- **Language guides** (`lang-*.xml`, 17): Python, TypeScript, C#, Go, SQL, etc.
+- **Framework guides** (`fw-*.xml`, 33): React, Next.js, ASP.NET, FastAPI, etc.
 
-| Formula | Specialization |
-|---------|---------------|
-| `mol-polecat-test` | TDD, coverage, test quality |
-| `mol-polecat-security` | OWASP, threat modeling, secure code review |
-| `mol-polecat-review` | Structured code review, SOLID compliance |
-| `mol-polecat-architect` | Design patterns, Clean Architecture, DDD |
-| `mol-polecat-debug` | Root cause analysis, structured diagnosis |
-| `mol-polecat-refactor` | Code smell detection, incremental improvement |
-| `mol-polecat-perf` | Profiling, bottleneck analysis, optimization |
-| `mol-polecat-browser` | Playwright MCP testing, URL safety |
-| `mol-polecat-ui` | Component-first dev, accessibility, responsive |
-| `mol-polecat-docs` | Technical writing, progressive disclosure |
+Language and framework files load automatically when their name appears in a spawn
+prompt's task description — e.g. `"fix bug in TypeScript React component"` pulls
+both `lang-typescript.xml` and `fw-react.xml`.
 
-Dispatch: `gt sling <bead-id> <rig> --formula mol-polecat-<type>`
+## Hooks
 
-### Plugins (`~/gt/plugins/`)
+Six hook types, each implemented as one or more Python scripts:
 
-Periodic quality audits run by the Deacon:
+| Hook | Scripts | Purpose |
+|------|---------|---------|
+| **SessionStart** | `rag-session-reset.py`, `compaction-restore.py` | Clear RAG sentinel, restore handoff state after clear/compact |
+| **PreToolUse** | `rag-read-guard.py`, `spawn-guard.py`, `session-primer.py` | RAG gate, agent spawn enforcement, RAG sentinel check |
+| **PostToolUse** | `context-nudge.py`, `spawn-nudge.py` | Nudge context.md updates, remind orchestrator to spawn evaluator |
+| **PreCompact** | `pre-compact-save.py` | Save workspace state before compaction |
+| **UserPromptSubmit** | `session-primer.py` | Inject HARD STOP if RAG sentinel is missing |
+| **Stop** | `stop-hook.py` | Status line update on stop |
 
-| Plugin | Interval | Purpose |
-|--------|----------|---------|
-| `compliance-audit` | 4h | Checks polecat completions for required quality sections (critique, teaching, SOLID) |
-| `standards-check` | 6h | Validates SOLID compliance and code metrics on merge diffs |
+## Slash Commands
 
-Both report violations to the Mayor via `gt mail send`.
+41 commands in `.claude/commands/`. Key ones:
 
-### Guard Scripts (`~/gt/scripts/`)
+| Command | Purpose |
+|---------|---------|
+| `/boost` | Start a session — RAG up, hooks verified, mode set, workspaces discovered |
+| `/rag` | Start or reconnect the RAG server |
+| `/index-project <path>` | Index a project's codebase for semantic search |
+| `/index-boost` | Reindex ClaudeBoost agents and knowledge |
+| `/graph <task>` | Build a Files in Scope map using vector + graph RAG |
+| `/workspace <task>` | Create a workspace and implementation plan |
+| `/done` | Push completed work to remote |
+| `/handoff` | Save session state for a fresh context |
+| `/clear-safe` | Save state before clearing context |
+| `/restore` | Restore state from last clear-safe |
 
-Hook scripts that block dangerous operations:
+## Session Flow
 
-| Script | Blocks |
-|--------|--------|
-| `cm-migration-guard.sh` | Accidental migrations/deploys |
-| `cm-browser-guard.sh` | Non-localhost browser testing |
-| `cm-forbidden-libs.sh` | Banned libraries (jQuery, etc.) |
+A typical session looks like this:
 
-### Hooks Permission Model (`~/.gt/`)
-
-Three-tier permission system:
-
-| File | For | Permissions |
-|------|-----|------------|
-| `hooks-base.json` | Default | 180 allow / 60 ask / 50 deny |
-| `hooks-overrides/crew.json` | You (crew) | Full permissions |
-| `hooks-overrides/polecat.json` | Workers | Restricted |
-| `hooks-overrides/witness.json` | Monitors | Read-only |
-
-Sync after changes: `gt hooks sync`
+1. User runs `/boost` — RAG server starts, session is primed, active workspaces discovered
+2. User pastes a ticket or describes a task
+3. CLAUDE.md rules apply: simple tasks get done directly, complex tasks go through the workspace flow
+4. Agents are spawned as needed; each calls `POST /context` first to load relevant knowledge
+5. Findings are written to `workspace/<task>/context.md` as they accumulate
+6. When done, user runs `/done` to push work to remote
 
 ## Code Metrics Thresholds
 
-These are enforced by polecat directives and the standards-check plugin:
+Enforced by agent directives:
 
 | Metric | Threshold |
 |--------|-----------|
@@ -139,62 +110,3 @@ These are enforced by polecat directives and the standards-check plugin:
 | Class length | 300 lines max |
 | Parameter count | 4 max |
 | Nesting depth | 3 max |
-
-## Windows-Specific Notes
-
-GT was designed for macOS/Linux. Your setup includes these Windows fixes
-(applied to the gastown source before building):
-
-1. **Signal handling** — `Signal(0)` replaced with `os.FindProcess` + port check
-2. **Process stop** — `SIGTERM` replaced with `process.Kill()`
-3. **PID directory** — `os.MkdirAll` added before PID file write
-4. **YAML paths** — `filepath.ToSlash()` for config paths (prevents `\U` hex escapes)
-5. **No tmux** — Session management features unavailable; use `--no-start` with doctor
-
-After making source changes, rebuild:
-```bash
-cd $CLAUDEBOOST_HOME/gastown
-go build -o gt.exe ./cmd/gt
-cp gt.exe "$HOME/go/bin/gt.exe"
-```
-
-## Current Versions (as of 2026-03-31)
-
-| Tool | Version |
-|------|---------|
-| Go | 1.26.1 (windows/amd64) |
-| Dolt | 1.84.0 |
-| gt | 0.12.1 |
-| bd (beads) | 0.62.0 |
-| Claude Code | v2.1.88 |
-| Model | Claude Opus 4.6 (1M context) |
-
-## Daily Workflow
-
-```bash
-# Option A: Use gtstart.bat from any project
-cd ~/OneDrive/prj/MyProject
-./gtstart.bat
-
-# Option B: Go directly to crew workspace
-cd ~/gt/MyProject/crew/<your-username>
-claude -p "gt prime"
-```
-
-Once in a session:
-- Agent auto-primes with `gt prime` (loads role context)
-- Check for work: `gt mol status` then `gt mail inbox`
-- Create issues: `bd create "title" -t bug`
-- Dispatch work: `gt sling TE-001 Test --formula mol-polecat-test`
-- Monitor: `gt status`, `gt trail`, `gt dolt status`
-
-## Useful Diagnostic Commands
-
-```bash
-gt doctor --fix --no-start    # Auto-fix workspace issues
-gt dolt status                # Dolt health + orphan count
-gt dolt cleanup               # Remove test database orphans
-gt vitals                     # Unified health dashboard
-gt costs                      # Session cost tracking
-gt whoami                     # Current agent identity
-```

@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, RAG_INDEX_DIR, RERANKER_ENABLED, SCOPES
+from rag_server.config import DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT, RAG_INDEX_DIR, RERANKER_CANDIDATE_MULTIPLIER, RERANKER_ENABLED, SCOPES
 from rag_server.ports.embedding_port import EmbeddingPort
 from rag_server.ports.store_port import StorePort
 
@@ -48,11 +48,17 @@ def _ensure_warmup(embedder: EmbeddingPort) -> None:
     if eid in _warmup_started:
         return
     _warmup_started.add(eid)
+
+    def _warmup_target():
+        try:
+            embedder.embed_query("warmup")
+        except Exception:
+            logger.error("Model warmup failed — embedder may not be usable", exc_info=True)
+
     # _load_model() is safe to call from multiple threads (double-checked lock),
     # so starting a thread here is idempotent even across hot-reloads.
     t = threading.Thread(
-        target=embedder.embed_query,
-        args=("warmup",),
+        target=_warmup_target,
         daemon=True,
         name="rag-model-warmup",
     )
@@ -216,35 +222,43 @@ def rag_search(
                     if any(src.endswith(ext) for ext in _DOC_EXTS_S):
                         score = round(score * 0.80, 4)
                     _boosted[_key] = r if score == r.score else _SR(r.content, r.metadata, score)
-                results = sorted(_boosted.values(), key=lambda r: r.score, reverse=True)[:limit]
+                # Retrieve wide so the reranker has a large candidate pool to work with.
+                # Research (arxiv 2506.00054, 2407.01219): "retrieve N=50, rerank to top-5"
+                # consistently beats fixed-small N. Cap at 20 to keep latency reasonable.
+                _fetch_limit = min(limit * RERANKER_CANDIDATE_MULTIPLIER, 20) if RERANKER_ENABLED else limit
+                results = sorted(_boosted.values(), key=lambda r: r.score, reverse=True)[:_fetch_limit]
 
-                # Fix 2: BM25/FTS5 hybrid — merge vector results with BM25 via RRF.
+                # BM25/FTS5 hybrid — merge vector results with BM25 via RRF.
                 # Helps short/exact queries (type sigs, function names) that confuse MiniLM.
-                results = _fts_hybrid(results, query, idx_dir, limit)
+                results = _fts_hybrid(results, query, idx_dir, _fetch_limit)
 
-                # Fix 1: cross-encoder reranking — re-scores candidates jointly with the query.
+                # Graph expansion BEFORE reranking — true tri-modal (dense + sparse + graph).
+                # arxiv 2506.00049: fusing all three signals in RRF beats two-modal.
+                # Graph neighbours join the wide candidate pool so the cross-encoder
+                # can score them alongside vector and BM25 hits.
+                if mode == "graph":
+                    if results:
+                        results, _graph_augmented, graph_warning = _augment_with_graph(
+                            results, idx_dir, project_store, _fetch_limit,
+                        )
+                        if graph_warning:
+                            warnings.append(graph_warning)
+                    else:
+                        warnings.append(
+                            "graph mode: skipping graph expansion because vector search returned 0 results"
+                        )
+
+                # Cross-encoder reranking on the widened tri-modal pool, then trim to limit.
                 # Fixes near-duplicate confusions where vector scores are nearly identical.
                 if RERANKER_ENABLED and results:
-                    results = _rerank(results, query)
+                    results = _rerank(results, query)[:limit]
+                else:
+                    results = results[:limit]
 
                 all_results.extend(results)
             except Exception as e:
                 logger.error("Codebase store search failed: %s", e)
                 warnings.append(f"Codebase vector search failed: {e}")
-
-            # Graph mode: augment seed results with structural neighbours
-            if mode == "graph":
-                if all_results:
-                    all_results, _graph_augmented, graph_warning = _augment_with_graph(
-                        all_results, idx_dir, project_store, limit,
-                    )
-                    if graph_warning:
-                        warnings.append(graph_warning)
-                else:
-                    # Vector search found nothing — graph expansion has no seeds to follow
-                    warnings.append(
-                        "graph mode: skipping graph expansion because vector search returned 0 results"
-                    )
 
             # Annotate results with cached community summaries when available
             _csum_db = idx_dir / "graph.db"
@@ -310,6 +324,27 @@ def rag_search(
                 logger.error("Store search failed for collection %s: %s", collection, e)
                 warnings.append(f"Search failed for collection {collection!r}: {e}")
                 continue
+
+    # Annotate knowledge/agents results with community summaries from kb_graph.db
+    if scope not in ("codebase", "research") and all_results:
+        _kb_graph_db = RAG_INDEX_DIR / "kb_graph.db"
+        if _kb_graph_db.exists():
+            try:
+                from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
+                _kb_gs = SQLiteGraphStore(_kb_graph_db)
+                if _kb_gs.has_graph():
+                    for _r in all_results:
+                        _src = _r.metadata.get("source_file", "").replace("\\", "/")
+                        if not _src or _src in _community_summaries:
+                            continue
+                        _cid = _kb_gs.get_community_for_file(_src)
+                        if _cid is None:
+                            continue
+                        _row = _kb_gs.get_community_summary(_cid)
+                        if _row and _row.get("summary"):
+                            _community_summaries[_src] = _row["summary"]
+            except Exception:
+                logger.debug("KB community summary lookup failed", exc_info=True)
 
     # Sort by score descending, take top N
     all_results.sort(key=lambda r: r.score, reverse=True)
@@ -441,6 +476,25 @@ def _rerank(results: list, query: str) -> list:
         return results
 
 
+def _normalize_pagerank(scores: dict[str, float]) -> dict[str, float]:
+    """Scale PageRank scores to [0.5, 1.5] so they act as a multiplier on neighbour scores.
+
+    A score of 1.0 means no change (average importance). Files above average get a
+    boost up to 1.5×; files below average are gently discounted down to 0.5×.
+    Returns an empty dict when no scores are available (caller uses 1.0 default).
+    """
+    if not scores:
+        return {}
+    min_s = min(scores.values())
+    max_s = max(scores.values())
+    if max_s == min_s:
+        return {k: 1.0 for k in scores}
+    return {
+        k: 0.5 + (v - min_s) / (max_s - min_s)
+        for k, v in scores.items()
+    }
+
+
 def _augment_with_graph(
     seed_results: list,
     idx_dir: "Path",
@@ -476,6 +530,11 @@ def _augment_with_graph(
         )
 
     try:
+        # Load PageRank scores if available — used to up-weight structurally important
+        # neighbour files (widely-imported utilities, core modules) before RRF runs.
+        raw_pr = graph_store.get_all_pagerank()
+        pr_factors = _normalize_pagerank(raw_pr)
+
         seen_sources = {r.metadata.get("source_file", "").replace("\\", "/") for r in seed_results}
         extra: list[SearchResult] = []
 
@@ -493,11 +552,13 @@ def _augment_with_graph(
                 if not neighbour_file or neighbour_file == "_external_" or neighbour_file in seen_sources:
                     continue
                 chunks = project_store.get_by_source("codebase", neighbour_file)
+                pr_factor = pr_factors.get(neighbour_file, 1.0)
+                base_score = max(0.1, seed.score - 0.15)
                 for chunk in chunks[:2]:  # at most 2 chunks per neighbour file
                     extra.append(SearchResult(
                         content=chunk.content,
                         metadata=chunk.metadata,
-                        score=max(0.1, seed.score - 0.15),
+                        score=base_score * pr_factor,
                     ))
                 seen_sources.add(neighbour_file)
 

@@ -1,19 +1,18 @@
-"""MCP RAG server — stdio or HTTP/SSE transport.
+"""RAG server — HTTP only.
 
 Run modes:
-  python -m rag_server                     stdio (MCP subprocess, legacy)
   python -m rag_server --http              HTTP on default port 8612
   python -m rag_server --http --port N     HTTP on custom port
 """
 
 import json
 import logging
+import os
+import subprocess
+import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
 
 from rag_server.config import (
     CHROMA_DIR,
@@ -29,7 +28,6 @@ from rag_server.core.embedding import SentenceTransformerEmbedding
 from rag_server.core.store import ChromaStore
 from rag_server.core.watcher import FileWatcher
 from rag_server.indexing.engine import IndexingEngine
-from rag_server.indexing.markdown_chunker import estimate_tokens
 from rag_server.tools.search import rag_search
 import rag_server.tools.context as _context_mod
 
@@ -39,349 +37,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# MCP server (lightweight — no side effects)
-app = Server("rag-server")
-
 # Components initialized in main(), accessed via module-level refs
 embedder: SentenceTransformerEmbedding | None = None
 code_embedder: SentenceTransformerEmbedding | None = None  # separate model for codebase scope (optional)
 store: ChromaStore | None = None
 engine: IndexingEngine | None = None
-
-
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="rag_search",
-            description=(
-                "Search ClaudeBoost knowledge bases, agent definitions, or project "
-                "codebases using semantic similarity. "
-                "Returns the most relevant text chunks with source attribution."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural language search query.",
-                    },
-                    "scope": {
-                        "type": "string",
-                        "enum": ["all", "knowledge", "agents", "codebase", "research", "memories"],
-                        "description": (
-                            "Which collection to search. "
-                            "'codebase' requires project_path. "
-                            "'research' requires workspace_path. "
-                            "'memories' searches the indexed memory system."
-                        ),
-                        "default": "all",
-                    },
-                    "project_path": {
-                        "type": "string",
-                        "description": (
-                            "Absolute path to the target project. "
-                            "Required when scope='codebase'."
-                        ),
-                    },
-                    "workspace_path": {
-                        "type": "string",
-                        "description": (
-                            "Absolute path to the task workspace directory. "
-                            "Required when scope='research'."
-                        ),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max results (1-20).",
-                        "default": DEFAULT_SEARCH_LIMIT,
-                        "minimum": 1,
-                        "maximum": 20,
-                    },
-                    "min_score": {
-                        "type": "number",
-                        "description": "Minimum similarity threshold (0.0-1.0).",
-                        "default": DEFAULT_MIN_SCORE,
-                        "minimum": 0.0,
-                        "maximum": 1.0,
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["vector", "graph"],
-                        "description": (
-                            "Search mode. 'vector' = semantic similarity only (default). "
-                            "'graph' = vector seed + structural neighbours from graph index. "
-                            "Only applies when scope='codebase'. Requires re-indexing with GraphRAG."
-                        ),
-                        "default": "vector",
-                    },
-                },
-                "required": ["query"],
-            },
-        ),
-        Tool(
-            name="rag_index",
-            description=(
-                "Index or re-index ClaudeBoost files for RAG search. "
-                "Re-indexes knowledge bases and agent definitions."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scope": {
-                        "type": "string",
-                        "enum": ["knowledge", "agents", "all"],
-                        "description": "Which collection to re-index.",
-                        "default": "all",
-                    },
-                    "force": {
-                        "type": "boolean",
-                        "description": "Force full re-index even if files haven't changed.",
-                        "default": False,
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="rag_status",
-            description=(
-                "Check RAG server status: model info, collection sizes, and all indexed projects. "
-                "Each indexed project entry shows graph_active (true = graph-mode search works) "
-                "and graph_edges/graph_resolved counts. Graph DBs are per-project — "
-                "they are NOT shown as a global component."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        Tool(
-            name="rag_warmup",
-            description=(
-                "Wait for the embedding model to finish loading after a server restart. "
-                "Blocks for up to 60 seconds, then returns. "
-                "Call this immediately after /mcp reconnect instead of sleep. "
-                "Returns {ready: true, elapsed_s: N} when model is loaded, "
-                "or {ready: false, error: ...} if it did not load within 60s."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        Tool(
-            name="rag_index_project",
-            description=(
-                "Index a project's source code for semantic codebase search. "
-                "Creates a per-project vector database. Re-runs only re-embed changed files. "
-                "Returns: files_indexed, chunks_created, files_unchanged, files_failed, "
-                "elapsed_s, graph (edges/resolved), and errors[] if any files failed. "
-                "Check files_failed > 0 to detect partial failures — errors[] lists each "
-                "file, its error type (read_error or embed_error), and the message."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_path": {
-                        "type": "string",
-                        "description": "Absolute path to the target project root.",
-                    },
-                    "languages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Language filter (e.g., ['python', 'typescript']). "
-                            "Omit to index all supported languages."
-                        ),
-                    },
-                    "force": {
-                        "type": "boolean",
-                        "description": "Force full re-index even if files haven't changed.",
-                        "default": False,
-                    },
-                },
-                "required": ["project_path"],
-            },
-        ),
-        Tool(
-            name="rag_scan",
-            description=(
-                "Dry-run scan of a project: returns what would be indexed (by language, "
-                "count, estimated size) without writing anything to the vector database. "
-                "Run this before rag_index_project to preview scope and catch surprises."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_path": {
-                        "type": "string",
-                        "description": "Absolute path to the project root.",
-                    },
-                    "languages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Language filter (e.g. ['typescript', 'csharp']). "
-                            "Omit to scan all supported languages."
-                        ),
-                    },
-                    "max_file_kb": {
-                        "type": "integer",
-                        "description": "Skip files larger than this size in KB. Default: 200.",
-                        "default": 200,
-                    },
-                },
-                "required": ["project_path"],
-            },
-        ),
-        Tool(
-            name="rag_index_research",
-            description=(
-                "Index URLs, PDFs, or local files into a per-task research RAG. "
-                "Creates a workspace-scoped vector database that can be queried with "
-                "rag_search scope='research'. Supports web pages, PDF URLs, and local "
-                ".pdf/.md/.txt files. Incremental: skips sources whose content hasn't changed."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "sources": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "List of URLs (web pages or PDFs) or absolute local file paths "
-                            "to index. Supports http/https URLs and local .pdf, .md, .txt files."
-                        ),
-                    },
-                    "workspace_path": {
-                        "type": "string",
-                        "description": (
-                            "Absolute path to the task workspace directory. "
-                            "Research index stored at workspace_path/.rag-index/research/."
-                        ),
-                    },
-                    "force": {
-                        "type": "boolean",
-                        "description": "Re-index even if source content hasn't changed.",
-                        "default": False,
-                    },
-                },
-                "required": ["sources", "workspace_path"],
-            },
-        ),
-        Tool(
-            name="rag_index_memories",
-            description=(
-                "Index the ClaudeBoost file-based memory system into a 'memories' RAG collection. "
-                "Reads all *.md memory files and makes them searchable via rag_search scope='memories' "
-                "or scope='all'. Incremental: skips unchanged files. Run after adding new memories."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "force": {
-                        "type": "boolean",
-                        "description": "Re-index even if memory files haven't changed.",
-                        "default": False,
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="rag_context",
-            description=(
-                "Build a curated context package for an agent. Given an agent name and "
-                "task description, returns relevant knowledge chunks. "
-                "Optionally includes project codebase search (Tier 4). "
-                "Use when spawning an agent."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "agent": {
-                        "type": "string",
-                        "description": "Agent name (e.g., 'debug-agent', 'test-agent').",
-                    },
-                    "task_description": {
-                        "type": "string",
-                        "description": "What the agent will work on.",
-                    },
-                    "project_path": {
-                        "type": "string",
-                        "description": (
-                            "Absolute path to target project. If provided and indexed, "
-                            "Tier 4 codebase search is included in context."
-                        ),
-                    },
-                    "max_tokens": {
-                        "type": "integer",
-                        "description": "Token budget for the context package.",
-                        "default": 4000,
-                        "minimum": 500,
-                        "maximum": 16000,
-                    },
-                    "weight": {
-                        "type": "string",
-                        "enum": ["lightweight", "standard", "full"],
-                        "description": (
-                            "Agent weight class. lightweight: skip guardrails "
-                            "(explore, research, docs, estimator, rag-indexing, research-rag). "
-                            "standard/full: include all guardrails."
-                        ),
-                        "default": "standard",
-                    },
-                },
-                "required": ["agent", "task_description"],
-            },
-        ),
-    ]
-
-
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    # All tool handlers call blocking code (ChromaDB, subprocess, embedding inference).
-    # On Windows with the MCP subprocess stdout=pipe + anyio I/O, blocking calls inside
-    # the asyncio event loop hang indefinitely. Run ALL dispatch in a thread pool.
-    #
-    # 90-second timeout prevents indefinite hangs when the embedding model is still loading
-    # during background startup (model load holds _load_lock, tool calls queue behind it).
-    # If startup takes longer than 90s the caller gets a clear retry message instead of silence.
-    import asyncio as _asyncio
-    _t0 = time.monotonic()
-    loop = _asyncio.get_running_loop()
-    # Index operations are long-running by nature (10-15 min for large projects).
-    # Query tools (search, context, status, scan) get the short 90s guard.
-    _LONG_RUNNING = {"rag_index", "rag_index_project", "rag_index_research", "rag_warmup"}
-    _timeout = 130.0 if name == "rag_warmup" else (900.0 if name in _LONG_RUNNING else 90.0)
-    try:
-        result = await _asyncio.wait_for(
-            loop.run_in_executor(None, lambda: _dispatch_tool(name, arguments)),
-            timeout=_timeout,
-        )
-    except _asyncio.TimeoutError:
-        logger.error(
-            "Tool %s timed out after %.0fs — likely blocked on model load or ChromaDB lock", name, _timeout,
-        )
-        result = {
-            "error": (
-                f"Tool '{name}' timed out after {int(_timeout)} seconds. "
-                "The RAG server is probably still loading the embedding model or indexing files. "
-                "Wait 30-60 seconds and retry — or run /mcp to reconnect if the problem persists."
-            )
-        }
-    except Exception as e:
-        logger.error(
-            "Tool %s executor failed after %.1fs (threading/process issue): %s",
-            name, time.monotonic() - _t0, e, exc_info=True,
-        )
-        result = {"error": f"Executor error: {e}"}
-    else:
-        _elapsed = time.monotonic() - _t0
-        if "error" not in result:
-            logger.info("Tool %s OK (%.1fs)", name, _elapsed)
-        else:
-            logger.warning("Tool %s returned error (%.1fs): %s", name, _elapsed, result["error"])
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
 def _dispatch_tool(name: str, arguments: dict) -> dict:
@@ -487,7 +147,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             return {
                 "ready": False,
                 "elapsed_s": _elapsed,
-                "error": "Model did not load within 120s — run /mcp and retry.",
+                "error": "Model did not load within 120s — restart the server and retry.",
             }
 
         elif name == "rag_status":
@@ -522,9 +182,10 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             return _build_context(
                 agent=arguments["agent"],
                 task_description=arguments["task_description"],
-                max_tokens=arguments.get("max_tokens", 4000),
+                max_tokens=arguments.get("max_tokens", 6000),
                 weight=arguments.get("weight", "standard"),
                 project_path=arguments.get("project_path"),
+                workspace_path=arguments.get("workspace_path"),
             )
 
         else:
@@ -541,6 +202,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
 def _build_context(
     agent: str, task_description: str, max_tokens: int,
     weight: str = "standard", project_path: str | None = None,
+    workspace_path: str | None = None,
 ) -> dict:
     """Delegate to tools/context.py so changes there hot-reload without a server restart."""
     return _context_mod.build_context(
@@ -553,6 +215,7 @@ def _build_context(
         project_root=PROJECT_ROOT,
         weight=weight,
         project_path=project_path,
+        workspace_path=workspace_path,
     )
 
 
@@ -560,11 +223,11 @@ def sync_init() -> FileWatcher:
     """Synchronous startup: initialize components and wire up watchers.
 
     Kept deliberately fast — no model loading, no indexing. Those run in a
-    background thread after the MCP server is ready (see _background_startup).
+    background thread after the server is ready (see _background_startup).
 
     ChromaDB 1.5+ uses a Rust/Tokio backend that crashes when called from
     inside an asyncio coroutine. ChromaDB calls in background tasks must use
-    run_in_executor (see main()).
+    run_in_executor (see main_http()).
     """
     global embedder, code_embedder, store, engine
 
@@ -600,12 +263,14 @@ def sync_init() -> FileWatcher:
         logger.info("Watcher started for: %s", ", ".join(watch_paths))
 
     # Hot-reload watcher: reload RAG server source modules when they change so
-    # code fixes take effect without needing /mcp. Reloads in dependency order
-    # and re-binds the engine global so the updated IndexingEngine class is used.
+    # code fixes take effect without restarting the server. Reloads in dependency
+    # order and re-binds the engine global so the updated IndexingEngine class is used.
     src_dir = Path(__file__).parent
     if src_dir.is_dir():
         import importlib
         import rag_server.adapters.sqlite_graph_store as _gstore_mod
+        import rag_server.core.community as _community_mod
+        import rag_server.core.summarizer as _summarizer_mod
         import rag_server.indexing.engine as _engine_mod
         import rag_server.tools.search as _search_mod
         import rag_server.tools.context as _ctx_mod
@@ -615,6 +280,8 @@ def sync_init() -> FileWatcher:
             logger.info("Source changed, hot-reloading modules: %s", path)
             try:
                 importlib.reload(_gstore_mod)
+                importlib.reload(_community_mod)
+                importlib.reload(_summarizer_mod)
                 importlib.reload(_engine_mod)
                 importlib.reload(_search_mod)
                 importlib.reload(_ctx_mod)
@@ -628,14 +295,14 @@ def sync_init() -> FileWatcher:
         watcher.watch([str(src_dir)], _on_source_change)
         logger.info("Source hot-reload watcher active on: %s", src_dir)
 
-    logger.info("Sync init complete — MCP server ready. Background indexing will start shortly.")
+    logger.info("Sync init complete — HTTP RAG server ready. Background indexing will start shortly.")
     return watcher
 
 
 def _background_startup() -> None:
-    """Slow startup work that runs in a thread pool after MCP server is ready.
+    """Slow startup work that runs in a thread pool after the HTTP server is ready.
 
-    Keeps sync_init() fast so Claude Code can connect before its MCP timeout.
+    Keeps sync_init() fast so the server can accept requests quickly.
     Must be called via run_in_executor — ChromaDB must not run inside an
     asyncio coroutine.
     """
@@ -646,11 +313,11 @@ def _background_startup() -> None:
     try:
         # Check for embedding dimension mismatch (e.g. model swap 384d -> 768d).
         # embedder.dimensions() triggers model load here — intentional, but done in
-        # a background thread so it doesn't block MCP startup.
+        # a background thread so it doesn't block startup.
         # STOP: never force re-index on dimension mismatch in background startup.
-        # A full force re-index holds ChromaDB locked for minutes, blocking all tool calls
-        # (rag_status, rag_search, etc.) and fills the thread pool. Log a warning instead —
-        # the user must explicitly trigger a force re-index via rag_index(force=true).
+        # A full force re-index holds ChromaDB locked for minutes, blocking all requests
+        # (status, search, etc.) and fills the thread pool. Log a warning instead —
+        # the user must explicitly trigger a force re-index via POST /index with force=true.
         try:
             for scope_config in SCOPES.values():
                 col_name = scope_config["collection"]
@@ -659,7 +326,7 @@ def _background_startup() -> None:
                     if sample_dim and sample_dim != embedder.dimensions():
                         logger.warning(
                             "DIMENSION MISMATCH in %s: index=%dd, model=%dd. "
-                            "Skipping background re-index — run rag_index(force=true) or "
+                            "Skipping background re-index — run POST /index with force=true or "
                             "delete .rag-index/chroma to rebuild with the new model.",
                             col_name, sample_dim, embedder.dimensions(),
                         )
@@ -722,8 +389,8 @@ def _write_heartbeat(model_loaded: bool = False, index_ok: bool = False) -> None
             json.dumps({"ts": time.time(), "model_loaded": model_loaded, "index_ok": index_ok}),
             encoding="utf-8",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Heartbeat write failed (non-fatal): %s", e)
 
 
 def _start_heartbeat_thread() -> None:
@@ -751,36 +418,46 @@ def _write_server_info(port: int) -> None:
         pass
 
 
-async def main(watcher: FileWatcher) -> None:
-    """Run the MCP stdio server. Call sync_init() before this."""
-    import asyncio
-    logger.info("MCP stdio transport starting")
-    try:
-        async with stdio_server() as (read_stream, write_stream):
-            loop = asyncio.get_running_loop()
-            asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
-            logger.info("MCP server ready — accepting tool calls")
-            await app.run(read_stream, write_stream, app.create_initialization_options())
-        logger.info("MCP stdio connection closed cleanly")
-    except Exception:
-        logger.exception("MCP server crashed")
-        raise
-    finally:
-        logger.info("MCP server shutting down, stopping file watchers")
-        watcher.stop()
+def _update_project_rag_flag(result: dict) -> None:
+    """Write or clear the project-RAG sentinel and stale-index head file.
+
+    Called after a successful /index for a project. Replaces the old
+    project-rag-flag.py PostToolUse hook (which was MCP-only).
+    """
+    flag_path = Path(tempfile.gettempdir()) / "claudeboost_project_rag_ok"
+    if "files_indexed" in result and "error" not in result:
+        try:
+            flag_path.write_text("ok", encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=str(PROJECT_ROOT), stderr=subprocess.DEVNULL
+            ).decode().strip()
+            branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(PROJECT_ROOT), stderr=subprocess.DEVNULL
+            ).decode().strip()
+            head_file = PROJECT_ROOT / "state" / "last-indexed-head.json"
+            head_file.write_text(json.dumps({
+                "head": head,
+                "branch": branch,
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
+            }), encoding="utf-8")
+        except Exception:
+            pass
+    else:
+        try:
+            flag_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
-    """Run the MCP server over HTTP/SSE. Call sync_init() before this.
-
-    Claude Code connects via: {"type": "sse", "url": "http://HOST:PORT/sse"}
-    The server is a persistent daemon — Claude Code auto-reconnects on disconnect.
-    """
+    """Run the HTTP REST server. Call sync_init() before this."""
     import asyncio
     try:
-        from mcp.server.sse import SseServerTransport
         from starlette.applications import Starlette
-        from starlette.routing import Mount, Route
+        from starlette.routing import Route
         import uvicorn
     except ImportError as e:
         logger.error(
@@ -788,16 +465,6 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
             "pip install starlette 'uvicorn[standard]'. Error: %s", e
         )
         raise SystemExit(1)
-
-    sse = SseServerTransport("/messages")
-
-    async def handle_sse(request):
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await app.run(*streams, app.create_initialization_options())
-
-    # REST handlers — plain HTTP, no MCP protocol required.
 
     async def handle_rest_search(request):
         from starlette.responses import JSONResponse
@@ -844,10 +511,30 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+        if body.get("project_path"):
+            # Project codebase index
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, _dispatch_tool, "rag_index_project", body
+            )
+            _update_project_rag_flag(result)
+        else:
+            # Knowledge/agents index (no project_path = index_all)
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, _dispatch_tool, "rag_index", body
+            )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
+
+    async def handle_rest_scan(request):
+        from starlette.responses import JSONResponse
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
         if not body.get("project_path"):
             return JSONResponse({"error": "project_path is required."}, status_code=400)
         result = await asyncio.get_running_loop().run_in_executor(
-            None, _dispatch_tool, "rag_index_project", body
+            None, _dispatch_tool, "rag_scan", body
         )
         return JSONResponse(result, status_code=500 if "error" in result else 200)
 
@@ -868,15 +555,24 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
         )
         return JSONResponse(result, status_code=500 if "error" in result else 200)
 
+    async def handle_rest_warmup(request):
+        from starlette.responses import JSONResponse
+        if embedder is None:
+            return JSONResponse({"error": "Server is still initializing, retry in a moment."}, status_code=503)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_warmup", {}
+        )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
     starlette_app = Starlette(
         routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages", app=sse.handle_post_message),
             Route("/search", endpoint=handle_rest_search, methods=["POST"]),
             Route("/context", endpoint=handle_rest_context, methods=["POST"]),
             Route("/status", endpoint=handle_rest_status, methods=["GET"]),
             Route("/index", endpoint=handle_rest_index, methods=["POST"]),
+            Route("/scan", endpoint=handle_rest_scan, methods=["POST"]),
             Route("/index_research", endpoint=handle_rest_index_research, methods=["POST"]),
+            Route("/warmup", endpoint=handle_rest_warmup, methods=["POST"]),
         ]
     )
 
@@ -887,8 +583,7 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
     loop = asyncio.get_running_loop()
     asyncio.ensure_future(loop.run_in_executor(None, _background_startup))
 
-    logger.info("HTTP/SSE RAG server on http://%s:%d/sse", host, port)
-    logger.info("Configure Claude Code: claude mcp add --transport sse rag-server http://%s:%d/sse", host, port)
+    logger.info("HTTP RAG server on http://%s:%d", host, port)
 
     config = uvicorn.Config(
         starlette_app,
@@ -910,17 +605,13 @@ if __name__ == "__main__":
     import asyncio
 
     parser = argparse.ArgumentParser(description="ClaudeBoost RAG server")
-    parser.add_argument("--http", action="store_true", help="Run as persistent HTTP/SSE server (recommended)")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=RAG_HTTP_PORT, help=f"HTTP port (default: {RAG_HTTP_PORT})")
     args = parser.parse_args()
 
     _watcher = sync_init()
     try:
-        if args.http:
-            asyncio.run(main_http(_watcher, args.host, args.port))
-        else:
-            asyncio.run(main(_watcher))
+        asyncio.run(main_http(_watcher, args.host, args.port))
     except KeyboardInterrupt:
         logger.info("RAG server stopped (KeyboardInterrupt)")
     except Exception:

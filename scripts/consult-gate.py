@@ -34,11 +34,6 @@ EXEMPT_FRAGMENTS = [
     "/knowledge/", "\\knowledge\\",
     "/plans/", "\\plans\\",
     "/docs/", "\\docs\\",
-    "/mayor/", "\\mayor\\",
-    "/polecats/", "\\polecats\\",
-    "/refinery/", "\\refinery\\",
-    "/witness/", "\\witness\\",
-    "/crew/", "\\crew\\",
 ]
 
 

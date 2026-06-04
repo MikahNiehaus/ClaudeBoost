@@ -6,7 +6,7 @@ Runs every ~2s by Claude Code to update the bottom status bar.
 Cross-platform: works on Windows, macOS, Linux.
 
 Output examples (ANSI colored):
-  > ClaudeBoost | RAG ● | Project RAG    (server live, project indexed)
+  > ClaudeBoost | RAG ●                  (server live, project indexed)
   > ClaudeBoost | RAG ○                  (server starting, model loading)
   > ClaudeBoost                          (server down)
 """
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -65,13 +64,17 @@ def _heartbeat_status() -> str:
         return "down"
 
 
-def _has_project_rag() -> bool:
-    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    return (Path(temp) / "claudeboost_project_rag_ok").exists()
 
-
-def _gt_available() -> bool:
-    return shutil.which("gt") is not None
+def _mcp_registered(name: str) -> bool:
+    """Check if an MCP server is registered in ~/.claude.json."""
+    p = Path.home() / ".claude.json"
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return name in data.get("mcpServers", {})
+    except Exception:
+        return False
 
 
 def main() -> None:
@@ -86,11 +89,11 @@ def main() -> None:
         parts.append(f"{DIM}|{RESET} {YELLOW}RAG ○{RESET}")
     # "down" — no RAG segment shown
 
-    if status in ("live", "starting") and _has_project_rag():
-        parts.append(f"{DIM}|{RESET} {CYAN}Project RAG{RESET}")
+    if _mcp_registered("playwright"):
+        parts.append(f"{DIM}|{RESET} {GREEN}PW ●{RESET}")
 
-    if _gt_available():
-        parts.append(f"{DIM}|{RESET} {YELLOW}GT{RESET}")
+    if _mcp_registered("mcp-debugger"):
+        parts.append(f"{DIM}|{RESET} {GREEN}DBG ●{RESET}")
 
     print(" ".join(parts), end="", flush=True)
 

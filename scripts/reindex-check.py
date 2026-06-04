@@ -70,7 +70,7 @@ def main() -> int:
         "additionalContext": (
             f"PROJECT RAG STALE{change_note}: "
             "The codebase search index is outdated. "
-            "Call rag_index_project(project_path='<cwd>', force=true) "
+            "Call POST http://127.0.0.1:8612/index with {project_path: cwd, force: true} "
             "before searching the codebase — stale results will mislead."
         )
     }))

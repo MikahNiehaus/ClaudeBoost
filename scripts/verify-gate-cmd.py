@@ -24,7 +24,13 @@ Behavior:
 """
 from __future__ import annotations
 import json
+import os
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+_FLAG = BOOST_HOME / "state" / "needs-verification.json"
 
 
 REVIEW_PASS_MARKERS = (
@@ -70,7 +76,25 @@ def main() -> int:
     # Only nudge if the response actually contains severity findings
     has_findings = any(kw in response_lower for kw in FINDING_KEYWORDS)
     if not has_findings:
+        # Clear any stale flag — the latest agent run had no findings
+        try:
+            _FLAG.unlink(missing_ok=True)
+        except Exception:
+            pass
         return 0
+
+    # Write the flag so agent-spawn-gate.py can block the next spawn
+    try:
+        _FLAG.write_text(
+            json.dumps({
+                "flagged_at": datetime.now(timezone.utc).isoformat(),
+                "tool_name": tool_input.get("description", "Task"),
+                "finding_summary": tool_response[:500],
+            }),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # never block on flag-write failure
 
     print(
         "[verify-gate nudge] Agent output contains BLOCKER/WARNING findings.\n"

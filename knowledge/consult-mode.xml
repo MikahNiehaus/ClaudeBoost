@@ -49,7 +49,7 @@
 
 <consultation-protocol>
   <step number="1" name="Research first">
-    Call rag_search(feature keywords). Call rag_context(architect-agent + task). Read 2-3 relevant project files. Draft the architect-agent spawn prompt with file:line citations. NO GUESSING — if you cannot cite existing code, you did not research enough.
+    Call POST http://127.0.0.1:8612/search with feature keywords). Call POST http://127.0.0.1:8612/context with architect-agent + task. Read 2-3 relevant project files. Draft the architect-agent spawn prompt with file:line citations. NO GUESSING — if you cannot cite existing code, you did not research enough.
   </step>
   <step number="2" name="Spawn architect-agent">
     Task(architect-agent, "PROPOSAL_ONLY — citations: file:line, file:line, ...")
@@ -84,7 +84,7 @@
 </additive-not-gatekeeping>
 
 <research-first-contract>
-  <enforcement>architect-agent refuses to produce a proposal if the spawn prompt contains "PROPOSAL_ONLY" but no file:line citations. Returns status=BLOCKED with message "Main agent did not research first. Call rag_search, read 2-3 relevant files, respawn with citations."</enforcement>
+  <enforcement>architect-agent refuses to produce a proposal if the spawn prompt contains "PROPOSAL_ONLY" but no file:line citations. Returns status=BLOCKED with message "Main agent did not research first. Call POST http://127.0.0.1:8612/search, read 2-3 relevant files, respawn with citations."</enforcement>
   <rationale>Research-first is a contract, not a suggestion. Prevents generic architecture advice disconnected from this project's conventions.</rationale>
 </research-first-contract>
 
@@ -107,6 +107,6 @@
 </hook-enforcement>
 
   <see-also>
-    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+    <ref>knowledge/rag-http-api.xml — call POST http://127.0.0.1:8612/search from scripts or tools outside Claude Code via HTTP REST</ref>
   </see-also>
 </knowledge-base>

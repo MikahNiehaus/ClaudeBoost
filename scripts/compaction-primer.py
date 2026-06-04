@@ -17,7 +17,7 @@ print(json.dumps({
         "Cite file:line for every finding. "
         "Spawn evaluator-agent — never self-verify. "
         "CONSULT before new endpoints/tables/dependencies. "
-        "rag_context first in every agent spawn prompt."
+        "POST http://127.0.0.1:8612/context first in every agent spawn prompt."
     )
 }))
 sys.exit(0)

@@ -32,7 +32,15 @@ echo '{"mode":"verify"}' > "$CLAUDEBOOST_HOME/state/boost-injection.json"
 
 Print the header, then clear Python bytecode caches:
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/boost-inline.py" && find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; echo "  caches cleared"
+python -c "
+import os, subprocess, sys, shutil
+from pathlib import Path
+h = os.environ['CLAUDEBOOST_HOME']
+subprocess.run([sys.executable, h+'/scripts/boost-inline.py'])
+for p in Path(h, 'mcp-rag-server').rglob('__pycache__'):
+    shutil.rmtree(p, ignore_errors=True)
+print('  caches cleared')
+"
 ```
 
 ## Step 1: Verify Privacy (auto-fix)
@@ -45,7 +53,7 @@ FIXED="" && if [ -z "$DISABLE_TELEMETRY" ]; then python -c "import subprocess; s
 
 The RAG server runs as a persistent HTTP daemon on port 8612. Start it if not already running:
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/rag-server-start.py"
+python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/rag-server-start.py']).returncode)"
 ```
 
 If the script prints "already running" or "ready" — proceed. If it fails after 60s, stop and tell the user.
@@ -93,7 +101,7 @@ The status line will show `RAG ●` (green) when live and `RAG ○` (yellow) whi
 
 ## Step 2.5: Index ClaudeBoost Codebase (Project RAG)
 
-Keep the ClaudeBoost codebase index current so `rag_search(scope="codebase")` works:
+Keep the ClaudeBoost codebase index current so `POST http://127.0.0.1:8612/search with scope="codebase"` works:
 ```bash
 echo "$CLAUDEBOOST_HOME"
 ```
@@ -130,26 +138,15 @@ touch "$TEMP/claudeboost_project_rag_ok"
 
 ---
 
-## Step 3: Activate Gas Town (MANDATORY — always prime, auto-init if needed)
+## Step 3: Check Hooks
 
 ```bash
-if command -v gt &>/dev/null; then echo "  GT: $(gt --version 2>&1 | head -1)"; GT_OUT=$(gt prime 2>&1); GT_RC=$?; echo "$GT_OUT"; if [ $GT_RC -ne 0 ] && echo "$GT_OUT" | grep -q "not in a Gas Town workspace"; then if [ -d .git ] || git rev-parse --git-dir >/dev/null 2>&1; then echo "  auto-init..."; gt init 2>&1 | tail -5; gt prime 2>&1 | head -5; fi; fi; echo "  GT: ready"; else echo "  GT: NOT FOUND in PATH"; fi
-```
-
-GT is "ready" if `command -v gt` succeeds. "failed" ONLY if not on PATH.
-`gt init` only runs when `gt prime` says the cwd is not a workspace AND it's a git repo.
-
-**GT is mandatory.** If not on PATH, warn the user to install it.
-
-## Step 4: Check Hooks
-
-```bash
-HOOKS_OK=true && for hook in SessionStart PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do if python "$CLAUDEBOOST_HOME/scripts/check-hooks.py" "$hook" 2>/dev/null; then true; else echo "  $hook hooks: MISSING"; HOOKS_OK=false; fi; done && if [ "$HOOKS_OK" = false ]; then echo "  [WARN] Some hooks missing — run setup.ps1 to install"; fi
+HOOKS_OK=true && for hook in SessionStart PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do if python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/check-hooks.py','$hook'],capture_output=True).returncode)" 2>/dev/null; then true; else echo "  $hook hooks: MISSING"; HOOKS_OK=false; fi; done && if [ "$HOOKS_OK" = false ]; then echo "  [WARN] Some hooks missing — run setup.py to install"; fi
 ```
 
 Missing hooks warn but don't block boost.
 
-## Step 5: Check Rules
+## Step 4: Check Rules
 
 ```bash
 head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "  rules: ok"
@@ -157,7 +154,7 @@ head -5 ~/.claude/CLAUDE.md 2>/dev/null && echo "  rules: ok"
 
 If CLAUDE.md doesn't exist, warn.
 
-## Step 5b: Read CONSULT/AUTO Mode
+## Step 4b: Read CONSULT/AUTO Mode
 
 ```bash
 if [ -f "$CLAUDEBOOST_HOME/state/claudeboost-mode.json" ]; then cat "$CLAUDEBOOST_HOME/state/claudeboost-mode.json"; else echo "mode file missing — defaulting to CONSULT"; fi
@@ -168,7 +165,20 @@ Clear session-approvals (they don't carry across sessions):
 if [ -f "$CLAUDEBOOST_HOME/state/session-approvals.json" ]; then echo '{"sessionId":"","approvals":[]}' > "$CLAUDEBOOST_HOME/state/session-approvals.json"; fi
 ```
 
-## Step 6: Workspace Discovery
+## Step 4c: MCP Debugger Check
+
+Verify `mcp-debugger` is registered and connected:
+```bash
+claude mcp list 2>&1 | grep -i "mcp-debugger"
+```
+
+- If the line contains `✓ Connected` — report "mcp-debugger: connected"
+- If the line is missing entirely — report "mcp-debugger: NOT registered — run: `claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio`"
+- If the line shows an error — report "mcp-debugger: registered but failed to start — check Node 22+ is installed"
+
+---
+
+## Step 5: Workspace Discovery
 
 ```bash
 mkdir -p workspace && for d in workspace/*/; do if [ -f "${d}context.md" ]; then STATUS=$(grep -i "^## Status" -A1 "${d}context.md" | tail -1); echo "$STATUS" | grep -qiE "in progress|plan_ready|implemented|blocked" && echo "WORKSPACE: $d | $STATUS"; fi; done; echo "  workspace: ready"
@@ -178,10 +188,10 @@ mkdir -p workspace && for d in workspace/*/; do if [ -f "${d}context.md" ]; then
 - If exactly one active workspace: read its full `context.md` to restore session state
 - If none: "No active workspaces — ready for new work"
 
-## Step 7: Done
+## Step 6: Done
 
 ```bash
-python "$CLAUDEBOOST_HOME/scripts/boost-inline.py" --done
+python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/boost-inline.py','--done']).returncode)"
 ```
 
 **Report format — include ALL of these sections:**
@@ -191,7 +201,7 @@ python "$CLAUDEBOOST_HOME/scripts/boost-inline.py" --done
 - ClaudeBoost index: X files, Y chunks, Z/W graph edges resolved
 - Memories: X memories indexed (or "not indexed — run rag_index_memories")
 - Project RAG: ready (files, chunks, edges) / not indexed
-- GT: ready/failed (version)
+- MCP Debugger: connected / not registered / failed (Step 4c result)
 - Hooks: all 6 types present/missing
 - Rules: CLAUDE.md loaded/missing
 
@@ -202,8 +212,6 @@ python "$CLAUDEBOOST_HOME/scripts/boost-inline.py" --done
 
 ### Session Directives
 - "RAG is active on HTTP port 8612. I will call POST /context first when spawning agents, and POST /search when I need knowledge."
-- "Gas Town is active. I will use `gt prime`, `gt sling`, and `gt handoff` for session transitions."
-- If GT failed: append "(GT not found on PATH — install or add to PATH to enable)"
 
 ### Collaborative Mode
 - **CONSULT (default)**: "I will research, propose via architect-agent (Opus), and ask before any architectural decision. Use `/auto` to bypass."

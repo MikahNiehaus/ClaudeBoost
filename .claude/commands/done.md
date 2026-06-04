@@ -1,31 +1,33 @@
 ---
-description: Signal work complete and submit to merge queue
-allowed-tools: Bash(gt done:*), Bash(git status:*), Bash(git log:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(bd close:*)
-argument-hint: [--status COMPLETED|ESCALATED|DEFERRED] [--pre-verified]
+description: Verify work is clean and push to remote
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*)
+argument-hint: [--message "optional commit message"]
 ---
 
-# Done — Submit Work to Merge Queue
+# Done — Push Work to Remote
 
-Signal that your work is complete and ready for the merge queue.
+Verify your work is ready, then push to the remote branch.
 
 Arguments: $ARGUMENTS
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `rag_context(agent="workflow-agent", task_description="final quality gate before submitting work", max_tokens=3000)`.
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="final quality gate before pushing work", max_tokens=3000`.
 
-This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
 ---
 
 ## Pre-flight Checks
 
-Before running `gt done`, verify your work is ready:
-
 ```bash
-git status                          # Must be clean (no uncommitted changes)
-git log --oneline origin/main..HEAD # Must have at least 1 commit
+git status
+git log --oneline origin/main..HEAD 2>/dev/null || git log --oneline -5
 ```
+
+**Must pass before pushing:**
+- Working tree is clean (no uncommitted changes)
+- At least 1 commit ahead of the base branch
 
 If there are uncommitted changes, commit them first:
 ```bash
@@ -33,25 +35,17 @@ git add <files>
 git commit -m "<type>: <description>"
 ```
 
-## Execute
+---
 
-Run `gt done` with any provided arguments:
+## Push
 
 ```bash
-gt done $ARGUMENTS
+git push
 ```
 
-**Common usage:**
-- `gt done` — Submit completed work (default: --status COMPLETED)
-- `gt done --pre-verified` — Submit with pre-verification (you ran gates after rebase)
-- `gt done --status ESCALATED` — Signal blocker, skip MR
-- `gt done --status DEFERRED` — Pause work, skip MR
-
-**If the bead has nothing to implement** (already fixed, can't reproduce):
+If the branch has no upstream yet:
 ```bash
-bd close <issue-id> --reason="no-changes: <brief explanation>"
-gt done
+git push -u origin HEAD
 ```
 
-This command pushes your branch, submits an MR to the merge queue, and transitions
-you to IDLE. The Refinery handles the actual merge. You are done after this.
+Report the result. If the push fails, show the error and stop — do not force-push.

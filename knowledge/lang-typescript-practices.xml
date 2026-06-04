@@ -1,0 +1,285 @@
+<knowledge-base name="lang-typescript-practices" version="1.0">
+<triggers>TypeScript, .ts, .tsx, naming conventions, type alias, interface, enum, const enum, string union, function overload, overloads, generic constraint, readonly, ReadonlyArray, boxed types, String Number Boolean Object, unknown, callback void, optional parameters, namespace keyword, declaration merging, type guard</triggers>
+<overview>Official TypeScript best practices from the Google TypeScript Style Guide and TypeScript handbook do's and don'ts. Covers naming, type system rules, function signatures, overloads, and module patterns not already in lang-typescript.xml. Loaded alongside lang-typescript.xml for .ts and .tsx files.</overview>
+
+<naming-conventions>
+  <description>Google TypeScript Style Guide naming rules. These supplement the lang-typescript.xml guardrails which cover strict mode and ESLint config.</description>
+  <rules>
+    <rule>UpperCamelCase (PascalCase) for classes, interfaces, type aliases, enums, decorators, and type parameters: `UserService`, `HttpClientOptions`, `StatusCode`</rule>
+    <rule>lowerCamelCase for variables, parameters, functions, methods, and properties: `userId`, `fetchUser`, `isActive`</rule>
+    <rule>CONSTANT_CASE for global constants and enum values: `MAX_RETRY_COUNT`, `Status.ACTIVE` (but prefer `as const` objects over enums — see below)</rule>
+    <rule>Treat acronyms as whole words: `loadHttpUrl` not `loadHTTPURL`, `parseHtmlContent` not `parseHTMLContent`</rule>
+    <rule>Never use `_` as a prefix or suffix. Private visibility is expressed with the `private` keyword, not underscores.</rule>
+    <rule>Never use `$` as a name prefix or suffix unless required by a framework (e.g., Observables in RxJS by convention)</rule>
+  </rules>
+</naming-conventions>
+
+<type-system-rules>
+  <description>Rules for choosing between type constructs. These complement lang-typescript.xml's Zero-any and strict mode rules.</description>
+
+  <interface-vs-type>
+    <rule>Use interfaces for objects that represent a shape which may be extended or implemented: `interface UserRepository { ... }`, `interface UserDTO { ... }`</rule>
+    <rule>Use type aliases for unions, intersections, mapped types, and primitives: `type UserId = string`, `type Result&lt;T&gt; = Success&lt;T&gt; | Failure`, `type ReadonlyUser = Readonly&lt;User&gt;`</rule>
+    <rule>Type aliases must NOT include `| null` or `| undefined` inline — add nullability at the use site so the alias itself remains reusable</rule>
+    <example><![CDATA[// Interfaces for extendable shapes
+interface Repository<T> {
+  findById(id: string): Promise<T | null>;
+  save(entity: T): Promise<T>;
+}
+
+interface UserRepository extends Repository<User> {
+  findByEmail(email: string): Promise<User | null>;
+}
+
+// Type aliases for unions and mapped types
+type UserId = string;
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
+type PartialUser = Partial<User>;
+
+// Nullability at the use site, not inside the alias
+type ApiKey = string;               // not: type ApiKey = string | null
+function findKey(id: string): ApiKey | null { ... }]]></example>
+  </interface-vs-type>
+
+  <enums>
+    <rule>Prefer `as const` objects with a derived type alias over TypeScript enums. Enums produce runtime JavaScript and have surprising reverse-mapping behavior for numeric variants.</rule>
+    <rule>If you must use an enum, use string values (not numeric) to prevent reverse-mapping surprises and make serialized values readable.</rule>
+    <rule>Never use `const enum` in code shared across compilation units (e.g., published libraries) — it inlines values at compile time and breaks when consumed without recompilation.</rule>
+    <example><![CDATA[// Preferred: as const object with derived type
+const Direction = {
+  North: "north",
+  South: "south",
+  East: "east",
+  West: "west",
+} as const;
+type Direction = (typeof Direction)[keyof typeof Direction];
+// Direction is "north" | "south" | "east" | "west" at runtime — no magic
+
+// Acceptable when interop requires it: string enum
+enum HttpMethod {
+  Get = "GET",
+  Post = "POST",
+}
+
+// Avoid: numeric enum has reverse mapping (Direction[0] === "North")
+enum Direction { North, South, East, West }]]></example>
+  </enums>
+
+  <generics>
+    <rule>Always constrain type parameters with `extends` when you need to access properties: `function getLabel&lt;T extends { label: string }&gt;(item: T)`</rule>
+    <rule>Never use `any` as a generic constraint or default. Use `unknown` for "accepts anything" and then narrow inside the function.</rule>
+    <rule>Remove unused generic parameters — they add noise without helping the type system.</rule>
+    <example><![CDATA[// Constrained generic: safe property access
+function sortBy<T extends { id: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => a.id - b.id);
+}
+
+// Unconstrained with unknown: force callers to narrow
+function parseJson(input: string): unknown {
+  return JSON.parse(input);  // caller must narrow before use
+}
+
+// WRONG: any constraint defeats type safety
+function identity<T extends any>(x: T): T { return x; }
+// RIGHT:
+function identity<T>(x: T): T { return x; }]]></example>
+  </generics>
+
+  <readonly>
+    <rule>Mark properties readonly when they are set once and should not be mutated after construction</rule>
+    <rule>Use ReadonlyArray&lt;T&gt; (or readonly T[]) for arrays that should not be mutated by the receiving code</rule>
+    <rule>When a function receives an array it should not modify, type the parameter as ReadonlyArray&lt;T&gt; to communicate intent and catch accidental mutations at compile time</rule>
+    <example><![CDATA[interface Config {
+  readonly apiUrl: string;
+  readonly maxRetries: number;
+  readonly allowedMethods: ReadonlyArray<string>;
+}
+
+function processItems(items: readonly string[]): string[] {
+  // items.push("x")  // Error: cannot mutate a readonly array
+  return items.map(i => i.toUpperCase());  // map returns a new array
+}]]></example>
+  </readonly>
+
+  <type-assertions>
+    <rule>Avoid `as Type` assertions — they silence the compiler without proving anything at runtime. Use type guards (typeof, instanceof, discriminant checks) instead.</rule>
+    <rule>Never use `as any` to escape the type system. Use `unknown` if you truly don't know the type, then narrow with a type guard or Zod schema.</rule>
+    <rule>Double assertion through `unknown` (`x as unknown as Target`) is acceptable only when you have a well-commented reason why the types are structurally compatible but TypeScript cannot see it.</rule>
+    <rule>The non-null assertion operator (`!`) should be avoided outside of test code. If you're sure something is not null, prove it with a runtime check instead.</rule>
+    <example><![CDATA[// WRONG: assertion silences the compiler without proving anything
+const user = getUser() as User;
+const el = document.getElementById("root") as HTMLDivElement;
+
+// RIGHT: type guard narrows safely
+function isUser(value: unknown): value is User {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof (value as { id: unknown }).id === "string"
+  );
+}
+
+// RIGHT: null check instead of !
+const el = document.getElementById("root");
+if (el === null) throw new Error("Root element not found");
+el.textContent = "Hello";  // el is HTMLElement here]]></example>
+  </type-assertions>
+
+  <boxed-types>
+    <rule>Never use boxed types: String, Number, Boolean, Symbol, Object. These are the JavaScript wrapper objects, not the primitive types. Use string, number, boolean, symbol, object instead.</rule>
+    <example><![CDATA[// WRONG: boxed types
+function greet(name: String): String { return "Hello, " + name; }
+
+// RIGHT: primitive types
+function greet(name: string): string { return `Hello, ${name}`; }]]></example>
+  </boxed-types>
+</type-system-rules>
+
+<function-rules>
+  <description>Rules for function signatures and overloads. These address patterns not covered by the lang-typescript.xml guardrails.</description>
+
+  <overloads>
+    <rule>Use optional parameters or union types instead of multiple overloads that differ only in trailing parameters or one argument's type. Overloads that differ only by arity or a single parameter type create subtle bugs with strict null checking.</rule>
+    <rule>When overloads are necessary, sort them from most specific to most general. TypeScript picks the first matching overload — general overloads before specific ones will hide the specific behavior.</rule>
+    <rule>Never write separate overloads differing only in callback arity. Use the maximum arity version — a callback that accepts fewer arguments is always valid in TypeScript.</rule>
+    <example><![CDATA[// WRONG: separate overloads for trailing optional params
+interface Example {
+  diff(one: string): number;
+  diff(one: string, two: string): number;
+  diff(one: string, two: string, three: boolean): number;
+}
+
+// RIGHT: optional parameters
+interface Example {
+  diff(one: string, two?: string, three?: boolean): number;
+}
+
+// WRONG: overloads for union types
+interface Moment {
+  utcOffset(b: number): Moment;
+  utcOffset(b: string): Moment;
+}
+
+// RIGHT: union type
+interface Moment {
+  utcOffset(b: number | string): Moment;
+}
+
+// When order matters: specific overloads before general
+declare function fn(x: HTMLDivElement): string;  // specific first
+declare function fn(x: HTMLElement): number;
+declare function fn(x: unknown): unknown;         // general last]]></example>
+  </overloads>
+
+  <callbacks>
+    <rule>Use void as the return type for callbacks whose return value is intentionally ignored. Using `any` allows the return value to be accidentally used, which can hide bugs.</rule>
+    <rule>Write callback parameters as required (non-optional) unless the callback genuinely may or may not receive them. Optional callback parameters do not mean "may be missing" — they mean the caller can pass a function that ignores them.</rule>
+    <example><![CDATA[// WRONG: any allows return value to be accidentally used
+function forEach(items: string[], callback: (item: string) => any): void { }
+
+// RIGHT: void prevents return value misuse
+function forEach(items: string[], callback: (item: string) => void): void { }
+
+// WRONG: optional parameter implies caller may pass undefined
+interface Fetcher {
+  getObject(done: (data: unknown, elapsedTime?: number) => void): void;
+}
+
+// RIGHT: required parameter (caller may still ignore it in their function)
+interface Fetcher {
+  getObject(done: (data: unknown, elapsedTime: number) => void): void;
+}]]></example>
+  </callbacks>
+
+  <declarations>
+    <rule>Prefer named function declarations over arrow functions or function expressions for top-level, exported, or named functions</rule>
+    <rule>Use arrow functions for callbacks and inline functions passed as arguments</rule>
+    <rule>Never use `var`. Use `const` by default; use `let` only when reassignment is needed.</rule>
+    <rule>One variable per declaration statement — `let a = 1, b = 2` is disallowed</rule>
+  </declarations>
+</function-rules>
+
+<module-rules>
+  <description>Module and namespace rules. The lang-typescript.xml file covers the ESLint config for import ordering. These rules address structural patterns.</description>
+  <rules>
+    <rule>Never use the TypeScript `namespace` keyword in new code. Use ES modules (import/export) instead. Namespaces predate ES modules and create confusing output.</rule>
+    <rule>Use named exports exclusively. Never use default exports — they can be imported under any name, which makes refactoring harder and hides mismatches.</rule>
+    <rule>Use `import type { ... }` for type-only imports. This ensures type imports are erased at build time and prevents circular dependency issues that only exist at the type level.</rule>
+    <rule>Never export mutable bindings (`export let value = ...`). If callers need to observe changing values, export a getter function.</rule>
+    <rule>Use single quotes for string literals in non-template strings</rule>
+  </rules>
+  <example><![CDATA[// WRONG: namespace
+namespace Utils {
+  export function format(s: string): string { return s.trim(); }
+}
+
+// RIGHT: ES module named export
+export function format(s: string): string { return s.trim(); }
+
+// WRONG: default export
+export default class UserService { }
+
+// RIGHT: named export
+export class UserService { }
+
+// Type-only import
+import type { User, UserDTO } from './types';
+import { UserService } from './user-service';  // value import
+
+// WRONG: mutable exported binding
+export let currentUser: User | null = null;
+
+// RIGHT: export getter
+let _currentUser: User | null = null;
+export function getCurrentUser(): User | null { return _currentUser; }]]></example>
+</module-rules>
+
+<class-rules>
+  <description>Class design rules from the Google TypeScript Style Guide. React-component-specific rules are in fw-react.xml.</description>
+  <rules>
+    <rule>Minimize visibility — use `private` for anything not needed externally. TypeScript `private` (not JavaScript `#`) is the correct choice for private members.</rule>
+    <rule>Never use JavaScript private field syntax (`#field`). TypeScript's `private` keyword is the right tool; `#` fields have different runtime semantics and worse tooling support in TypeScript.</rule>
+    <rule>Mark properties `readonly` when they are set in the constructor and never reassigned. This communicates intent and catches accidental mutation.</rule>
+    <rule>Use parameter properties to eliminate redundant initialization boilerplate when a constructor parameter is directly stored as a field.</rule>
+    <rule>Avoid private static methods. Module-level functions are simpler and more testable.</rule>
+    <rule>Do not place classes in namespaces or use "container classes" that only export static methods. Export individual functions and constants directly.</rule>
+  </rules>
+  <example><![CDATA[// Parameter properties + readonly: no boilerplate
+class OrderService {
+  constructor(
+    private readonly repository: OrderRepository,
+    private readonly logger: Logger,
+  ) {}
+
+  async getOrder(id: string): Promise<Order | null> {
+    this.logger.info('Fetching order', { id });
+    return this.repository.findById(id);
+  }
+}
+
+// WRONG: container class with static methods
+class StringUtils {
+  static capitalize(s: string): string { return s[0].toUpperCase() + s.slice(1); }
+}
+
+// RIGHT: module-level export
+export function capitalize(s: string): string { return s[0].toUpperCase() + s.slice(1); }]]></example>
+</class-rules>
+
+<quick-reference>
+  <item key="naming">Types/interfaces/enums: PascalCase. Variables/functions/methods: camelCase. Global constants: CONSTANT_CASE. No _ prefixes.</item>
+  <item key="interface vs type">Interfaces for extendable shapes. Type aliases for unions, intersections, mapped types.</item>
+  <item key="enums">Prefer `as const` + derived type alias. Avoid numeric enums (reverse mapping). Never `const enum` in shared code.</item>
+  <item key="generics">Constrain with extends. Never `any` as constraint. Remove unused type params.</item>
+  <item key="readonly">Mark non-reassigned properties readonly. ReadonlyArray for arrays you should not mutate.</item>
+  <item key="assertions">No `as Type` without a type guard. No `as any`. Use unknown + type guards instead.</item>
+  <item key="boxed types">Never String/Number/Boolean/Object. Always string/number/boolean/object.</item>
+  <item key="overloads">Optional params over trailing-param overloads. Union types over type-variant overloads. Specific overloads before general.</item>
+  <item key="callbacks">Return type void not any. Parameters required not optional.</item>
+  <item key="const/let">const by default, let when reassignment needed. Never var. One per declaration.</item>
+  <item key="modules">Named exports only. Never default. import type for type-only imports. Never namespace keyword.</item>
+  <item key="private">TypeScript private keyword, not JavaScript # fields.</item>
+</quick-reference>
+
+</knowledge-base>

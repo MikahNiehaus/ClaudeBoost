@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 96 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 41 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work. Gas Town, if installed, adds multi-agent coordination, persistent identity, and cross-session work tracking on top of all that.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 96 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 41 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -16,7 +16,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 41 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
-Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG, activates Gas Town if installed, and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
+Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 
 If you're working on a specific project and want semantic search over your codebase (not just the ClaudeBoost knowledge), run `/index-project <path>` once. That indexes your source files and builds the graph index. After that, Claude can find relevant files in your project by description rather than guessing file names.
 
@@ -50,10 +50,10 @@ For a one-line fix or a doc update, none of that applies. The system doesn't add
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/boost` | Connects RAG, loads Gas Town, primes the session. Run this first every time. | `/boost` |
+| `/boost` | Connects RAG, primes the session. Run this first every time. | `/boost` |
 | `/restore` | Reloads workspace state saved by your last `/clear-safe`. Use in a fresh session after `/clear`. | `/restore` |
 | `/clear-safe` | Saves current workspace context before you clear. Prevents losing mid-task state. | `/clear-safe` |
-| `/handoff` | Hands off to a fresh Gas Town session. Good for long-running tasks that need a clean context. | `/handoff` |
+| `/handoff` | Saves session state and prepares for a fresh context. Good for long-running tasks that need a clean start. | `/handoff` |
 | `/compact-review` | Shows the critical state Claude will preserve during compaction. Run before compaction to verify nothing important gets lost. | `/compact-review` |
 
 ### Planning & Workspace
@@ -329,34 +329,7 @@ For tasks involving UI work, `snapshots/` is where before/after screenshots go. 
 
 ---
 
-## 10. Gas Town (if installed)
-
-Gas Town adds a coordination layer on top of ClaudeBoost. Without it, ClaudeBoost still works fully — you get all the agents, knowledge, RAG, and slash commands. Gas Town is optional infrastructure for teams or for long-running work that spans many sessions.
-
-What it adds:
-
-- **Persistent identity** — agents have a stable identity across sessions, not just a task description
-- **Work tracking (beads)** — each unit of work is tracked and can be handed off cleanly
-- **Cross-session handoffs** — `gt handoff` passes a live session to a fresh context without losing state
-- **Directives** — structured role definitions that shape how agents in a group behave
-
-Key commands:
-
-| Command | What it does |
-|---------|-------------|
-| `gt prime` | Prime the current session with Gas Town context and active work state |
-| `gt sling` | Dispatch a task to an agent (polecat dispatch) |
-| `gt handoff` | Hand off the current session cleanly to a new context |
-| `gt mail` | Send a message to another agent or session |
-| `gt nudge` | Nudge a stalled session back into motion |
-
-Gas Town uses three directive types: `mayor.md` (town-wide rules that apply to all agents), `polecat.md` (individual agent roles and responsibilities), and `witness.md` (observer role for recording decisions without acting on them).
-
-For install instructions, see [SETUP-GUIDE.md](SETUP-GUIDE.md).
-
----
-
-## 11. Common task patterns
+## 10. Common task patterns
 
 ### 1. Fix a bug
 

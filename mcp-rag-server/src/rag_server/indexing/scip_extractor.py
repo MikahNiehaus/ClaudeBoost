@@ -54,6 +54,76 @@ def extract_project_edges(project_path: str, py_files: list[str]) -> list:
         return []
 
 
+def extract_typescript_edges(project_path: str) -> list:
+    """Run scip-typescript on the project and return file-level GraphEdge objects.
+
+    Requires: npm install -g @sourcegraph/scip-typescript
+    Returns [] when the tool is not installed or on any error.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "index-ts.scip"
+            result = subprocess.run(
+                ["scip-typescript", "index", "--output", str(output_path)],
+                cwd=project_path,
+                capture_output=True,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                logger.debug(
+                    "scip-typescript returned %d: %s",
+                    result.returncode,
+                    result.stderr[:300].decode(errors="replace"),
+                )
+                return []
+            if not output_path.exists():
+                return []
+            edges = _parse_index(output_path)
+            logger.info("SCIP TypeScript: extracted %d reference edges", len(edges))
+            return edges
+    except FileNotFoundError:
+        logger.debug("scip-typescript not found — skipping TypeScript SCIP pass")
+        return []
+    except Exception:
+        logger.debug("SCIP TypeScript extraction failed", exc_info=True)
+        return []
+
+
+def extract_go_edges(project_path: str) -> list:
+    """Run scip-go on the project and return file-level GraphEdge objects.
+
+    Requires: go install github.com/sourcegraph/scip-go/cmd/scip-go@latest
+    Returns [] when the tool is not installed or on any error.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "index-go.scip"
+            result = subprocess.run(
+                ["scip-go", "--output", str(output_path)],
+                cwd=project_path,
+                capture_output=True,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                logger.debug(
+                    "scip-go returned %d: %s",
+                    result.returncode,
+                    result.stderr[:300].decode(errors="replace"),
+                )
+                return []
+            if not output_path.exists():
+                return []
+            edges = _parse_index(output_path)
+            logger.info("SCIP Go: extracted %d reference edges", len(edges))
+            return edges
+    except FileNotFoundError:
+        logger.debug("scip-go not found — skipping Go SCIP pass")
+        return []
+    except Exception:
+        logger.debug("SCIP Go extraction failed", exc_info=True)
+        return []
+
+
 def _run_and_parse(project_path: str, py_files: list[str]) -> list:
     from rag_server.ports.graph_port import GraphEdge  # noqa: F401 — used via list type
 

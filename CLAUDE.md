@@ -25,7 +25,7 @@ A RAG server indexes all of them for semantic search.
 
 Two paths, not five mandatory steps:
 
-**Simple task?** Just do it. No workspace, no ceremony — but `rag_search` still applies when you need to find something in the codebase.
+**Simple task?** Just do it. No workspace, no ceremony — but `POST /search` still applies when you need to find something in the codebase.
 
 **Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this", or touches >5 files)
 
@@ -78,7 +78,7 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 - "No issues found" is always a valid outcome
 - Reviewers: finding something is NOT the goal. Finding REAL things is.
 
-Hooks remind you of this: PreToolUse nudges agents to call rag_context in spawn prompts, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION status flags a finding for evaluator-agent escalation.
+Hooks remind you of this: PreToolUse nudges agents to call POST http://127.0.0.1:8612/context in spawn prompts, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION status flags a finding for evaluator-agent escalation.
 
 ## Collaborative Mode (CONSULT / AUTO)
 
@@ -104,6 +104,24 @@ Always spawn evaluator for findings — never self-verify. Evaluator only reads 
 
 ## Hard Rules
 See global `~/.claude/CLAUDE.md` — jQuery Ban, Security Standards, Logging Standards apply here.
+
+### No Multiline python -c or cat heredocs
+Never write `python -c "..."` or `python3 -c "..."` with multi-line code, and never use `cat > file << 'EOF'` to create files. Both trigger Claude Code's built-in safety scanner regardless of the allow list.
+
+Use the Write tool to create the file, then run it:
+1. Write tool → `$TEMP/cb_script.py` with your Python content
+2. `Bash: python "$TEMP/cb_script.py"`
+
+bash-guard.py enforces both — multiline `-c` strings and cat heredocs are blocked at the hook level.
+
+### Irreversible Actions (Non-Negotiable)
+Before doing ANYTHING that cannot be undone — deleting files, dropping tables, force-pushing, overwriting data, sending messages, publishing to external services, running destructive shell commands — STOP.
+
+Tell the user exactly what you are about to do and why it cannot be undone. Use AskUserQuestion to get explicit YES confirmation before proceeding. If uncertain whether an action is reversible, treat it as irreversible and ask.
+
+Always prefer safe reversible alternatives when one exists: soft deletes over hard deletes, backups before overwrites, dry-runs before destructive commands.
+
+This applies in every context — not just agent spawns.
 
 ### Label / String Consistency Fix Rule
 When fixing a label, field name, or string inconsistency:
@@ -150,6 +168,31 @@ Same rules. Comments are output too.
 
 Full framework with examples: `knowledge/human-voice.xml`
 
+## MCP Debugging Tools
+
+When a user asks for breakpoint debugging, step-through execution, or wants to inspect
+runtime variable values, use `mcp-debugger` MCP tools — not print statements.
+
+**Trigger phrases:** "set a breakpoint", "step through", "step into/over/out", "what's the
+value of X at line Y", "debug this", "walk through execution", "trace this call"
+
+**Tool sequence:**
+1. `mcp__mcp-debugger__create_debug_session` — start session, pass language + name, returns sessionId
+2. `mcp__mcp-debugger__set_breakpoint` — set breakpoint at file:line
+3. `mcp__mcp-debugger__continue_execution` — run until breakpoint hits
+4. `mcp__mcp-debugger__get_variables` — inspect locals, call stack, scope
+5. `mcp__mcp-debugger__step_over` / `step_into` / `step_out` — navigate execution
+6. `mcp__mcp-debugger__evaluate_expression` — evaluate expression in current scope
+7. `mcp__mcp-debugger__close_debug_session` — always close when done
+
+**Languages:** Python, Node.js, TypeScript, browser JS, Go, Rust, Java, C#/.NET
+
+**Anti-pattern:** Never add `print()` / `console.log()` to inspect runtime state when
+mcp-debugger is available. Use `get_variables` instead.
+
+**For complex debugging sessions:** Spawn `debug-agent` — it has this workflow built in.
+Run `/boost` — Step 4c will confirm whether `mcp-debugger` is connected.
+
 ## Task Creation
 
 For any multi-step or non-trivial work, call `TaskCreate` before starting. Mark the task `in_progress` when you begin it and `completed` when you finish. Don't batch completions — update each task as you go.
@@ -162,6 +205,7 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 |---------|--------|
 | Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
 | Complex feature | Workspace + sweep-then-verify + agents |
+| Before delegating agents | Run `/research-rag [task-id]` to build Tier 3c workspace research — agents get task-specific docs auto-loaded via `/context` |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
 | New architecture | Spawn architect-agent (Opus) with SOLID review |
 | Visualize architecture | `/visualize` — interactive board in browser (self-map for ClaudeBoost, project-map for others) |
@@ -183,10 +227,6 @@ Create a `CLAUDE.md` in any significant subdirectory with:
 - Conventions specific to that folder
 - Key patterns or constraints
 Claude Code auto-loads these when working in subdirectories.
-
-## Gas Town Compatibility
-
-Compatible: `gt prime`, `gt hook`, `gt sling` (polecats), `gt mail`, `gt nudge`, `gt handoff`, beads.
 
 ## RAG HTTP API
 
@@ -214,7 +254,9 @@ At the start of any investigation or multi-step codebase task:
 1. **Call `GET http://127.0.0.1:8612/status` FIRST** — before loading context, before spawning agents.
    - Returns in under 1 second if the server is up.
    - If it fails: **STOP. Do not proceed.** Tell the user: "RAG server is not responding. Run `/rag` to start it."
-2. **Then call `POST http://127.0.0.1:8612/context`** with `{"agent":"...","task_description":"...","project_path":"..."}`
+2. **Then call `POST http://127.0.0.1:8612/context`** with `{"agent":"...","task_description":"...","project_path":"...","workspace_path":"..."}`
+   - `project_path` = absolute path to the project being worked on (enables Tier 4 codebase search and stack detection for Tier 3 boost)
+   - `workspace_path` = absolute path to the active workspace, e.g. `$CLAUDEBOOST_HOME/workspace/[task-id]` (enables Tier 3c task research). Omit only when no workspace exists for this task.
    - If the response contains an `"error"` key: **STOP. Do not proceed.** Report the error and tell the user to run `/rag`.
 3. **Check the status response** for collection counts and indexed projects to spot stale indexes.
 4. If index is stale (`reindex-check.py` warned at session start): POST /index with `{"project_path":"<path>","force":true}` before searching.
@@ -251,7 +293,7 @@ When the user says "Project RAG" or "project index" → they mean the codebase i
 **GraphRAG usage:**
 - `POST /search` with `scope=codebase mode=graph` — vector seed + structural neighbours (files that import/inherit from seed files)
 - `POST /search` with `scope=codebase mode=vector` — semantic only (default, backwards compatible)
-- Graph index is built automatically during `rag_index_project` — no extra step needed
+- Graph index is built automatically during project indexing (POST /index) — no extra step needed
 - Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
 
 **Parallel reindex pattern** (use when reindexing a project while doing other work):
@@ -266,7 +308,7 @@ Spawn prompt must include:
 5. Call `GET http://127.0.0.1:8612/status` and confirm graph shows `graph_active: true` for the project
 6. Return summary: files_indexed, chunks_created, files_failed, elapsed_s, graph edges/resolved, any unresolved errors
 
-**Reading reindex results** — `rag_index_project` returns:
+**Reading reindex results** — POST /index returns:
 - `files_indexed` — successfully embedded and stored
 - `files_unchanged` — skipped (hash match, no change needed)
 - `files_failed` — errored; check `errors[]` for details

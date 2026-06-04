@@ -14,7 +14,7 @@ Performs a security-focused review. Without arguments, reviews pending branch ch
 
 ## Phase 0: RAG Context
 
-Call `rag_context(agent="security-agent", task_description="security review $ARGUMENTS", max_tokens=5000)` as your FIRST action.
+Call `POST http://127.0.0.1:8612/context with agent="security-agent", task_description="security review $ARGUMENTS", max_tokens=5000` as your FIRST action.
 
 ---
 
@@ -155,6 +155,8 @@ trufflehog filesystem .
 
 Manual grep for common patterns if tooling unavailable:
 ```bash
+# These are intentional regex pattern scans for literal tokens — RAG cannot detect hardcoded
+# secrets because it uses semantic similarity, not pattern matching. Direct grep is correct here.
 grep -rn "password\s*=" . --include="*.py" --include="*.js" --include="*.ts" --include="*.env" | grep -v ".git"
 grep -rn "AKIA[0-9A-Z]" .   # AWS keys
 grep -rn "sk_live_" .        # Stripe keys

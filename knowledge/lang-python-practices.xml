@@ -1,0 +1,254 @@
+<knowledge-base name="lang-python-practices" version="1.0">
+<triggers>Python, .py, naming conventions, module name, package name, CONSTANT_NAME, __all__, __dunder__, __future__ annotations, walrus operator, dataclass frozen, comprehension nested, logging getLogger, print statement, __init__.py, f-string format, map filter, docstring, google style, PEP 8, PEP 484, PEP 526</triggers>
+<overview>Official Python naming conventions, type hint patterns, and style rules from PEP 8, PEP 484, and the Google Python Style Guide. Covers what is NOT already in lang-python.xml: specific naming rules across every identifier kind, __all__ discipline, logging module setup, docstring format, and walrus operator guidance.</overview>
+
+<naming-conventions>
+  <description>Python naming conventions from PEP 8 and the Google style guide. Every identifier kind has a specific casing rule.</description>
+  <rules>
+    <rule>module_name: lowercase with underscores (also used for packages). Example: `user_service`, `data_pipeline`</rule>
+    <rule>ClassName: CapWords (PascalCase). Example: `UserService`, `DataPipeline`</rule>
+    <rule>method_name and function_name: lowercase with underscores. Example: `get_user`, `process_batch`</rule>
+    <rule>CONSTANT_NAME: uppercase with underscores. Example: `MAX_RETRY_COUNT`, `DEFAULT_TIMEOUT`</rule>
+    <rule>_protected_name: single leading underscore for protected/internal use. Example: `_parse_token`</rule>
+    <rule>__private_name: double leading underscore triggers name mangling — only for true class-private attributes where subclasses must not accidentally override. Use sparingly.</rule>
+    <rule>__dunder__: reserved for Python's special protocol methods (str, repr, init, len, etc.). Never invent your own dunder names.</rule>
+    <rule>Exception classes: always suffix with Error. Example: `ValidationError`, `NotFoundError`</rule>
+    <rule>Avoid single-character names except for counters (i, j), type variables (T, K, V), exception handlers (e), and file handles (f)</rule>
+    <rule>Never use dashes in module names or package names (use underscores). Never use offensive terms. No type-encoding in names (not `user_dict` — just `users`).</rule>
+  </rules>
+  <example><![CDATA[# module: user_repository.py
+MAX_PAGE_SIZE = 100           # CONSTANT_NAME
+
+class UserRepository:         # ClassName
+    def __init__(self) -> None:
+        self._cache: dict[str, User] = {}   # _protected_name
+
+    def get_by_id(self, user_id: str) -> User | None:   # method_name
+        return self._cache.get(user_id)
+
+    def _invalidate_cache(self) -> None:                 # _protected_name
+        self._cache.clear()
+
+class UserNotFoundError(Exception):                      # suffix Error
+    pass]]></example>
+</naming-conventions>
+
+<all-exports>
+  <description>__all__ controls what `from module import *` exports and serves as an explicit public API contract. Define it in every public module.</description>
+  <rules>
+    <rule>Define `__all__` in every public module (any module intended to be imported by external code). This documents the public API and prevents accidental export of internal helpers.</rule>
+    <rule>List only the identifiers you intend to be part of the public interface. Private names (_name) are never included.</rule>
+    <rule>Internal modules (prefixed with _) may omit `__all__` since they are not part of the public API.</rule>
+    <rule>Keep `__all__` near the top of the file, after imports and before class/function definitions</rule>
+  </rules>
+  <example><![CDATA[# user_service.py
+from __future__ import annotations
+
+from .models import User
+from .repository import UserRepository
+
+__all__ = ["UserService", "UserServiceError"]   # explicit public API
+
+class UserServiceError(Exception):
+    pass
+
+class UserService:
+    def __init__(self, repo: UserRepository) -> None:
+        self._repo = repo
+
+def _build_cache_key(user_id: str) -> str:   # not in __all__, internal
+    return f"user:{user_id}"]]></example>
+</all-exports>
+
+<type-hints>
+  <description>Type hint rules beyond "use them everywhere" — these are the patterns from PEP 484 and PEP 526 that appear most in practice.</description>
+  <rules>
+    <rule>Add `from __future__ import annotations` at the top of any file that uses forward references (types referenced before they are defined). This defers annotation evaluation and avoids NameError.</rule>
+    <rule>Prefer `X | None` over `Optional[X]` (Python 3.10+). Prefer `X | Y` over `Union[X, Y]`. The `|` syntax is more readable and aligns with modern Python.</rule>
+    <rule>Use `collections.abc` types for generics in annotations: `Sequence`, `Mapping`, `Iterable`, `Callable`. Never use `typing.List`, `typing.Dict`, `typing.Tuple` — those are deprecated aliases.</rule>
+    <rule>Import type symbols directly: `from typing import Any, TypeVar` not `import typing; typing.Any`</rule>
+    <rule>Use TypeVar for generic functions. Constrain with bound= when you need to access specific attributes.</rule>
+    <rule>For classmethods that return an instance of the class, use `Self` from `typing` (Python 3.11+) rather than a string forward reference.</rule>
+    <rule>Annotate `__init__` parameters but omit the return type annotation (it is always `None`). Omit `self` and `cls` annotations.</rule>
+  </rules>
+  <example><![CDATA[from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from typing import Any, TypeVar
+
+T = TypeVar("T")
+
+def first_or_default(items: Sequence[T], default: T) -> T:
+    return items[0] if items else default
+
+def retry(
+    func: Callable[..., T],
+    *,
+    max_attempts: int = 3,
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+) -> T:
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except exceptions:
+            if attempt == max_attempts - 1:
+                raise
+    raise RuntimeError("unreachable")
+
+# Modern union syntax
+def find_user(user_id: str) -> User | None:
+    ...
+
+# Self in classmethods
+from typing import Self
+
+class Config:
+    @classmethod
+    def from_env(cls) -> Self:
+        return cls(...)]]></example>
+</type-hints>
+
+<logging>
+  <description>Python logging setup. The lang-python.xml guardrails cover error handling broadly; these rules cover the logging module specifically.</description>
+  <rules>
+    <rule>Create a module-level logger with `logger = logging.getLogger(__name__)`. This gives each module its own logger namespace and lets the application control log levels per module.</rule>
+    <rule>Never use print() for diagnostic output or application logging. Use the logging module so output can be controlled, filtered, and routed by the application's logging configuration.</rule>
+    <rule>Pass arguments to logging methods as positional args, NOT with f-strings: `logger.info("User %s created", user_id)` not `logger.info(f"User {user_id} created")`. This preserves the unformatted message template and avoids string formatting cost when the log level is disabled.</rule>
+    <rule>Log at the right level: DEBUG for detailed flow, INFO for significant events, WARNING for unexpected but recoverable, ERROR for failures that need attention, CRITICAL for application-breaking failures.</rule>
+    <rule>Log errors with exc_info=True or logger.exception() inside except blocks to include the stack trace.</rule>
+    <rule>Never log sensitive data (passwords, tokens, PII) even at DEBUG level.</rule>
+  </rules>
+  <example><![CDATA[import logging
+
+logger = logging.getLogger(__name__)   # module-level logger
+
+def process_order(order_id: str) -> None:
+    logger.info("Processing order %s", order_id)   # not f-string
+    try:
+        result = _execute_order(order_id)
+        logger.info("Order %s completed: status=%s", order_id, result.status)
+    except OrderNotFoundError:
+        logger.warning("Order %s not found, skipping", order_id)
+        raise
+    except Exception:
+        logger.exception("Unexpected error processing order %s", order_id)  # includes traceback
+        raise]]></example>
+</logging>
+
+<comprehensions>
+  <description>When to use list/dict/set comprehensions vs loops, and where they become unreadable.</description>
+  <rules>
+    <rule>Prefer list/dict/set comprehensions over map() and filter() calls for simple transformations. Comprehensions are more Pythonic and readable.</rule>
+    <rule>Keep comprehensions to a single for-clause and at most one if-clause on a single line. If you need more, write a regular loop.</rule>
+    <rule>Never nest more than two comprehension levels. Nested comprehensions beyond two for-clauses are harder to read than explicit loops.</rule>
+    <rule>Use a generator expression (round brackets) instead of a list comprehension when the result is consumed immediately without being stored, e.g. `sum(x * x for x in items)` instead of `sum([x * x for x in items])`</rule>
+  </rules>
+  <example><![CDATA[# Good: simple comprehension
+active_users = [u for u in users if u.is_active]
+name_map = {u.id: u.name for u in users}
+
+# Good: generator for immediate consumption
+total = sum(order.total for order in orders)
+
+# WRONG: nested comprehension beyond two levels
+matrix = [[cell for cell in row if cell > 0] for row in grid if sum(row) > 0]
+
+# RIGHT: explicit loop when comprehension gets complex
+result = []
+for row in grid:
+    if sum(row) > 0:
+        for cell in row:
+            if cell > 0:
+                result.append(cell)
+
+# Comprehension over map/filter
+# WRONG:
+names = list(map(lambda u: u.name, filter(lambda u: u.is_active, users)))
+# RIGHT:
+names = [u.name for u in users if u.is_active]]]></example>
+</comprehensions>
+
+<walrus-operator>
+  <description>The walrus operator (:=) assigns a value within an expression. Use it sparingly.</description>
+  <rules>
+    <rule>Use the walrus operator only when it eliminates genuine duplication in an expression and makes the code clearer, not shorter-for-its-own-sake.</rule>
+    <rule>Appropriate uses: while-loop that reads and processes, comprehension with an expensive expression that you filter and use, conditional expressions that call the same function twice.</rule>
+    <rule>Never use walrus just to save a line. If a regular assignment on the line before is clearer, use that.</rule>
+  </rules>
+  <example><![CDATA[# Good: walrus in while loop eliminates repetition
+while chunk := file.read(8192):
+    process(chunk)
+
+# Good: comprehension with expensive call used twice
+results = [y for x in data if (y := expensive_transform(x)) is not None]
+
+# WRONG: walrus where a plain assignment is clearer
+if (n := len(items)) > 10:   # just write: n = len(items); if n > 10:
+    print(f"Too many items: {n}")]]></example>
+</walrus-operator>
+
+<docstrings>
+  <description>Docstring format following Google Python Style Guide (triple double-quotes, structured sections).</description>
+  <rules>
+    <rule>Use triple double-quotes for all docstrings: `"""Summary."""`</rule>
+    <rule>One-line docstrings: a single sentence summary ending with a period, on one line including the quotes</rule>
+    <rule>Multi-line docstrings: one-line summary, blank line, then body. Use structured sections: Args:, Returns: (or Yields:), Raises:</rule>
+    <rule>Public functions, methods, classes, and modules require docstrings. Private helpers and trivial functions may omit them.</rule>
+    <rule>Document the meaning of parameters, not just their names. Mention units, ranges, or invariants where relevant.</rule>
+  </rules>
+  <example><![CDATA[def fetch_user(user_id: str, *, include_deleted: bool = False) -> User | None:
+    """Fetch a user by ID from the database.
+
+    Args:
+        user_id: The UUID of the user to fetch.
+        include_deleted: When True, also searches soft-deleted records.
+
+    Returns:
+        The User if found, or None if no user with that ID exists.
+
+    Raises:
+        DatabaseError: If the database is unreachable.
+    """
+    ...]]></example>
+</docstrings>
+
+<imports>
+  <description>Import ordering and style from PEP 8 and Google style guide. These supplement lang-python.xml which covers star imports and relative imports.</description>
+  <rules>
+    <rule>Use `import x` for packages and modules. Use `from x import y` where y is a module or a well-known symbol. Never import individual classes/functions from deeply nested paths unless the path would otherwise be unreadably long.</rule>
+    <rule>Never use relative imports (from . import foo). Always use full package paths: `from myapp.models import User`</rule>
+    <rule>Group imports in order: (1) `from __future__` imports, (2) standard library, (3) third-party, (4) local package. Blank line between each group. Sort lexicographically within groups.</rule>
+    <rule>Import type annotations directly from typing: `from typing import Any, TypeVar` — not `import typing` and then `typing.Any`</rule>
+  </rules>
+  <example><![CDATA[from __future__ import annotations   # always first if present
+
+import logging                           # stdlib
+import os
+from collections.abc import Sequence
+from typing import Any
+
+import httpx                             # third-party
+from pydantic import BaseModel
+
+from myapp.config import Settings        # local
+from myapp.models import User]]></example>
+</imports>
+
+<quick-reference>
+  <item key="module/package">lowercase_with_under. Never dashes.</item>
+  <item key="class">CapWords. Exception classes end in Error.</item>
+  <item key="function/method">lowercase_with_under.</item>
+  <item key="constant">UPPERCASE_WITH_UNDER.</item>
+  <item key="_single_leading">Protected/internal. __double_leading = name mangling (rare).</item>
+  <item key="__all__">Define in every public module. Lists the public API.</item>
+  <item key="type unions">X | None not Optional[X]. X | Y not Union[X, Y].</item>
+  <item key="collections.abc">Use Sequence/Mapping/Iterable. Never typing.List/Dict/Tuple (deprecated).</item>
+  <item key="from __future__">Add annotations import when using forward references.</item>
+  <item key="logging">logger = logging.getLogger(__name__). Never print(). Pass args not f-strings.</item>
+  <item key="comprehensions">One for-clause + one if max. Never nested beyond two levels. Prefer over map/filter.</item>
+  <item key="walrus">Use only when it genuinely removes duplication. Never just to save a line.</item>
+  <item key="docstrings">Triple double-quotes. Args/Returns/Raises sections. Period at end of summary.</item>
+  <item key="imports">No relative imports. Group: future / stdlib / third-party / local. Direct from typing imports.</item>
+</quick-reference>
+
+</knowledge-base>

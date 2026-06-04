@@ -19,7 +19,13 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def chunk_markdown(text: str, source_file: str, max_tokens: int = 500, min_tokens: int = 50) -> list[RawChunk]:
+def chunk_markdown(
+    text: str,
+    source_file: str,
+    max_tokens: int = 500,
+    min_tokens: int = 50,
+    chunk_overlap: int = 0,
+) -> list[RawChunk]:
     """Split markdown into chunks based on section headers.
 
     Strategy:
@@ -27,13 +33,15 @@ def chunk_markdown(text: str, source_file: str, max_tokens: int = 500, min_token
     - Target 200-500 tokens per chunk
     - If a section exceeds max_tokens, split at paragraph boundaries
     - Merge very small sections with the next section
+    - chunk_overlap carries the last paragraph of each split chunk into the next,
+      so concepts at chunk boundaries don't get lost entirely.
     """
     lines = text.split("\n")
     sections = _split_into_sections(lines)
 
     chunks = []
     for section in sections:
-        section_chunks = _process_section(section, max_tokens, min_tokens)
+        section_chunks = _process_section(section, max_tokens, min_tokens, chunk_overlap)
         chunks.extend(section_chunks)
 
     # Merge trailing small chunks
@@ -97,7 +105,9 @@ def _split_into_sections(lines: list[str]) -> list[_Section]:
     return sections
 
 
-def _process_section(section: _Section, max_tokens: int, min_tokens: int) -> list[RawChunk]:
+def _process_section(
+    section: _Section, max_tokens: int, min_tokens: int, chunk_overlap: int = 0,
+) -> list[RawChunk]:
     """Process a single section, splitting if too large."""
     tokens = estimate_tokens(section.content)
 
@@ -115,6 +125,7 @@ def _process_section(section: _Section, max_tokens: int, min_tokens: int) -> lis
     chunks = []
     current_text = ""
     current_start = section.line_start
+    _overlap_text = ""  # last paragraph of the previous chunk, carried forward
 
     for para in paragraphs:
         para_tokens = estimate_tokens(para)
@@ -130,10 +141,17 @@ def _process_section(section: _Section, max_tokens: int, min_tokens: int) -> lis
                 line_end=current_start + line_count - 1,
                 token_count_approx=current_tokens,
             ))
+            # Carry the last paragraph into the next chunk when overlap is enabled.
+            # This preserves context at split points without duplicating full chunks.
+            if chunk_overlap > 0:
+                tail = current_text.rsplit("\n\n", 1)[-1].strip()
+                _overlap_text = tail if tail and estimate_tokens(tail) <= chunk_overlap else ""
+            else:
+                _overlap_text = ""
             current_start = current_start + line_count
-            current_text = para
+            current_text = (_overlap_text + "\n\n" + para).strip() if _overlap_text else para
         else:
-            current_text = (current_text + "\n\n" + para).strip()
+            current_text = (current_text + "\n\n" + para).strip() if current_text else para
 
     # Last paragraph group
     if current_text.strip():

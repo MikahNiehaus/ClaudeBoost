@@ -60,7 +60,7 @@ with the correct `RAG_PROJECT_ROOT` for your machine. Manual registration exampl
 5. Incremental indexing: only re-embeds files that changed (SHA-256 hash comparison)
 6. File watcher auto-reindexes when source files change
 
-## Standalone vs Gas Town
+## Standalone
 
-Works independently in any ClaudeBoost project. With Gas Town, polecats and crew
-use `rag_context` for automatic knowledge routing when slung work.
+Works independently in any ClaudeBoost project. Spawned agents call `rag_context`
+as their first action for automatic knowledge routing.

@@ -1,0 +1,214 @@
+<knowledge-base name="practices-commits" version="1.0">
+<triggers>conventional commits, commit message, git commit, commit format, feat, fix, chore, refactor, breaking change, BREAKING CHANGE, semantic versioning, changelog, commit type, commit scope, git history, squash, commit conventions</triggers>
+<overview>The Conventional Commits specification and git commit best practices. Covers commit message format, types, scopes, breaking changes, and how this connects to semantic versioning and automated changelogs.</overview>
+
+<format>
+  <structure><![CDATA[
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+  ]]></structure>
+
+  <rules>
+    <rule>The description (first line) must be in the imperative mood, lowercase after the colon, no period at end.</rule>
+    <rule>The first line must not exceed 72 characters.</rule>
+    <rule>Leave a blank line between the description and the body.</rule>
+    <rule>Leave a blank line between the body and each footer.</rule>
+    <rule>The body explains WHY the change was made, not what. The diff shows what.</rule>
+  </rules>
+
+  <examples>
+    <example label="Simple fix">fix: prevent racing condition in order processing</example>
+    <example label="Feature with scope">feat(auth): add OAuth2 login via Google</example>
+    <example label="Breaking change with !">feat!: remove deprecated payment API v1</example>
+    <example label="Breaking change with scope and !">feat(api)!: rename userId field to accountId in all responses</example>
+    <example label="Docs only">docs: correct example in authentication guide</example>
+    <example label="Chore">chore(deps): update axios from 1.3.0 to 1.6.0</example>
+    <example label="With body and footer"><![CDATA[
+fix(auth): handle token refresh race condition
+
+When two simultaneous requests both detect an expired token, they
+both try to refresh it. The second request now waits for the first
+to complete rather than issuing a duplicate refresh.
+
+Refs: #4821
+Reviewed-by: Jane Smith
+    ]]></example>
+    <example label="Breaking change with footer"><![CDATA[
+refactor(api): replace error object shape
+
+The `errors` array is now `error` (singular object) for consistency
+with RFC 7807 Problem Details.
+
+BREAKING CHANGE: `response.errors[0]` must be changed to `response.error`
+in all API consumers.
+    ]]></example>
+  </examples>
+</format>
+
+<types>
+  <type name="feat">
+    <description>Introduces a new feature visible to users.</description>
+    <semver>Triggers a MINOR version bump (1.x.0)</semver>
+    <examples>
+      <example>feat: add CSV export for transaction history</example>
+      <example>feat(search): add fuzzy matching to product search</example>
+    </examples>
+  </type>
+
+  <type name="fix">
+    <description>Patches a bug in the codebase.</description>
+    <semver>Triggers a PATCH version bump (1.0.x)</semver>
+    <examples>
+      <example>fix: correct off-by-one error in pagination</example>
+      <example>fix(cart): prevent negative quantities on item removal</example>
+    </examples>
+  </type>
+
+  <type name="docs">
+    <description>Documentation changes only. No code change.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>docs: add rate limiting section to API reference</example>
+      <example>docs(readme): update local setup instructions for Windows</example>
+    </examples>
+  </type>
+
+  <type name="style">
+    <description>Code formatting, whitespace, missing semicolons — no logic change. Not CSS styling.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>style: apply prettier formatting to src/</example>
+    </examples>
+  </type>
+
+  <type name="refactor">
+    <description>Code change that neither fixes a bug nor adds a feature. Restructuring, renaming, extracting.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>refactor(orders): extract order status logic into OrderStateMachine</example>
+      <example>refactor: replace Promise chains with async/await in payment module</example>
+    </examples>
+  </type>
+
+  <type name="test">
+    <description>Adding or correcting tests. No production code change.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>test: add edge case coverage for empty cart checkout</example>
+      <example>test(auth): add integration tests for token refresh flow</example>
+    </examples>
+  </type>
+
+  <type name="perf">
+    <description>Performance improvement. No functional change.</description>
+    <semver>No version bump (but some tools treat it as PATCH)</semver>
+    <examples>
+      <example>perf(queries): add index on orders.created_at</example>
+      <example>perf: memoize expensive category tree calculation</example>
+    </examples>
+  </type>
+
+  <type name="ci">
+    <description>CI/CD configuration and script changes (GitHub Actions, GitLab CI, CircleCI, etc.).</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>ci: add code coverage gate to pull request checks</example>
+    </examples>
+  </type>
+
+  <type name="build">
+    <description>Build system changes: webpack config, package.json scripts, Makefile, Docker.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>build: upgrade Node.js base image to 20-alpine</example>
+      <example>build(deps): update TypeScript to 5.4</example>
+    </examples>
+  </type>
+
+  <type name="chore">
+    <description>Catch-all for maintenance tasks that don't fit other types: dependency updates without code changes, config tweaks, generated files.</description>
+    <semver>No version bump</semver>
+    <examples>
+      <example>chore: update .gitignore for VS Code workspace files</example>
+      <example>chore(deps): bump lodash from 4.17.20 to 4.17.21</example>
+    </examples>
+  </type>
+
+  <type name="revert">
+    <description>Reverts a previous commit. Should reference the reverted commit SHA or description.</description>
+    <examples>
+      <example>revert: feat(auth): add OAuth2 login via Google (refs commit abc1234)</example>
+    </examples>
+  </type>
+</types>
+
+<scope>
+  <rule>Scope is optional. Use it when a commit targets a specific module, package, or subsystem.</rule>
+  <rule>Scope must be a noun in parentheses, lowercase: feat(auth):, fix(cart):, refactor(orders):</rule>
+  <rule>Be consistent with scope names across the project. Define a fixed list in CONTRIBUTING.md if helpful.</rule>
+  <rule>Omit scope when the change is cross-cutting or doesn't belong to a single module.</rule>
+  <common-scopes>
+    <scope>api — API routes or contracts</scope>
+    <scope>auth — authentication and authorization</scope>
+    <scope>db — database migrations or queries</scope>
+    <scope>deps — dependency updates</scope>
+    <scope>ui — UI components (use alongside a module name for clarity)</scope>
+    <scope>tests — test infrastructure (not individual feature tests)</scope>
+  </common-scopes>
+</scope>
+
+<breaking-changes>
+  <notation-1>
+    <description>Append ! after the type (and scope if present), before the colon.</description>
+    <examples>
+      <example>feat!: drop support for Node.js 16</example>
+      <example>fix(parser)!: change return type of parse() from string to ParseResult</example>
+    </examples>
+  </notation-1>
+
+  <notation-2>
+    <description>Include BREAKING CHANGE: in the footer, followed by a description of what changed and how to migrate.</description>
+    <example><![CDATA[
+feat(api): replace userId with accountId across all endpoints
+
+BREAKING CHANGE: The `userId` field is removed from all API responses.
+Use `accountId` instead. Update all client code that reads `response.userId`.
+    ]]></example>
+  </notation-2>
+
+  <notation-combined>
+    <description>You can use both ! and BREAKING CHANGE: footer together for clarity. If you use !, the BREAKING CHANGE footer is optional but recommended for migration guidance.</description>
+  </notation-combined>
+
+  <semver>Breaking changes trigger a MAJOR version bump (x.0.0). This is the mechanism for coordinating major releases in automated changelog and release tools.</semver>
+</breaking-changes>
+
+<why-it-matters>
+  <benefit name="Automated changelogs">Tools like standard-version, semantic-release, and commitizen parse conventional commits to generate CHANGELOG.md entries automatically. feat → Features section, fix → Bug Fixes section, BREAKING CHANGE → Breaking Changes section.</benefit>
+  <benefit name="Semantic versioning">Automated release tools determine the next version number from commit types: feat → minor bump, fix → patch bump, BREAKING CHANGE → major bump.</benefit>
+  <benefit name="Clearer history">git log with consistent commit types makes it fast to understand what a release contained and find when a specific change was introduced.</benefit>
+  <benefit name="Code review clarity">A well-typed commit message tells reviewers what category of change to expect before reading the diff.</benefit>
+  <benefit name="Bisect and blame">Meaningful commit messages make git bisect and git blame dramatically more useful for debugging.</benefit>
+</why-it-matters>
+
+<bad-commit-messages>
+  <bad>fix stuff</bad>
+  <bad>WIP</bad>
+  <bad>asdf</bad>
+  <bad>changes</bad>
+  <bad>fix: fixed the bug where it was broken</bad>
+  <bad>feat: lots of changes to auth, orders, and UI plus some refactoring</bad>
+</bad-commit-messages>
+
+<commit-hygiene>
+  <rule>One commit, one logical change. Don't bundle unrelated fixes into one commit.</rule>
+  <rule>Commits should pass CI on their own. Never commit code that breaks the build.</rule>
+  <rule>Use interactive rebase (git rebase -i) to clean up WIP commits before merging, if your team's workflow allows it.</rule>
+  <rule>Never force-push to a shared branch (main, develop) without team consensus.</rule>
+  <rule>Separate refactoring commits from feature or fix commits — it makes code review and revert much easier.</rule>
+</commit-hygiene>
+
+</knowledge-base>

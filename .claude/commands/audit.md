@@ -19,7 +19,7 @@ Input: **$ARGUMENTS**
 echo '{"active":true}' > "$CLAUDEBOOST_HOME/state/audit-in-progress.json"
 ```
 
-Then call `rag_context(agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000)`.
+Then call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000`.
 
 ---
 
@@ -149,7 +149,7 @@ Choose 3–6 dimensions from the tables below based on `INPUT_TYPE`. Be decisive
 |----|-----------|-------|
 | X1 | Red Flags / Anomalies | Anything that doesn't add up, feels off, or contradicts expectations |
 | X2 | Missing Context | What additional information would change this assessment? |
-| CB1 | ClaudeBoost Protocol Compliance | Did the session follow ClaudeBoost's mandatory protocols? Check each of the following — a violation requires a quoted phrase or named step as evidence, not an assumption: **(1) Dual-mode RAG** — were BOTH `rag_search scope=research mode=vector` AND `rag_search scope=codebase mode=graph` called for every research query? Skipping either is a violation. **(2) rag_context first** — was `rag_context` the first action in every agent spawn prompt? Any agent spawned without it is a violation. **(3) Evaluator never skipped** — was `evaluator-agent` spawned after every set of findings before acting on them? Self-verification is a violation. **(4) Context.md kept current** — was `workspace/[task-id]/context.md` updated after significant work, decisions, or changes? Stale context at session end is a violation. **(5) CONSULT mode respected** — were new endpoints, tables, dependencies, modules, or auth strategies proposed via `architect-agent` and approved before implementation? Architectural changes without consultation are a violation. **(6) /boost before workspace** — was `/boost` run before any workspace was created? Creating a workspace without a verified RAG is a violation. **(7) Verify gate** — were all findings cited with `file:line` before being acted on? Acting on uncited findings is a violation. Flag each violation with the specific step that was skipped and where in the output this is visible. If a step was correctly followed, note it as CONFIRMED — do not leave it silent. |
+| CB1 | ClaudeBoost Protocol Compliance | Did the session follow ClaudeBoost's mandatory protocols? Check each of the following — a violation requires a quoted phrase or named step as evidence, not an assumption: **(1) Dual-mode RAG** — were BOTH `POST http://127.0.0.1:8612/search scope=research mode=vector` AND `POST http://127.0.0.1:8612/search scope=codebase mode=graph` called for every research query? Skipping either is a violation. **(2) POST http://127.0.0.1:8612/context first** — was `POST http://127.0.0.1:8612/context` the first action in every agent spawn prompt? Any agent spawned without it is a violation. **(3) Evaluator never skipped** — was `evaluator-agent` spawned after every set of findings before acting on them? Self-verification is a violation. **(4) Context.md kept current** — was `workspace/[task-id]/context.md` updated after significant work, decisions, or changes? Stale context at session end is a violation. **(5) CONSULT mode respected** — were new endpoints, tables, dependencies, modules, or auth strategies proposed via `architect-agent` and approved before implementation? Architectural changes without consultation are a violation. **(6) /boost before workspace** — was `/boost` run before any workspace was created? Creating a workspace without a verified RAG is a violation. **(7) Verify gate** — were all findings cited with `file:line` before being acted on? Acting on uncited findings is a violation. Flag each violation with the specific step that was skipped and where in the output this is visible. If a step was correctly followed, note it as CONFIRMED — do not leave it silent. |
 
 ### Auto-include rules
 
@@ -183,7 +183,7 @@ Spawn one agent per selected dimension. Wait for each batch to complete before s
 **EACH AGENT PROMPT must follow this template exactly:**
 
 ```
-Your FIRST action: call rag_context(agent="reviewer-agent", task_description="audit dimension: <DIMENSION_NAME>", max_tokens=2000)
+Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit dimension: <DIMENSION_NAME>", max_tokens=2000
 
 You are an auditor for ONE specific dimension: **<DIMENSION_NAME>**
 
@@ -240,7 +240,7 @@ Collect all JSON outputs as `AUDIT_FINDINGS`.
 After ALL batches complete, spawn a single verdict agent. Use **Opus model**.
 
 ```
-Your FIRST action: call rag_context(agent="reviewer-agent", task_description="audit verdict synthesis", max_tokens=2000)
+Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit verdict synthesis", max_tokens=2000
 
 You are the Verdict Agent. You do NOT re-audit the content. You synthesize the findings from all dimension auditors into a single "is it legit" verdict.
 

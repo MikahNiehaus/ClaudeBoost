@@ -4,9 +4,9 @@
 
 <rag-requirement mandatory="true">
   Before writing any finding or starting any review pass, run these three calls in order:
-  1. rag_context(agent="reviewer-agent", task_description="code review [description]", max_tokens=4000)
-  2. rag_search(scope="codebase", project_path=[repo], query="[one-sentence summary of what changed]", limit=5)
-  3. rag_search(scope="codebase", project_path=[repo], query="[same summary]", limit=5, mode="graph")
+  1. POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code review [description]", max_tokens=4000
+  2. POST http://127.0.0.1:8612/search with scope="codebase", project_path=[repo], query="[one-sentence summary of what changed]", limit=5
+  3. POST http://127.0.0.1:8612/search with scope="codebase", project_path=[repo], query="[same summary]", limit=5, mode="graph"
 
   Why this is mandatory: RAG surfaces existing patterns (guards, projections, conventions) before
   any code is reviewed. Reviewing a diff in isolation means pattern-inconsistency bugs won't be
@@ -274,7 +274,7 @@
 </anti-patterns>
 
   <see-also>
-    <ref>knowledge/rag-http-api.xml — call rag_search from scripts or tools outside Claude Code via HTTP REST</ref>
+    <ref>knowledge/rag-http-api.xml — call POST http://127.0.0.1:8612/search from scripts or tools outside Claude Code via HTTP REST</ref>
   </see-also>
 
 </knowledge-base>

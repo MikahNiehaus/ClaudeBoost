@@ -43,8 +43,8 @@ class ChromaStore(StorePort):
         """
         try:
             del self._client
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ChromaDB client cleanup failed (non-fatal): %s", e)
         import gc
         gc.collect()
 
@@ -68,8 +68,8 @@ class ChromaStore(StorePort):
         """Drop a collection entirely (used for dimension-change re-index)."""
         try:
             self._client.delete_collection(collection)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to delete collection %r — stale data may persist: %s", collection, e)
 
     def add_chunks(self, collection: str, chunks: list[Chunk]) -> int:
         if not chunks:
@@ -130,13 +130,15 @@ class ChromaStore(StorePort):
     def count(self, collection: str) -> int:
         try:
             return int(self._get_collection(collection).count())
-        except Exception:
+        except Exception as e:
+            logger.error("count() failed for collection %r (returning 0 — may falsely appear empty): %s", collection, e)
             return 0
 
     def get_by_source(self, collection: str, source_file: str) -> list[SearchResult]:
         try:
             col = self._get_collection(collection)
-        except Exception:
+        except Exception as e:
+            logger.error("get_by_source: collection %r not found for %r: %s", collection, source_file, e)
             return []
         results = col.get(where={"source_file": source_file}, include=["documents", "metadatas"])
         return [
@@ -151,8 +153,8 @@ class ChromaStore(StorePort):
             result = col.peek(limit=1)
             if result["embeddings"] and result["embeddings"][0]:
                 return len(result["embeddings"][0])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("sample_dimension failed for %r — dimension mismatch detection may be skipped: %s", collection, e)
         return None
 
     def count_sources(self, collection: str) -> int:
@@ -162,7 +164,8 @@ class ChromaStore(StorePort):
             results = col.get(include=["metadatas"])
             sources = {m.get("source_file") for m in results["metadatas"] if m.get("source_file")}
             return len(sources)
-        except Exception:
+        except Exception as e:
+            logger.error("count_sources failed for %r: %s", collection, e)
             return 0
 
     def list_sources(self, collection: str) -> list[str]:

@@ -1,31 +1,58 @@
 ---
-description: Hand off to fresh session via Gas Town (gt handoff) — for tmux/beads session cycling
-allowed-tools: Bash(gt handoff:*)
+description: Save session state and prepare for a fresh context
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(python -c *)
 argument-hint: [message]
 ---
 
-# /handoff — Gas Town Session Cycling
+# Handoff — Save State for a Fresh Session
 
-**This skill requires Gas Town (`gt`) running in a tmux session.**
-If you are NOT in tmux, this will fail. For post-clear context restore,
-use `/restore` instead — it reads `state/handoff-latest.json` directly.
+Save your current workspace context so it can be restored in the next session.
+
+Arguments: $ARGUMENTS
+
+## What This Does
+
+Saves your active workspace context and conversation highlights to
+`state/handoff-latest.json`. When you start a fresh session and run `/boost` or
+`/restore`, ClaudeBoost reads that file and restores where you left off.
+
+Use this when your context is getting long and you want a clean start without
+losing your place in a task.
 
 ---
 
-User's handoff message (if any): $ARGUMENTS
+## Steps
 
-Execute these steps in order:
+### 1. Save workspace state
 
-1. Check if running in tmux — if `gt handoff` returns "not running in tmux",
-   stop immediately and tell the user:
-   > Not in tmux — `gt handoff` cannot cycle sessions here.
-   > Use `/restore` to restore saved context from the last `/clear-safe` run.
+```bash
+python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/session-clear-save.py'])" 2>/dev/null || true
+```
 
-2. If user provided a message, run the handoff command with a subject and message.
-   Example: `gt handoff -s "HANDOFF: Session cycling" -m "USER_MESSAGE_HERE"`
+### 2. If a message was provided, store it in the handoff file
 
-3. If no message was provided, run the handoff command:
-   `gt handoff`
+```bash
+python3 -c "
+import json, os, sys
+from pathlib import Path
+home = os.environ.get('CLAUDEBOOST_HOME', '')
+f = Path(home) / 'state' / 'handoff-latest.json'
+msg = '''$ARGUMENTS'''.strip()
+if f.exists() and msg:
+    d = json.loads(f.read_text(encoding='utf-8'))
+    d['handoff_message'] = msg
+    f.write_text(json.dumps(d, indent=2), encoding='utf-8')
+    print('Handoff message saved.')
+"
+```
 
-Note: The new session will auto-prime via the SessionStart hook and find your handoff mail.
-End watch. A new session takes over, picking up any molecule on the hook.
+### 3. Report to user
+
+Tell the user:
+- Which workspace was active (task ID and status from the saved state)
+- That they can run `/clear` now to reset context
+- That running `/boost` or `/restore` in the next session will pick up where this one left off
+
+---
+
+**Next step:** Run `/clear` to reset context, then start a new session and run `/boost` to restore.

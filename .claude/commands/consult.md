@@ -8,7 +8,7 @@ allowed-tools: Read, Write, Edit, Bash
 
 Return ClaudeBoost to its default **CONSULT** mode. For any architectural decision, Claude will:
 
-1. `rag_search` + read 2–3 relevant project files
+1. `POST /search` + read 2–3 relevant project files
 2. Spawn `architect-agent` (Opus) with `PROPOSAL_ONLY` and file:line citations
 3. Present 2–3 options via `AskUserQuestion` — you pick, edit, or add
 4. Log your approval and implement

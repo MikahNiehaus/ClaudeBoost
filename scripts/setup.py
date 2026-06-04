@@ -113,7 +113,7 @@ def preflight() -> bool:
             _err(f"{label} not found — install before re-running setup.")
             ok = False
         else:
-            _warn(f"{label} not found — gt commands and workspace commits will not work.")
+            _warn(f"{label} not found — some features may not work.")
     return ok
 
 
@@ -437,8 +437,10 @@ def _install_all_hooks(settings: dict) -> None:
                        "GET /status (server health), "
                        "POST /index (reindex files). "
                        "When loading context for an agent, POST to /context with "
-                       "{\"agent\":\"...\",\"task_description\":\"...\",\"project_path\":\"...\"} "
-                       "using project_path set to the primary working directory. "
+                       "{\"agent\":\"...\",\"task_description\":\"...\",\"project_path\":\"...\",\"workspace_path\":\"...\"} "
+                       "where project_path is the primary working directory (enables Tier 4 codebase search + stack detection) "
+                       "and workspace_path is the active workspace directory e.g. $CLAUDEBOOST_HOME/workspace/[task-id] "
+                       "(enables Tier 3c task-specific research). Omit workspace_path only if no workspace exists. "
                        "When searching code, POST to /search with "
                        "{\"query\":\"...\",\"scope\":\"codebase\",\"project_path\":\"...\"}. "
                        "If the project has not been indexed, run /index-project first. "
@@ -457,6 +459,17 @@ def _install_all_hooks(settings: dict) -> None:
             "statusMessage": "Restoring context after compaction...",
         }],
     }, sentinel="compaction-restore.py", label="compaction restore (command-type)")
+
+    # --- SessionStart: workspace primer ---
+    _install_hook(settings, "SessionStart", {
+        "matcher": "Always",
+        "hooks": [{
+            "type": "command",
+            "command": _py_cmd("workspace-primer.py"),
+            "timeout": 5000,
+            "statusMessage": "Loading workspace tier briefing...",
+        }],
+    }, sentinel="workspace-primer.py", label="workspace tier primer (command-type)")
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
     _install_hook(settings, "PreToolUse", {
@@ -477,10 +490,9 @@ def _install_all_hooks(settings: dict) -> None:
             "type": "prompt",
             "prompt": ("WORKSPACE CREATION CHECK: You are creating a workspace directory. "
                        "Before proceeding:\n"
-                       "1. Call ``rag_search`` with the task description to find relevant knowledge\n"
-                       "2. If Gas Town is available, consider ``gt prime`` to initialize the workspace\n"
-                       "3. Ensure you have a task ID and will create context.md after this\n"
-                       "This is the start of complex work - RAG and GT should be active."),
+                       "1. Call POST http://127.0.0.1:8612/search with the task description to find relevant knowledge\n"
+                       "2. Ensure you have a task ID and will create context.md after this\n"
+                       "This is the start of complex work. RAG should be active."),
             "statusMessage": "Enforcing RAG lookup on workspace creation...",
         }],
     }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
@@ -519,22 +531,16 @@ def _install_all_hooks(settings: dict) -> None:
         }],
     }, sentinel="PROCESS KILL SAFETY", label="process kill safety")
 
-    # --- PostToolUse: verify gate ---
+    # --- PostToolUse: verify gate (command-type, non-blocking) ---
+    # Replaces the old prompt-type hook which blocked batched agent flows
+    # (code-review passes ground to a halt waiting for Claude to respond).
+    # verify-gate-cmd.py emits a stderr nudge only when findings are present,
+    # and suppresses during code-review pass runs where Pass 15 handles it.
     _install_hook(settings, "PostToolUse", {
         "matcher": "Task",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("VERIFY GATE: Scan agent output for BLOCKER/HIGH/MEDIUM findings.\n"
-                       "- If findings exist: spawn evaluator-agent to verify (fresh context "
-                       "prevents confirmation bias). Do NOT self-verify — same context that "
-                       "hallucinated will ``confirm`` the hallucination.\n"
-                       "- Evaluator checks: does each finding cite file:line? Does the code "
-                       "actually show the issue? Drop false positives.\n"
-                       "- No findings? No evaluator needed. Present results directly.\n"
-                       "Rework from false findings costs more than one lightweight evaluator spawn."),
-            "statusMessage": "Enforcing verify gate on agent output...",
-        }],
-    }, sentinel="VERIFY GATE: Scan agent output", label="verify gate")
+        "hooks": [{"type": "command", "command": _py_cmd("verify-gate-cmd.py"),
+                   "timeout": 3000, "statusMessage": "Checking agent output for findings..."}],
+    }, sentinel="verify-gate-cmd.py", label="verify gate (command-type)")
 
     # --- PostToolUse: context nudge (counter-based, all tools) ---
     _install_hook(settings, "PostToolUse", {
@@ -555,17 +561,16 @@ def _install_all_hooks(settings: dict) -> None:
             {
                 "type": "prompt",
                 "prompt": ("CONTEXT PRESERVATION — quality-first routing:\n"
-                           "1. Agent spawns: ``rag_context`` Step 1, route by type "
+                           "1. Agent spawns: call POST http://127.0.0.1:8612/context (Step 1), route by type "
                            "(full/standard/lightweight)\n"
                            "2. Finding verification: ALWAYS evaluator-agent, never self-verify "
                            "(confirmation bias)\n"
-                           "3. GT commands: ``gt prime``, ``gt sling``, ``gt handoff``\n"
-                           "4. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
-                           "5. Rework costs more than ceremony. Do it right the first time.\n"
-                           "6. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json "
+                           "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
+                           "4. Rework costs more than ceremony. Do it right the first time.\n"
+                           "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json "
                            "— re-check after compact. Default CONSULT: research + propose + ask "
                            "before architectural decisions."),
-                "statusMessage": "Preserving RAG/GT/CONSULT awareness before compaction...",
+                "statusMessage": "Preserving RAG/CONSULT awareness before compaction...",
             },
             {
                 "type": "command",
@@ -600,6 +605,11 @@ def _install_all_hooks(settings: dict) -> None:
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
     }, sentinel="speak-stop.py", label="TTS interrupt (command-type)")
+
+    # --- Stop: auto-clear (fires /clear after /clear-safe sets the pending flag) ---
+    _install_hook(settings, "Stop", {
+        "hooks": [{"type": "command", "command": _py_cmd("auto-clear.py")}],
+    }, sentinel="auto-clear.py", label="auto-clear")
 
     # --- Stop: TTS speak hook ---
     _install_hook(settings, "Stop", {

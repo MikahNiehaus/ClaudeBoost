@@ -81,6 +81,75 @@ Then propose a fix
   </lost-in-middle-effect>
 </context-management>
 
+<mcp-debugger>
+  <triggers>breakpoint, set breakpoint, step through, step into, step over, step out,
+  watch variable, inspect variable, runtime value, debug session, attach debugger,
+  live debug, mcp-debugger, create_debug_session, get_variables</triggers>
+
+  <overview>When the user asks for breakpoint-based or step-through debugging, use the
+  mcp-debugger MCP tools instead of print statements or static analysis. mcp-debugger
+  gives Claude real DAP (Debug Adapter Protocol) access across Python, Node.js,
+  JavaScript, TypeScript, Go, Rust, Java, C#/.NET, and browser JS.</overview>
+
+  <decision-rule>
+    <use-mcp-debugger-when>
+      <signal>User says "set a breakpoint", "step through", "step into/over/out"</signal>
+      <signal>User asks "what is the value of X at line Y"</signal>
+      <signal>User says "debug this", "walk through this", "trace execution"</signal>
+      <signal>Bug only manifests at runtime and static analysis has already failed</signal>
+      <signal>Race condition, timing bug, or intermittent failure</signal>
+    </use-mcp-debugger-when>
+    <use-static-analysis-when>
+      <signal>User asks to "review" or "explain" code (no runtime needed)</signal>
+      <signal>Syntax error or obvious logic error visible in source</signal>
+      <signal>mcp-debugger is not connected — check /boost Step 4c</signal>
+    </use-static-analysis-when>
+  </decision-rule>
+
+  <tool-sequence>
+    <step order="1" tool="mcp__mcp-debugger__create_debug_session">
+      Start a debug session. Pass language (python/javascript/typescript/go/rust/java/dotnet)
+      and a session name. Returns a sessionId used by all subsequent calls.
+    </step>
+    <step order="2" tool="mcp__mcp-debugger__set_breakpoint">
+      Set a breakpoint at the target file and line. Pass sessionId, file path, line number.
+      Use conditional breakpoints when you only want to stop on specific values.
+    </step>
+    <step order="3" tool="mcp__mcp-debugger__continue_execution">
+      Resume execution until the breakpoint is hit. Pass sessionId.
+    </step>
+    <step order="4" tool="mcp__mcp-debugger__get_variables">
+      Inspect local variables, call stack, and scope at the breakpoint. Pass sessionId.
+    </step>
+    <step order="5" tool="mcp__mcp-debugger__step_over">
+      Step over the current line without entering the called function.
+    </step>
+    <step order="6" tool="mcp__mcp-debugger__step_into">
+      Step into a function call to trace its execution.
+    </step>
+    <step order="7" tool="mcp__mcp-debugger__evaluate_expression">
+      Evaluate an arbitrary expression in the current scope — useful for checking
+      state without modifying code.
+    </step>
+    <step order="8" tool="mcp__mcp-debugger__close_debug_session">
+      Always close the session when done. Pass sessionId.
+    </step>
+  </tool-sequence>
+
+  <anti-pattern>Never add print/console.log statements to inspect runtime state when
+  mcp-debugger is available. Print-debugging is slower, produces noise in diffs, and
+  requires cleanup. Use get_variables instead.</anti-pattern>
+
+  <language-adapters>
+    <adapter language="Python">debugpy — auto-installed on first use</adapter>
+    <adapter language="Node.js / TypeScript / browser JS">js-debug — auto-downloaded</adapter>
+    <adapter language="Go">Delve — must be installed: go install github.com/go-delve/delve/cmd/dlv@latest</adapter>
+    <adapter language="Rust">CodeLLDB — auto-downloaded; GNU toolchain required on Windows</adapter>
+    <adapter language="Java">JDT LS + java-debug — auto-downloaded; requires JDK 17+</adapter>
+    <adapter language="C# / .NET">netcoredbg — auto-downloaded; requires .NET SDK</adapter>
+  </language-adapters>
+</mcp-debugger>
+
 <systematic-workflow>
   <plan-then-execute>
     <step order="1">Explore: Read relevant files without coding</step>

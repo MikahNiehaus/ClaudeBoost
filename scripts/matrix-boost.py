@@ -44,7 +44,7 @@ sr = tr + 2
 sc = max(0, (cols - len(sub)) // 2)
 status_start_row = sr + 2
 
-systems = ['PRIVACY', 'RAG', 'GT', 'RULES', 'AGENTS']
+systems = ['PRIVACY', 'RAG', 'RULES', 'AGENTS']
 # BOOST is a control signal, not displayed — tracked separately
 control_keys = {'BOOST', 'ATTENTION'}
 

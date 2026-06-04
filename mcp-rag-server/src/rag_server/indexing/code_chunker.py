@@ -225,6 +225,7 @@ def chunk_code(
     source_file: str,
     max_tokens: int = 500,
     min_tokens: int = 50,
+    chunk_overlap: int = 0,
 ) -> list[RawChunk]:
     """Split source code into semantic chunks using tree-sitter AST.
 
@@ -235,13 +236,16 @@ def chunk_code(
     4. Large definitions are split at logical boundaries
     5. Falls back to blank-line splitting if tree-sitter unavailable
 
+    chunk_overlap is passed to the fallback path only — AST-level chunks already
+    land at logical unit boundaries (functions, classes) where overlap adds noise.
+
     Returns list[RawChunk] matching the interface of other chunkers.
     """
     ext = Path(source_file).suffix
     language = _EXT_TO_LANG.get(ext)
 
     if not language:
-        return _fallback_chunk(text, source_file, max_tokens, min_tokens)
+        return _fallback_chunk(text, source_file, max_tokens, min_tokens, chunk_overlap)
 
     # tsx has its own parser but shares typescript's definition types
     parser_key = "tsx" if ext == ".tsx" else language
@@ -249,7 +253,7 @@ def chunk_code(
 
     parser = _get_parser(parser_key)
     if parser is None:
-        return _fallback_chunk(text, source_file, max_tokens, min_tokens)
+        return _fallback_chunk(text, source_file, max_tokens, min_tokens, chunk_overlap)
 
     try:
         source_bytes = text.encode("utf-8")
@@ -257,7 +261,7 @@ def chunk_code(
         return _chunk_from_tree(tree, text, source_file, lang_for_types, max_tokens, min_tokens)
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", source_file, e)
-        return _fallback_chunk(text, source_file, max_tokens, min_tokens)
+        return _fallback_chunk(text, source_file, max_tokens, min_tokens, chunk_overlap)
 
 
 def _chunk_from_tree(
@@ -518,7 +522,7 @@ def _split_at_blank_lines(
 
 
 def _fallback_chunk(
-    text: str, source_file: str, max_tokens: int, min_tokens: int,
+    text: str, source_file: str, max_tokens: int, min_tokens: int, chunk_overlap: int = 0,
 ) -> list[RawChunk]:
     """Fallback: split at double-blank-line boundaries."""
     import re
@@ -527,6 +531,7 @@ def _fallback_chunk(
     current_text = ""
     current_start = 1
     line_cursor = 1
+    _overlap_text = ""
 
     for block in blocks:
         block_lines = block.count("\n") + 1
@@ -542,10 +547,16 @@ def _fallback_chunk(
                     line_end=line_cursor - 1,
                     token_count_approx=current_tokens,
                 ))
-            current_text = block
+            # Carry last block as overlap
+            if chunk_overlap > 0:
+                tail = current_text.rsplit("\n\n", 1)[-1].strip()
+                _overlap_text = tail if tail and estimate_tokens(tail) <= chunk_overlap else ""
+            else:
+                _overlap_text = ""
+            current_text = (_overlap_text + "\n\n" + block).strip() if _overlap_text else block
             current_start = line_cursor
         else:
-            current_text = (current_text + "\n\n" + block).strip()
+            current_text = (current_text + "\n\n" + block).strip() if current_text else block
 
         line_cursor += block_lines + 1  # +1 for the blank line between blocks
 

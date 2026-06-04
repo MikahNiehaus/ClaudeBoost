@@ -93,3 +93,13 @@ RERANKER_ENABLED = os.environ.get("RAG_RERANKER_ENABLED", "1").strip().lower() n
 # Belt-and-suspenders below MIN_CHUNK_TOKENS for edge cases (PDF/URL chunkers,
 # tiny stubs) that might slip through with nearly empty content.
 DEGENERATE_CHUNK_MIN_TOKENS = 10
+
+# Chunk overlap: tokens carried from the end of one chunk into the start of the next.
+# Research (arxiv 2407.01219 Table 3) shows 10-20% overlap improves faithfulness at
+# chunk boundaries. Default is ~10% of MAX_CHUNK_TOKENS. Set to 0 to disable.
+CHUNK_OVERLAP_TOKENS = int(os.environ.get("RAG_CHUNK_OVERLAP", "50"))
+
+# Candidate multiplier for the cross-encoder reranker.
+# Fetch limit * N candidates before reranking, then trim to limit after.
+# "Retrieve wide, rerank narrow" — research consistently shows this beats fixed-small N.
+RERANKER_CANDIDATE_MULTIPLIER = int(os.environ.get("RAG_RERANKER_CANDIDATES", "4"))

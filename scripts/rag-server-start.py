@@ -46,16 +46,13 @@ def _server_info() -> dict | None:
 
 
 def _is_server_alive(port: int) -> bool:
-    """Check if the HTTP server is responding on the given port."""
+    """Check if the HTTP server is up and ready on the given port."""
     try:
-        import urllib.request
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=2)
-        return True
-    except Exception as e:
-        # SSE endpoint returns 200 with streaming — urllib may raise on that, which is fine
-        err = str(e)
-        if "200" in err or "RemoteDisconnected" in err or "IncompleteRead" in err:
-            return True
+        import urllib.request, json
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=3) as r:
+            data = json.loads(r.read())
+        return data.get("status") == "ready"
+    except Exception:
         return False
 
 
@@ -127,6 +124,8 @@ def main() -> int:
         print(f"Stale server info (pid={pid}) — restarting...")
 
     print(f"Starting RAG HTTP server on port {port}...")
+    # Wait briefly for Windows to release the port after killing the old process
+    time.sleep(3)
     start_server(port)
 
     # Wait up to 60s for the server to accept connections

@@ -10,7 +10,7 @@ Two-phase command: generate a Product Requirements Document, then break it into 
 
 ## Phase 0: Load Context
 
-Call `rag_context(agent="architect-agent", task_description="create PRD for $ARGUMENTS", max_tokens=4000)` as your FIRST action. This loads organization, architecture, and workflow knowledge.
+Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="create PRD for $ARGUMENTS", max_tokens=4000` as your FIRST action. This loads organization, architecture, and workflow knowledge.
 
 Feature or task: **$ARGUMENTS**
 

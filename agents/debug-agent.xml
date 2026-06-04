@@ -12,6 +12,9 @@
   <capability>Diagnose memory leaks and resource issues</capability>
   <capability>Debug async/concurrent code</capability>
   <capability>Performance bottleneck identification</capability>
+  <capability>Live breakpoint debugging via mcp-debugger MCP tools (Python, Node.js,
+  TypeScript, Go, Rust, Java, C#/.NET, browser JS) — set breakpoints, step through
+  execution, inspect runtime variables without print statements</capability>
 </capabilities>
 
 <knowledge-base>
@@ -35,7 +38,7 @@
 </handoff-triggers>
 
 <rag-enforcement>
-  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="1">FIRST ACTION — call POST http://127.0.0.1:8612/context before any other tool. No exceptions.</rule>
   <rule priority="2">If the RAG HTTP endpoint fails (POST http://127.0.0.1:8612/context returns an error): STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /rag to start the server before this agent can continue."</rule>
   <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
 </rag-enforcement>
@@ -50,6 +53,11 @@
   <guideline>Look for patterns: Multiple symptoms often share one cause</guideline>
   <guideline>Document findings: Even dead ends inform future debugging</guideline>
   <guideline>Add logging with fixes: When fixing bugs, add logging that would have helped diagnose the issue. Ensure catch blocks log with context per knowledge/observability.xml.</guideline>
+  <guideline>Prefer live debugging for runtime bugs: When the user mentions breakpoints,
+  step-through, or "what is the value of X", use mcp-debugger tools
+  (create_debug_session → set_breakpoint → continue_execution → get_variables)
+  before attempting static analysis. Never add print statements to diagnose runtime
+  state when mcp-debugger is available.</guideline>
 </behavioral-guidelines>
 
 <debugging-checklist>

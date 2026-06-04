@@ -14,9 +14,9 @@ Scope: **$ARGUMENTS** (e.g. `npm`, `python`, `go`, `rust` — or omit to auto-de
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `rag_context(agent="workflow-agent", task_description="safe dependency update workflow", max_tokens=3000)`.
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="safe dependency update workflow", max_tokens=3000`.
 
-This loads relevant knowledge before any work begins. If `rag_context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
 ---
 

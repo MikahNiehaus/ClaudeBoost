@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS community_summaries (
     model         TEXT NOT NULL,
     generated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS node_pagerank (
+    file        TEXT PRIMARY KEY,
+    score       REAL NOT NULL,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -396,6 +402,25 @@ class SQLiteGraphStore(GraphStorePort):
             for r in rows
         ]
 
+    def clear_graph_structure(self) -> None:
+        """Clear edges and community assignments, but keep summaries intact.
+
+        Used when rebuilding the graph so old summaries survive as cache for
+        unchanged communities — avoids re-running slow LLM summarization.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM edges")
+            conn.execute("DELETE FROM communities")
+        logger.debug("Cleared graph structure (edges + communities); summaries preserved")
+
+    def get_all_community_ids_with_summaries(self) -> list[int]:
+        """Return community IDs that have a stored summary."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT community_id FROM community_summaries ORDER BY community_id"
+            ).fetchall()
+        return [r["community_id"] for r in rows]
+
     def save_communities(self, mapping: dict[str, int]) -> None:
         """Bulk upsert file→community_id. INSERT OR REPLACE per row."""
         if not mapping:
@@ -504,6 +529,27 @@ class SQLiteGraphStore(GraphStorePort):
                 """
             ).fetchone()
             return row[0]
+
+    def save_pagerank(self, scores: dict[str, float]) -> None:
+        """Replace all PageRank scores with a fresh set."""
+        if not scores:
+            return
+        rows = list(scores.items())
+        with self._connect() as conn:
+            conn.execute("DELETE FROM node_pagerank")
+            conn.executemany(
+                "INSERT INTO node_pagerank (file, score) VALUES (?, ?)",
+                rows,
+            )
+        logger.debug("Saved PageRank scores for %d nodes", len(rows))
+
+    def get_all_pagerank(self) -> dict[str, float]:
+        """Return all stored PageRank scores keyed by file path."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT file, score FROM node_pagerank"
+            ).fetchall()
+        return {r["file"]: r["score"] for r in rows}
 
     def count_edges(self) -> int:
         """Total edge count."""

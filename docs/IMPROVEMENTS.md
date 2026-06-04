@@ -75,20 +75,7 @@ This matters because retrieval quality degrades silently. A knowledge file that 
 
 These are real limitations but require more design work before implementation.
 
-### 3.1 Remove Gas Town Dependencies
-
-**The decision.** Gas Town (`gt prime`, `gt hook`, `gt sling`, `gt handoff`, beads) is referenced throughout CLAUDE.md and several commands. It adds external dependency complexity for features that ClaudeBoost either already handles (session handoff via `/clear-safe` + `/restore`) or doesn't need. Gas Town is better suited for hobby projects with a different workflow than ClaudeBoost's structure.
-
-**What to change.**
-- Remove Gas Town references from `CLAUDE.md` (the "Gas Town Compatibility" section and the `gt prime`/`gt nudge` mentions in the workspace creation hook).
-- Update `/handoff` to use ClaudeBoost's native compaction-save + session state mechanism exclusively.
-- Remove `gt` references from workspace creation prompt hooks.
-- Audit any slash commands that mention Gas Town and either update or remove them.
-- Update `docs/USING-CLAUDEBOOST.md` to remove Gas Town from the recommended workflow.
-
----
-
-### 3.2 Peer-to-Peer Agent Communication
+### 3.1 Peer-to-Peer Agent Communication
 
 **The problem.** ClaudeBoost agents are hub-and-spoke: every agent reports to the orchestrator. Agents cannot negotiate with each other mid-task. Anthropic Agent Teams supports peer-to-peer messaging and a shared task list with dependency tracking. This means two ClaudeBoost agents working on related subtasks can't coordinate without going back through the orchestrator, which creates bottlenecks and potential context waste.
 
@@ -98,7 +85,7 @@ These are real limitations but require more design work before implementation.
 
 ---
 
-### 3.3 CI/CD Integration
+### 3.2 CI/CD Integration
 
 **The problem.** ClaudeBoost's workflow ends at PR description generation. There's no hook into GitHub Actions results, test run feedback, or deployment status. Agents that implement a feature don't know if it passed CI.
 
@@ -108,7 +95,7 @@ These are real limitations but require more design work before implementation.
 
 ---
 
-### 3.4 Summary Format Enforcement
+### 3.3 Summary Format Enforcement
 
 **The problem.** The `## Summary (≤300 words)` requirement at the end of every agent response is advisory. The orchestrator reads the summary block and trusts it. There's no hook that verifies the summary block exists before the orchestrator proceeds.
 
@@ -142,7 +129,6 @@ This is intentional for now, but worth a design note: if you ever want to share 
 | Mechanical evaluator routing | Anti-hallucination | LangGraph |
 | Hook test harness | Reliability | General software quality |
 | RAG server observability | Reliability | LangSmith |
-| Remove Gas Town | Simplification | (removes external dependency) |
 | Peer-to-peer agent notes | Architecture | Anthropic Agent Teams |
 | CI/CD integration | Workflow | LangGraph in CI |
 | Summary format enforcement | Output quality | (tightens existing protocol) |

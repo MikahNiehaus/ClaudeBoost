@@ -122,7 +122,7 @@
 1. Reads `state/claudeboost-mode.json`
 2. If mode is not CONSULT, exits 0 (no-op)
 3. If CONSULT, checks the file path against exempt fragments:
-   - `/workspace/`, `/.claude/`, `/knowledge/`, `/plans/`, `/docs/`, `/mayor/`, `/polecats/`, `/refinery/`, `/witness/`, `/crew/`
+   - `/workspace/`, `/.claude/`, `/knowledge/`, `/plans/`, `/docs/`
 4. If the path is exempt, exits 0
 5. Checks `state/session-approvals.json` for existing approval
 6. If path is non-exempt AND not approved: writes 4-line nudge to `stderr`
@@ -1388,20 +1388,19 @@ Agent reads and internalizes before taking any action
 
 ### 5.1 /boost
 **File:** `.claude/commands/boost.md`  
-**Description:** Activate ClaudeBoost — load RAG + GT and prime the session  
+**Description:** Activate ClaudeBoost — load RAG and prime the session  
 **Tools:** Bash, Read, Glob  
 **Steps:**
 1. Launch matrix-boost.py animation (new WT tab), clear `__pycache__`, clear Boost RAG and Project RAG flag files
 2. Verify privacy env vars (`DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`) — auto-fix if missing
 3. Activate RAG: `check-rag-health.py` → auto-repair if exit 2 or 3 → call `rag_context` to prime
 3.5. Index ClaudeBoost Codebase (Project RAG): call `rag_index_project` on CLAUDEBOOST_HOME — keeps `rag_search(scope="codebase")` current against ClaudeBoost source
-4. Activate Gas Town: `gt prime` → auto-init (`gt init`) if not a GT workspace
-5. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
-6. Verify `~/.claude/CLAUDE.md` exists
-7. Read CONSULT/AUTO mode, clear `session-approvals.json`
-8. Scan `workspace/*/context.md` for active tasks
-9. Write `$TEMP/claudeboost_active`, write `BOOST:done` to status file
-10. Report: Systems Status + Active Workspaces + Session Directives + Collaborative Mode + Ready
+4. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
+5. Verify `~/.claude/CLAUDE.md` exists
+6. Read CONSULT/AUTO mode, clear `session-approvals.json`
+7. Scan `workspace/*/context.md` for active tasks
+8. Write `$TEMP/claudeboost_active`, write `BOOST:done` to status file
+9. Report: Systems Status + Active Workspaces + Session Directives + Collaborative Mode + Ready
 
 ---
 
@@ -1566,19 +1565,17 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.17 /done [--status COMPLETED|ESCALATED|DEFERRED] [--pre-verified]
+### 5.17 /done
 **File:** `.claude/commands/done.md`  
-**Description:** Signal work complete and submit to Gas Town merge queue  
-**Steps:** Pre-flight (git status clean, at least 1 commit) → `gt done $ARGUMENTS`  
-**Statuses:** COMPLETED (default), ESCALATED (blocker), DEFERRED (pause work)
+**Description:** Verify work is clean and push to remote  
+**Steps:** Pre-flight (git status clean, at least 1 commit) → `git push` (or `git push -u origin HEAD` if no upstream)
 
 ---
 
 ### 5.18 /handoff [message]
 **File:** `.claude/commands/handoff.md`  
-**Description:** Hand off to a fresh session  
-**Steps:** `gt handoff -s "HANDOFF: Session cycling" -m "message"` or `gt handoff` if no message  
-**Effect:** New session auto-primes via SessionStart hook and finds handoff mail
+**Description:** Save session state and prepare for a fresh context  
+**Steps:** Runs `session-clear-save.py` to snapshot active workspace → optionally stores message in handoff-latest.json → instructs user to `/clear` then `/boost` or `/restore` in next session
 
 ---
 
@@ -1689,7 +1686,7 @@ Agent reads and internalizes before taking any action
 
 | Matcher | Type | Script/Prompt | Purpose |
 |---------|------|---------------|---------|
-| `Bash(mkdir*workspace*)` | prompt | Workspace creation check | Remind to call rag_search + gt prime |
+| `Bash(mkdir*workspace*)` | prompt | Workspace creation check | Remind to call rag_search before workspace creation |
 | `Task` | command | `agent-spawn-gate.py` | Verify rag_context in spawn prompt |
 | `Edit\|Write\|MultiEdit` | command | `consult-gate.py` | Check CONSULT mode approval |
 | `Bash(pkill*)\|Bash(killall*)\|...` | prompt | Process kill safety | Remind to use specific PID instead of broad name-pattern kills |

@@ -5,7 +5,7 @@ Hard-blocks workspace creation when /boost has not been run this session.
 The sentinel file ($TEMP/claudeboost_rag_ok) is created by /boost only after
 RAG health checks pass.
 
-Without /boost, the RAG index is unverified and rag_context won't load
+Without /boost, the RAG index is unverified and POST /context won't load
 correctly into the workspace — so blocking here is the right call rather
 than letting the workspace get created with a broken RAG underneath it.
 

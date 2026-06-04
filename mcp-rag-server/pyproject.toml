@@ -1,10 +1,9 @@
 [project]
 name = "rag-server"
 version = "0.1.0"
-description = "MCP RAG server for ClaudeBoost - semantic search over knowledge bases and agent definitions"
+description = "HTTP RAG server for ClaudeBoost - semantic search over knowledge bases and agent definitions"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0",
     "chromadb>=1.5.9,<2.0",
     "chroma-hnswlib>=0.7.6",
     "sentence-transformers>=3.0",

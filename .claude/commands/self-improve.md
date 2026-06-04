@@ -42,10 +42,10 @@ Second token (or first token if no target was given) → `FOCUS`. Valid values p
 
 Announce: `Starting self-improve — MODE: [SELF|WORKSPACE|PROJECT], Target: [target or "ClaudeBoost"], Focus: [FOCUS]`
 
-**0b — Call rag_context.**
+**0b — Call POST http://127.0.0.1:8612/context.**
 
 ```
-rag_context(
+POST http://127.0.0.1:8612/context with 
   agent="reviewer-agent",
   task_description="self-improvement audit in [MODE] mode on [target], focus: [FOCUS]",
   max_tokens=5000
@@ -65,8 +65,8 @@ Announce: `Round R[N+1]`
 ## Phase 1: Index
 
 **SELF mode:**
-1. `rag_index(force=true, scope=all)` — rebuilds ClaudeBoost RAG (agents + knowledge)
-2. `rag_index_project(project_path=$CLAUDEBOOST_HOME, force=true)` — rebuilds project RAG (codebase)
+1. `POST http://127.0.0.1:8612/index with force=true, scope=all)` — rebuilds ClaudeBoost RAG (agents + knowledge
+2. `POST http://127.0.0.1:8612/index with project_path=$CLAUDEBOOST_HOME, force=true)` — rebuilds project RAG (codebase
 
 Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
 
@@ -74,13 +74,13 @@ Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
 1. Read `$WORKSPACE_ABS/goal.md` and `$WORKSPACE_ABS/plan.md`.
 2. Extract `**Project**:` line from plan.md — this is the project path the workspace is working on.
 3. If a valid project path is found:
-   - `rag_index_project(project_path=$PROJECT_PATH, force=true)`
+   - `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH, force=true`
    - Report: "Indexed Y files (project: $PROJECT_PATH)"
 4. If no project path found or path is "N/A":
    - Skip project indexing. Note: "No project path in workspace plan — code audit will use grep/glob only."
 
 **PROJECT mode:**
-1. `rag_index_project(project_path=$PROJECT_PATH, force=true)`
+1. `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH, force=true`
 2. Report: "Indexed Y files (project: $PROJECT_PATH)"
 
 ---
@@ -135,7 +135,7 @@ Use findings as extra audit checklist items in Phase 2.
 ## Phase 2: Audit
 
 Every finding **MUST** cite `file:line` — no citation = drop the finding.
-Use `rag_search` to locate files before reading them. Never guess file paths.
+Use POST http://127.0.0.1:8612/search to locate files before reading them. Never guess file paths.
 
 ### SELF mode lenses
 
@@ -145,7 +145,7 @@ Use `rag_search` to locate files before reading them. Never guess file paths.
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
 | `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
 | `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
-| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `rag_status` total > 700 (ST-10). Context pipeline: `rag_context` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
+| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8612/context` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
 | `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
 | `all` | All of the above |
@@ -154,13 +154,13 @@ Use `rag_search` to locate files before reading them. Never guess file paths.
 
 First, determine the **workspace scope** (what files the workspace touched):
 1. Read `$WORKSPACE_ABS/plan.md` — extract all `**Output artifact**:` lines to build a file list.
-2. `rag_search(scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10)` — find related files.
+2. `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10` — find related files.
 3. Only audit files in scope. Do not audit the entire project.
 
 | FOCUS | Lenses to run |
 |-------|--------------|
 | `code` | Does the implementation follow the plan steps? Are planned output artifacts present? Any obvious code quality issues (hardcoded values, missing error handling at system boundaries, duplicate logic)? Cite file:line for every flag. |
-| `security` | OWASP top 10 scan on files in workspace scope. Focus on new endpoints, data flows, and user input handling. Use knowledge/security.xml via rag_search. |
+| `security` | OWASP top 10 scan on files in workspace scope. Focus on new endpoints, data flows, and user input handling. Use knowledge/security.xml via POST http://127.0.0.1:8612/search. |
 | `tests` | Are tests present for new/changed code? For each output artifact that is a source file, check whether a corresponding test file exists. List gaps. |
 | `quality` | Consistency with project conventions: naming, error handling, logging (logger.error in catch blocks), no secrets in source. |
 | `docs` | Are new functions/APIs documented? Is `$WORKSPACE_ABS/context.md` Status field current? Is plan.md still accurate? |
@@ -168,14 +168,14 @@ First, determine the **workspace scope** (what files the workspace touched):
 
 ### PROJECT mode lenses
 
-Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate files. Never guess.
+Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, ...` to locate files. Never guess.
 
 | FOCUS | Lenses to run |
 |-------|--------------|
-| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use rag_search to find largest/most-referenced files and spot-check them. Cite file:line. |
+| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use POST http://127.0.0.1:8612/search to find largest/most-referenced files and spot-check them. Cite file:line. |
 | `security` | OWASP top 10 scan across project entry points and data flows. Grep for raw SQL string concatenation, eval() on user input, secrets in source. |
 | `tests` | Find source files with no corresponding test file. Report ratio of tested vs untested modules. |
-| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via rag_search. |
+| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via POST http://127.0.0.1:8612/search. |
 | `docs` | README present and complete? Public API surface documented? Undocumented exports? |
 | `all` | All of the above |
 
@@ -193,17 +193,17 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
 | ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
 | ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |
-| ST-07 | `rag_search("OWASP SQL injection", scope="knowledge")` | security.xml in top 3 |
-| ST-08 | `rag_search("playwright browser testing", scope="agents")` | playwright.xml or e2e-testing.xml in top 3 |
+| ST-07 | `POST http://127.0.0.1:8612/search with "OWASP SQL injection", scope="knowledge"` | security.xml in top 3 |
+| ST-08 | `POST http://127.0.0.1:8612/search with "playwright browser testing", scope="agents"` | playwright.xml or e2e-testing.xml in top 3 |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
-| ST-10 | `rag_status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `rag_status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via `rag_index_project` output instead |
+| ST-10 | `GET /status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `GET /status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via POST /index output instead |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
-| ST-13 | `rag_search("rag search implementation", scope="codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
-| ST-14 | `rag_context(agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME)` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
-| ST-15 | Graph resolution quality: `rag_index_project(project_path=$CLAUDEBOOST_HOME)` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved). External deps don't count as unresolved. |
-| ST-16 | Neighbor relevance spot-check: `rag_search(scope="codebase", query="build_context tier4 codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`). Confirms graph edges connect semantically related files, not random ones. |
-| ST-17 | CodeSearchNet MRR benchmark: `python "C:/Users/grayw/OneDrive/prj/rag-benchmarks/codesearchnet_benchmark.py" --sample 100 --lang python --no-index`. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. **Caveat**: benchmark uses `whole_func_string` (code+docstring) which is easier than the published CodeBERT task (code-only). Use for trend tracking only — not a direct comparison to Microsoft baselines. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |
+| ST-13 | `POST http://127.0.0.1:8612/search with "rag search implementation", scope="codebase", project_path=$CLAUDEBOOST_HOME, mode="graph"` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
+| ST-14 | `POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
+| ST-15 | Graph resolution quality: `POST http://127.0.0.1:8612/index with project_path=$CLAUDEBOOST_HOME)` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved. External deps don't count as unresolved. |
+| ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8612/search with scope="codebase", query="build_context tier4 codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`. Confirms graph edges connect semantically related files, not random ones. |
+| ST-17 | CodeSearchNet MRR benchmark: `python "$RAG_BENCHMARKS_PATH/codesearchnet_benchmark.py" --sample 100 --lang python --no-index` where `$RAG_BENCHMARKS_PATH` is your local clone of the rag-benchmarks repo. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. **Caveat**: benchmark uses `whole_func_string` (code+docstring) which is easier than the published CodeBERT task (code-only). Use for trend tracking only — not a direct comparison to Microsoft baselines. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |
 
 ### WORKSPACE mode tests (run all)
 
@@ -214,7 +214,7 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | WT-03 | `$WORKSPACE_ABS/context.md` exists | File present |
 | WT-04 | context.md Status field | Not stuck on PLAN_READY if work has started (should be IN_PROGRESS or COMPLETE) |
 | WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
-| WT-06 | Project RAG indexed (if project path exists) | `rag_index_project` output from Phase 1 shows files_indexed > 0 (note: `rag_status` does not report project chunks) |
+| WT-06 | Project RAG indexed (if project path exists) | POST /index output from Phase 1 shows files_indexed > 0 (note: `GET /status` does not report project chunks) |
 | WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
 | WT-08 | Tests planned → test files exist | If plan includes a test-agent step, at least one test file is present |
 
@@ -223,7 +223,7 @@ Use `rag_search(scope="codebase", project_path=$PROJECT_PATH, ...)` to locate fi
 | ID | Check | Pass condition |
 |----|-------|----------------|
 | PT-01 | README exists | File present at project root |
-| PT-02 | Project RAG indexed | `rag_index_project` output from Phase 1 shows files_indexed > 0 (note: `rag_status` does not report project chunks) |
+| PT-02 | Project RAG indexed | POST /index output from Phase 1 shows files_indexed > 0 (note: `GET /status` does not report project chunks) |
 | PT-03 | Raw SQL string concatenation | Zero occurrences (grep for string-concatenated query patterns) |
 | PT-04 | Secrets in source | Zero hardcoded API keys, passwords, tokens in non-.env source files |
 | PT-05 | logger.error in catch blocks | Sample 10 catch blocks via grep; flag any missing error logging (INFO, not FAIL) |

@@ -1,0 +1,208 @@
+<knowledge-base name="practices-code-review" version="1.0">
+<triggers>code review, pull request, PR review, CL, changelist, reviewer, author, LGTM, diff review, review comment, review feedback, review speed, small PR, small CL</triggers>
+<overview>Concrete guidance for both reviewers and authors based on Google's engineering practices. Covers what to look for, how to give and receive feedback, CL size, and speed.</overview>
+
+<what-review-is-for>
+  <purpose>Code review improves code health over time. The primary goal is to ensure every change improves the overall codebase — not to achieve perfection on each CL.</purpose>
+  <goals>
+    <goal>Correctness: does the code do what the author intends?</goal>
+    <goal>Maintainability: will others understand and modify this easily?</goal>
+    <goal>Knowledge sharing: spreads design awareness and coding practices across the team</goal>
+    <goal>Catches bugs, design problems, and test gaps before they reach production</goal>
+  </goals>
+  <not-goals>
+    <not-goal>Perfection — approve when the change improves overall code health, even if imperfect</not-goal>
+    <not-goal>Teaching everything you know — mark educational comments as optional</not-goal>
+    <not-goal>Bikeshedding style when a style guide already rules on it</not-goal>
+  </not-goals>
+</what-review-is-for>
+
+<reviewer-checklist>
+  <item area="Design">
+    <check>Does the overall design make sense? Does this code integrate well with the rest of the system?</check>
+    <check>Should this logic be in a library instead of this service?</check>
+    <check>Does this interact correctly with other parts of the system?</check>
+  </item>
+  <item area="Functionality">
+    <check>Does it do what the author intended?</check>
+    <check>Are edge cases handled? What happens with null, empty, or very large inputs?</check>
+    <check>For UI changes: does this actually work? Is it accessible?</check>
+    <check>For concurrent code: are there race conditions or deadlocks?</check>
+  </item>
+  <item area="Complexity">
+    <check>Can each line, function, and class be understood quickly?</check>
+    <check>Is the complexity necessary, or is the author solving a problem that doesn't exist yet?</check>
+    <check>Over-engineering flag: is generic infrastructure being added for speculative future needs?</check>
+  </item>
+  <item area="Tests">
+    <check>Are there appropriate unit, integration, or end-to-end tests?</check>
+    <check>Will the tests actually fail if the code breaks?</check>
+    <check>Are test assertions simple and meaningful?</check>
+    <check>Tests are code too — they have to be maintained. Are they clear?</check>
+  </item>
+  <item area="Naming">
+    <check>Are names sufficiently descriptive without being verbose?</check>
+    <check>Do names communicate what something is or does?</check>
+  </item>
+  <item area="Comments">
+    <check>Do comments explain WHY, not WHAT? The code shows what; comments explain why.</check>
+    <check>If a comment explains what the code does, the code should be simplified instead.</check>
+    <check>Are class and function comments accurate about purpose, usage, and behavior?</check>
+  </item>
+  <item area="Style">
+    <check>Does it follow the project style guide?</check>
+    <check>Flag optional style improvements with "Nit:" prefix so the author knows they're not blockers.</check>
+  </item>
+  <item area="Documentation">
+    <check>Are READMEs or guides updated to match this change?</check>
+    <check>Is documentation for deleted or deprecated code removed?</check>
+  </item>
+</reviewer-checklist>
+
+<approval-standard>
+  <rule>Approve when the change demonstrably improves code health overall — even if it's not perfect.</rule>
+  <rule>Do not block approval because you'd have done it differently, as long as the author's approach is technically sound.</rule>
+  <rule>Technical facts and data override opinions. Style guides are the authority on style.</rule>
+  <rule>If multiple valid approaches exist and the author's choice is sound, accept their preference.</rule>
+  <rule>Never approve a change that would worsen overall code health.</rule>
+
+  <comment-prefixes>
+    <prefix label="Nit:">Optional polish — author can ignore or address at their discretion</prefix>
+    <prefix label="(no prefix)">Must be addressed before approval</prefix>
+    <prefix label="FYI:">Informational only — no action needed</prefix>
+  </comment-prefixes>
+</approval-standard>
+
+<speed>
+  <target>Respond within one business day. Ideally, shortly after the request comes in if you're between tasks.</target>
+  <why-speed-matters>
+    <reason>Slow reviews stall features and fixes by days or weeks</reason>
+    <reason>Frustration with slow reviews vanishes when reviewers respond quickly, even if they request many changes</reason>
+    <reason>Pressure to approve substandard code builds when reviews drag on</reason>
+  </why-speed-matters>
+
+  <managing-interruptions>
+    <rule>Don't interrupt focused coding work to do a review. Respond during natural breaks — after finishing a task, at lunch, between meetings.</rule>
+    <rule>Quick acknowledgment that a full review is coming later still helps significantly.</rule>
+    <rule>Responding quickly to each round matters more than completing the full process quickly.</rule>
+  </managing-interruptions>
+
+  <lgtm-with-comments>
+    <use-when>The remaining comments are optional or very minor</use-when>
+    <use-when>You trust the developer will address the notes reliably</use-when>
+    <use-when>The change spans time zones and waiting another day has no benefit</use-when>
+  </lgtm-with-comments>
+
+  <large-cls>
+    <rule>Ask developers to split large changes into smaller sequential CLs.</rule>
+    <rule>If splitting is impossible and you lack time, provide architectural feedback rather than delaying entirely.</rule>
+  </large-cls>
+</speed>
+
+<cl-size>
+  <target>A CL should make one minimal, self-contained change. Typically 100 lines is reasonable; 1000 is usually too large.</target>
+  <what-small-means>
+    <criteria>Addresses a single thing — one feature part, one bug fix, one refactoring</criteria>
+    <criteria>Includes related tests</criteria>
+    <criteria>Keeps the system working after submission</criteria>
+    <criteria>Contains enough context for reviewers to understand it</criteria>
+  </what-small-means>
+
+  <why-small>
+    <reason>Reviewers find five-minute blocks easier than thirty-minute ones — faster turnaround</reason>
+    <reason>Smaller scope means more thorough review, fewer missed issues</reason>
+    <reason>Simpler to reason about side effects and correctness</reason>
+    <reason>Less wasted work if the design needs to change</reason>
+    <reason>Easier rollbacks when something goes wrong</reason>
+    <reason>Unblocks other work — you can start the next CL while this one is in review</reason>
+  </why-small>
+
+  <acceptable-exceptions>
+    <exception>File deletions count as roughly one line of work</exception>
+    <exception>Automated refactoring from trusted tools — reviewers verify intent, not each line</exception>
+  </acceptable-exceptions>
+
+  <splitting-strategies>
+    <strategy name="Stack changes">Submit one small CL, start a dependent CL immediately without waiting</strategy>
+    <strategy name="By files">Separate CLs for different reviewer groups (e.g., proto changes separate from code using the proto)</strategy>
+    <strategy name="Horizontal split">Shared code or stubs in one CL, usage in another</strategy>
+    <strategy name="Vertical split">Independent full-stack features (multiply in one CL, divide in another)</strategy>
+    <strategy name="Separate refactoring">Never mix feature work and refactoring in the same CL</strategy>
+  </splitting-strategies>
+</cl-size>
+
+<author-responsibilities>
+  <rule>Self-review your own diff before sending for review. Catch obvious issues yourself first.</rule>
+  <rule>Keep CLs small. Reviewers can reject a change solely for being too large.</rule>
+  <rule>Write a clear description: what this change does and why, not how.</rule>
+  <rule>Respond to all reviewer comments — even if just to acknowledge.</rule>
+  <rule>Improve the code in response to confusion, not just the review thread. Future readers won't see the review.</rule>
+  <rule>Add explanatory comments to code when a reviewer doesn't understand something — don't just explain in the review tool.</rule>
+</author-responsibilities>
+
+<handling-disagreement>
+  <rule>Don't personalize feedback. Reviewer critiques are about the code, not you.</rule>
+  <rule>Never respond in anger — step away until you can respond professionally.</rule>
+  <rule>Clarify the code first. If a reviewer is confused, the code probably needs improvement.</rule>
+  <rule>Share context the reviewer may lack: user needs, codebase history, design rationale.</rule>
+  <rule>Ground disagreements in technical facts and engineering principles, not preference.</rule>
+  <rule>If consensus fails, escalate to team discussion or technical leads — never let a CL stall indefinitely.</rule>
+</handling-disagreement>
+
+<writing-review-comments>
+  <rule>Be specific. "This won't handle the null case when user is unauthenticated" is useful. "This looks wrong" is not.</rule>
+  <rule>Explain the why behind a request, not just what to change. Reviewers often have context the author doesn't.</rule>
+  <rule>Ask questions to understand intent before demanding changes: "Is there a reason this uses a raw loop instead of LINQ?"</rule>
+  <rule>Separate blocking issues from suggestions. Use "Nit:" for suggestions so the author knows what's required vs. optional.</rule>
+  <rule>Review every line you're assigned. Don't skim large files — if you're too busy for a thorough review, say so and suggest a different reviewer.</rule>
+  <rule>Be kind. You can be direct without being harsh. Comments get written down and stay in the review history.</rule>
+
+  <good-comment-patterns>
+    <pattern>Blocking: "This query will N+1 on large order lists. Eager load orders.Items here."</pattern>
+    <pattern>Nit: "Nit: 'data' is a bit vague here — 'userProfile' would be clearer."</pattern>
+    <pattern>Question: "Does this need a try/catch? What happens if the external call fails?"</pattern>
+    <pattern>FYI: "FYI: We have a shared utility for this in /shared/formatters.ts if you want to reuse it."</pattern>
+  </good-comment-patterns>
+
+  <bad-comment-patterns>
+    <pattern>Vague: "This is wrong." — wrong how? what should it be?</pattern>
+    <pattern>Dogmatic: "This should be done with a factory." — why? is there a real benefit here?</pattern>
+    <pattern>Personal preference unmarked: "I prefer map() over forEach" (should be a Nit if anything)</pattern>
+  </bad-comment-patterns>
+</writing-review-comments>
+
+<cl-description>
+  <rule>The CL description should answer: what does this change do, and why?</rule>
+  <rule>The first line is a summary (under 72 characters): treat it like a newspaper headline.</rule>
+  <rule>The body explains the motivation: what problem does this solve? what was wrong before?</rule>
+  <rule>Reference issue/ticket numbers in the footer for traceability.</rule>
+  <rule>Don't describe how the code works — the diff does that. Describe why the approach was chosen if it's non-obvious.</rule>
+
+  <good-description><![CDATA[
+Fix N+1 query loading user orders on dashboard
+
+The orders dashboard was issuing one query per user to fetch their
+latest order. On a page with 50 users this produced 51 queries and
+caused noticeable latency (avg 2400ms, p99 8000ms).
+
+Changed to a single JOIN query with an application-side group-by.
+Dashboard load time is now avg 180ms.
+
+Fixes: #1823
+  ]]></good-description>
+
+  <bad-description><![CDATA[
+Fix bug
+
+Updated the query to use a join instead of looping.
+  ]]></bad-description>
+</cl-description>
+
+<quick-reference>
+  <reviewer-must>Review every line assigned. Respond within one business day. Explain the why in comments. Approve when it improves health, not when it's perfect.</reviewer-must>
+  <reviewer-must-not>Block on style when a style guide applies. Use "Nit:" only for true nitpicks. Let personal preference block a sound technical choice.</reviewer-must-not>
+  <author-must>Self-review first. Keep CLs small and focused. Respond to all comments. Improve code, not just the review thread.</author-must>
+  <author-must-not>Respond in anger. Ignore comments. Combine refactoring with feature work in one CL.</author-must-not>
+</quick-reference>
+
+</knowledge-base>

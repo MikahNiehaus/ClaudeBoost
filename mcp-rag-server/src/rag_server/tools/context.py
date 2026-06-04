@@ -11,6 +11,28 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _detect_stack(project_path: str) -> str | None:
+    """Quick stack detection from indicator files in the project root.
+
+    Checks only the project root — no recursive search — so it stays fast
+    even for large codebases. Returns a short stack name or None if unknown.
+    """
+    p = Path(project_path)
+    if (p / "go.mod").exists():
+        return "go"
+    if next(p.glob("*.csproj"), None) or next(p.glob("*.sln"), None):
+        return "csharp"
+    if (p / "tsconfig.json").exists():
+        return "typescript"
+    if (p / "package.json").exists():
+        return "javascript"
+    if (p / "pyproject.toml").exists() or (p / "setup.py").exists() or (p / "requirements.txt").exists():
+        return "python"
+    if (p / "pom.xml").exists() or next(p.glob("build.gradle*"), None):
+        return "java"
+    return None
+
+
 def build_context(
     agent: str,
     task_description: str,
@@ -21,15 +43,19 @@ def build_context(
     weight: str = "standard",
     project_path: str | None = None,
     code_embedder=None,
+    workspace_path: str | None = None,
 ) -> dict:
     """Build a tiered context package for an agent.
 
-    Tier 0: Agent definition (always included, full text)
-    Tier 1: Universal guardrails (skipped for lightweight agents)
-    Tier 2: Agent-declared knowledge bases (from <knowledge-base> tags)
-    Tier 3: Semantic search fills remaining budget (knowledge only, not agents)
-    Tier 4: Codebase search (if project_path provided and index exists)
+    Tier 0:  Agent definition (always included, full text)
+    Tier 1:  Universal guardrails (skipped for lightweight agents)
+    Tier 2:  Agent-declared knowledge bases (from <knowledge-base> tags)
+    Tier 3:  Semantic search fills remaining budget (knowledge collection)
+             Auto-boosts queries with detected stack name when project_path given.
+    Tier 3c: Workspace research (if workspace_path given and research index exists)
+    Tier 4:  Codebase search (if project_path provided and index exists)
     Tier 4b: Graph structural neighbours (auto-appended to Tier 4 when graph index exists)
+    Tier 4c: Community summaries for files in scope
     """
     from rag_server.indexing.markdown_chunker import estimate_tokens
 
@@ -60,6 +86,12 @@ def build_context(
     if project_path and remaining_budget > 400:
         tier4_reserved = min(600, remaining_budget // 4)
         remaining_budget -= tier4_reserved
+
+    # Pre-reserve Tier 3c (workspace research) so Tier 3 doesn't crowd it out.
+    tier3c_reserved = 0
+    if workspace_path and remaining_budget > 400:
+        tier3c_reserved = min(400, remaining_budget // 5)
+        remaining_budget -= tier3c_reserved
 
     # --- Parse agent's declared knowledge bases ---
     declared_files = []
@@ -153,14 +185,20 @@ def build_context(
             })
         else:
             try:
-                # Multi-query: 3 variants cover vocabulary gaps between task description
-                # and knowledge file language. Deduplicate by source before budget gating.
+                # Multi-query: several variants cover vocabulary gaps between task
+                # description and knowledge file language. When the project stack is
+                # known, add stack-specific queries so lang/framework knowledge surfaces
+                # even when the task description doesn't mention the language by name.
                 _agent_label = agent.replace("-agent", "").replace("-", " ")
                 _queries = [
                     task_description,
                     f"{_agent_label} {task_description}",
                     f"how to {task_description}",
                 ]
+                _stack = _detect_stack(project_path) if project_path else None
+                if _stack:
+                    _queries.append(f"{_stack} {task_description}")
+                    _queries.append(f"best practices {_stack}")
                 _seen_ids: set[str] = set()
                 _all_hits: list = []
                 for _q in _queries:
@@ -194,6 +232,39 @@ def build_context(
                 tier_errors.append({"tier": "search", "error": str(e)})
 
     remaining_budget -= tier3_tokens
+
+    # --- Tier 3c: Workspace research (if workspace_path given and index exists) ---
+    tier3c_chunks = []
+    tier3c_tokens = 0
+
+    if workspace_path and not skip_guardrails and embedder.is_loaded:
+        try:
+            research_chroma = Path(workspace_path) / ".rag-index" / "research" / "chroma"
+            if research_chroma.exists():
+                from rag_server.core.store import ChromaStore as _ResearchStore
+                _rs = _ResearchStore(persist_dir=str(research_chroma))
+                if _rs.collection_exists("research") and _rs.count("research") > 0:
+                    _t3c_budget = tier3c_reserved if tier3c_reserved > 0 else min(400, remaining_budget)
+                    _qe = embedder.embed_query(task_description)
+                    _hits = _rs.search("research", _qe, limit=8, min_score=0.35)
+                    for r in _hits:
+                        _ct = r.metadata.get("token_count", estimate_tokens(r.content))
+                        if tier3c_tokens > 0 and tier3c_tokens + _ct > _t3c_budget:
+                            break
+                        tier3c_chunks.append({
+                            "source": r.metadata.get("source_file") or r.metadata.get("url", "workspace_research"),
+                            "section": r.metadata.get("section", ""),
+                            "content": r.content,
+                            "score": r.score,
+                            "tier": "workspace_research",
+                        })
+                        tier3c_tokens += _ct
+                _rs.close()
+        except Exception as e:
+            logger.error("Tier 3c: workspace research failed: %s", e)
+            tier_errors.append({"tier": "workspace_research", "error": str(e)})
+
+    remaining_budget -= tier3c_tokens
 
     # --- Tier 4: Codebase search (if project indexed) ---
     tier4_chunks = []
@@ -290,10 +361,14 @@ def build_context(
                             _gs4c = _SGS4c(_graph_db_4c)
                             if _gs4c.has_graph():
                                 _seen_cids: set[int] = set()
-                                _community_budget = min(400, max(0, remaining_budget - tier4_tokens))
+                                # Community summaries get a dedicated slot that doesn't
+                                # compete with tier4 code chunks. Always allow at least
+                                # one summary (mirrors the "first chunk always" rule in tier4a).
+                                _community_budget = min(600, max(200, remaining_budget - tier4_tokens))
                                 _community_tokens = 0
                                 for _ck in list(tier4_chunks):
-                                    if _community_tokens >= _community_budget:
+                                    # Allow the first summary through even if over budget.
+                                    if _community_tokens > 0 and _community_tokens >= _community_budget:
                                         break
                                     _cid4 = _gs4c.get_community_for_file(_ck["source"])
                                     if _cid4 is None or _cid4 in _seen_cids:
@@ -303,7 +378,7 @@ def build_context(
                                     if not _crow or not _crow.get("summary"):
                                         continue
                                     _ctokens = estimate_tokens(_crow["summary"])
-                                    if _community_tokens + _ctokens > _community_budget:
+                                    if _community_tokens > 0 and _community_tokens + _ctokens > _community_budget:
                                         break
                                     tier4_chunks.append({
                                         "source": f"community:{_cid4}",
@@ -323,8 +398,8 @@ def build_context(
             logger.error("Tier 4: codebase search failed for project %r: %s", project_path, e)
             tier_errors.append({"tier": "codebase", "error": str(e)})
 
-    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier4_chunks
-    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier4_tokens
+    all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier3c_chunks + tier4_chunks
+    total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier3c_tokens + tier4_tokens
 
     result = {
         "agent_definition": agent_def,
@@ -337,7 +412,8 @@ def build_context(
             "guardrails": len(tier1_chunks),
             "declared": len(tier2_chunks),
             "search": len(tier3_chunks),
-            "codebase": sum(1 for c in tier4_chunks if c["tier"] != "community_summary"),
+            "workspace_research": len(tier3c_chunks),
+            "codebase": sum(1 for c in tier4_chunks if c["tier"] not in {"community_summary", "codebase_graph"}),
             "community_summaries": sum(1 for c in tier4_chunks if c["tier"] == "community_summary"),
         },
     }

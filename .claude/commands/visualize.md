@@ -4,11 +4,14 @@ description: Interactive Architecture Board — generate a visual project archit
 
 # Interactive Architecture Board
 
-Generate a professional dark-themed SVG architecture diagram as a self-contained HTML file and open it in the browser. Claude writes the HTML directly — no intermediate JSON, no render scripts.
+Generate a professional interactive architecture diagram as a self-contained HTML file and open it in the browser. Claude writes the HTML directly using **CSS flexbox layout** — no SVG pixel coordinates, no coordinate math, no overlaps.
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `rag_context(agent="workflow-agent", task_description="architecture visualization of current project", max_tokens=3000)`.
+Call `POST http://127.0.0.1:8612/context` with:
+```json
+{"agent":"workflow-agent","task_description":"architecture visualization of current project","project_path":"<cwd>"}
+```
 
 If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
@@ -27,262 +30,323 @@ User can override: `--self` forces self-map, `--project` forces project-map.
 
 ---
 
-## Step 2a: Self-Map — Gather Data
+## Step 2a: Self-Map — Get Data from Extractor
 
-Read ClaudeBoost's structure to populate the diagram:
+Run the extractor — it reads all agents, knowledge files, hooks, and commands in one shot:
 
-1. **Agents** — list names and expertise:
-   ```bash
-   grep -r "<name>\|<expertise>" agents/*.xml | head -80
-   ```
-   Group by tier:
-   - **Opus agents**: architect-agent, reviewer-agent, ticket-analyst-agent
-   - **Quality agents**: security-agent, test-agent, debug-agent, performance-agent, refactor-agent, evaluator-agent
-   - **Support agents**: everything else
+```bash
+python -c "
+import os,subprocess,sys,json
+h=os.environ['CLAUDEBOOST_HOME']
+t=os.environ.get('TEMP','/tmp')
+r=subprocess.run([sys.executable,h+'/scripts/visualize-extract.py',h,t+'/cb-graph.json'])
+if r.returncode==0:
+    print(open(t+'/cb-graph.json').read())
+sys.exit(r.returncode)
+"
+```
 
-2. **Knowledge bases** — count by category:
-   ```bash
-   ls knowledge/lang-*.xml | wc -l
-   ls knowledge/fw-*.xml | wc -l
-   ls knowledge/*.xml | grep -v lang- | grep -v fw- | wc -l
-   ```
-
-3. **Scripts** — list the major ones:
-   ```bash
-   ls scripts/*.py | head -20
-   ```
-
-4. **Commands** — count slash commands:
-   ```bash
-   ls .claude/commands/*.md | wc -l
-   ```
-
-Build this mental model for the diagram:
-- **Layer 1 INPUT**: User
-- **Layer 2 ORCHESTRATOR**: Claude Code + ClaudeBoost hooks (session-primer, context-nudge, agent-spawn-gate, rag-server-guard)
-- **Layer 3 AGENTS**: Three columns — Opus tier, Quality tier, Support tier
-- **Layer 4 RAG / KNOWLEDGE**: RAG server (port 8612) + three knowledge categories (domain, language guides, framework guides)
-- **Left rail**: Scripts and hooks infrastructure
-- **Right rail**: External integrations (MCP servers, edge-tts, git)
+Read the JSON output. Use the `layers`, `side_rails`, and card fields (`title`, `subtitle`, `detail`, `responsibilities`, `icon`, `accent`) as your content. Do not run any other data-gathering commands — everything is already in the JSON.
 
 ---
 
 ## Step 2b: Project-Map — Gather Data
 
-For non-ClaudeBoost repos:
-
-1. List top-level structure and read key config files:
+1. Read top-level structure and key config:
    ```bash
    ls -la && cat package.json 2>/dev/null || cat pyproject.toml 2>/dev/null || cat Cargo.toml 2>/dev/null
    ```
-2. Use RAG if available: `rag_search(scope="codebase", query="services endpoints data models API", mode="graph", limit=8)`
-3. Identify 6–18 key components: entry points, services/modules, data stores, external APIs, middleware, config
-4. Map their relationships: which calls which, which reads/writes where
+2. If RAG project index exists: `POST http://127.0.0.1:8612/search` with `{"scope":"codebase","mode":"graph","query":"services endpoints data models","project_path":"<cwd>","limit":8}`
+3. Identify **8–15 key components**: entry points, services, data stores, external APIs, middleware. Cap at 15 — more components hurt clarity.
 
 ---
 
 ## Step 3: Write the HTML File
 
-Write a **fully self-contained** HTML file. No external CDN, no Google Fonts, no network requests. All CSS and JS inline.
+Write a fully self-contained HTML file. No external CDN, no fonts, no network requests. All CSS and JS inline. **Use CSS flexbox layout throughout — never use pixel-positioned SVG elements.**
 
-### Design system
+### Design tokens
 
-```
-Background:        #020617
-Grid overlay:      #0f172a (40px grid lines, opacity 0.4)
-Surface:           #0f172a
-Card background:   #1e293b
-Border:            #334155
-Text primary:      #f1f5f9
-Text muted:        #94a3b8
-Font:              -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif
-Monospace:         'Consolas', 'Courier New', monospace
+```css
+--bg:      #020617
+--surface: #0f172a
+--card-bg: #1e293b
+--border:  #334155
+--text:    #f1f5f9
+--muted:   #94a3b8
 ```
 
-### Component color palette
+### Component accent colors (use as `border-left-color` on each card)
 
-| Type | Fill | Border | Label |
-|------|------|--------|-------|
-| User / Input | `#0ea5e9` | `#38bdf8` | `#e0f2fe` |
-| Orchestrator / Core | `#f97316` | `#fb923c` | `#fff7ed` |
-| Agent / Worker | `#22c55e` | `#4ade80` | `#f0fdf4` |
-| Knowledge / RAG | `#a855f7` | `#c084fc` | `#faf5ff` |
-| Storage / Database | `#f59e0b` | `#fbbf24` | `#fffbeb` |
-| External / API | `#06b6d4` | `#22d3ee` | `#ecfeff` |
-| Scripts / Hooks | `#10b981` | `#34d399` | `#ecfdf5` |
-| Config | `#64748b` | `#94a3b8` | `#f8fafc` |
+| Type | Color |
+|------|-------|
+| User / Input | `#0ea5e9` |
+| Orchestrator / Core | `#f97316` |
+| Agent / Worker | `#22c55e` |
+| Knowledge / RAG | `#a855f7` |
+| Storage / Database | `#f59e0b` |
+| External / API | `#06b6d4` |
+| Scripts / Hooks | `#10b981` |
+| Config | `#64748b` |
 
 ### HTML structure
 
-```
-<html>
-  <head>
-    <style>  ← all CSS inline </style>
-  </head>
-  <body style="background:#020617; margin:0; font-family:system-ui">
-    <!-- Header bar: title left, export buttons right -->
-    <div id="toolbar">
-      <h1>Project Name · Architecture</h1>
-      <div>
-        <button onclick="copyPNG()">Copy</button>
-        <button onclick="downloadPNG()">PNG</button>
-        <button onclick="window.print()">PDF</button>
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>[Project] · Architecture</title>
+<style>
+/* === RESET + BASE === */
+*, *::before, *::after { box-sizing: border-box; }
+body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; margin: 0; }
+
+/* === TOOLBAR === */
+.toolbar { display: flex; justify-content: space-between; align-items: center;
+           padding: 12px 20px; background: #0f172a; border-bottom: 1px solid #334155;
+           position: sticky; top: 0; z-index: 10; }
+.toolbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.toolbar button { background: #1e293b; color: #f1f5f9; border: 1px solid #334155;
+                  padding: 6px 14px; border-radius: 6px; cursor: pointer; margin-left: 8px;
+                  font-size: 12px; }
+.toolbar button:hover { background: #334155; }
+
+/* === BOARD GRID: left-rail | layers | right-rail === */
+.board { display: grid; grid-template-columns: 130px 1fr 130px; gap: 20px;
+         padding: 24px; align-items: start; }
+
+/* === LAYERS (center column) === */
+.layers { display: flex; flex-direction: column; gap: 0; }
+.layer { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; }
+.layer-label { writing-mode: vertical-rl; text-orientation: mixed; font-size: 9px;
+               letter-spacing: 3px; color: #475569; text-transform: uppercase;
+               min-width: 20px; padding-top: 6px; flex-shrink: 0; }
+.cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.layer-arrow { color: #475569; font-size: 11px; padding: 4px 0 4px 32px; }
+
+/* === CARD === */
+.card { background: #1e293b; border: 1px solid #334155; border-left: 4px solid #334155;
+        border-radius: 8px; padding: 11px 13px; min-width: 130px; max-width: 190px;
+        cursor: pointer; transition: background 0.12s; }
+.card:hover { background: #253347; }
+.card-icon { font-size: 17px; display: block; margin-bottom: 5px; }
+.card-title { font-size: 12px; font-weight: 600; color: #f1f5f9; line-height: 1.3; }
+.card-sub { font-size: 10px; color: #94a3b8; margin-top: 3px; line-height: 1.4; }
+.card-badge { display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 10px;
+              margin-top: 5px; font-weight: 500; }
+
+/* Columns inside a layer (for sub-grouped tiers) */
+.col-group { display: flex; flex-direction: column; gap: 6px; }
+.col-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;
+             padding-bottom: 2px; border-bottom: 1px solid #1e293b; }
+
+/* === RAILS (flanking columns) === */
+.rail { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+.rail-card { background: #1e293b; border: 1px solid #334155; border-left: 3px solid #64748b;
+             border-radius: 6px; padding: 9px 10px; cursor: pointer; }
+.rail-card:hover { background: #253347; }
+.rc-title { font-size: 11px; font-weight: 600; color: #f1f5f9; }
+.rc-sub { font-size: 9px; color: #94a3b8; margin-top: 2px; }
+
+/* === DETAIL PANEL === */
+.detail { position: fixed; right: 0; top: 0; height: 100vh; width: 300px;
+          background: #0f172a; border-left: 1px solid #334155; padding: 20px;
+          overflow-y: auto; z-index: 100; }
+.detail.hidden { display: none; }
+.detail-close { float: right; background: none; border: none; color: #64748b;
+                font-size: 20px; cursor: pointer; line-height: 1; }
+.detail-close:hover { color: #f1f5f9; }
+.detail-type { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 10px;
+               background: #1e293b; color: #94a3b8; margin-bottom: 10px; margin-top: 4px; }
+.detail h2 { margin: 6px 0 10px; font-size: 15px; clear: both; }
+.detail p { color: #94a3b8; font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
+.detail ul { color: #cbd5e1; font-size: 12px; padding-left: 16px; line-height: 1.9; margin: 0; }
+
+/* === PRINT === */
+@media print {
+  .toolbar button, .detail { display: none !important; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>[Project Name] · Architecture</h1>
+  <div>
+    <button onclick="downloadSVG()">SVG</button>
+    <button onclick="window.print()">PDF</button>
+  </div>
+</div>
+
+<div class="board" id="board">
+
+  <!-- Left rail (cross-cutting concerns) -->
+  <aside class="rail rail-left">
+    <div class="rail-card" style="border-left-color:#e74c3c" onclick="showDetail('global-rules')">
+      <div class="rc-title">🔒 Global Rules</div>
+      <div class="rc-sub">~/.claude/CLAUDE.md</div>
+    </div>
+    <!-- more rail cards... -->
+  </aside>
+
+  <!-- Main layers -->
+  <main class="layers">
+
+    <section class="layer">
+      <div class="layer-label">INPUT</div>
+      <div class="cards">
+        <div class="card" style="border-left-color:#0ea5e9" onclick="showDetail('you')">
+          <span class="card-icon">👤</span>
+          <div class="card-title">You</div>
+          <div class="card-sub">Chat · tickets · slash commands</div>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Main SVG diagram -->
-    <svg id="diagram" viewBox="0 0 1100 [height]" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <!-- arrowhead marker -->
-        <marker id="arrow" markerWidth="10" markerHeight="7"
-                refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#475569"/>
-        </marker>
-        <!-- grid pattern -->
-        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#0f172a" stroke-width="1"/>
-        </pattern>
-      </defs>
+    <div class="layer-arrow">classifies as ↓</div>
 
-      <!-- Grid background -->
-      <rect width="100%" height="100%" fill="url(#grid)"/>
+    <section class="layer">
+      <div class="layer-label">CLASSIFICATION</div>
+      <div class="cards">
+        <!-- cards for this layer... -->
+      </div>
+    </section>
 
-      <!-- DRAW ARROWS FIRST (so they render behind boxes) -->
-      <!-- connection lines with marker-end="url(#arrow)" -->
-      <!-- use <path> for curved connections, <line> for straight -->
+    <div class="layer-arrow">routes to ↓</div>
 
-      <!-- THEN DRAW COMPONENT BOXES on top -->
-      <!-- each component: <g id="comp-id" class="node" onclick="showDetail(...)">
-             <rect rx="8" fill="[surface]" stroke="[type-border]" stroke-width="2"/>
-             <rect width="4" height="[h]" rx="2" fill="[type-fill]"/>  ← left accent bar
-             <text fill="[text-primary]" font-weight="600">Title</text>
-             <text fill="[text-muted]" font-size="12">Subtitle</text>
-           </g> -->
+    <!-- For layers with sub-columns (e.g. agent tiers): -->
+    <section class="layer">
+      <div class="layer-label">AGENTS</div>
+      <div class="cards" style="align-items:flex-start">
+        <div class="col-group">
+          <div class="col-label">Opus — Strategic</div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('architect')">
+            <div class="card-title">architect-agent</div>
+            <div class="card-sub">System design, SOLID review</div>
+          </div>
+          <!-- more cards in column -->
+        </div>
+        <div class="col-group">
+          <div class="col-label">Sonnet — Quality</div>
+          <!-- cards -->
+        </div>
+        <!-- more col-groups -->
+      </div>
+    </section>
 
-      <!-- Layer labels (left margin text) -->
-      <!-- <text x="20" y="[mid-y]" fill="#475569" font-size="11"
-             writing-mode="tb" letter-spacing="2">LAYER NAME</text> -->
-    </svg>
+    <div class="layer-arrow">searches ↓</div>
 
-    <!-- Detail panel (shown on node click) -->
-    <div id="detail-panel" style="display:none; position:fixed; right:20px; top:80px;
-         width:280px; background:#1e293b; border:1px solid #334155; border-radius:12px;
-         padding:20px; color:#f1f5f9">
-      <button onclick="closeDetail()" style="float:right">✕</button>
-      <div id="detail-type-badge"></div>
-      <h3 id="detail-title"></h3>
-      <p id="detail-desc" style="color:#94a3b8; font-size:14px"></p>
-      <ul id="detail-list" style="color:#cbd5e1; font-size:13px; padding-left:16px"></ul>
-    </div>
+    <!-- more layers... -->
 
-    <script>
-      // Component data for detail panel
-      const COMPONENTS = { /* id: {title, type, desc, items:[]} */ };
+  </main>
 
-      function showDetail(id) {
-        const c = COMPONENTS[id]; if (!c) return;
-        document.getElementById('detail-title').textContent = c.title;
-        document.getElementById('detail-desc').textContent = c.desc;
-        // populate list...
-        document.getElementById('detail-panel').style.display = 'block';
-      }
+  <!-- Right rail -->
+  <aside class="rail rail-right">
+    <!-- rail cards -->
+  </aside>
 
-      function closeDetail() {
-        document.getElementById('detail-panel').style.display = 'none';
-      }
+</div>
 
-      document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+<!-- Detail panel -->
+<div id="detail" class="detail hidden">
+  <button class="detail-close" onclick="closeDetail()">✕</button>
+  <div id="detail-type" class="detail-type"></div>
+  <h2 id="detail-title"></h2>
+  <p id="detail-desc"></p>
+  <ul id="detail-list"></ul>
+</div>
 
-      // PNG export — draw SVG to canvas then download / copy
-      async function svgToCanvas() {
-        const svg = document.getElementById('diagram');
-        const data = new XMLSerializer().serializeToString(svg);
-        const blob = new Blob([data], {type:'image/svg+xml'});
-        const url = URL.createObjectURL(blob);
-        const img = new Image();
-        await new Promise(r => { img.onload = r; img.src = url; });
-        const canvas = document.createElement('canvas');
-        canvas.width = svg.viewBox.baseVal.width * 2;   // 2x for retina
-        canvas.height = svg.viewBox.baseVal.height * 2;
-        const ctx = canvas.getContext('2d');
-        ctx.scale(2, 2);
-        ctx.fillStyle = '#020617';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-        URL.revokeObjectURL(url);
-        return canvas;
-      }
+<script>
+// Component data — one entry per clickable card
+const COMPONENTS = {
+  'you': {
+    title: 'You',
+    type: 'Input',
+    desc: 'You interact with Claude Code normally. ClaudeBoost changes how Claude thinks behind the scenes.',
+    items: [
+      'Type requests, paste tickets, or run slash commands',
+      'Approve or adjust architectural proposals (CONSULT mode)',
+    ]
+  },
+  'global-rules': {
+    title: 'Global Rules',
+    type: 'Config',
+    desc: 'Hard rules loaded from ~/.claude/CLAUDE.md at every session. Not debatable.',
+    items: [
+      'jQuery ban — use React hooks / vanilla JS',
+      'Parameterized queries only',
+      'logger.error in every catch block',
+      'No secrets in logs, URLs, or source code',
+    ]
+  },
+  // add one entry per card id...
+};
 
-      async function downloadPNG() {
-        const canvas = await svgToCanvas();
-        const a = document.createElement('a');
-        a.download = 'architecture.png';
-        a.href = canvas.toDataURL('image/png');
-        a.click();
-      }
+function showDetail(id) {
+  const c = COMPONENTS[id];
+  if (!c) return;
+  document.getElementById('detail-title').textContent = c.title;
+  document.getElementById('detail-type').textContent = c.type || '';
+  document.getElementById('detail-desc').textContent = c.desc || '';
+  document.getElementById('detail-list').innerHTML = (c.items || []).map(i => `<li>${i}</li>`).join('');
+  document.getElementById('detail').classList.remove('hidden');
+}
 
-      async function copyPNG() {
-        const canvas = await svgToCanvas();
-        canvas.toBlob(blob => {
-          navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
-        }, 'image/png');
-      }
-    </script>
+function closeDetail() {
+  document.getElementById('detail').classList.add('hidden');
+}
 
-    <style>
-      @media print {
-        #toolbar button { display: none; }
-        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      }
-    </style>
-  </body>
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+
+function downloadSVG() {
+  const board = document.getElementById('board');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${board.scrollWidth}" height="${board.scrollHeight}">
+    <foreignObject width="100%" height="100%">
+      <html xmlns="http://www.w3.org/1999/xhtml"><body style="margin:0;background:#020617">${board.outerHTML}</body></html>
+    </foreignObject>
+  </svg>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([svg], {type: 'image/svg+xml'}));
+  a.download = 'architecture.svg';
+  a.click();
+}
+</script>
+
+</body>
 </html>
 ```
 
-### SVG layout rules
+### Layout rules
 
-**Layered (self-map and most projects):**
-- Layers stack top-to-bottom with ~80px vertical gap between layers
-- Components in a layer spread horizontally, centered, with ~20px gap between boxes
-- Box size: 160×70px minimum; expand width for long titles
-- Layer label: rotated text in left margin at x=14
-- Connection arrows: straight `<line>` for same-column, `<path>` with a mid-point curve for cross-column; always drawn *before* boxes so they sit behind them
-- Connection label: small `<text>` on the midpoint of the line, background rect for readability
-
-**Side rails (cross-cutting concerns):**
-- Left rail x=0–110, right rail x=990–1100
-- Rail boxes are narrower (100px wide), stacked vertically
-- Dashed `<line>` connections from rail boxes to the layers they affect
-
-### Quality bar — check before writing the file
-
-- Every component box has a colored left-accent bar (4px wide rect at x=box_x, same height as box)
-- Every connection has a descriptive label (not just an arrow)
-- No components overlap
-- SVG `viewBox` height is computed from actual content, not hardcoded
-- Detail panel `COMPONENTS` map has an entry for every clickable node
+- Every layer needs a `layer-label` and a `cards` div — no exceptions
+- Between layers: `<div class="layer-arrow">flow description ↓</div>`
+- Multi-column layers (e.g. agent tiers): wrap `card-group` divs side by side inside `.cards`
+- `COMPONENTS` map must have an entry for every `onclick="showDetail('id')"` id on the page
+- Colors: always set `border-left-color` on each card to match its component type
+- Never use pixel positions, `position: absolute`, or SVG coordinate math
 
 ---
 
 ## Step 4: Save and Open
 
-Save the file:
+Pick an output directory:
 - If `workspace/[task-id]/` exists → save to `workspace/[task-id]/visualize/architecture.html`
 - Otherwise create `workspace/visualize-YYYY-MM-DD/` and save there
 
-Open in browser (Windows — always use cygpath):
+Open in browser (Windows):
 ```bash
-WIN_PATH="$(cygpath -w "$(realpath [path-to-architecture.html])")" && cmd.exe /c start "" "$WIN_PATH"
+powershell.exe -NoProfile -Command "Start-Process 'C:\path\to\architecture.html'"
 ```
 
-**Never pass a bash/Unix path directly to `cmd.exe`** — it only understands Windows paths.
+Use the literal Windows path with backslashes. Do not use `cygpath` or `cmd.exe /c start`.
 
 ---
 
 ## Step 5: Report
 
 Tell the user:
-- How many components were diagrammed and how many connections
+- How many components and layers are in the diagram
 - Where the file was saved
-- That it's open in their browser
-- Click any box to see details. Export with the Copy / PNG / PDF buttons.
+- Click any card to see details. Export with the SVG / PDF buttons.

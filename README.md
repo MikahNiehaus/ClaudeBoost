@@ -1,7 +1,7 @@
 # ClaudeBoost
 
 Multi-agent orchestration toolkit for Claude Code. 25 specialist agents, 96 knowledge
-files, semantic RAG search, and Gas Town integration — all installable globally.
+files, and semantic RAG search — all installable globally.
 
 ## What's Inside
 
@@ -12,18 +12,13 @@ ClaudeBoost/
 ├── mcp-rag-server/      Semantic search MCP server (Python)
 ├── .claude/commands/    41 slash commands
 ├── scripts/             Setup and maintenance scripts
-├── gastown/             Gas Town multi-agent framework
 ├── CLAUDE.md            Orchestration rules
 └── docs/                Reference documentation
 ```
 
 ## Quick Start
 
-### 1. Install Gas Town (optional but recommended)
-
-See [SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for full installation including Go, Dolt, and GT (Windows, macOS, Linux).
-
-### 2. Install ClaudeBoost Extensions
+### 1. Install ClaudeBoost
 
 **macOS / Linux:**
 
@@ -44,7 +39,6 @@ Either path runs `scripts/setup.py`, the cross-platform installer. It registers 
 - RAG MCP server (semantic search in every project)
 - Hooks (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 - CLAUDEBOOST_HOME environment variable
-- Agent/knowledge files in GT directives (if GT installed)
 
 > **TTS support:** `/speak` works on Windows and macOS. Linux is not supported (no `afplay` / Windows API equivalent wired in) — the rest of ClaudeBoost runs fine.
 
@@ -55,7 +49,7 @@ Open any project in Claude Code. You now have:
 - `rag_context` — curated context packages for agent tasks
 - `rag_index` — index new content
 - `rag_status` — check server health
-- `/boost` — activate ClaudeBoost (RAG + GT primed)
+- `/boost` — activate ClaudeBoost (RAG primed)
 - 41 slash commands for task management
 
 ## Features
@@ -122,13 +116,4 @@ context engineering, verify gate, scope governance, rule enforcement, and more.
 
 ## How It Works
 
-See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the full architecture, directives,
-formulas, plugins, and Gas Town integration details.
-
-## Works Standalone
-
-ClaudeBoost works without Gas Town. You get agents, knowledge, RAG search, and
-slash commands in any Claude Code project.
-
-With Gas Town, you additionally get: multi-agent coordination, persistent identity,
-work tracking (beads), message passing, and automated supervision.
+See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the full architecture, agents, knowledge bases, and RAG details.

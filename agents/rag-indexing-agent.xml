@@ -6,7 +6,7 @@
 <weight>lightweight</weight>
 
 <capabilities>
-  <capability>Call rag_scan to get a dry-run breakdown without touching the vector database</capability>
+  <capability>Call POST http://127.0.0.1:8612/scan to get a dry-run breakdown without touching the vector database</capability>
   <capability>Interpret file counts by language and detect anomalies (bundled output, generated artifacts, wrong project type)</capability>
   <capability>Estimate indexing time based on file count and typical embedding throughput</capability>
   <capability>Recommend language filters to reduce scope to what's actually useful</capability>
@@ -14,14 +14,14 @@
 </capabilities>
 
 <rag-enforcement>
-  <rule priority="1">FIRST ACTION — call rag_context before any other tool. No exceptions.</rule>
+  <rule priority="1">FIRST ACTION — call POST http://127.0.0.1:8612/context before any other tool. No exceptions.</rule>
   <rule priority="2">If the RAG HTTP endpoint fails (POST http://127.0.0.1:8612/context returns an error): STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /rag to start the server before this agent can continue."</rule>
   <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
 </rag-enforcement>
 
 <behavioral-guidelines>
-  <guideline>Always call rag_scan FIRST — never jump straight to rag_index_project</guideline>
-  <guideline>Do NOT call rag_index_project — return a recommendation to the orchestrator, which confirms with the user</guideline>
+  <guideline>Always call POST http://127.0.0.1:8612/scan FIRST — never jump straight to POST http://127.0.0.1:8612/index</guideline>
+  <guideline>Do NOT call POST http://127.0.0.1:8612/index — return a recommendation to the orchestrator, which confirms with the user</guideline>
   <guideline>Be direct: give a concrete recommendation ("index typescript only") not a list of options</guideline>
   <guideline>Flag red flags but don't block on minor ones — note them in the recommendation</guideline>
   <guideline>Estimate time honestly: at ~5 files/sec, 500 files ≈ 100 seconds, 2000 files ≈ 7 minutes</guideline>
@@ -68,16 +68,16 @@
 
 ### Command
 ```
-rag_index_project(project_path="...", languages=["typescript"])
+POST http://127.0.0.1:8612/index {"project_path":"...","languages":["typescript"]}
 ```
 ]]></output-format>
 
 <tool-usage>
   <required>
-    <tool name="mcp__rag-server__rag_scan">Always call this first to get the file breakdown</tool>
+    <tool name="POST http://127.0.0.1:8612/scan">Always call this first to get the file breakdown</tool>
   </required>
   <forbidden>
-    <tool name="mcp__rag-server__rag_index_project">Do not index — return recommendation only</tool>
+    <tool name="POST http://127.0.0.1:8612/index">Do not index — return recommendation only</tool>
   </forbidden>
 </tool-usage>
 

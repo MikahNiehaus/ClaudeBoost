@@ -47,15 +47,7 @@ CONTEXT_PCT_WARN = 0.75         # warn when >75% of the window is used (< 25% re
 AUTO_SAVE_TOOLS = {"Edit", "Write"}
 STALE_NUDGE_SECONDS = 300  # 5 minutes — nudge if context.md older than this after an edit
 
-RAG_TOOLS = {
-    "mcp__rag-server__rag_search",
-    "mcp__rag-server__rag_context",
-    "mcp__rag-server__rag_index_project",
-    "mcp__rag-server__rag_index",
-    "mcp__rag-server__rag_index_research",
-    "mcp__rag-server__rag_status",
-    "mcp__rag-server__rag_scan",
-}
+RAG_TOOLS: set = set()  # RAG is HTTP-only now; detection uses _is_http_rag (Bash to 127.0.0.1:8612)
 FILE_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 
@@ -241,7 +233,7 @@ def main() -> int:
         nudges.append(
             f"RAG REMINDER ({reads} file searches since last RAG call): "
             "STOP reading files. Search RAG FIRST — "
-            "POST http://127.0.0.1:8612/search (or call rag_search if MCP is connected). "
+            "POST http://127.0.0.1:8612/search. "
             "Only read files after RAG confirms which ones are relevant."
         )
     elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0:
