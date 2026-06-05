@@ -1,19 +1,30 @@
-"""RAG retrieval quality benchmark suite.
+"""ClaudeBoost RAG Domain Quality Tests
 
-Measures retrieval quality using industry-standard methodologies:
+Tests retrieval quality across ClaudeBoost's three search scopes (knowledge,
+agents, codebase) using domain-specific ground-truth pairs. These are internal
+quality tests — they verify ClaudeBoost's specific knowledge base and codebase
+retrieval, not general-purpose benchmark datasets.
 
-  - BEIR-style Recall@k  — ground-truth query/source pairs across all scopes
-  - MTEB-style nDCG@k    — normalised discounted cumulative gain for ranking quality
-  - MRR                  — mean reciprocal rank for first-hit latency
-  - CodeSearchNet-style  — natural-language queries mapped to specific code files
-  - GraphRAG-Bench-style — multi-hop graph reasoning: does graph mode surface
-                           structural neighbours that vector-only mode misses?
+Metric methodology follows industry standards:
 
-References:
-  BEIR (Thakur et al. 2021)     — https://arxiv.org/abs/2104.08663
-  MTEB (Muennighoff et al. 2022) — https://arxiv.org/abs/2210.07316
-  GraphRAG-Bench (ICLR 2026)    — https://arxiv.org/abs/2506.05690
-  CodeSearchNet (Husain et al.)  — https://arxiv.org/abs/1909.09436
+  Recall@k — from BEIR (Thakur et al. 2021, arxiv:2104.08663):
+              binary hit in top-k across diverse query types
+
+  nDCG@k, MRR — from MTEB (Muennighoff et al. 2022, arxiv:2210.07316):
+                 normalized discounted cumulative gain and mean reciprocal rank
+
+  Graph structural tests — methodology from GraphRAG-Bench (ICLR 2026,
+                            arxiv:2506.05690): does graph mode surface
+                            structural import-chain neighbours that vector misses?
+
+  NL→code mapping — methodology from CodeSearchNet (Husain et al. 2019,
+                     arxiv:1909.09436): natural-language description mapped
+                     to correct source file.
+
+Note: these tests use ClaudeBoost-specific query/source pairs. They are NOT
+running against the actual BEIR, MTEB, or CodeSearchNet datasets. For the
+actual CodeSearchNet benchmark using real test data, see:
+    mcp-rag-server/tests/test_codesearchnet_benchmark.py
 
 Run from the repo root:
     pytest mcp-rag-server/tests/test_rag_quality.py -v -s
@@ -137,10 +148,10 @@ def require_server():
 
 
 # ---------------------------------------------------------------------------
-# BEIR-style — Knowledge scope Recall@3
+# Knowledge scope domain recall — Recall@3
 #
-# Each pair: (natural-language query, expected source fragment)
-# Ground truth derived from ClaudeBoost knowledge index.
+# Uses Recall@k methodology (Thakur et al. 2021 / BEIR).
+# Ground truth pairs are ClaudeBoost-specific; queries are natural-language.
 # ---------------------------------------------------------------------------
 
 KNOWLEDGE_CASES = [
@@ -178,7 +189,8 @@ def test_knowledge_recall_at_3(query: str, expected_fragment: str):
 
 
 # ---------------------------------------------------------------------------
-# BEIR-style — Agents scope Recall@3
+# Agents scope domain recall — Recall@3
+# Uses Recall@k methodology (Thakur et al. 2021 / BEIR).
 # ---------------------------------------------------------------------------
 
 AGENTS_CASES = [
@@ -206,7 +218,8 @@ def test_agents_recall_at_3(query: str, expected_fragment: str):
 
 
 # ---------------------------------------------------------------------------
-# BEIR / MTEB-style — Codebase vector Recall@5
+# Codebase vector domain recall — Recall@5
+# Uses Recall@k methodology (Thakur et al. 2021 / BEIR).
 # ---------------------------------------------------------------------------
 
 CODEBASE_CASES_VECTOR = [
@@ -235,11 +248,12 @@ def test_codebase_vector_recall_at_5(query: str, expected_fragment: str):
 
 
 # ---------------------------------------------------------------------------
-# CodeSearchNet-style — natural-language → code file
+# NL→code domain recall — Recall@5
 #
-# Queries are written as a developer would describe the function they want,
-# not as keywords from the source. Tests whether the embedding model
-# generalises beyond literal term overlap.
+# Uses CodeSearchNet methodology (Husain et al. 2019): queries are written
+# as a developer would describe the function, not as keywords from source.
+# These are ClaudeBoost-specific pairs. For actual CodeSearchNet dataset
+# evaluation, see test_codesearchnet_benchmark.py.
 # ---------------------------------------------------------------------------
 
 CODESEARCH_CASES = [
@@ -283,14 +297,14 @@ def test_codesearch_recall_at_5(description: str, expected_fragment: str):
 
 
 # ---------------------------------------------------------------------------
-# GraphRAG-Bench-style — multi-hop structural retrieval
+# Graph structural retrieval — multi-hop
 #
-# Methodology from GraphRAG-Bench (ICLR 2026, arxiv:2506.05690):
-# "Does graph mode surface structural neighbours that vector-only misses?"
+# Methodology follows GraphRAG-Bench (ICLR 2026, arxiv:2506.05690):
+# does graph mode surface structural import-chain neighbours that vector misses?
 #
 # Each case: (query, seed_fragment, neighbour_fragment)
-# The graph mode should return BOTH the seed file AND its structural
-# import-chain neighbour. Vector-only typically returns only the seed.
+# Graph mode should return BOTH the seed file AND its structural neighbour.
+# Uses ClaudeBoost codebase import relationships as ground truth.
 # ---------------------------------------------------------------------------
 
 GRAPH_MULTIHOP_CASES = [
@@ -634,10 +648,11 @@ def test_graph_mode_augmented_flag():
 
 
 # ---------------------------------------------------------------------------
-# MTEB-style nDCG@k + MRR summary (informational — always passes)
+# nDCG@5 + MRR summary (informational — always passes)
 #
-# Computes nDCG@5 and MRR across all codebase vector cases.
-# These match the primary metrics used on the MTEB leaderboard.
+# Computes nDCG@5 and MRR across all codebase domain queries.
+# Uses MTEB-standard metric formulas (Muennighoff et al. 2022).
+# Scores reflect ClaudeBoost-domain retrieval, not MTEB leaderboard values.
 # ---------------------------------------------------------------------------
 
 def test_mteb_ndcg_mrr_report():

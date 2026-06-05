@@ -7,7 +7,7 @@ of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+provided to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
@@ -42,3 +42,249 @@ include this Commons Clause License Condition notice.
 Software: ClaudeBoost
 License: MIT
 Licensor: Mikah Niehaus
+
+---
+
+Proprietary Method Notice
+
+The following techniques, systems, and architectures implemented in this
+Software are proprietary innovations authored by Mikah Niehaus. Use of this
+Software does not grant any license to claim, patent, or independently
+commercialize these methods in any product or service, regardless of how
+they are re-implemented or repackaged:
+
+1. ClaudeBoost Multi-Agent Orchestration System
+
+   A complete multi-agent orchestration layer for AI coding assistants,
+   comprising the following innovations in combination:
+
+   (a) Specialist agent routing: a set of named specialist agents (architect,
+       reviewer, security, performance, debug, test, ui, database, devops,
+       observability, refactor, docs, research, explore, workflow, compliance,
+       evaluator, e2e, browser, estimator, rag-indexing, standards-validator,
+       ticket-analyst, and others), each with a defined specialty, weight
+       tier, and model assignment, dispatched automatically based on task
+       classification at spawn time.
+
+   (b) Model routing by task weight: routing Opus-class models to tasks
+       requiring deep reasoning (architecture design, code review, ticket
+       analysis) and Sonnet-class models to all other agent work, with
+       mid-task escalation when an agent self-reports low confidence or is
+       blocked.
+
+   (c) Parallel agent limits tied to context utilization: allowing up to
+       three parallel agents below 50% context fill, two agents from
+       50-75%, and one agent above 75%, preventing context saturation
+       while maximizing throughput.
+
+   (d) Hook-based automatic knowledge routing: PreToolUse and PostToolUse
+       hooks that enforce RAG context loading at agent spawn, nudge
+       evaluator-agent spawning after unverified findings, track workspace
+       update frequency, and gate dangerous operations — all without
+       requiring the user or the orchestrating model to remember to call
+       these steps manually.
+
+
+2. Three-Tier Retrieval-Augmented Generation (RAG) Architecture
+
+   A multi-tier retrieval pipeline where each tier builds on the one below:
+
+   Tier 1 — Vector-only retrieval: semantic embedding search across knowledge
+   files, agent definitions, and project source code via POST /search with
+   scope and mode=vector.
+
+   Tier 2 — Structural indexing (vector + graph): a single /index-project
+   pass that simultaneously builds a vector index (embeddings) and a graph
+   index (import chains and inheritance relationships) from a project's source
+   code. Both indexes are built in one pass and used together in production.
+   Graph-augmented retrieval (mode=graph) expands vector seed results to all
+   structurally connected files via import and inheritance edges, using
+   reciprocal rank fusion with PageRank weighting to merge the two result sets.
+
+   Tier 3 — Entity-extraction multi-hop traversal (the /graph skill):
+   described in section 3 below.
+
+   The specific combination of running Tier 1 vector search and Tier 2
+   graph expansion within a single HTTP API call (POST /search mode=graph),
+   with both indexes built automatically during project indexing and
+   maintained in parallel (ChromaDB vector index + SQLite graph database),
+   is a specific architectural innovation of this Software.
+
+3. The /graph Skill: Lightweight and Heavyweight Modes
+
+   This Software includes two distinct implementations of graph-augmented
+   retrieval that the Licensor specifically reserves against commercial
+   appropriation:
+
+   Lightweight mode: calling POST /search with scope=codebase and mode=graph
+   directly against one or more entity names or code symbols. Returns vector
+   seed results fused with structural neighbours (files that import, inherit
+   from, or are imported by the seed files) via reciprocal rank fusion with
+   PageRank weighting. This mode is integrated into the base RAG API and
+   runs transparently inside POST /context Tier 4b.
+
+   Heavyweight mode (the /graph skill): given a natural-language task
+   description, automatically extracts code entity names (file names, class
+   names, function names, module paths) from that description using the
+   language model, runs the lightweight graph search for each extracted
+   entity, and aggregates all returned file paths into a "Files in Scope"
+   map written to the active workspace's context.md. This map surfaces
+   structurally connected files that single-entity vector search would miss,
+   providing a complete blast-radius view before implementation begins. The
+   skill is implemented at .claude/commands/graph.md and via the /graph
+   slash command.
+
+   The combination of natural-language entity extraction driving multi-hop
+   graph traversal to produce a Files in Scope map — as a pre-implementation
+   scoping step integrated into an AI coding assistant workflow — is a
+   specific innovation of this Software.
+
+4. Local High-Performance RAG: The Indexing Architecture
+
+   ClaudeBoost achieves semantic code retrieval quality that exceeds
+   published results for code-specialized models (CodeBERT, GraphCodeBERT)
+   using components that run entirely on a developer's local machine — no
+   GPU, no cloud embedding API, no external vector service. The reason this
+   is possible is the specific indexing design described in this section,
+   which is different from standard "chunk-and-embed" RAG approaches.
+
+   Benchmark evidence: on the CodeSearchNet Python 1K-pool evaluation
+   (Husain et al. 2019, arxiv:1909.09436), ClaudeBoost achieves:
+
+       MRR = 0.981      (CodeBERT: 0.713, GraphCodeBERT: 0.769)
+       Recall@1 = 96.8% (CodeBERT: ~59%,  GraphCodeBERT: ~68%)
+       Recall@5 = 99.4% (CodeBERT: ~85%,  GraphCodeBERT: ~90%)
+
+   These results run on CPU. CodeBERT and GraphCodeBERT are models
+   purpose-built and fine-tuned for code retrieval on GPU infrastructure.
+
+   The indexing architecture that produces these results:
+
+   (a) AST-aware chunking via tree-sitter: source files are parsed with
+       tree-sitter to extract the abstract syntax tree. Top-level definition
+       nodes (functions, classes, methods, interfaces, type aliases, enums)
+       are each stored as independent chunks with their function/class name
+       as the section label and their exact line range. Import blocks before
+       the first definition are merged into the first definition chunk (when
+       small) to prevent import stubs from outranking implementations in
+       search. Large definitions are split at method boundaries, then at
+       blank-line boundaries, preserving semantic coherence. This produces
+       semantically meaningful retrieval units — not arbitrary token
+       windows. Supported: Python, JavaScript, TypeScript, C#, Go, Rust,
+       Java, C, C++, Ruby, Bash, Lua, Kotlin, Swift, PHP. Fallback to
+       blank-line splitting when tree-sitter is unavailable.
+
+   (b) In-loop graph extraction: edge extraction runs inside the same
+       indexing loop as chunking, using the same tree-sitter parse, with
+       no second file pass. Three edge types are extracted from the AST:
+       imports (direct AST reads of import/require/using/include
+       statements), inherits (class inheritance and interface implementation
+       across Python, TypeScript, Java), and calls (approximate name-match
+       function call references). All edges are stored immediately with the
+       target file path left unresolved (target_file="") — resolution
+       happens after all files are processed.
+
+   (c) Post-loop multi-variant import resolution: after all files are
+       processed, a file map is built that contains multiple name variants
+       for every project file. For a file at
+       "mcp-rag-server/src/rag_server/ports/graph_port.py", the map
+       contains entries for the dotted form (rag_server.ports.graph_port),
+       the slash form (rag_server/ports/graph_port), the src-layout suffix
+       variant (mcp-rag-server.src.rag_server.ports.graph_port), and
+       shorter suffix variants. A bulk UPDATE resolves all edges in one
+       pass, handling TypeScript path aliases (@/ prefixes), relative
+       JavaScript imports, Go module paths, and extension-less resolution.
+       External dependencies (Python stdlib, npm packages, C# BCL/NuGet
+       namespaces, Go external modules) are classified and marked separately
+       so they don't pollute graph health metrics.
+
+   (d) Ghost pruning: after each indexing run, edges pointing to files that
+       no longer exist in the project are deleted from the graph. This keeps
+       the graph consistent with the current branch checkout and prevents
+       deleted files from appearing as structural neighbours.
+
+   (e) SHA-256 hash-based incremental indexing: each file's content hash
+       is stored in a manifest after indexing. On subsequent runs, only
+       files whose hash has changed are re-chunked, re-embedded, and
+       re-graphed. Unchanged files are skipped in under one millisecond.
+       This makes incremental indexing complete in under a second for
+       typical code changes, so the index stays current without manual
+       management.
+
+   (f) HNSW vector indexing in cosine space: ChromaDB stores embeddings
+       in an HNSW (Hierarchical Navigable Small World) index configured
+       for cosine similarity. HNSW traverses a navigable graph of
+       embedding proximity rather than computing dot products against the
+       full corpus, making queries fast on CPU without GPU acceleration.
+
+   (g) Model selection: sentence-transformers/all-MiniLM-L6-v2 is a
+       22-million-parameter general semantic similarity model trained by
+       knowledge distillation from larger teacher models. The key insight
+       behind its retrieval performance is that developer search queries
+       are written in natural language, and code retrieval against
+       natural-language docstrings is a semantic similarity problem rather
+       than a code syntax problem. A model trained to match meaning in
+       natural language outperforms models fine-tuned on code-docstring
+       syntax for this reason.
+
+   (h) Persistent shared server: mcp-rag-server is a single FastAPI process
+       on localhost:8612, shared by all Claude Code sessions on the machine.
+       The ChromaDB collection and SQLite graph are loaded at startup and
+       kept resident in memory. No index is re-loaded between sessions or
+       between agent spawns.
+
+   The combination of (a) through (h) — AST-aware chunking, in-loop graph
+   extraction, post-loop multi-variant resolution, ghost pruning, incremental
+   hash-based updates, HNSW cosine indexing, semantic similarity model
+   selection, and a persistent shared server — is the specific indexing
+   architecture that produces these results locally. This architecture, as
+   a whole and in each of its constituent design decisions, is a core
+   innovation of this Software and is specifically protected by this notice.
+
+5. Knowledge Base and Agent Definition System
+
+   The specific structure and integration method by which ClaudeBoost delivers
+   domain knowledge to AI coding assistant sessions:
+
+   (a) Structured XML knowledge files: a library of domain knowledge files
+       (coding standards, security, testing, architecture, performance,
+       debugging, documentation, etc.) and language/framework guides, each
+       structured as a machine-readable XML document indexed into the RAG
+       server at startup.
+
+   (b) Automatic knowledge routing: the RAG server's POST /context endpoint
+       automatically selects and loads the most relevant knowledge files for
+       each agent spawn based on semantic similarity between the task
+       description and indexed knowledge file content — without the user or
+       orchestrating model needing to identify which files apply.
+
+   (c) Language and framework detection: automatic detection of programming
+       language and framework from spawn prompt keywords, used to boost
+       retrieval of the corresponding lang-*.xml and fw-*.xml knowledge files
+       so agents receive language-specific coding standards without explicit
+       configuration.
+
+6. Scope of This Notice
+
+   This notice does not restrict personal or internal use of the Software.
+   It restricts:
+   (a) Claiming authorship or independent invention of the above methods in
+       a product, paper, patent application, or marketing material without
+       attribution to Mikah Niehaus.
+   (b) Building a commercial product or service whose primary value derives
+       from any of the above methods — whether re-implemented, reimagined, or
+       incorporated from this codebase — without written permission from the
+       Licensor. This includes products built on top of this codebase as well
+       as independent reimplementations of the specific techniques described
+       above.
+   (c) Removing or obscuring this notice in any distribution of the Software
+       or any derivative work.
+   (d) Training a machine learning model on the code, agents, knowledge files,
+       or architecture of this Software for the purpose of reproducing or
+       approximating any of the above methods in a commercial product or
+       service.
+
+   Attribution required in any permitted use:
+   "ClaudeBoost multi-agent orchestration, three-tier RAG architecture,
+   /graph skill (lightweight and heavyweight modes), and fully local RAG
+   execution stack by Mikah Niehaus, ClaudeBoost (2026)."

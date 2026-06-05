@@ -269,17 +269,47 @@ prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xm
 
 ## Benchmarks
 
-The RAG system is evaluated by a 64-test suite at `mcp-rag-server/tests/test_rag_quality.py`,
-using methodologies drawn from four professional benchmarks:
+Two test suites evaluate the RAG system. One uses the actual CodeSearchNet dataset.
+The other tests ClaudeBoost's domain-specific retrieval.
 
-| Methodology | Source | What it tests |
-|-------------|--------|--------------|
-| BEIR-style Recall@k | Thakur et al. 2021 | Zero-shot retrieval across query types |
-| MTEB-style nDCG@5 + MRR | Muennighoff et al. 2022 | Embedding ranking quality |
-| GraphRAG-Bench (ICLR 2026) | arXiv 2506.05690 | Structural neighbour retrieval via import chains |
-| CodeSearchNet-style | Husain et al. | Natural-language description → correct source file |
+### CodeSearchNet Benchmark (external dataset)
 
-### Results (64/64 passing)
+`mcp-rag-server/tests/test_codesearchnet_benchmark.py` runs against the actual
+CodeSearchNet Python test set (Husain et al. 2019, arxiv:1909.09436) — the same
+dataset used to evaluate CodeBERT, GraphCodeBERT, and other code retrieval systems.
+
+200 Python functions from the real test set are indexed. Queries are the actual
+natural-language docstrings from those functions. Metrics match the paper's protocol.
+
+**Official 1K-pool protocol** (`test_codesearchnet_1k_pool.py`) — full 21,544-function
+corpus, 500 queries, 1 correct + 999 random distractors per query. Directly comparable
+to published leaderboard numbers.
+
+| Metric | ClaudeBoost | NBOW | CodeBERT | GraphCodeBERT |
+|--------|-------------|------|----------|---------------|
+| Recall@1 | **96.8%** | ~38% | ~59% | ~68% |
+| Recall@5 | **99.4%** | ~65% | ~85% | ~90% |
+| Recall@10 | **99.8%** | ~75% | ~90% | ~94% |
+| MRR | **0.981** | 0.510 | 0.713 | 0.769 |
+
+Model: `sentence-transformers/all-MiniLM-L6-v2` (same model used for all RAG retrieval).
+Baselines from Husain et al. 2019 and follow-up work. all-MiniLM-L6-v2 is a
+general-purpose model; CodeBERT and GraphCodeBERT were fine-tuned specifically on
+code-docstring pairs, so this comparison shows what a general-purpose embedding achieves.
+
+**Quick smoke-test** (`test_codesearchnet_benchmark.py`) — 200-function corpus, runs in
+~4 minutes, good for CI. Recall@1=95.0%, Recall@5=99.5%, MRR=0.972 (smaller pool means
+higher absolute scores — use the 1K-pool test for leaderboard comparison).
+
+### Domain Quality Tests (ClaudeBoost-specific)
+
+`mcp-rag-server/tests/test_rag_quality.py` (64 tests) verifies ClaudeBoost's
+knowledge base and codebase retrieval using domain-specific ground-truth pairs.
+Metric formulas follow BEIR (Recall@k), MTEB (nDCG@5, MRR), and GraphRAG-Bench
+(structural neighbour retrieval). The query/source pairs are ClaudeBoost-specific,
+not from the original benchmark datasets.
+
+**Results (64/64 passing):**
 
 | Metric | Score |
 |--------|-------|
@@ -291,7 +321,7 @@ using methodologies drawn from four professional benchmarks:
 
 ### Three tiers
 
-The suite tests each layer of the RAG stack separately, showing what each tier adds:
+The domain test suite checks each layer of the RAG stack:
 
 **Tier 1 — Vector only**: 34 queries across knowledge files, agent definitions, and codebase.
 Embedding similarity alone. Recall@5 = 100%.
@@ -308,12 +338,15 @@ single-entity vector search in 3/3 cases (100% gap-fill rate).
 ### Run it yourself
 
 ```bash
-# Requires: RAG server running (/rag), knowledge indexed (/index-boost), project indexed (/index-project)
+# Domain quality tests (fast, ~90s):
 pytest mcp-rag-server/tests/test_rag_quality.py -v -s
-```
 
-`test_three_tier_summary` and `test_recall_summary_report` print a full diagnostic breakdown
-at the end of the run. Both are informational — they never fail, they just show the numbers.
+# CodeSearchNet quick smoke-test (200-function corpus, ~4 min):
+pytest mcp-rag-server/tests/test_codesearchnet_benchmark.py -v -s
+
+# CodeSearchNet official 1K-pool benchmark (first run ~10 min, cached runs ~30s):
+pytest mcp-rag-server/tests/test_codesearchnet_1k_pool.py -v -s
+```
 
 ## How It Works
 
