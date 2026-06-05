@@ -38,6 +38,7 @@ Run:
     pytest mcp-rag-server/tests/test_codesearchnet_benchmark.py -v -s
 """
 
+import ast
 import json
 import math
 import os
@@ -53,6 +54,33 @@ import pytest
 
 RAG_URL = "http://127.0.0.1:8612"
 DATA_FILE = Path(__file__).parent / "data" / "codesearchnet_python_sample.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Docstring stripping
+# ---------------------------------------------------------------------------
+
+def _strip_docstring(code: str) -> str:
+    """Remove the docstring from a Python function before indexing.
+
+    whole_func_string includes the docstring in the code body. Indexing code
+    that contains the docstring and then querying with that same docstring
+    is text overlap, not retrieval. Strip it before writing the .py files.
+    """
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if (node.body
+                        and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and isinstance(node.body[0].value.value, str)):
+                    node.body.pop(0)
+                    if not node.body:
+                        node.body.append(ast.Pass())
+        return ast.unparse(tree)
+    except SyntaxError:
+        return code
 HF_PARQUET_URL = (
     "https://huggingface.co/datasets/code_search_net/resolve/main"
     "/python/test-00000-of-00001.parquet"
@@ -157,13 +185,14 @@ def csn_index(csn_examples, tmp_path_factory) -> str:
     tmpdir = str(tmp_path_factory.mktemp("csn_bench"))
 
     print(f"\n[CodeSearchNet] Writing {len(csn_examples)} functions to {tmpdir} ...")
+    print("[CodeSearchNet] Stripping docstrings before indexing (no leakage).")
     for i, ex in enumerate(csn_examples):
         # Sanitise function name: keep only alnum and underscore, max 30 chars
         raw_name = ex.get("func_name", f"func{i}").split(".")[-1]
         safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in raw_name)[:30]
         filename = f"func_{i:04d}_{safe_name}.py"
         path = Path(tmpdir) / filename
-        path.write_text(ex["code"], encoding="utf-8")
+        path.write_text(_strip_docstring(ex["code"]), encoding="utf-8")
 
     print("[CodeSearchNet] Indexing (this takes ~30-60 s for 200 functions) ...")
     t0 = time.time()

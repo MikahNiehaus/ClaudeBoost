@@ -151,12 +151,14 @@ they are re-implemented or repackaged:
    Benchmark evidence: on the CodeSearchNet Python 1K-pool evaluation
    (Husain et al. 2019, arxiv:1909.09436), ClaudeBoost achieves:
 
-       MRR = 0.981      (CodeBERT: 0.713, GraphCodeBERT: 0.769)
-       Recall@1 = 96.8% (CodeBERT: ~59%,  GraphCodeBERT: ~68%)
-       Recall@5 = 99.4% (CodeBERT: ~85%,  GraphCodeBERT: ~90%)
+       MRR = 0.868      (CodeBERT: 0.713, GraphCodeBERT: 0.769)
+       Recall@1 = 81.2% (CodeBERT: ~59%,  GraphCodeBERT: ~68%)
+       Recall@5 = 93.6% (CodeBERT: ~85%,  GraphCodeBERT: ~90%)
 
-   These results run on CPU. CodeBERT and GraphCodeBERT are models
-   purpose-built and fine-tuned for code retrieval on GPU infrastructure.
+   These results run on CPU, with docstrings stripped from code before
+   embedding (clean evaluation — no text overlap between query and document).
+   CodeBERT and GraphCodeBERT are models purpose-built and fine-tuned for
+   code retrieval on GPU infrastructure.
 
    The indexing architecture that produces these results:
 

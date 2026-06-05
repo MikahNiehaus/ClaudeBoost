@@ -38,6 +38,7 @@ Note: first run encodes the full corpus (~21K functions). This takes
 so subsequent runs are fast (< 30 seconds).
 """
 
+import ast
 import json
 import math
 import os
@@ -56,13 +57,45 @@ except ImportError:
 
 FULL_DATA = Path(__file__).parent / "data" / "codesearchnet_python_full.jsonl"
 CACHE_DIR = Path(__file__).parent / "data"
-CODE_CACHE = CACHE_DIR / "csn_code_embeddings.npy"
+# _stripped suffix: code embeddings use docstring-stripped code (no leakage).
+# Old csn_code_embeddings.npy used whole_func_string (docstring in code body) — invalid.
+CODE_CACHE = CACHE_DIR / "csn_code_embeddings_stripped.npy"
 DOC_CACHE = CACHE_DIR / "csn_doc_embeddings.npy"
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 N_EVAL = 500        # queries to evaluate (statistically solid; full=21K takes hours)
 N_POOL = 1000       # 1 correct + 999 random distractors per query (official protocol)
 RANDOM_SEED = 42
+
+
+# ---------------------------------------------------------------------------
+# Docstring stripping
+# ---------------------------------------------------------------------------
+
+def _strip_docstring(code: str) -> str:
+    """Remove the docstring from a Python function before embedding.
+
+    CodeSearchNet's whole_func_string includes the docstring in the code body.
+    Matching a docstring query against code that literally contains that
+    docstring is string overlap, not retrieval. Strip it so the model must
+    match the function's semantics, not its documentation text.
+
+    Falls back to the original string if parsing fails.
+    """
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if (node.body
+                        and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and isinstance(node.body[0].value.value, str)):
+                    node.body.pop(0)
+                    if not node.body:
+                        node.body.append(ast.Pass())
+        return ast.unparse(tree)
+    except SyntaxError:
+        return code
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +132,11 @@ def embeddings(corpus) -> tuple[np.ndarray, np.ndarray]:
     """Return (code_embeddings, doc_embeddings) for the full corpus.
 
     Loads from cache if available; encodes and caches otherwise.
-    code_embeddings[i] = embedding of corpus[i]['code']
+    code_embeddings[i] = embedding of _strip_docstring(corpus[i]['code'])
     doc_embeddings[i]  = embedding of corpus[i]['docstring']
+
+    Docstrings are stripped from code before embedding so the model must
+    match function semantics, not literal docstring text overlap.
     """
     n = len(corpus)
 
@@ -113,11 +149,12 @@ def embeddings(corpus) -> tuple[np.ndarray, np.ndarray]:
         print(f"[CSN-1K] Cache stale (cached {code_embs.shape[0]}, corpus {n}) — re-encoding.")
 
     print(f"[CSN-1K] Encoding {n:,} functions with {MODEL_NAME} ...")
+    print("         Docstrings stripped from code before encoding (no leakage).")
     print("         This runs once and caches to tests/data/. Expect 1-3 minutes.")
     model = SentenceTransformer(MODEL_NAME)
 
     t0 = time.time()
-    code_texts = [ex["code"] for ex in corpus]
+    code_texts = [_strip_docstring(ex["code"]) for ex in corpus]
     code_embs = model.encode(
         code_texts,
         batch_size=256,

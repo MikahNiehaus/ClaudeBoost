@@ -283,14 +283,15 @@ natural-language docstrings from those functions. Metrics match the paper's prot
 
 **Official 1K-pool protocol** (`test_codesearchnet_1k_pool.py`) — full 21,544-function
 corpus, 500 queries, 1 correct + 999 random distractors per query. Directly comparable
-to published leaderboard numbers.
+to published leaderboard numbers. Docstrings are stripped from code before embedding
+so the model retrieves on function semantics, not text overlap.
 
 | Metric | ClaudeBoost | NBOW | CodeBERT | GraphCodeBERT |
 |--------|-------------|------|----------|---------------|
-| Recall@1 | **96.8%** | ~38% | ~59% | ~68% |
-| Recall@5 | **99.4%** | ~65% | ~85% | ~90% |
-| Recall@10 | **99.8%** | ~75% | ~90% | ~94% |
-| MRR | **0.981** | 0.510 | 0.713 | 0.769 |
+| Recall@1 | **81.2%** | ~38% | ~59% | ~68% |
+| Recall@5 | **93.6%** | ~65% | ~85% | ~90% |
+| Recall@10 | **95.2%** | ~75% | ~90% | ~94% |
+| MRR | **0.868** | 0.510 | 0.713 | 0.769 |
 
 Model: `sentence-transformers/all-MiniLM-L6-v2` (same model used for all RAG retrieval).
 Baselines from Husain et al. 2019 and follow-up work. all-MiniLM-L6-v2 is a
@@ -298,8 +299,7 @@ general-purpose model; CodeBERT and GraphCodeBERT were fine-tuned specifically o
 code-docstring pairs, so this comparison shows what a general-purpose embedding achieves.
 
 **Quick smoke-test** (`test_codesearchnet_benchmark.py`) — 200-function corpus, runs in
-~4 minutes, good for CI. Recall@1=95.0%, Recall@5=99.5%, MRR=0.972 (smaller pool means
-higher absolute scores — use the 1K-pool test for leaderboard comparison).
+~4 minutes, good for CI. Use the 1K-pool test for leaderboard comparison.
 
 ### Domain Quality Tests (ClaudeBoost-specific)
 
