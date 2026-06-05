@@ -274,17 +274,16 @@ The other tests ClaudeBoost's domain-specific retrieval.
 
 ### CodeSearchNet Benchmark (external dataset)
 
-`mcp-rag-server/tests/test_codesearchnet_benchmark.py` runs against the actual
-CodeSearchNet Python test set (Husain et al. 2019, arxiv:1909.09436) — the same
-dataset used to evaluate CodeBERT, GraphCodeBERT, and other code retrieval systems.
+Both tests use real data from the CodeSearchNet Python test set (Husain et al. 2019,
+arxiv:1909.09436) — the same dataset used to evaluate CodeBERT, GraphCodeBERT, and
+other code retrieval systems.
 
-200 Python functions from the real test set are indexed. Queries are the actual
-natural-language docstrings from those functions. Metrics match the paper's protocol.
+#### Official 1K-pool protocol
 
-**Official 1K-pool protocol** (`test_codesearchnet_1k_pool.py`) — full 21,544-function
-corpus, 500 queries, 1 correct + 999 random distractors per query. Directly comparable
-to published leaderboard numbers. Docstrings are stripped from code before embedding
-so the model retrieves on function semantics, not text overlap.
+`test_codesearchnet_1k_pool.py` — full 21,544-function corpus, 500 queries,
+1 correct + 999 random distractors per query. Directly comparable to published
+leaderboard numbers. Docstrings are stripped from code before embedding so the model
+retrieves on function semantics, not text overlap.
 
 | Metric | ClaudeBoost | NBOW | CodeBERT | GraphCodeBERT |
 |--------|-------------|------|----------|---------------|
@@ -298,8 +297,21 @@ Baselines from Husain et al. 2019 and follow-up work. all-MiniLM-L6-v2 is a
 general-purpose model; CodeBERT and GraphCodeBERT were fine-tuned specifically on
 code-docstring pairs, so this comparison shows what a general-purpose embedding achieves.
 
-**Quick smoke-test** (`test_codesearchnet_benchmark.py`) — 200-function corpus, runs in
-~4 minutes, good for CI. Use the 1K-pool test for leaderboard comparison.
+#### Quick smoke-test
+
+`test_codesearchnet_benchmark.py` — 200 Python functions from the real test set indexed,
+queries are the actual natural-language docstrings. Docstrings stripped before indexing
+(same clean eval protocol as the 1K-pool test). Runs in ~5 minutes, good for CI.
+
+| Metric | Score |
+|--------|-------|
+| Recall@1 | 69.5% |
+| Recall@5 | 91.5% |
+| MRR | 0.789 |
+
+Scores are lower than the 1K-pool numbers: the 200-function corpus is a coherent cluster
+of video-download and pipeline functions with many similar docstrings, making retrieval
+harder than a pool with random distractors. Use the 1K-pool test for leaderboard comparison.
 
 ### Domain Quality Tests (ClaudeBoost-specific)
 
