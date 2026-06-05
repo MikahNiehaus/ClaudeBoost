@@ -8,7 +8,14 @@ allowed-tools: Read, Glob, Task
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="agent spawn with RAG knowledge loading", max_tokens=3000`.
+**0a — Collect paths (before loading context):**
+
+1. **project_path** — Check `$CLAUDEBOOST_HOME/state/active-workspace.json` for `project_path`. Fall back to current working directory if not found.
+2. **workspace_path** — Check `$CLAUDEBOOST_HOME/state/active-workspace.json` for `workspace_path`. Fall back to `$CLAUDEBOOST_HOME/workspace/$2/` if `$2` resolves to an existing directory. Omit if no workspace exists for this task.
+
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="agent spawn with RAG knowledge loading: $ARGUMENTS", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>", max_tokens=3000`.
+
+Omit `workspace_path` from the context call if no workspace was found.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
@@ -24,18 +31,13 @@ Before spawning, verify:
 
 Spawn the agent using the Task tool. The agent will load its own knowledge via RAG.
 
-**Before writing the spawn prompt**, collect two paths:
-
-1. **project_path** — run `pwd` to get the current working directory (the project being worked on).
-2. **workspace_path** — check `$CLAUDEBOOST_HOME/state/active-workspace.json` for `workspace_path`.
-   Fall back to `$CLAUDEBOOST_HOME/workspace/$2/` if `$2` resolves to an existing directory.
-   Omit workspace_path only if no workspace exists for this task.
+The paths collected in Phase 0 flow directly into the spawn prompt.
 
 Include in the agent's prompt:
 - Agent name: `$1-agent`
 - Task description (clear and specific — RAG uses this to find relevant knowledge)
 - Instruction to call `POST http://127.0.0.1:8612/context` as Step 1
-- `project_path`: the literal cwd string (e.g. `"C:/Development/Nectar"`)
+- `project_path`: the literal project path string (e.g. `"/home/user/projects/my-app"` on Linux/Mac, `"C:/Development/MyApp"` on Windows)
 - `workspace_path`: the literal workspace path when one exists (enables Tier 3c task research)
 - Task context path: `workspace/$2/context.md`
 - Required output format with Status field (COMPLETE/BLOCKED/NEEDS_INPUT)

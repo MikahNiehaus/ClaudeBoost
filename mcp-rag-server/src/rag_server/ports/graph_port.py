@@ -39,7 +39,7 @@ class GraphStorePort(ABC):
         """Return edges where source_file or target_file matches *file*.
 
         If *symbol* is given, also filter by source_symbol or target_symbol.
-        *depth* is reserved for future multi-hop traversal (currently depth=1 only).
+        depth=1 returns direct neighbours; depth=2 adds their neighbours (capped at 2).
         Returns an empty list when no edges exist — not an error.
         """
         ...

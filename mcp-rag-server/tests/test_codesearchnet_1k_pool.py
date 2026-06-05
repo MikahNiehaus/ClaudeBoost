@@ -44,6 +44,7 @@ import math
 import os
 import random
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -83,7 +84,11 @@ def _strip_docstring(code: str) -> str:
     Falls back to the original string if parsing fails.
     """
     try:
-        tree = ast.parse(code)
+        # Suppress SyntaxWarning for third-party code that uses invalid escape
+        # sequences like "\s" or "\d" in non-raw strings (Python 3.12+ warning).
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            tree = ast.parse(code)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if (node.body

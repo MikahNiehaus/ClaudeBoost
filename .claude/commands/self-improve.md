@@ -12,7 +12,7 @@ Format: `[target] [focus]`
 - **target** (optional):
   - Omitted or `self` → **SELF mode**: ClaudeBoost internals audit (original behavior)
   - A workspace ID (e.g. `add-dark-mode-2026-05-14`) → **WORKSPACE mode**: audit that workspace's implementation
-  - An absolute path (e.g. `C:/Development/MyApp`) → **PROJECT mode**: audit any project codebase
+  - An absolute path (e.g. `/home/user/myapp` or `C:/Development/MyApp`) → **PROJECT mode**: audit any project codebase
 - **focus** (optional, default: `all`):
   - SELF mode: `docs | enforcement | xml | counts | rag | rules | memory | all`
   - WORKSPACE mode: `code | security | tests | quality | docs | all`
@@ -325,6 +325,7 @@ Source files modified only in Phase 5 (Fix), only for CONFIRMED findings, only w
 /self-improve add-auth-2026-05-14 security # Security-only audit of that workspace
 /self-improve add-auth-2026-05-14 tests    # Check test coverage for that workspace
 
-/self-improve C:/Development/MyApp         # Audit entire project
+/self-improve /home/user/myapp             # Audit entire project (Linux/Mac)
+/self-improve C:/Development/MyApp         # Audit entire project (Windows)
 /self-improve C:/Development/MyApp quality # Quality-only audit of the project
 ```

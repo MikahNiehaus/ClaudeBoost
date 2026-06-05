@@ -134,10 +134,10 @@ def check_cat_heredoc(command: str) -> str | None:
 def check_curl_external(command: str) -> str | None:
     """Block curl to non-localhost URLs.
 
-    curl:* is in the allow list so all curl runs without prompting.
-    This hook enforces that only localhost targets are allowed.
+    Catches curl anywhere in the command — including compound commands like
+    `sleep 40 && curl https://external.com` and `curl ... | head`.
     """
-    if not re.match(r"curl\b", command.strip()):
+    if not re.search(r"\bcurl\b", command):
         return None
     # Strip -d / --data / -H values so URLs in request bodies don't trip us up
     cleaned = re.sub(r'(?:-d|--data|-H)\s+[\'"][^\'"]*[\'"]', "", command)

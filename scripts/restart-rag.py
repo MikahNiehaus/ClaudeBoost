@@ -7,8 +7,8 @@ After killing it, restart with: python scripts/rag-server-start.py
 Use this when the RAG server is stuck or needs to pick up code changes.
 
 Usage (Claude can call this directly):
-  python "C:/Development/ClaudeBoost/scripts/restart-rag.py"
-  python "C:/Development/ClaudeBoost/scripts/rag-server-start.py"
+  python scripts/restart-rag.py
+  python scripts/rag-server-start.py
 """
 from __future__ import annotations
 
@@ -20,20 +20,29 @@ import time
 
 
 def find_rag_server_pids() -> list[int]:
-    """Find PIDs of Python processes running rag_server."""
+    """Find PIDs of Python processes running rag_server. Works on Windows, macOS, and Linux."""
     try:
-        result = subprocess.run(
-            [
-                "powershell",
-                "-Command",
-                "Get-WmiObject Win32_Process "
-                "| Where-Object {$_.CommandLine -like '*rag_server*' -and $_.CommandLine -like '*ClaudeBoost*' -and $_.Name -like 'python*'} "
-                "| Select-Object -ExpandProperty ProcessId",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        if sys.platform == "win32":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-Command",
+                    "Get-WmiObject Win32_Process "
+                    "| Where-Object {$_.CommandLine -like '*rag_server*' -and $_.Name -like 'python*'} "
+                    "| Select-Object -ExpandProperty ProcessId",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        else:
+            # macOS / Linux: pgrep searches by command line pattern
+            result = subprocess.run(
+                ["pgrep", "-f", "rag_server"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
         return [int(p.strip()) for p in result.stdout.strip().splitlines() if p.strip().isdigit()]
     except Exception as e:
         print(f"Error finding rag_server process: {e}", file=sys.stderr)

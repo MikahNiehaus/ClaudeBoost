@@ -18,21 +18,24 @@ Input: **$ARGUMENTS**
 
 Run this Bash command to set the flag (resolves CLAUDEBOOST_HOME dynamically):
 ```bash
-python -c "import os,json,pathlib; p=pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','C:/Development/ClaudeBoost'))/'state'/'audit-in-progress.json'; p.write_text(json.dumps({'active':True}))"
+python -c "import os,json,pathlib; p=pathlib.Path(os.environ.get('CLAUDEBOOST_HOME',''))/'state'/'audit-in-progress.json'; p.write_text(json.dumps({'active':True}))"
 ```
 
-Then call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit: $ARGUMENTS", max_tokens=3000`.
+**0a — Detect project path (before loading context):**
 
-**0b — Verify project is indexed** (required for codebase search to work):
-
-Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
 2. Fall back to current working directory if no registry entry found
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Set `PROJECT_PATH` to the detected value.
+
+Then call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit: $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=3000`.
+
+**0b — Verify project is indexed** (required for codebase search to work):
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `PROJECT_PATH`.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` immediately. Do not continue until indexing completes.
 - **RAG offline**: stop and tell the user to run `/rag` first.
 
 ---
@@ -197,7 +200,7 @@ Spawn one agent per selected dimension. Wait for each batch to complete before s
 **EACH AGENT PROMPT must follow this template exactly:**
 
 ```
-Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit dimension: <DIMENSION_NAME>", max_tokens=2000
+Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit dimension: <DIMENSION_NAME>", project_path="<PROJECT_PATH>", max_tokens=2000
 
 You are an auditor for ONE specific dimension: **<DIMENSION_NAME>**
 
@@ -254,7 +257,7 @@ Collect all JSON outputs as `AUDIT_FINDINGS`.
 After ALL batches complete, spawn a single verdict agent. Use **Opus model**.
 
 ```
-Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit verdict synthesis", max_tokens=2000
+Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit verdict synthesis", project_path="<PROJECT_PATH>", max_tokens=2000
 
 You are the Verdict Agent. You do NOT re-audit the content. You synthesize the findings from all dimension auditors into a single "is it legit" verdict.
 
@@ -316,7 +319,7 @@ If AUDIT_SCOPE = completion-verification, use these verdict labels instead of LE
 
 **Clear audit flag first** (before any output — ensures cleanup even if interrupted):
 ```bash
-python -c "import os,pathlib; pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','C:/Development/ClaudeBoost')).joinpath('state','audit-in-progress.json').unlink(missing_ok=True)"
+python -c "import os,pathlib; pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','')).joinpath('state','audit-in-progress.json').unlink(missing_ok=True)"
 ```
 
 Output the full verdict report. Lead with the severity count header on the very first line:

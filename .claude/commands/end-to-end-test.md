@@ -114,7 +114,8 @@ Check which files exist in `$WORKSPACE_ABS/`:
 | `report.md` | All phases complete — print "Workspace has a completed report. Use `--fresh` to start over." then STOP. |
 | `plan.md` with at least one `- [ ] TC-` line | Phase 2 done → skip Phases 0e–2, jump to Phase 3 |
 | `plan.md` but no unchecked `[ ]` lines | All TCs already marked → print "All tests have results. Use `--fresh` to re-run." then STOP. |
-| `context.md` but no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
+| `context.md` and `flow-map.md` but no `plan.md` | Phase 1 + 2a done → skip Phases 0e–2a, jump to Phase 2b |
+| `context.md` but no `flow-map.md` and no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
 | Neither `context.md` nor `plan.md` | Workspace exists but no E2E state yet → proceed to Phase 0d |
 
 Print:
@@ -124,25 +125,26 @@ Detected state: Phase [N] in progress — skipping completed phases.
 (Use /end-to-end-test <url> --fresh to force a new session.)
 ```
 
-**0d — Create workspace and set SNAPSHOTS_DIR.**
+**0d — Create workspace, set SNAPSHOTS_DIR and PROOF_DIR.**
 
-Pick a non-colliding snapshot folder name by checking what already exists:
+Set `SNAPSHOTS_DIR = $WORKSPACE_ABS/screenshots`.
 
-```bash
-ls "$WORKSPACE_ABS/" 2>/dev/null
-```
-
-- If no `snapshots` folder exists → use `snapshots`
-- If `snapshots` exists but no `snapshots-e2e` → use `snapshots-e2e`
-- If both exist → use `snapshots-e2e-[YYYY-MM-DD]`
-
-Set `SNAPSHOTS_DIR = $WORKSPACE_ABS/<chosen-folder-name>`.
+Derive `PROOF_DIR` — this is where TC pass-evidence screenshots land (separate from discovery and temp shots):
+- If `TICKET_ID` is set (not 'none'): `PROOF_DIR = $SNAPSHOTS_DIR/proof-[TICKET_ID]`
+  Example: `$WORKSPACE_ABS/screenshots/proof-ASC-1175`
+- Otherwise: `PROOF_DIR = $SNAPSHOTS_DIR/proof-[hostname]-[YYYY-MM-DD]`
+  Example: `$WORKSPACE_ABS/screenshots/proof-localhost-2026-06-05`
 
 ```bash
 mkdir -p "$SNAPSHOTS_DIR"
+mkdir -p "$PROOF_DIR"
 ```
 
-Announce: "Snapshots → `$SNAPSHOTS_DIR/`"
+Announce: "Screenshots → `$SNAPSHOTS_DIR/` | Proof → `$PROOF_DIR/`"
+
+What goes where:
+- `$SNAPSHOTS_DIR/` — discovery shots (`discovery-home.png`) and anything taken outside a TC
+- `$PROOF_DIR/` — TC-NNN-after.png (PASS evidence), TC-NNN-before.png (state-change pairs), TC-NNN-debug.json
 
 **Register and protect (new workspaces only):**
 
@@ -232,7 +234,7 @@ Display environment confirmation:
 ```
 
 Call `browser_navigate(url=$TARGET_URL)`.
-Call `browser_take_screenshot` → save to `$SNAPSHOTS_DIR/discovery-home.png`.
+Call `browser_take_screenshot` → save to `$SNAPSHOTS_DIR/discovery-home.png`. (Discovery shot — stays in base screenshots/ folder, not in proof subfolder.)
 Call `browser_console_messages` — note any startup errors.
 
 **Live environment probe (runs immediately after first navigation — catches OAuth redirects):**
@@ -360,20 +362,85 @@ If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed
 
 **The test plan is written to disk BEFORE any test executes. This is structural anti-cheat — a plan that predates execution cannot be fabricated.**
 
-**2a — Generate test cases from SCOPE + App Map + component registry.**
+---
+
+**2a — Map user journeys. Write `flow-map.md` BEFORE any test cases.**
+
+The most common source of bad E2E tests is generating them from what the browser saw (components, pages, fields) instead of from what users actually do (journeys). This step inverts that: identify the 5–10 highest-risk user journeys first, then derive TCs from those journeys.
+
+**What is a user journey?** A journey is a goal a real user wants to accomplish — "register an account", "submit an order", "edit a saved address". It spans multiple pages and involves a sequence of actions. A page is not a journey. A form field is not a journey.
+
+**Step 1 — Derive journeys from available sources (in priority order):**
+1. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
+2. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
+3. **RAG codebase search**: query `POST http://127.0.0.1:8612/search scope=codebase query="route controller action" mode=graph limit=5`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+
+**Step 2 — Score each journey by risk:**
+
+| Risk signal | Score |
+|---|---|
+| Involves authentication or authorization | +3 |
+| Involves writing data (create, update, delete) | +2 |
+| Is the primary revenue or conversion path | +3 |
+| Involves multiple pages or redirects | +1 |
+| Involves external integration (email, payment, webhook) | +2 |
+| Has a known prior bug (from TICKET_ID) | +3 |
+| Is purely navigational (no state change) | +0 |
+
+Keep all journeys scoring 3+. Keep the top 10 maximum. Smoke tests (home loads, nav links) are always included but don't need journey scoring.
+
+**Step 3 — Write `$WORKSPACE_ABS/flow-map.md`:**
+
+```markdown
+# Flow Map — [APP_NAME] — [DATE]
+
+## Journeys
+
+| # | Journey Name | User Goal | Entry URL | Steps | Pages Touched | Risk Score |
+|---|---|---|---|---|---|---|
+| J1 | User Registration | New user creates account | /register | 1. Navigate to /register → 2. Fill form → 3. Submit → 4. Verify welcome state | /register, /dashboard | 6 |
+| J2 | ... | ... | ... | ... | ... | ... |
+
+## Smoke Tests (always include)
+- S1: Home page loads without console errors
+- S2: All primary nav links resolve without 404
+```
+
+**Step 4 — Hard gate:** If `flow-map.md` does not exist when Phase 2b starts, STOP. Print: "Phase 2b blocked: flow-map.md not found. Complete Phase 2a first." Do not generate test cases until the flow map is written.
+
+---
+
+**2b — Generate test cases from flow-map.md journeys + intelligent rules.**
+
+TCs come from journeys, not from components. For each journey in flow-map.md:
+- Generate TCs that walk the journey end-to-end: entry → actions → final observable state
+- Take the **most direct path to the feature** — no roundabout navigation through unrelated pages
+- Each TC must reference its parent journey: `[Journey: J1 — User Registration, Step 3]`
+- One TC covers one step or one decision point in the journey; don't bundle multiple independent decisions into one TC
+
+**E2E scope boundary — what belongs here vs in unit tests:**
+
+| Belongs in E2E | Belongs in unit/integration tests (skip here) |
+|---|---|
+| Full journey: enter data → submit → verify server persisted it | Whether a single field validator rejects an empty string |
+| Auth redirect: unauthenticated user → sent to login → returns after auth | Whether a pure function returns the correct computed value |
+| State visible after server round-trip: create → reload page → item still shown | Whether an API endpoint returns the right JSON shape |
+| Cross-page flow: form on /checkout → confirmation on /orders | Whether a CSS class is applied by a component |
+
+**Rule:** If a TC could be fully verified by calling a function directly (no browser, no server round-trip, no multi-page flow), it belongs in unit tests. Drop it or demote it to a `## Unit Coverage Notes` section in plan-draft.md.
 
 **Always include regardless of scope:**
 - `TC-SMOKE-01`: Home page loads without console errors
 - `TC-SMOKE-02`: All primary nav links resolve without 404
 
-**Intelligent test generation rules (apply these during generation):**
+**Intelligent test generation rules (apply per journey step):**
 
 | Control type | Rule |
 |---|---|
 | Toggle/select/enum with N≤7 states | Generate ONE TC per state |
 | Boolean | Always 2 TCs |
 | List/collection UI | Always 4 TCs: empty state, one item, 3-5 items, max/full |
-| Form validation | One TC per validation rule (not per field) |
+| Form validation | One TC per validation rule (not per field) — E2E only if the validation requires a server round-trip or cross-field dependency; client-only validation belongs in unit tests |
 | Same component with multiple instances | One UI consistency TC for the type |
 | Large enum (N>7) | Boundary values: first option, last option, one invalid |
 
@@ -384,27 +451,27 @@ If context.md does NOT exist or has no pages listed → **STOP**. Do not proceed
 | `auth` | Login happy path, login bad credentials, logout, protected route without auth |
 | `crud` | Create / read list / read detail / update / delete / empty state — per entity |
 | `nav` | Each nav link resolves, back-button, breadcrumb accuracy |
-| `errors` | Required field blank, invalid format, 404 page |
+| `errors` | Required field blank (if server-validated), invalid format (if server-validated), 404 page |
 | `responsive` | Key pages at 375px, 768px, 1280px |
 | `all` | Union of all above + UI consistency pass |
 
 **Each test case format:**
 ```markdown
 - [ ] TC-001: [Category] — [Description]
-  - Steps: [numbered, browser-action-only steps]
-  - Expected: [exact observable UI outcome]
+  - Journey: [J# — Journey Name, Step N] (or "smoke" for smoke tests)
+  - Steps: [numbered, browser-action-only steps — most direct path to the feature]
+  - Expected: [exact observable UI outcome after the final step]
   - Evidence: TC-001-after.png
+  - Code path: [file:line — server-side entry point this TC hits, from UI scope graph or RAG; leave as 'client-side' if no server call involved]
   - Source: [RAG hit / browser discovery / component registry]
 ```
 
 **Coverage completeness mandate (anti-laziness — enforce before writing draft):**
 
-- Every **page in UI Pages in Scope** (from Phase 0g) → mandatory coverage. At minimum: 1 navigation TC confirming the page loads, plus 1 TC per form or action on that page. These cannot be omitted or marked BLOCKED for difficulty.
-- Every **form** in the component registry → at minimum: 1 happy-path TC + 1 required-field-blank TC
-- Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists)
-- Every **nav link** in the App Map → at least one TC that navigates to it and confirms it loads
-- Every **toggle / select / enum** → one TC per state (per the intelligent generation rules above)
-- If a discovered component has NO TC: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
+- Every **journey in flow-map.md** → at least one TC per decision point or observable outcome in that journey. These cannot be omitted or marked BLOCKED for difficulty.
+- Every **page in UI Pages in Scope** (from Phase 0g) that is part of a journey → covered by the journey's TCs; no extra per-page TCs needed unless the page has a form or action not covered by any journey.
+- Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists) — these map to the CRUD journeys.
+- If a discovered component has NO journey that exercises it: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
 - BLOCKED status is only valid for genuine external preconditions (e.g., "requires admin account not provisioned"). Complexity or difficulty is never a valid reason.
 
 **Ticket tracing (if TICKET_ID was provided in Phase 0):**
@@ -417,23 +484,25 @@ Add a `TC-TICKET-01` test case that directly exercises `ORIGINAL_BUG_DESC`. This
 
 **Write draft plan to disk:** `$WORKSPACE_ABS/plan-draft.md`
 
-**2b — Anti-hallucination evaluator.**
+**2c — Anti-hallucination evaluator.**
 
 Spawn `evaluator-agent` to audit the draft plan. Pass in:
 - The full contents of `plan-draft.md`
+- The flow-map.md journeys
 - The App Map from `context.md`
 - The RAG search result summaries from Phase 1b
 
 Evaluator checks each TC:
+- Does the TC reference a journey from flow-map.md?
 - Does the route/page referenced appear in the App Map?
-- Does the UI element (toggle, dropdown, form) appear in the component registry?
-- Is this testing something actually discovered, not inferred?
+- Does the TC test an observable user-facing outcome (not an implementation detail)?
+- Does the TC take the most direct path to the feature (no unnecessary navigation steps)?
 
 Evaluator returns a list of TCs to remove or demote. Apply those changes.
 
-Print: "Evaluator removed N test cases as unverified (not found in app discovery)."
+Print: "Evaluator removed N test cases as unverified or unit-level (not E2E scope)."
 
-**2c — Write final plan and present to user.**
+**2d — Write final plan and present to user.**
 
 Write cleaned plan to `$WORKSPACE_ABS/plan.md`.
 
@@ -513,12 +582,46 @@ Detected server processes:
   [PID]  node.exe
 ```
 
-**Step B — Determine language and attach.**
+**Step C — Determine language and attach.**
 
 - If only dotnet processes found → language = `csharp`, pick the first PID.
 - If only node processes found → language = `javascript`, pick the first PID.
 - If both found → print the table and ask: "Which process should the debugger attach to? (Enter PID)"
 - If neither found → set `DEBUG_ENABLED = false`. Print: "No server process found — tests will run UI-only. Start the app in debug mode and re-run to enable code verification." Skip to the TC loop.
+
+**Step D — Verify debugger prerequisites before attaching.**
+
+If `language = csharp`: check that `netcoredbg` is available (mcp-debugger requires it for .NET).
+
+Run:
+```bash
+command -v netcoredbg 2>/dev/null || ([ -n "$NETCOREDBG_PATH" ] && [ -f "$NETCOREDBG_PATH/netcoredbg.exe" ] && echo "$NETCOREDBG_PATH/netcoredbg.exe") || echo NOT_FOUND
+```
+
+- If the command returns a path → continue to attach.
+- If output is `NOT_FOUND` → set `DEBUG_ENABLED = false`. Print the following, then skip to the TC loop:
+
+```
+netcoredbg not found. mcp-debugger requires netcoredbg for .NET debugging.
+
+To install — pick one:
+
+  Option A (dotnet global tool):
+    dotnet tool install -g Samsung.Netcoredbg
+    Then add the tool path to PATH (usually %USERPROFILE%\.dotnet\tools)
+
+  Option B (manual install, Windows):
+    1. Download the latest release from:
+       https://github.com/Samsung/netcoredbg/releases
+    2. Extract netcoredbg.exe to a folder (e.g. C:\Tools\netcoredbg\)
+    3. Either add that folder to your PATH, or set the env var:
+       $env:NETCOREDBG_PATH = "C:\Tools\netcoredbg"
+
+After installing, re-run this E2E test to enable code step-through.
+Tests will run UI-only for this session.
+```
+
+If `language = javascript`: no extra prerequisites — Node.js uses the built-in V8 inspector. Continue to attach.
 
 Call `mcp__mcp-debugger__create_debug_session` with `language=<detected>` and `name="e2e-session"` → store result as `DEBUG_SESSION_ID`.
 
@@ -610,7 +713,7 @@ Identify the element or region to annotate (from browser_snapshot coordinates).
 - After injecting the overlay, immediately call `browser_take_screenshot`. Do not read or verify anything first.
 - If the element's bounding rect returns `{0,0,0,0}` — the element is not rendered (popup closed). Do NOT use stale coordinates. Re-open the popup and retry from Step 2.
 
-Inject annotation overlay:
+Inject annotation overlay via `browser_evaluate`:
 ```javascript
 (function() {
   const e = document.getElementById('__e2e_ann__');
@@ -623,10 +726,21 @@ Inject annotation overlay:
   const left = LEFT_PX - window.scrollX;
   d.style.cssText = `position:fixed;top:${top}px;left:${left}px;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:2px;`;
   document.body.appendChild(d);
+  return true;
 })();
 ```
 
-Call `browser_take_screenshot` → save as `$SNAPSHOTS_DIR/TC-NNN-after.png`.
+**ANNOTATION GATE — must pass before screenshot fires. No exceptions.**
+
+Call `browser_evaluate` with this check:
+```javascript
+(function(){ const e = document.getElementById('__e2e_ann__'); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()
+```
+
+- Returns `true` → overlay is present and visible. Proceed to screenshot.
+- Returns `false` → overlay was not injected, or the coordinates placed it off-screen (zero bounding box). **FAIL this TC immediately.** Record: `FAIL | annotation gate failed — overlay not visible (element off-screen or inject returned without appending)`. Call the remove-snippet, then skip directly to Step 5. Do NOT take the screenshot — an unannotated image is not valid evidence.
+
+Call `browser_take_screenshot` → save as `$PROOF_DIR/TC-NNN-after.png`.
 
 Remove overlay:
 ```javascript
@@ -668,7 +782,7 @@ Skip if `DEBUG_ENABLED = false`.
    - Call `mcp__mcp-debugger__step_over` 2–3 times through the key logic
    - Call `mcp__mcp-debugger__get_variables` again — capture post-step state
    - Call `mcp__mcp-debugger__continue_execution` to let the request complete
-   - Write debug evidence to `$SNAPSHOTS_DIR/TC-NNN-debug.json`:
+   - Write debug evidence to `$PROOF_DIR/TC-NNN-debug.json`:
      ```json
      {
        "tc": "TC-NNN",
@@ -704,9 +818,10 @@ Call `browser_console_messages`. Record any errors.
 **Step 7 — Update plan.md.**
 
 Edit `plan.md`, replacing the checkbox:
-- PASS (with debug): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: TC-NNN-debug.json (breakpoint at file:line)`
-- PASS (no debug hit): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: no server breakpoint hit`
-- PASS (debug disabled): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | debug: UI-only (no server process found)`
+- PASS (with debug): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | code path: file:line | debug: TC-NNN-debug.json (breakpoint hit)`
+- PASS (no debug hit): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | code path: file:line | debug: no server breakpoint hit`
+- PASS (debug disabled): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | code path: client-side | debug: UI-only (no server process found)`
+- FAIL (annotation gate): `- [F] TC-NNN: ... FAIL | annotation gate failed — overlay not visible (element '[label]' not found in DOM or zero bounding box)`
 - FAIL: `- [F] TC-NNN: ... FAIL | observed: [snapshot text describing what was seen]`
 - BLOCKED: `- [B] TC-NNN: ... BLOCKED | reason: [specific verifiable reason]`
 - NEEDS-RERUN: `- [S] TC-NNN: ... NEEDS-RERUN | reason: [prior session result not re-executed / precondition changed]`
@@ -809,7 +924,7 @@ Spawn `evaluator-agent` to independently audit every screenshot taken this sessi
 
 **Pass `evaluator-agent` the following:**
 
-1. The list of all `TC-NNN-after.png` files saved to `$SNAPSHOTS_DIR/` this session.
+1. The list of all `TC-NNN-after.png` files saved to `$PROOF_DIR/` this session.
 2. The corresponding TC entry from `plan.md` for each screenshot (TC-ID, description, expected outcome).
 3. The instruction below.
 
@@ -874,7 +989,8 @@ Write `$WORKSPACE_ABS/report.md`:
 **Date**: [date]
 **Scope**: [SCOPE]
 **Plan**: $WORKSPACE_ABS/plan.md
-**Snapshots**: $SNAPSHOTS_DIR/
+**Screenshots**: $SNAPSHOTS_DIR/
+**Proof**: $PROOF_DIR/
 
 ## Summary
 
@@ -923,7 +1039,7 @@ Write `$WORKSPACE_ABS/report.md`:
 
 Print the Summary table. List all failures with their observed state. List blocked tests with reasons.
 
-End with: "Full report → `$WORKSPACE_ABS/report.md`. Screenshots → `$SNAPSHOTS_DIR/`."
+End with: "Full report → `$WORKSPACE_ABS/report.md`. Proof screenshots → `$PROOF_DIR/`. All screenshots → `$SNAPSHOTS_DIR/`."
 
 Call `browser_close`.
 

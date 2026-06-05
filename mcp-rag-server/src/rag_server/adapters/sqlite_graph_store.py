@@ -338,22 +338,64 @@ class SQLiteGraphStore(GraphStorePort):
     ) -> list[GraphEdge]:
         """Return all edges incident on *file* (as source or target).
 
-        depth > 1 is reserved; only depth=1 is implemented.
+        depth=1  — direct neighbours only.
+        depth=2  — direct neighbours plus their neighbours (two hops).
+        depth > 2 is capped at 2 to keep query time bounded.
         """
+        depth = min(depth, 2)
+
+        def _rows_for_files(conn, files: set[str]) -> list:
+            if not files:
+                return []
+            placeholders = ",".join("?" * len(files))
+            params = list(files) + list(files)
+            return conn.execute(
+                f"""SELECT * FROM edges
+                    WHERE source_file IN ({placeholders})
+                       OR target_file IN ({placeholders})""",
+                params,
+            ).fetchall()
+
         with self._connect() as conn:
+            # Depth-1 query — always run
             if symbol:
-                rows = conn.execute(
+                depth1_rows = conn.execute(
                     """SELECT * FROM edges
                        WHERE (source_file = ? AND source_symbol = ?)
                           OR (target_file = ? AND target_symbol = ?)""",
                     (file, symbol, file, symbol),
                 ).fetchall()
             else:
-                rows = conn.execute(
+                depth1_rows = conn.execute(
                     """SELECT * FROM edges
                        WHERE source_file = ? OR target_file = ?""",
                     (file, file),
                 ).fetchall()
+
+            all_rows = list(depth1_rows)
+
+            if depth >= 2:
+                # Collect the neighbour files found at depth 1
+                neighbour_files: set[str] = set()
+                for r in depth1_rows:
+                    sf, tf = r["source_file"], r["target_file"]
+                    if sf != file and sf and sf != "_external_":
+                        neighbour_files.add(sf)
+                    if tf != file and tf and tf != "_external_":
+                        neighbour_files.add(tf)
+
+                if neighbour_files:
+                    depth2_rows = _rows_for_files(conn, neighbour_files)
+                    # Deduplicate using (source_file, target_file, edge_type)
+                    seen = {
+                        (r["source_file"], r["target_file"], r["edge_type"])
+                        for r in all_rows
+                    }
+                    for r in depth2_rows:
+                        key = (r["source_file"], r["target_file"], r["edge_type"])
+                        if key not in seen:
+                            seen.add(key)
+                            all_rows.append(r)
 
         return [
             GraphEdge(
@@ -364,7 +406,7 @@ class SQLiteGraphStore(GraphStorePort):
                 edge_type=r["edge_type"],
                 confidence=r["confidence"],
             )
-            for r in rows
+            for r in all_rows
         ]
 
     def delete_edges_for_file(self, file: str) -> None:

@@ -523,9 +523,10 @@ function loadVoices() {
   sel.innerHTML = '';
   const scored = voices.filter(v => v.lang.startsWith('en')).map(v => {
     let s=0, n=v.name.toLowerCase();
-    if(n.includes('mark')&&n.includes('natural'))s+=100; if(n.includes('andrew')&&n.includes('natural'))s+=95;
-    if(n.includes('guy')&&n.includes('natural'))s+=90; if(n.includes('mark')&&n.includes('online'))s+=88;
-    if(n.includes('mark'))s+=70; if(n.includes('david')&&n.includes('desktop'))s+=60;
+    if(n.includes('andrew')&&n.includes('natural'))s+=100; if(n.includes('andrew')&&n.includes('online'))s+=98;
+    if(n.includes('andrew'))s+=80; if(n.includes('mark')&&n.includes('natural'))s+=60;
+    if(n.includes('guy')&&n.includes('natural'))s+=55; if(n.includes('mark')&&n.includes('online'))s+=50;
+    if(n.includes('david')&&n.includes('desktop'))s+=40;
     if(n.includes('google')&&n.includes('us')&&n.includes('male'))s+=50;
     if(v.lang==='en-US')s+=10; return {v,s};
   }).sort((a,b)=>b.s-a.s);

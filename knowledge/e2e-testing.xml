@@ -80,6 +80,47 @@
   </cheat>
 </anti-cheat-patterns>
 
+<scope-boundary>
+  <description>E2E tests cover full user journeys that span UI interaction, network calls, and observable server-side effects. Anything that doesn't cross that boundary belongs in unit or integration tests — not here.</description>
+
+  <belongs-in-e2e>
+    <item>Full journey: user fills a form → submits → server persists data → user sees confirmation or updated state</item>
+    <item>Authentication flow: unauthenticated user hits protected route → redirected to login → authenticates → lands on original destination</item>
+    <item>State visible after server round-trip: create an entity → reload the page → entity is still shown (proves the server persisted it, not just client state)</item>
+    <item>Cross-page flow: action on page A produces a visible effect on page B (e.g., add to cart on /products → count badge updates on /cart)</item>
+    <item>Error state from the server: submit a form that triggers a server-side validation error → verify the error message appears in the UI</item>
+    <item>Role-based visibility: log in as a non-admin → verify admin-only UI elements are absent</item>
+  </belongs-in-e2e>
+
+  <does-not-belong-in-e2e>
+    <item>Client-only field validation: a required-field message shown by the browser before any server call — this is a unit test for the validator function</item>
+    <item>Computed display values: a price total calculated from quantities already on the page — unit test the calculation function</item>
+    <item>Pure API response shape: whether an endpoint returns the right JSON — this is an integration/contract test</item>
+    <item>CSS or styling assertions: whether a button is red or a font is bold — these break on design changes and test nothing functional</item>
+    <item>Framework behavior: whether React re-renders when state changes, whether a router redirects on push — test the app, not the framework</item>
+    <item>Internal component state: whether a dropdown is "open" in React state — test the visible UI result (options appear), not the internal representation</item>
+  </does-not-belong-in-e2e>
+
+  <drift-detection>
+    If a TC could be fully verified by calling a function directly — no browser, no server round-trip, no multi-page navigation — it belongs in unit tests. Drop it from the E2E plan or move it to a "## Unit Coverage Notes" section in plan-draft.md.
+
+    Warning signs that a TC has drifted into unit-test territory:
+    - The TC tests only one UI element in isolation (no user goal, no journey)
+    - The TC verifies a value computed entirely in the browser (no server involved)
+    - The TC checks whether something is styled correctly rather than whether it works
+    - The TC could be automated without opening a browser at all
+  </drift-detection>
+
+  <test-pyramid-position>
+    E2E tests sit at the top of the pyramid: few in number, high in value, slow to run. For a typical app:
+    - 70%+ of tests should be unit tests (fast, isolated, cheap)
+    - 20% integration tests (API contracts, DB writes, service boundaries)
+    - 10% E2E tests (critical user journeys only)
+
+    If a test plan has more than 40 TCs for a modest CRUD app, it likely contains unit-level tests that shouldn't be there. Review for drift before finalizing.
+  </test-pyramid-position>
+</scope-boundary>
+
 <intelligent-test-generation>
   <description>Rules for generating appropriate test coverage without combinatorial explosion. Apply these during test plan generation.</description>
 
@@ -132,9 +173,16 @@
   </always-include>
 
   <pre-generation-requirement>
-    Build flow-map.md BEFORE writing any test cases.
-    Every TC must reference its parent flow: TC-NNN [Flow: name, Step N] — description.
-    Do not write a single test case until the flow map is written to workspace/[task-id]/flow-map.md.
+    Build flow-map.md BEFORE writing any test cases. This is a hard gate — do not write a single TC until the flow map exists at workspace/[task-id]/flow-map.md.
+
+    The flow map must:
+    1. List every user journey (a goal a real user wants to accomplish, spanning multiple pages)
+    2. Score each journey by risk: auth/authz (+3), write operations (+2), primary conversion path (+3), multi-page flow (+1), external integration (+2), known prior bug (+3)
+    3. Include all journeys scoring 3 or higher, plus smoke tests
+    4. Document the most direct entry path to each journey (no roundabout navigation)
+
+    Every TC must reference its parent journey: TC-NNN [Journey: J# — Name, Step N] — description.
+    Smoke tests use: TC-NNN [Journey: smoke] — description.
   </pre-generation-requirement>
 </intelligent-test-generation>
 
@@ -203,14 +251,16 @@
       if (candidate) { el = candidate; break; }
     }
   }
-  if (!el) return;
+  if (!el) return false;
   const existing = document.getElementById('__e2e_ann__');
   if (existing) existing.remove();
   const rect = el.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return false;
   const ann = document.createElement('div');
   ann.id = '__e2e_ann__';
   ann.style.cssText = `position:fixed;left:${rect.left-4}px;top:${rect.top-4}px;width:${rect.width+8}px;height:${rect.height+8}px;border:3px solid #FF0000;background:rgba(255,0,0,0.08);border-radius:4px;pointer-events:none;z-index:999999`;
   document.body.appendChild(ann);
+  return true;
 })();
   ]]></text-find-snippet>
 
@@ -224,6 +274,7 @@
   overlay.id = '__e2e_ann__';
   overlay.style.cssText = 'position:fixed;top:TOP_PXpx;left:LEFT_PXpx;width:W_PXpx;height:H_PXpx;border:3px solid #FF0000;background:rgba(255,0,0,0.08);z-index:999999;pointer-events:none;border-radius:4px;';
   document.body.appendChild(overlay);
+  return true;
 })();
   ]]></coordinate-inject-snippet>
 
@@ -252,19 +303,25 @@
     }
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
     const ann = document.createElement('div');
     ann.id = `__e2e_ann_${i+1}__`;
     ann.style.cssText = `position:fixed;left:${rect.left-4}px;top:${rect.top-4}px;width:${rect.width+8}px;height:${rect.height+8}px;border:3px solid #FF0000;background:rgba(255,0,0,0.08);border-radius:4px;pointer-events:none;z-index:999999`;
     document.body.appendChild(ann);
   });
+  const injected = targets.filter((_, i) => !!document.getElementById(`__e2e_ann_${i+1}__`)).length;
+  return injected; // returns count of overlays actually appended; 0 = all targets missed
 })();
   ]]></multi-element-snippet>
 
   <workflow>
     <step order="1">Call browser_snapshot — confirm expected state in text</step>
     <step order="2">Identify the visible text label of the element to annotate (button text, field label, list item)</step>
-    <step order="3">Call browser_evaluate with text-find-snippet, substituting the label — if element has no unique text, use coordinate-inject-snippet instead</step>
-    <step order="4">Call browser_take_screenshot — the red overlay is visible in the image</step>
+    <step order="3">Call browser_evaluate with text-find-snippet, substituting the label — if element has no unique text, use coordinate-inject-snippet instead. Both snippets return true on success, false if the element was not found or has zero dimensions.</step>
+    <step order="3b">ANNOTATION GATE — check the return value from browser_evaluate:
+      - true → overlay present and visible. Proceed to screenshot.
+      - false or null → element not found or off-screen. FAIL the TC with: "Annotation target '[label]' not found in DOM or has zero dimensions — element may not be rendered." Call remove-snippet to clean up. Do NOT call browser_take_screenshot. Skip to console check step.</step>
+    <step order="4">Only if step 3b passed: call browser_take_screenshot — the red overlay is visible in the image. Save to PROOF_DIR.</step>
     <step order="5">Call browser_evaluate with remove-snippet</step>
     <step order="6">Update plan.md with the screenshot filename</step>
   </workflow>
@@ -455,7 +512,22 @@
   <standard name="Naming Convention">
     <format>TC-[ID]-[before|after].png</format>
     <examples>TC-001-before.png, TC-001-after.png, TC-012-after.png</examples>
-    <storage>workspace/[task-id]/snapshots/</storage>
+    <storage>workspace/[task-id]/screenshots/proof-[ticket-or-date]/</storage>
+  </standard>
+
+  <standard name="Annotation Gate — Hard Stop Before Screenshot">
+    <rule>After calling browser_evaluate with any inject snippet, check the return value BEFORE calling browser_take_screenshot</rule>
+    <rule>Return value true → overlay is present and visible. Proceed to screenshot.</rule>
+    <rule>Return value false or null → the target element was not found or had zero bounding-box dimensions. FAIL the TC immediately with: "Annotation target not found — element not rendered or off-screen." Do NOT take the screenshot.</rule>
+    <rule>A screenshot with no visible red overlay is not valid evidence. It could show any state and proves nothing specific.</rule>
+    <why-this-matters>The previous pattern called inject then screenshot with no check in between. If the element was not in the DOM (e.g., the snapshot had stale coordinates, the element was inside a closed dropdown, or the page had scrolled), the screenshot would fire on a blank page with no annotation — and then pass silently unless the evaluator caught it. The gate makes the failure immediate and explicit instead of deferred.</why-this-matters>
+  </standard>
+
+  <standard name="Proof Folder Separation">
+    <rule>All TC pass-evidence screenshots (TC-NNN-after.png, TC-NNN-before.png) go into the PROOF_DIR subfolder, not the base SNAPSHOTS_DIR</rule>
+    <rule>Discovery screenshots (discovery-home.png) and temporary/debug shots stay in the base screenshots/ folder</rule>
+    <rule>PROOF_DIR is named proof-[TICKET_ID] when a ticket is set, or proof-[hostname]-[YYYY-MM-DD] otherwise</rule>
+    <why-this-matters>When the screenshots/ folder contains dozens of files, it is hard to find the actual pass-evidence images. The proof subfolder contains only the annotated, confirmed-pass screenshots — exactly what goes into a report or bug ticket.</why-this-matters>
   </standard>
 </evidence-standards>
 

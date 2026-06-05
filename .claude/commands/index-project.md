@@ -11,7 +11,7 @@ Index the target project's source code into a per-project vector database for se
 
 $ARGUMENTS — flexible, any of:
 - Empty → use the current working directory
-- A full path → `/index-project C:/Development/MyApp`
+- A full path → `/index-project /home/user/myapp` (Linux/Mac) or `/index-project C:/Development/MyApp` (Windows)
 - A short project name → `/index-project PantryEasy`
 - A fuzzy description → `/index-project the benefits app` or `/index-project nectar`
 - Any of the above plus language filter → `PantryEasy python,typescript`

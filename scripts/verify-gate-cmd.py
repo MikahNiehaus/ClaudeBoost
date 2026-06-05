@@ -54,7 +54,10 @@ FINDING_KEYWORDS = (
 
 
 def main() -> int:
-    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        raw = sys.stdin.read() if (sys.stdin and not sys.stdin.isatty()) else ""
+    except Exception:
+        raw = ""
     try:
         payload = json.loads(raw) if raw else {}
     except Exception:

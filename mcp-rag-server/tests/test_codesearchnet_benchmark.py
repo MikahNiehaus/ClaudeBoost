@@ -47,6 +47,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +69,11 @@ def _strip_docstring(code: str) -> str:
     is text overlap, not retrieval. Strip it before writing the .py files.
     """
     try:
-        tree = ast.parse(code)
+        # Suppress SyntaxWarning for third-party code that uses invalid escape
+        # sequences like "\s" or "\d" in non-raw strings (Python 3.12+ warning).
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            tree = ast.parse(code)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if (node.body

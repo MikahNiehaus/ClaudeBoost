@@ -213,17 +213,21 @@ def run_direct_test(project_path: str | None) -> int:
                 ok("Wiped with shutil.rmtree")
                 use_force = True
             except Exception as e:
-                warn(f"shutil.rmtree failed ({e}) — trying PowerShell...")
-                result_ps = subprocess.run(
-                    ["powershell", "-Command",
-                     f"Remove-Item -Path '{chroma_proj}' -Recurse -Force -ErrorAction Stop"],
-                    capture_output=True, text=True,
-                )
-                if result_ps.returncode == 0:
-                    ok("Wiped with PowerShell Remove-Item")
-                    use_force = True
+                if sys.platform == "win32":
+                    warn(f"shutil.rmtree failed ({e}) — trying PowerShell...")
+                    result_ps = subprocess.run(
+                        ["powershell", "-Command",
+                         f"Remove-Item -Path '{chroma_proj}' -Recurse -Force -ErrorAction Stop"],
+                        capture_output=True, text=True,
+                    )
+                    if result_ps.returncode == 0:
+                        ok("Wiped with PowerShell Remove-Item")
+                        use_force = True
+                    else:
+                        warn(f"Wipe failed (server holds files open) — falling back to incremental indexing")
+                        use_force = False
                 else:
-                    warn(f"Wipe failed (server holds files open) — falling back to incremental indexing")
+                    warn(f"shutil.rmtree failed ({e}) — falling back to incremental indexing")
                     use_force = False
         else:
             use_force = True

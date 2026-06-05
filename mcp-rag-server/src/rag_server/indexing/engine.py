@@ -683,9 +683,22 @@ class IndexingEngine:
                                 f"shutil.rmtree + PowerShell both failed: {_ps.stderr.strip()}"
                             )
                     if last_err:
-                        logger.error("Failed to wipe chroma dir after retries: %s", last_err)
-                        return {"error": f"Re-index aborted: could not wipe chroma dir: {last_err}"}
-                logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
+                        # shutil.rmtree + PowerShell both failed: another process (a
+                        # concurrent search request or OneDrive) still holds the SQLite
+                        # WAL file. Fall back to API-level collection clear — ChromaDB
+                        # handles its own locking and works even with active readers.
+                        logger.warning(
+                            "Could not wipe chroma dir (%s). Clearing collection in-place.",
+                            last_err,
+                        )
+                        _fb_store = ChromaStore(persist_dir=str(chroma_dir))
+                        if _fb_store.collection_exists(collection):
+                            _fb_store.delete_collection(collection)
+                        del _fb_store
+                        gc.collect()
+                        logger.info("In-place collection clear succeeded — proceeding with reindex.")
+                    else:
+                        logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
             project_store = ChromaStore(persist_dir=str(chroma_dir))
             graph_store = SQLiteGraphStore(index_dir / "graph.db")
 
@@ -1217,9 +1230,20 @@ class IndexingEngine:
             except Exception as e:
                 return [f"manifest read failed: {e}"]
 
-        return self._check_project_health(
+        issues = self._check_project_health(
             index_dir, project_store, graph_store, project_manifest, stored_version
         )
+        # Release SQLite handles — prevents accumulating open connections on Windows
+        # when health checks are called repeatedly without the server restarting.
+        import gc as _gc
+        try:
+            project_store.close()
+        except Exception:
+            pass
+        del project_store
+        del graph_store
+        _gc.collect()
+        return issues
 
     def _chunk_file(self, content: str, rel_path: str):
         """Route to the right chunker based on file extension.

@@ -1,3 +1,8 @@
+---
+description: "Run the ClaudeBoost hook test suite to verify all hook scripts behave correctly"
+allowed-tools: Bash
+---
+
 # /test-hooks — Run Hook Test Suite
 
 Run the ClaudeBoost hook test harness to verify all hook scripts behave correctly.

@@ -37,8 +37,8 @@ def _rag_index_dir() -> Path:
         return Path(rag_index_dir)
     if local_appdata:
         return Path(local_appdata) / "rag-server-index"
-    # macOS / Linux fallback
-    return Path.home() / ".local" / "share" / "rag-server-index"
+    # macOS / Linux: use the same path rag-server-start.py writes to
+    return Path(__file__).resolve().parent.parent / "mcp-rag-server" / ".rag-index"
 
 
 def _heartbeat_status() -> str:

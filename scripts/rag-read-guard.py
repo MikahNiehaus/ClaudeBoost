@@ -58,11 +58,14 @@ def _rag_is_live() -> bool:
     """
     import time as _time
 
-    _local_appdata = os.environ.get("LOCALAPPDATA", "")
-    _rag_index_dir = os.environ.get(
-        "RAG_INDEX_DIR",
-        str(Path(_local_appdata) / "rag-server-index") if _local_appdata else "",
-    )
+    _rag_index_dir = os.environ.get("RAG_INDEX_DIR", "")
+    if not _rag_index_dir:
+        _local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if _local_appdata:
+            _rag_index_dir = str(Path(_local_appdata) / "rag-server-index")
+        else:
+            # macOS / Linux: server writes to BOOST_HOME/mcp-rag-server/.rag-index
+            _rag_index_dir = str(Path(__file__).resolve().parent.parent / "mcp-rag-server" / ".rag-index")
     if not _rag_index_dir:
         return False
 

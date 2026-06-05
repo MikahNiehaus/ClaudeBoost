@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
-**Generated:** 2026-05-08 (counts updated 2026-05-23)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 96 knowledge XMLs (46 domain + 17 lang + 33 framework), 41 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Generated:** 2026-05-08 (counts updated 2026-06-05)
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 106 knowledge XMLs (52 domain + 21 lang + 33 framework), 44 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1615,15 +1615,18 @@ Agent reads and internalizes before taking any action
 
 ### 5.23 /end-to-end-test <target-url> [scope]
 **File:** `.claude/commands/end-to-end-test.md`  
-**Description:** End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with screenshot evidence  
+**Description:** End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with annotated screenshot evidence  
 **Argument:** `<target-url>` (localhost only) + optional `scope` (auth|crud|nav|errors|responsive|all; default: all)  
 **Agent:** `e2e-agent`  
 **Phases:**
-- Phase 0: Parse args, hard-stop on staging/prod URLs, derive task ID, create workspace, load RAG knowledge, index project codebase
-- Phase 1: App discovery via browser snapshot crawl + RAG codebase search; builds component registry and App Map
-- Phase 2: Test plan generation using scope-to-category mapping + intelligent rules (equivalence partitioning, boundary values); evaluator-agent removes unverified TCs; PAUSE for user approval
-- Phase 3: Test execution — browser MCP tools only; snapshot-first text verification; annotated screenshots for PASS only; every TC gets PASS/FAIL/BLOCKED
-- Phase 4: Report written to `workspace/$TASK_ID/report.md`; screenshots in `snapshots/`  
+- Phase 0: Parse args, hard-stop on staging/prod URLs, derive task ID, create workspace, load RAG knowledge, index project codebase; sets `SNAPSHOTS_DIR = screenshots/` and `PROOF_DIR = screenshots/proof-[ticket-id]`
+- Phase 1: App discovery via browser snapshot crawl + RAG codebase search; builds component registry and App Map; discovery shots saved to `screenshots/` (base folder only)
+- Phase 2: Test plan generation using scope-to-category mapping + intelligent rules (equivalence partitioning, boundary values); each TC includes a `Code path: file:line` field; evaluator-agent removes unverified TCs; PAUSE for user approval
+- Phase 3: Test execution — browser MCP tools only; snapshot-first text verification; red-box annotation injected before every screenshot (annotation gate: FAIL immediately if overlay element has zero bounding box); TC evidence written to `PROOF_DIR`; every TC gets PASS/FAIL/BLOCKED; mcp-debugger step-through attempted for every server-side TC
+- Phase 4: Report written to `workspace/$TASK_ID/report.md`; proof evidence in `screenshots/proof-[ticket-id]/`  
+**Screenshot layout:** `screenshots/` = discovery + temp shots; `screenshots/proof-[ticket-id]/` = TC evidence (TC-NNN-after.png) and debug traces (TC-NNN-debug.json)  
+**Annotation gate:** Inject overlay → verify `document.getElementById('__e2e_ann__')` has non-zero bounding rect → screenshot. If gate fails, TC is marked FAIL, not skipped.  
+**TC plan fields:** Steps, Expected, Evidence, Code path (server-side file:line or `client-side`), Source  
 **Anti-cheat enforcement:** No Bash DB queries, no API bypasses, no fabricated PASS — honest FAIL is the output  
 **Hard stops:** Production/staging URLs blocked; any self-audit question NO → FAIL, never PASS
 

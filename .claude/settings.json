@@ -6,7 +6,7 @@
       "Bash(python3 *)",
       "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
       "Bash(python3 \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(sqlite3 \"C:/Development/*/workspace/.rag-index/graph.db\" *)",
+      "Bash(sqlite3 */.rag-index/graph.db *)",
       "Bash(rm -f \"$CLAUDEBOOST_HOME/state/*.json\")",
       "Bash(rm -f \"$TEMP/claudeboost_*\")",
       "Bash(grep **)",

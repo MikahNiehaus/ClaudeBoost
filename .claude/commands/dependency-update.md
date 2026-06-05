@@ -14,7 +14,13 @@ Scope: **$ARGUMENTS** (e.g. `npm`, `python`, `go`, `rust` — or omit to auto-de
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="safe dependency update workflow", max_tokens=3000`.
+**0a — Detect project path (before loading context):**
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Set `PROJECT_PATH` to the detected value.
+
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="safe dependency update workflow", project_path="<PROJECT_PATH>", max_tokens=3000`.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 

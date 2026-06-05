@@ -87,7 +87,7 @@ Remaining tokens (after the token used as TASK_ID, if any) may be `PROJECT_PATH`
    - If CWD is NOT `$CLAUDEBOOST_HOME`: set `PROJECT_PATH = <cwd>`. Announce: "Project detected: [cwd]."
    - If CWD IS `$CLAUDEBOOST_HOME` and no PROJECT_PATH in args: ask now:
      ```
-     AskUserQuestion: "What project does this ticket belong to? Provide the full path (e.g., C:/Development/MyApp) or 'none' if codebase-independent."
+     AskUserQuestion: "What project does this ticket belong to? Provide the full absolute path (e.g., `/home/user/myapp` on Linux/Mac or `C:/Development/MyApp` on Windows) or 'none' if codebase-independent."
      ```
      Set `PROJECT_PATH` from the answer.
 

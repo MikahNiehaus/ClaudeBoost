@@ -42,7 +42,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 41 slash commands | `~/.claude/commands/` |
+| 4 | Links 44 slash commands | `~/.claude/commands/` |
 | 5 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
 The installer output should show all steps completing:
@@ -96,7 +96,7 @@ Only changed files get re-indexed normally (incremental via SHA-256 hash compari
 
 | Scope | Source files | What's in them |
 |-------|------------|----------------|
-| knowledge | `knowledge/*.xml` (96 files: 46 domain, 17 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
+| knowledge | `knowledge/*.xml` (106 files: 52 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
 | agents | `agents/*.xml` (25 files) | Agent definitions with capabilities, guidelines, output formats |
 
 ## Verification Checklist

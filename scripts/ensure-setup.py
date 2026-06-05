@@ -61,16 +61,11 @@ def main() -> int:
     setup_script = _find_setup_script()
 
     if setup_script is None:
-        manual_cmd = (
-            'powershell -ExecutionPolicy Bypass -File '
-            '"C:/Development/ClaudeBoost/scripts/setup.py"'
-            if _IS_WINDOWS
-            else 'python3 "$HOME/ClaudeBoost/scripts/setup.py"'
-        )
         print(json.dumps({
             "additionalContext": (
                 "CLAUDEBOOST SETUP REQUIRED: Cannot find setup.py. "
-                f"Run: {manual_cmd}"
+                "Navigate to your ClaudeBoost directory and run: "
+                "python scripts/setup.py"
             )
         }))
         return 0

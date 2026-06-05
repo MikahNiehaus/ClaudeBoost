@@ -10,17 +10,19 @@ Two-phase command: generate a Product Requirements Document, then break it into 
 
 ## Phase 0: Load Context
 
-Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="create PRD for $ARGUMENTS", max_tokens=4000` as your FIRST action. This loads organization, architecture, and workflow knowledge.
+**0a — Detect project path (before loading context):**
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Set `PROJECT_PATH` to the detected value.
+
+Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="create PRD for $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000` as your FIRST action. This loads organization, architecture, and workflow knowledge.
 
 Feature or task: **$ARGUMENTS**
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
-Detect the project path:
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
-
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `<PROJECT_PATH>`.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.

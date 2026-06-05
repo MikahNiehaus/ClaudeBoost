@@ -538,12 +538,12 @@ def _augment_with_graph(
         seen_sources = {r.metadata.get("source_file", "").replace("\\", "/") for r in seed_results}
         extra: list[SearchResult] = []
 
-        # Limit graph expansion to top-3 seeds to control token budget
-        for seed in seed_results[:3]:
+        # Expand top-5 seeds; depth=2 catches transitive dependencies
+        for seed in seed_results[:5]:
             seed_file = seed.metadata.get("source_file", "").replace("\\", "/")
             if not seed_file:
                 continue
-            neighbours = graph_store.get_neighbours(seed_file, depth=1)
+            neighbours = graph_store.get_neighbours(seed_file, depth=2)
             for edge in neighbours:
                 # Fetch chunks from the neighbouring file (source or target)
                 neighbour_file = (
@@ -554,7 +554,7 @@ def _augment_with_graph(
                 chunks = project_store.get_by_source("codebase", neighbour_file)
                 pr_factor = pr_factors.get(neighbour_file, 1.0)
                 base_score = max(0.1, seed.score - 0.15)
-                for chunk in chunks[:2]:  # at most 2 chunks per neighbour file
+                for chunk in chunks[:3]:  # at most 3 chunks per neighbour file
                     extra.append(SearchResult(
                         content=chunk.content,
                         metadata=chunk.metadata,

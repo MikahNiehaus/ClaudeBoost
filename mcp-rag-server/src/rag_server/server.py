@@ -536,6 +536,12 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
             return JSONResponse({"error": "workspace_path is required."}, status_code=400)
         if not body.get("sources") or not isinstance(body.get("sources"), list):
             return JSONResponse({"error": "sources must be a non-empty list."}, status_code=400)
+        bad = [s for s in body["sources"] if not isinstance(s, str)]
+        if bad:
+            return JSONResponse(
+                {"error": f"sources must be a list of strings (URLs or file paths). Got non-string items: {bad[:3]}"},
+                status_code=400,
+            )
         result = await asyncio.get_running_loop().run_in_executor(
             None, _dispatch_tool, "rag_index_research", body
         )

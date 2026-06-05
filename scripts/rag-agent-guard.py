@@ -19,11 +19,14 @@ from pathlib import Path
 
 def _heartbeat_age() -> float | None:
     """Return heartbeat age in seconds, or None if missing/unreadable."""
-    local_appdata = os.environ.get("LOCALAPPDATA", "")
-    rag_index_dir = os.environ.get(
-        "RAG_INDEX_DIR",
-        str(Path(local_appdata) / "rag-server-index") if local_appdata else "",
-    )
+    rag_index_dir = os.environ.get("RAG_INDEX_DIR", "")
+    if not rag_index_dir:
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if local_appdata:
+            rag_index_dir = str(Path(local_appdata) / "rag-server-index")
+        else:
+            # macOS / Linux: server writes to BOOST_HOME/mcp-rag-server/.rag-index
+            rag_index_dir = str(Path(__file__).resolve().parent.parent / "mcp-rag-server" / ".rag-index")
     if not rag_index_dir:
         return None
     hb = Path(rag_index_dir) / ".heartbeat"

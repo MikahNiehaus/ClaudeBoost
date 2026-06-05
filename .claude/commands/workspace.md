@@ -380,7 +380,7 @@ If WORK_TYPES includes Feature / Bug Fix / Refactor / Testing / UI / Database / 
 
 Ask exactly this:
 ```
-AskUserQuestion: "Does this involve a specific project codebase? Provide the full path (e.g., C:/Development/MyApp) or say 'none' if this is ClaudeBoost meta-work or codebase-independent."
+AskUserQuestion: "Does this involve a specific project codebase? Provide the full absolute path (e.g., `/home/user/myapp` on Linux/Mac or `C:/Development/MyApp` on Windows) or say 'none' if this is ClaudeBoost meta-work or codebase-independent."
 ```
 
 Set `PROJECT_PATH` from the answer. If 'none' or ClaudeBoost meta-work: `PROJECT_PATH = none`.

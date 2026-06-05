@@ -7,20 +7,23 @@ description: Execute planning phase for a task (without execution)
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="implementation planning for current task", max_tokens=3000`.
+**0a — Detect project path (before loading context):**
+
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory if no registry entry found
+
+Set `PROJECT_PATH` to the detected value.
+
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="implementation planning for current task", project_path="<PROJECT_PATH>", max_tokens=3000`.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
-Detect the project path:
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
-
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `PROJECT_PATH`.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
+- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` immediately. Do not continue until indexing completes.
 - **RAG offline**: stop and tell the user to run `/rag` first.
 
 ---

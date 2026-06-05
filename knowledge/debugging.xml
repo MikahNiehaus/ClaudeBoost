@@ -146,8 +146,24 @@ Then propose a fix
     <adapter language="Go">Delve — must be installed: go install github.com/go-delve/delve/cmd/dlv@latest</adapter>
     <adapter language="Rust">CodeLLDB — auto-downloaded; GNU toolchain required on Windows</adapter>
     <adapter language="Java">JDT LS + java-debug — auto-downloaded; requires JDK 17+</adapter>
-    <adapter language="C# / .NET">netcoredbg — auto-downloaded; requires .NET SDK</adapter>
+    <adapter language="C# / .NET">netcoredbg — requires manual install on Windows (see prerequisites below)</adapter>
   </language-adapters>
+
+  <prerequisites>
+    <prerequisite language="C# / .NET">
+      <requirement>netcoredbg must be installed and on PATH (or NETCOREDBG_PATH set)</requirement>
+      <detection>Run: command -v netcoredbg 2>/dev/null || echo NOT_FOUND</detection>
+      <install-option id="A">dotnet tool install -g Samsung.Netcoredbg
+Then add %USERPROFILE%\.dotnet\tools to PATH if not already present</install-option>
+      <install-option id="B">Download from https://github.com/Samsung/netcoredbg/releases,
+extract netcoredbg.exe, add the folder to PATH or set NETCOREDBG_PATH env var</install-option>
+      <fallback>If not installed: tell the user, provide these install options, set DEBUG_ENABLED=false,
+and continue with UI-only testing. Never silently skip — always explain why debugging is disabled.</fallback>
+    </prerequisite>
+    <prerequisite language="Python">debugpy is auto-installed — no manual step needed</prerequisite>
+    <prerequisite language="Node.js / TypeScript">Uses built-in V8 inspector — no manual step needed</prerequisite>
+    <prerequisite language="Go">go install github.com/go-delve/delve/cmd/dlv@latest</prerequisite>
+  </prerequisites>
 </mcp-debugger>
 
 <systematic-workflow>
