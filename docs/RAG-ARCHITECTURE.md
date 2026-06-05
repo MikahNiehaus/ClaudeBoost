@@ -6,15 +6,15 @@ How the ClaudeBoost RAG server works — from file discovery through semantic se
 
 ## Overview
 
-The RAG server runs as an MCP subprocess. It exposes tools (`rag_search`, `rag_context`, `rag_index_project`, etc.) that Claude Code calls during sessions. Two separate indexes exist and serve different purposes:
+The RAG server is a Python HTTP service on port 8612 that starts as a subprocess when Claude Code opens. It exposes a REST API (`POST /search`, `POST /context`, `POST /index`, `GET /status`) that Claude, hooks, and agents call during sessions. Two separate indexes exist and serve different purposes:
 
 | Index | What it holds | Location |
 |-------|--------------|----------|
-| **ClaudeBoost RAG** | `agents/*.xml` + `knowledge/*.xml` — agent definitions and knowledge bases | `$LOCALAPPDATA/rag-server-index/chroma/` |
+| **ClaudeBoost RAG** | `agents/*.xml` + `knowledge/*.xml` — agent definitions and knowledge bases | `mcp-rag-server/.rag-index/chroma/` |
 | **Project RAG** | A specific project's source code | `<project>/workspace/.rag-index/chroma/` |
 | **Graph DB** | Code structure graph (imports, inheritance, calls) for a project | `<project>/workspace/.rag-index/graph.db` |
 
-These are built and queried independently. `rag_context` combines both — ClaudeBoost RAG for knowledge, Project RAG for codebase context.
+These are built and queried independently. `POST /context` combines both — ClaudeBoost RAG for knowledge, Project RAG for codebase context.
 
 ---
 

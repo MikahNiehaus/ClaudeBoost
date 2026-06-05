@@ -62,14 +62,19 @@ a different location, re-run `install.bat` (Windows) or `./install.sh` (macOS/Li
 ### 3. Verify
 
 Open any project in Claude Code and try:
-- `rag_status` — should show collections with chunk counts (counts vary based on file count)
-- `rag_search "SQL injection"` — should return results from security.xml
+- `/boost` — starts the RAG server and primes the session
 - `/list-agents` — should list all 25 agents
 
+Verify the RAG server directly:
+```
+GET http://127.0.0.1:8612/status
+```
+Should return `{"status":"ready"}` with collection chunk counts.
+
 That's it. Every Claude Code session now has:
-- Semantic search over 96 knowledge files (46 domain, 17 language, 33 framework) and 25 agent XML files
+- Semantic search over 106 knowledge files (52 domain, 21 language, 33 framework) and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 41 slash commands for task management
+- 44 slash commands for task management
 
 ### How RAG works after install
 

@@ -234,7 +234,6 @@ prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xm
 | database-agent | Schema design, queries, migrations | Sonnet |
 | observability-agent | Logging, metrics, alerting | Sonnet |
 | rag-indexing-agent | RAG index health and filtering | Sonnet |
-| e2e-agent | End-to-end UI testing, structured test plans | Sonnet |
 
 ## Slash Commands
 
@@ -267,6 +266,54 @@ prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xm
 
 **Documentation**
 `/update-docs` `/init` `/generate-agents-md`
+
+## Benchmarks
+
+The RAG system is evaluated by a 64-test suite at `mcp-rag-server/tests/test_rag_quality.py`,
+using methodologies drawn from four professional benchmarks:
+
+| Methodology | Source | What it tests |
+|-------------|--------|--------------|
+| BEIR-style Recall@k | Thakur et al. 2021 | Zero-shot retrieval across query types |
+| MTEB-style nDCG@5 + MRR | Muennighoff et al. 2022 | Embedding ranking quality |
+| GraphRAG-Bench (ICLR 2026) | arXiv 2506.05690 | Structural neighbour retrieval via import chains |
+| CodeSearchNet-style | Husain et al. | Natural-language description → correct source file |
+
+### Results (64/64 passing)
+
+| Metric | Score |
+|--------|-------|
+| Recall@1 | 79% |
+| Recall@3 | **97%** |
+| Recall@5 | **100%** |
+| nDCG@5 | **0.899** |
+| MRR | 0.865 |
+
+### Three tiers
+
+The suite tests each layer of the RAG stack separately, showing what each tier adds:
+
+**Tier 1 — Vector only**: 34 queries across knowledge files, agent definitions, and codebase.
+Embedding similarity alone. Recall@5 = 100%.
+
+**Tier 2 — Normal indexing (vector + graph)**: `/index-project` builds both the vector
+index and the import-chain graph in one pass. Tests confirm the embedding pipeline and
+edge extraction are both healthy: seed file + structural import-chain neighbour retrieved
+at 100% hit rate.
+
+**Tier 3 — `/graph` skill**: Entity extraction from a task description + multi-hop graph
+traversal. Surfaces files the basic search misses. The skill added files beyond
+single-entity vector search in 3/3 cases (100% gap-fill rate).
+
+### Run it yourself
+
+```bash
+# Requires: RAG server running (/rag), knowledge indexed (/index-boost), project indexed (/index-project)
+pytest mcp-rag-server/tests/test_rag_quality.py -v -s
+```
+
+`test_three_tier_summary` and `test_recall_summary_report` print a full diagnostic breakdown
+at the end of the run. Both are informational — they never fail, they just show the numbers.
 
 ## How It Works
 

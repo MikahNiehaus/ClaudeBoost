@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 96 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 41 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 106 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 44 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -14,7 +14,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 ## 2. Getting started
 
-Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 41 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
+Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 44 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
 Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 
@@ -40,7 +40,7 @@ A typical session looks like this:
 
 For a one-line fix or a doc update, none of that applies. The system doesn't add ceremony unless the task warrants it.
 
-**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, use `/spawn-agent` or just say "have security-agent look at this." The agents always call `rag_context` as their first action — that's how they know what domain knowledge applies to the task. You'll see it in the output; it's expected behavior, not overhead.
+**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, use `/spawn-agent` or just say "have security-agent look at this." The agents always call `POST /context` as their first action — that's how they know what domain knowledge applies to the task. You'll see it in the output; it's expected behavior, not overhead.
 
 ---
 
@@ -215,11 +215,11 @@ ClaudeBoost runs two separate indexes. Knowing which is which saves confusion.
 
 **Project RAG** — your project's source code, indexed per-project at `<project>/workspace/.rag-index/`. This is what Claude searches when it needs to find a specific file, function, or pattern in *your* codebase. It doesn't exist until you run `/index-project <path>`. After that, it's automatically available during any work on that project.
 
-### MCP tools
+### HTTP API endpoints
 
-These run behind the scenes. You won't usually call them directly, but they're available if you want to query manually, and understanding what they do explains why the system behaves the way it does.
+The RAG server runs on `http://127.0.0.1:8612`. Claude calls these directly — no MCP layer. You won't usually call them yourself, but understanding what they do explains why the system behaves the way it does.
 
-**`rag_search`** — semantic search across either index. Key scope options:
+**`POST /search`** — semantic search across either index. Key scope options:
 - `scope=agents` — search agent definitions only
 - `scope=knowledge` — search knowledge bases only
 - `scope=all` — search both ClaudeBoost indexes
@@ -228,17 +228,17 @@ These run behind the scenes. You won't usually call them directly, but they're a
 
 The graph mode is useful when you need to understand ripple effects: "what files import this module?", "what changes if I modify class Foo?". The vector mode (default) is better for semantic questions: "where is payment processing handled?", "find the auth middleware."
 
-**`rag_context`** — the tool every agent calls as its first action. It assembles a curated context package: the right agent definition, relevant knowledge chunks, and (if available) matching codebase results. It works in tiers: agent definition first, then relevant knowledge, then project code. This is what makes each agent smart about its domain without loading the entire knowledge base into context every time. If you see an agent getting started and it calls `rag_context` first, that's expected and required — it's the mandatory first step for every agent.
+**`POST /context`** — the endpoint every agent calls as its first action. It assembles a curated context package: the right agent definition, relevant knowledge chunks, and (if available) matching codebase results. It works in tiers: agent definition first, then relevant knowledge, then project code. This is what makes each agent smart about its domain without loading the entire knowledge base into context every time. If you see an agent getting started and it calls `POST /context` first, that's expected and required — it's the mandatory first step for every agent.
 
-**`rag_index`** — reindexes the ClaudeBoost knowledge and agent files. Called by `/index-boost`. Run manually if you've added or edited knowledge files directly and want the changes picked up immediately.
+**`POST /index`** — reindexes the ClaudeBoost knowledge and agent files. Called by `/index-boost`. Run manually if you've added or edited knowledge files directly and want the changes picked up immediately.
 
-**`rag_status`** — health check for the RAG server. Shows unresolved graph edges, index errors, stale collections, and whether the server is running. If search results seem wrong or incomplete, or if an agent seems to be missing obvious knowledge, run this first. Stale indexes fail silently — they return results, just not the right ones.
+**`GET /status`** — health check for the RAG server. Shows unresolved graph edges, index errors, stale collections, and whether the server is running. If search results seem wrong or incomplete, or if an agent seems to be missing obvious knowledge, run this first. Stale indexes fail silently — they return results, just not the right ones.
 
 ### When to reindex
 
 - After pulling a ClaudeBoost update: `/index-boost`
 - After adding or significantly changing project source files: `/index-project <path>`
-- If `rag_status` shows a stale index: `/index-project <path>` (force mode)
+- If `GET /status` shows a stale index: `/index-project <path>` (force mode)
 - If RAG isn't connected at all: run `/boost` to reconnect — don't try to work around it by reading files manually
 
 The RAG unavailability protocol is strict: if RAG is down, stop, run `/boost`, and retry. Don't substitute grep or file reads for RAG when it's offline. The system is designed to use RAG as the entry point for knowledge — bypassing it produces degraded results and skips guardrails.
@@ -428,7 +428,7 @@ ClaudeBoost installs several hooks that run automatically in the background. You
 
 **Session start hook** - runs when Claude Code starts. It checks whether `/boost` has been run this session and injects the CONSULT/AUTO mode protocol into context. If the sentinel is missing (meaning `/boost` has not run), it blocks task spawning until you run `/boost`.
 
-**Pre-task hook** - fires before any agent is spawned via the Task tool. It checks that `rag_context` is included in the spawn prompt. If it is not, the spawn is blocked (exit code 2). This enforces the "RAG first" contract that keeps agents from running with empty context.
+**Pre-task hook** - fires before any agent is spawned via the Task tool. It checks that `POST /context` is included in the spawn prompt. If it is not, the spawn is blocked (exit code 2). This enforces the "RAG first" contract that keeps agents from running with empty context.
 
 **Post-task hook** - fires after every agent completes. It nudges the orchestrator to check agent output for unverified BLOCKER/HIGH findings and spawn `evaluator-agent` if needed. It is an LLM nudge, not a mechanical block - the orchestrator has to act on it.
 
@@ -453,7 +453,7 @@ You will not see most of these. They run silently unless there is a problem, in 
 
 **Use `/changes` before committing.** It gives you a clean view of everything that changed and why, which makes commit messages easier and catches any unintended edits.
 
-**If something seems slow or wrong with RAG**, run `rag_status` before anything else. Most search quality problems are stale index problems, and they are easy to fix.
+**If something seems slow or wrong with RAG**, run `GET /status` (or `/boost` to reconnect) before anything else. Most search quality problems are stale index problems, and they are easy to fix.
 
 **For big tasks, start with `/explore` not `/workspace`.** `/explore` does a deeper ticket analysis and codebase exploration pass before generating the plan. `/workspace` is faster but assumes less investigation is needed. Use `/explore` when you have a ticket with real complexity.
 
@@ -463,18 +463,19 @@ You will not see most of these. They run silently unless there is a problem, in 
 
 ## Appendix: Knowledge base coverage
 
-The 96 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
+The 106 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
 
-**Domain bases (46 files)** cover: api-design, architecture, branching-strategy, code-critique, code-exploration, coding-standards, consult-mode, context-engineering, database, debugging, devops, documentation, e2e-testing, error-handling, human-voice, memory-management, model-selection, observability, performance, playwright, pr-review, refactoring, research, security, testing, ticket-understanding, tool-design, ui-implementation, verify-gate, workflow, and more.
+**Domain bases (52 files)** cover: api-design, architecture, branching-strategy, code-critique, code-exploration, coding-standards, consult-mode, context-engineering, database, debugging, devops, documentation, e2e-testing, error-handling, human-voice, memory-management, model-selection, observability, performance, playwright, pr-review, refactoring, research, security, testing, ticket-understanding, tool-design, ui-implementation, verify-gate, workflow, and more.
 
-**Language guides (17 files, `lang-*.xml`)** cover C#, Go, Java, JavaScript, Kotlin, Python, Rust, Swift, TypeScript, and others — each with idioms, common pitfalls, and language-specific standards. These load when the language appears in the task description or in the files being edited.
+**Language guides (21 files, `lang-*.xml`)** cover C#, Go, Java, JavaScript, Kotlin, Python, Rust, Swift, TypeScript, and others — each with idioms, common pitfalls, and language-specific standards. These load when the language appears in the task description or in the files being edited.
 
 **Framework guides (33 files, `fw-*.xml`)** cover ASP.NET Core, React, Vue, Angular, Next.js, Django, FastAPI, Spring Boot, Android Compose, iOS SwiftUI, and more. Including the framework name in your task description (e.g., "fix bug in React component") pulls in the right guide automatically. Both the language and framework guides can load at the same time — a TypeScript React task gets both.
 
 If you want to see which knowledge files would be relevant to a specific task before starting, run:
 
 ```
-rag_search(scope="all", query="<describe your task>")
+POST http://127.0.0.1:8612/search
+{"scope": "all", "query": "<describe your task>"}
 ```
 
 That shows you exactly what RAG would surface for that work.
