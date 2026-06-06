@@ -134,6 +134,47 @@ If FAIL: repair → `pip install edge-tts`, then retry.
 
 ---
 
+### Check 4b — mcp-debugger: netcoredbg (.NET debugging)
+
+`netcoredbg` is required for mcp-debugger to step through .NET/C# code. Without it the E2E skill skips all code verification for .NET projects and warns the user at runtime. Install it now so it's always ready.
+
+**Step 1 — Confirm dotnet SDK is available:**
+```bash
+dotnet --version
+```
+If `dotnet` is not found: mark WARN (not FAIL), skip to Check 5. .NET is optional — skip this check only if dotnet itself isn't installed.
+
+**Step 2 — Check whether netcoredbg is on PATH:**
+```bash
+where netcoredbg
+```
+
+| Result | Meaning | Action |
+|--------|---------|--------|
+| Path printed | **PASS** | Continue |
+| Not found | Needs install | Run auto-repair below |
+
+**Auto-repair (if not found):**
+```bash
+dotnet tool install -g Samsung.Netcoredbg
+```
+
+After install, re-check `where netcoredbg`. If still not found, `%USERPROFILE%\.dotnet\tools` may not be on PATH. Fix it permanently in the user's environment:
+```bash
+$toolsDir = "$env:USERPROFILE\.dotnet\tools"
+$current = [System.Environment]::GetEnvironmentVariable('PATH','User')
+if ($current -notlike "*$toolsDir*") {
+    [System.Environment]::SetEnvironmentVariable('PATH', "$current;$toolsDir", 'User')
+    echo "PATH updated — restart terminal for it to take effect"
+}
+```
+
+Retry `where netcoredbg` after the PATH fix. Up to 3 attempts total before marking FAIL.
+
+**This check is mandatory.** Never skip it — even for non-.NET projects. mcp-debugger is a project-agnostic tool; the user may run E2E tests against .NET projects at any time.
+
+---
+
 ### Check 5 — Global CLAUDE.md
 
 ```bash
@@ -257,6 +298,7 @@ RAG server health        : OK / FAIL (<reason>)
 Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
+netcoredbg (mcp-debugger): OK vX.Y.Z / INSTALLED / WARN (no dotnet SDK) / FAIL
 CLAUDE.md                : OK / MISSING
 statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)

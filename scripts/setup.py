@@ -243,13 +243,12 @@ def _is_junction(path: Path) -> bool:
 # Settings.json: env + statusLine + hooks.
 # ---------------------------------------------------------------------------
 def _statusline_cmd() -> str:
-    """Build the status line command using the current Python interpreter.
+    """Build the status line command.
 
-    Uses the interpreter that ran setup.py — portable across venvs and platforms.
-    CLAUDEBOOST_HOME is expanded at runtime from the env var (set in settings.json env).
+    Both CLAUDEBOOST_PYTHON and CLAUDEBOOST_HOME are expanded at runtime from
+    the env block in settings.json — no machine-specific paths baked in.
     """
-    interp = Path(sys.executable).as_posix()
-    return f'"{interp}" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
+    return '"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
 
 
 def _load_settings() -> dict:
@@ -264,39 +263,31 @@ def _load_settings() -> dict:
         sys.exit(1)
 
 
-def _script_path(name: str) -> str:
-    """Absolute POSIX path to a script in scripts/. Used in hook commands."""
-    return (BOOST_HOME / "scripts" / name).as_posix()
-
-
 def _py_cmd(script_name: str) -> str:
-    """Hook command that invokes a script with the current Python interpreter.
+    """Hook command that invokes a ClaudeBoost script.
 
-    Writing sys.executable avoids the `python` vs `python3` vs venv mess —
-    whichever interpreter ran setup is the one used by hooks. Critical on
-    macOS/Linux where `python` often doesn't exist (only `python3`).
+    Uses $CLAUDEBOOST_PYTHON and $CLAUDEBOOST_HOME — both set in the settings.json
+    env block by update_settings(). No machine-specific paths baked in: works after
+    repo moves, Python upgrades, and fresh clones on any machine.
     """
-    interp = Path(sys.executable).as_posix()
-    return f'"{interp}" "{_script_path(script_name)}"'
+    return f'"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/{script_name}"'
 
 
 def _hook_command_stale(cmd: str) -> bool:
-    """Stale = (1) contains literal $CLAUDEBOOST_HOME bash var, or
-    (2) references an absolute script path that no longer exists.
+    """Stale = references an absolute script path that no longer exists.
 
-    Paths containing other env-var refs (e.g. $HOME/.claude/ensure-setup.py,
-    %APPDATA%\\...) are left alone — we can't verify them without expansion,
-    and they are intentionally written that way to stay machine-portable.
+    Commands using env-var refs ($CLAUDEBOOST_PYTHON, $CLAUDEBOOST_HOME, $HOME,
+    %APPDATA%, etc.) are portable and left alone — can't verify statically, and
+    they're intentionally written that way.
     """
-    if "$CLAUDEBOOST_HOME" in cmd:
-        return True
     import re
     m = re.search(r'"([^"]+\.py)"', cmd)
     if m:
         candidate = m.group(1)
-        # Skip paths with unresolved env vars — can't statically verify.
+        # Env-var-relative paths are portable — skip
         if "$" in candidate or "%" in candidate:
             return False
+        # Absolute path that's gone — stale
         if not Path(candidate).exists():
             return True
     return False
@@ -593,10 +584,9 @@ def _install_all_hooks(settings: dict) -> None:
     shutil.copy2(ensure_src, ensure_dst)
     _ok(f"ensure-setup.py copied to {ensure_dst}")
 
-    # The hook command uses $HOME so it doesn't bake in a machine-specific
-    # absolute path. Wrap interpreter in quotes for paths with spaces.
-    interp = Path(sys.executable).as_posix()
-    ensure_cmd = f'"{interp}" "$HOME/.claude/ensure-setup.py"'
+    # $CLAUDEBOOST_PYTHON is set in the env block, so this stays portable across
+    # Python installs and repo locations. $HOME is stable on every platform.
+    ensure_cmd = '"$CLAUDEBOOST_PYTHON" "$HOME/.claude/ensure-setup.py"'
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
@@ -620,9 +610,17 @@ def _install_all_hooks(settings: dict) -> None:
 def update_settings() -> None:
     settings = _load_settings()
 
-    # CLAUDEBOOST_HOME env entry
+    # Env entries used by hook commands — both are machine-specific but set here
+    # so the hook command strings themselves stay portable (no baked-in paths).
     env = settings.setdefault("env", {})
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
+    env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
+
+    # Write a stable lookup file so ensure-setup.py can find the repo even when
+    # it's running from ~/.claude/ (outside the repo tree).
+    home_file = CLAUDE_DIR / "claudeboost-home.txt"
+    home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
+    _ok(f"claudeboost-home.txt written → {home_file}")
 
     # statusLine — always use the Python-based RAG health script (cross-platform)
     new_sl_cmd = _statusline_cmd()
