@@ -610,6 +610,113 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="speak-tts.py", label="TTS speak hook")
 
 
+
+# ---------------------------------------------------------------------------
+# Permission gates: ensure global settings.json has the correct allow/ask/deny
+# entries for safe ClaudeBoost operation.
+#
+# Policy enforced here:
+#   allow  — "Bash" catch-all (safe because bash-guard.py PreToolUse hook
+#             enforces safety at the command level for every Bash call)
+#   ask    — every git/gh write operation; must prompt before modifying repo
+#   deny   — hard blocks: force-push main/master, catastrophic destructive ops
+#
+# All operations are additive. Existing user entries are never removed.
+# ---------------------------------------------------------------------------
+_GIT_WRITE_ASK = [
+    "Bash(git commit **)", "Bash(git commit)",
+    "Bash(git push)", "Bash(git push **)",
+    "Bash(git push --force **)", "Bash(git push -f **)",
+    "Bash(git add **)", "Bash(git add .)", "Bash(git add -A)",
+    "Bash(git merge **)", "Bash(git merge)",
+    "Bash(git rebase **)", "Bash(git rebase)",
+    "Bash(git reset **)", "Bash(git reset)",
+    "Bash(git restore **)",
+    "Bash(git clean **)",
+    "Bash(git checkout **)", "Bash(git checkout)",
+    "Bash(git switch **)", "Bash(git switch)",
+    "Bash(git stash **)", "Bash(git stash)",
+    "Bash(git cherry-pick **)", "Bash(git cherry-pick)",
+    "Bash(git revert **)", "Bash(git revert)",
+    "Bash(git pull **)", "Bash(git pull)",
+    "Bash(git init)", "Bash(git init **)",
+    "Bash(git clone **)",
+    "Bash(git remote add **)", "Bash(git remote remove **)", "Bash(git remote set-url **)",
+    "Bash(git rm **)", "Bash(git mv **)",
+    "Bash(git apply **)", "Bash(git am **)",
+    "Bash(git worktree **)",
+    "Bash(git branch -d **)", "Bash(git branch -m **)", "Bash(git branch -c **)",
+    "Bash(git branch --copy **)",
+    "Bash(git tag -a **)", "Bash(git tag -d **)", "Bash(git tag --delete **)",
+    "Bash(git config --global **)", "Bash(git config --system **)",
+    "Bash(git config --local **)", "Bash(git config --unset **)",
+    "Bash(git filter-branch **)", "Bash(git filter-repo **)",
+    "Bash(git reflog expire **)", "Bash(git reflog delete **)",
+    "Bash(git submodule add **)", "Bash(git submodule deinit **)",
+    "Bash(git sparse-checkout **)",
+    "Bash(git lfs track **)", "Bash(git lfs untrack **)",
+    "Bash(git notes add **)", "Bash(git notes edit **)", "Bash(git notes remove **)",
+    "Bash(gh pr create **)", "Bash(gh pr edit **)",
+    "Bash(gh pr merge **)", "Bash(gh pr close **)",
+    "Bash(gh issue create **)", "Bash(gh issue close **)",
+    "Bash(gh release **)", "Bash(gh repo create **)",
+    "Bash(gh gist create **)", "Bash(gh gist edit **)", "Bash(gh gist delete **)",
+]
+
+_GIT_DENY = [
+    "Bash(git push --force origin main **)",
+    "Bash(git push --force origin master **)",
+    "Bash(git push -f origin main **)",
+    "Bash(git push -f origin master **)",
+    "Bash(git branch -D **)",
+    "Bash(git branch --delete --force **)",
+    "Bash(git clean -fdx **)",
+    "Bash(git clean -fxd **)",
+    "Bash(git reset --hard HEAD~ **)",
+]
+
+_BASH_CATCHALL = "Bash"
+
+
+def _update_permissions(settings: dict) -> None:
+    """Ensure global settings.json has the correct ClaudeBoost permission entries.
+
+    Additive only — never removes entries the user added themselves.
+    """
+    perms = settings.setdefault("permissions", {})
+    allow: list = perms.setdefault("allow", [])
+    ask: list = perms.setdefault("ask", [])
+    deny: list = perms.setdefault("deny", [])
+
+    added_allow, added_ask, added_deny = 0, 0, 0
+
+    # "Bash" catch-all must be in allow so common dev commands don't prompt.
+    # bash-guard.py (PreToolUse) enforces the real safety policy.
+    if _BASH_CATCHALL not in allow:
+        allow.insert(0, _BASH_CATCHALL)
+        added_allow += 1
+
+    # Every git/gh write operation must prompt.
+    for entry in _GIT_WRITE_ASK:
+        if entry not in ask:
+            ask.append(entry)
+            added_ask += 1
+
+    # Hard blocks that should never be auto-approved even if "Bash" is in allow.
+    for entry in _GIT_DENY:
+        if entry not in deny:
+            deny.append(entry)
+            added_deny += 1
+
+    if added_allow or added_ask or added_deny:
+        _ok(
+            f"Permissions: +{added_allow} allow, +{added_ask} ask, "
+            f"+{added_deny} deny entries added"
+        )
+    else:
+        _skip("Permissions — all required entries already present")
+
+
 def update_settings() -> None:
     settings = _load_settings()
 
@@ -623,7 +730,7 @@ def update_settings() -> None:
     # it's running from ~/.claude/ (outside the repo tree).
     home_file = CLAUDE_DIR / "claudeboost-home.txt"
     home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
-    _ok(f"claudeboost-home.txt written -> {home_file}")
+    _ok(f"claudeboost-home.txt written: {home_file}")
 
     # statusLine — always use the Python-based RAG health script (cross-platform)
     new_sl_cmd = _statusline_cmd()
@@ -635,6 +742,7 @@ def update_settings() -> None:
         _ok("statusLine - configured RAG health indicator")
 
     _install_all_hooks(settings)
+    _update_permissions(settings)
 
     write_json(SETTINGS_PATH, settings)
     _ok("settings.json - CLAUDEBOOST_HOME env added")

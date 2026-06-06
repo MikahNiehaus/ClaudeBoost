@@ -282,6 +282,57 @@ If pull fails: mark WARN — community summaries will fall back to path-based na
 
 ---
 
+### Check 9 — Permission Gates
+
+Verify that `~/.claude/settings.json` has the correct ClaudeBoost permission policy:
+- `"Bash"` is in allow (catch-all; bash-guard.py enforces safety at hook level)
+- All git/gh write operations are in ask (reads auto-approve, writes always prompt)
+- Force-push to main/master is in deny
+
+Run a quick audit:
+
+```bash
+python3 "C:/Users/mniehaus/AppData/Local/Temp/cb_perm_check.py"
+```
+
+Where `cb_perm_check.py` contains:
+
+```python
+import json, sys
+with open("C:/Users/mniehaus/.claude/settings.json", encoding="utf-8") as f:
+    s = json.load(f)
+allow = s["permissions"]["allow"]
+ask = s["permissions"]["ask"]
+deny = s["permissions"]["deny"]
+
+issues = []
+if "Bash" not in allow:
+    issues.append('MISSING: "Bash" in allow (catch-all needed for smooth dev workflow)')
+for entry in ["Bash(git commit **)", "Bash(git push **)", "Bash(git revert **)",
+              "Bash(git config --global **)", "Bash(git filter-branch **)"]:
+    if entry not in ask:
+        issues.append(f"MISSING from ask: {entry}")
+for entry in ["Bash(git push --force origin main **)", "Bash(git branch -D **)"]:
+    if entry not in deny:
+        issues.append(f"MISSING from deny: {entry}")
+
+if issues:
+    for i in issues: print("FAIL:", i)
+    sys.exit(1)
+else:
+    print(f"OK: allow={len(allow)} ask={len(ask)} deny={len(deny)}")
+    sys.exit(0)
+```
+
+| Result | Meaning | Repair |
+|--------|---------|--------|
+| `OK: allow=N ask=N deny=N` | **PASS** | — |
+| Any `FAIL:` line | Missing entries | Re-run `setup.py` — `_update_permissions()` adds missing entries idempotently |
+
+If repair is needed, re-run Phase 1 (`setup.py`), then retry this check. `setup.py` calls `_update_permissions()` which adds all required entries without removing any user-added entries.
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -303,6 +354,7 @@ CLAUDE.md                : OK / MISSING
 statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 Ollama (qwen3:4b)        : OK / WARN (<reason>)
+Permission gates         : OK (allow=N ask=N deny=N) / FAIL (<missing entries>)
 
 ─────────────────────────────────────────
 ```
