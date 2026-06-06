@@ -97,8 +97,18 @@ def main() -> int:
     ))
     workspace_dir = home / "workspace"
 
-    # Compute ctx_files once — used by both Channel B paths and auto-save
-    ctx_files = list(workspace_dir.glob("*/context.md")) if workspace_dir.exists() else []
+    # Compute ctx_files once — used by both Channel B paths and auto-save.
+    # Only include workspaces touched within the session window; old workspaces from
+    # previous sessions aren't "active" and shouldn't drive nudges.
+    SESSION_WINDOW_HOURS = 4
+    session_cutoff = time.time() - SESSION_WINDOW_HOURS * 3600
+    if workspace_dir.exists():
+        ctx_files = [
+            f for f in workspace_dir.glob("*/context.md")
+            if f.stat().st_mtime >= session_cutoff
+        ]
+    else:
+        ctx_files = []
     has_workspace = bool(ctx_files)
 
     # --- Read hook payload ---

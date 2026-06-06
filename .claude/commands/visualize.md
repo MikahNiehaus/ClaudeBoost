@@ -446,9 +446,27 @@ function downloadSVG() {
 
 ---
 
-## Step 3b: Add Audio Tour (MANDATORY)
+## Step 3b: Add Audio Tour (MANDATORY — DO NOT SIMPLIFY)
 
-Every visualization MUST include an interactive audio walkthrough using the Web Speech API. This is non-negotiable — users expect it in every diagram.
+Every visualization MUST include the **full audio bar system** using the Web Speech API. This is non-negotiable — users expect it in every diagram.
+
+**BANNED — do NOT use these simpler patterns:**
+- A small floating overlay div with prev/next/stop buttons
+- A toolbar button that toggles a tour mode
+- Any approach that does not include the full two-row audio bar at the bottom
+
+**REQUIRED — always use the exact system below.** The canonical reference implementation is at:
+`C:\Development\Food and Function\FoodAccessProject\workspace\TFF-1038\visualize\architecture.html`
+
+The full system includes:
+- Fixed two-row audio bar at the bottom with play/pause ▶⏸, stop ■, chapters ☰, transcript T
+- Voice selector (auto-populated from browser speech synthesis, scored to prefer Microsoft Andrew)
+- Speed selector (0.85× / 0.95× / 1.05× / 1.15×)
+- Scrub track with chapter tick marks and draggable thumb
+- Card pulse animation (blue glow) on highlighted cards during narration
+- Chapters panel (click ☰ to jump to any segment)
+- Transcript panel (click T to slide in full text, clickable to jump)
+- `body { padding-bottom: 110px; }` to leave room for the bar
 
 ### COMPONENTS pattern — ALWAYS use `html:` not `desc:`/`items:`
 
