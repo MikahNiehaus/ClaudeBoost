@@ -734,6 +734,26 @@ def install_rag_server() -> None:
         else:
             _warn("Could not remove torchvision")
 
+    # Pre-download the embedding model so the server can load it offline on first run.
+    # Without this, a fresh install hits an empty HF cache and the server (which loads
+    # with local_files_only) 500s every /index until the model gets fetched. Warm the
+    # cross-encoder reranker too — it's the other model the server needs offline.
+    _info("Pre-downloading embedding model (first run only)...")
+    _dl = (
+        "from sentence_transformers import SentenceTransformer, CrossEncoder; import os; "
+        "SentenceTransformer(os.environ.get('RAG_EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')); "
+        "en = os.environ.get('RAG_RERANKER_ENABLED', '1').strip().lower() not in ('0', 'false', 'off'); "
+        "CrossEncoder(os.environ.get('RAG_RERANKER_MODEL', 'cross-encoder/ms-marco-MiniLM-L6-v2')) if en else None; "
+        "print('models cached')"
+    )
+    rc, out = run_cmd([sys.executable, "-c", _dl])
+    if rc == 0:
+        _ok("Embedding model cached for offline use")
+    else:
+        _warn("Model pre-download failed — the server will fetch it on first use instead")
+        if out:
+            _warn(out)
+
     _info("Installing HTTP server deps (starlette + uvicorn)...")
     rc, out = _pip_install(["starlette>=0.37", "uvicorn[standard]>=0.29"])
     if rc != 0:

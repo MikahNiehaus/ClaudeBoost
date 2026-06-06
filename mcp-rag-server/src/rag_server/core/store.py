@@ -147,12 +147,21 @@ class ChromaStore(StorePort):
         ]
 
     def sample_dimension(self, collection: str) -> int | None:
-        """Return the embedding dimension of the first stored vector, or None."""
+        """Return the embedding dimension of the first stored vector, or None.
+
+        Must request embeddings explicitly — peek()/get() in current ChromaDB omit
+        them by default, which would silently return None and disable dimension
+        mismatch detection. Use len() rather than truthiness since embeddings come
+        back as numpy arrays (bare `if array:` raises).
+        """
         try:
             col = self._get_collection(collection)
-            result = col.peek(limit=1)
-            if result["embeddings"] and result["embeddings"][0]:
-                return len(result["embeddings"][0])
+            result = col.get(limit=1, include=["embeddings"])
+            embs = result.get("embeddings")
+            if embs is not None and len(embs) > 0:
+                first = embs[0]
+                if first is not None and len(first) > 0:
+                    return int(len(first))
         except Exception as e:
             logger.warning("sample_dimension failed for %r — dimension mismatch detection may be skipped: %s", collection, e)
         return None
