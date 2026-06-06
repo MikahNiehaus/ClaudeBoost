@@ -61,6 +61,35 @@ def build_context(
 
     tier_errors: list[dict] = []
 
+    # --- Pre-compute embeddings FIRST (before any ChromaDB operations) ---
+    # On Windows, PyTorch and ChromaDB's SQLite backend conflict when embed_query()
+    # is called after ChromaDB has already run queries in the same thread. Pre-computing
+    # all embeddings up-front keeps PyTorch and ChromaDB operations temporally separated.
+    _pre_embeddings: dict[str, list[float]] = {}
+    if embedder.is_loaded:
+        _code_emb_pre = code_embedder if code_embedder is not None else embedder
+        _agent_label_pre = agent.replace("-agent", "").replace("-", " ")
+        _stack_pre = _detect_stack(project_path) if project_path else None
+        _pre_queries = [
+            task_description,
+            f"{_agent_label_pre} {task_description}",
+            f"how to {task_description}",
+        ]
+        if _stack_pre:
+            _pre_queries.append(f"{_stack_pre} {task_description}")
+            _pre_queries.append(f"best practices {_stack_pre}")
+        for _pq in _pre_queries:
+            if _pq not in _pre_embeddings:
+                try:
+                    _pre_embeddings[_pq] = embedder.embed_query(_pq)
+                except Exception as _pe:
+                    logger.warning("Pre-embed failed for %r: %s", _pq[:40], _pe)
+        if project_path and task_description not in _pre_embeddings:
+            try:
+                _pre_embeddings[task_description] = _code_emb_pre.embed_query(task_description)
+            except Exception as _pe:
+                logger.warning("Pre-embed (code) failed: %s", _pe)
+
     # --- Tier 0: Agent definition ---
     agent_file = f"agents/{agent}.md"
     agent_def = ""
@@ -189,6 +218,7 @@ def build_context(
                 # description and knowledge file language. When the project stack is
                 # known, add stack-specific queries so lang/framework knowledge surfaces
                 # even when the task description doesn't mention the language by name.
+                # Use pre-computed embeddings to avoid PyTorch+ChromaDB conflict on Windows.
                 _agent_label = agent.replace("-agent", "").replace("-", " ")
                 _queries = [
                     task_description,
@@ -202,7 +232,7 @@ def build_context(
                 _seen_ids: set[str] = set()
                 _all_hits: list = []
                 for _q in _queries:
-                    _qe = embedder.embed_query(_q)
+                    _qe = _pre_embeddings.get(_q) or embedder.embed_query(_q)
                     _hits = store.search("knowledge", _qe, limit=10, min_score=0.4)
                     for _h in _hits:
                         _src = _h.metadata.get("source_file", "")
@@ -245,7 +275,7 @@ def build_context(
                 _rs = _ResearchStore(persist_dir=str(research_chroma))
                 if _rs.collection_exists("research") and _rs.count("research") > 0:
                     _t3c_budget = tier3c_reserved if tier3c_reserved > 0 else min(400, remaining_budget)
-                    _qe = embedder.embed_query(task_description)
+                    _qe = _pre_embeddings.get(task_description) or embedder.embed_query(task_description)
                     _hits = _rs.search("research", _qe, limit=8, min_score=0.35)
                     for r in _hits:
                         _ct = r.metadata.get("token_count", estimate_tokens(r.content))
@@ -282,7 +312,7 @@ def build_context(
                 project_store = _ChromaStore(persist_dir=str(chroma_dir))
                 if project_store.collection_exists("codebase") and project_store.count("codebase") > 0:
                     tier4_budget = tier4_reserved if tier4_reserved > 0 else min(600, remaining_budget)
-                    query_embedding = _code_emb.embed_query(task_description)
+                    query_embedding = _pre_embeddings.get(task_description) or _code_emb.embed_query(task_description)
                     codebase_results = project_store.search(
                         "codebase", query_embedding, limit=10, min_score=0.35,
                     )

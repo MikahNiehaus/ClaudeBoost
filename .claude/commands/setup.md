@@ -180,6 +180,67 @@ If the `comm` output lists any files (commands present in the repo but missing g
 
 ---
 
+### Check 8 — Ollama (community summaries LLM)
+
+Ollama is required for community summaries (qwen3:4b). Without it, `/index-boost` will still work but summaries won't be generated.
+
+**8a. Is Ollama installed?**
+
+```bash
+ollama --version
+```
+
+If the command is not found: tell the user to install Ollama from https://ollama.com/download and re-run `/setup`. Mark as WARN and skip 8b/8c — cannot auto-repair a missing binary.
+
+**8b. Is Ollama running?**
+
+```bash
+python -c "
+import urllib.request, urllib.error
+try:
+    urllib.request.urlopen('http://localhost:11434/', timeout=3)
+    print('RUNNING')
+except urllib.error.URLError:
+    print('NOT_RUNNING')
+"
+```
+
+If `NOT_RUNNING`: start it in the background:
+
+```bash
+nohup ollama serve > /tmp/ollama.log 2>&1 &
+sleep 3
+python -c "
+import urllib.request, urllib.error
+try:
+    urllib.request.urlopen('http://localhost:11434/', timeout=3)
+    print('RUNNING')
+except urllib.error.URLError:
+    print('STILL_NOT_RUNNING')
+"
+```
+
+If still not running after repair: mark as WARN — community summaries unavailable until Ollama starts. Continue.
+
+**8c. Is qwen3:4b pulled?**
+
+```bash
+ollama list | grep qwen3
+```
+
+If `qwen3:4b` is **not** in the list:
+
+```bash
+ollama pull qwen3:4b
+```
+
+This may take several minutes (~2.5 GB). Wait for it to complete, then re-verify with `ollama list | grep qwen3`.
+
+If pull succeeds: mark PASS.
+If pull fails: mark WARN — community summaries will fall back to path-based names until model is available.
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -199,6 +260,7 @@ edge-tts                 : OK / FAIL
 CLAUDE.md                : OK / MISSING
 statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
+Ollama (qwen3:4b)        : OK / WARN (<reason>)
 
 ─────────────────────────────────────────
 ```

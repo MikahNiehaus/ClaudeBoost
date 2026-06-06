@@ -757,12 +757,53 @@ def install_rag_server() -> None:
     rc, out = run_cmd([sys.executable, str(start_script)])
     if rc == 0:
         _ok(f"RAG HTTP server running: {out.splitlines()[-1] if out else 'port 8612'}")
+        _prime_rag_session()
     else:
         _warn("RAG HTTP server did not start — run it manually:")
         _warn(f"  {sys.executable} \"{start_script}\"")
 
     # Clean up any stale MCP registration (idempotent)
     _cleanup_mcp_registration()
+
+
+# ---------------------------------------------------------------------------
+# RAG session prime: write the sentinel file and call /context so session-
+# primer.py doesn't block the first prompt after setup.
+# ---------------------------------------------------------------------------
+def _prime_rag_session() -> None:
+    import tempfile
+    import urllib.request
+    import urllib.error
+
+    # Write sentinel — session-primer.py checks for this file before every
+    # prompt. Without it, the UserPromptSubmit hook blocks with HARD STOP.
+    sentinel = Path(tempfile.gettempdir()) / "claudeboost_rag_ok"
+    try:
+        sentinel.touch()
+        _ok(f"RAG sentinel written: {sentinel}")
+    except OSError as e:
+        _warn(f"Could not write RAG sentinel ({e}) — run /rag after setup to prime the session")
+        return
+
+    # Call /context to warm the session — failures are non-fatal (model may
+    # still be loading; the server is confirmed running at this point).
+    try:
+        import json as _json
+        body = _json.dumps({
+            "agent": "debug-agent",
+            "task_description": "session start",
+            "max_tokens": 500,
+        }).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:8612/context", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = _json.loads(r.read())
+            sources = len(data.get("sources", []))
+            _ok(f"RAG session primed ({sources} sources)")
+    except Exception as e:
+        _warn(f"RAG context prime failed ({e}) — model may still be loading, run /rag if needed")
 
 
 # ---------------------------------------------------------------------------
@@ -800,11 +841,32 @@ def _cleanup_mcp_registration() -> None:
 # mcp-debugger: register with `claude mcp` at user scope so it's available
 # in every Claude session. Idempotent — skips if already registered.
 # ---------------------------------------------------------------------------
+def _claude_cmd() -> list[str] | None:
+    """Return a subprocess-safe claude invocation, or None if not found.
+
+    On Windows, `claude` installs as `claude.cmd` which subprocess.run can't
+    find without shell=True. We detect the .cmd variant explicitly.
+    """
+    for candidate in ("claude", "claude.cmd"):
+        path = shutil.which(candidate)
+        if path:
+            # On Windows, .cmd files must be run via cmd.exe
+            if candidate.endswith(".cmd"):
+                return ["cmd", "/c", path]
+            return [path]
+    return None
+
+
 def register_mcp_debugger() -> None:
     _info("\nVerifying mcp-debugger...")
-    rc, out = run_cmd(["claude", "mcp", "list"])
-    if rc != 0:
+    claude = _claude_cmd()
+    if claude is None:
         _skip("claude CLI not found — skipping mcp-debugger registration")
+        return
+
+    rc, out = run_cmd(claude + ["mcp", "list"])
+    if rc != 0:
+        _skip(f"claude mcp list failed (exit {rc}) — skipping mcp-debugger registration")
         return
 
     if "mcp-debugger" in out:
@@ -815,8 +877,8 @@ def register_mcp_debugger() -> None:
         return
 
     _info("Registering mcp-debugger (user scope)...")
-    rc, out = run_cmd([
-        "claude", "mcp", "add", "mcp-debugger",
+    rc, out = run_cmd(claude + [
+        "mcp", "add", "mcp-debugger",
         "--scope", "user",
         "--", "npx", "-y", "@debugmcp/mcp-debugger", "stdio",
     ])

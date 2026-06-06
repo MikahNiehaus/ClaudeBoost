@@ -242,6 +242,24 @@ def sync_init() -> FileWatcher:
         code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
     else:
         code_embedder = embedder  # same model for all scopes
+
+    # Windows fix: force BLAS (PyTorch/MKL) initialization before SQLite opens.
+    # ChromaDB's PersistentClient eagerly opens SQLite in __init__. On Windows,
+    # BLAS and SQLite conflict if SQLite initializes first — any subsequent
+    # embed_query() call causes a segfault (exit code 139). Running a warmup
+    # inference here ensures BLAS memory regions are established before SQLite.
+    logger.info("Pre-warming embedding model before ChromaDB init...")
+    try:
+        embedder.embed_query("warmup")
+        if code_embedder is not embedder:
+            code_embedder.embed_query("warmup")
+        logger.info("Embedding model pre-warmed (%dd)", embedder.dimensions())
+    except Exception:
+        logger.warning(
+            "Pre-warm failed — PyTorch/SQLite conflict may still occur on /context calls",
+            exc_info=True,
+        )
+
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
     engine = IndexingEngine(embedder=code_embedder, store=store)
 
