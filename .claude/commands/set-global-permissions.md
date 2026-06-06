@@ -78,14 +78,45 @@ Tip: project rules in .claude/settings.json merge with these.
 
 ### `allow <pattern>` / `ask <pattern>` / `deny <pattern>`
 
-1. **Safety check for global scope**: if the pattern is very broad (e.g., `Bash(*)`, `Bash(rm *)`, `Bash(curl *)` without a host restriction), print a warning:
+1. **Safety check for global scope**:
+
+   **If the pattern is `"Bash"` (bare, no args):**
    ```
-   ⚠️  Broad pattern in global allow: [pattern]
-   This will apply to ALL projects. Is this intentional?
-   For localhost-only tools, prefer: Bash(curl * localhost:*) or Bash(curl * http://localhost:*)
-   Type 'confirmed' to proceed, or refine the pattern.
+   Warning: "Bash" in global allow means ALL Bash commands auto-approve globally.
+   This is Anthropic's recommended architecture ONLY when you have a PreToolUse
+   hook (like bash-guard.py) blocking dangerous commands — deny/ask rules alone
+   are not enough because Claude Code doesn't evaluate compound commands (pipes,
+   &&, ;) against single-command allow rules.
+
+   Do you have a bash-guard PreToolUse hook configured? (yes/no)
    ```
-   **PAUSE and wait for user response before writing.**
+   If user says yes: proceed. If no: suggest setting up bash-guard.py first.
+
+   **If the pattern is `Bash(*)` (wildcard everything):**
+   Same as above — treat identically to bare `"Bash"`.
+
+   **If `"Bash"` is ALREADY in the allow list and the new pattern is another `Bash(...)` entry:**
+   ```
+   Note: "Bash" is already in global allow — this specific Bash(...) entry is
+   redundant. Adding it won't change behavior. Proceed anyway? (yes/no)
+   ```
+
+   **All other broad patterns** (below) — warn and pause:
+   ```
+   Warning: [pattern] is a broad global allow that covers many commands.
+   This applies to ALL projects. Is this intentional? (yes/no)
+   ```
+   Broad patterns (not `"Bash"` itself):
+   - `Bash(rm *)` or `Bash(rm:*)` — deletion without path restriction
+   - `Bash(sudo *)` or `Bash(sudo:*)` — unrestricted sudo
+   - `Bash(wget *)` or `Bash(wget:*)` — wget without host restriction
+   - Any bare tool name with no qualifier: `Bash(python)`, `Bash(node)`, `Bash(curl)`
+
+   Note: `Bash(curl *)` and `Bash(curl:*)` are NOT flagged as broad when `"Bash"` is already
+   in allow — they're redundant, not dangerous. They ARE flagged if `"Bash"` is NOT in allow,
+   because curl without a host restriction allows any URL.
+
+   **PAUSE and wait for user response before writing for any warning.**
 
 2. **Dedup check**: scan all three lists for the exact pattern.
    - If already in the requested list → print "Already in [list]: [pattern]" and stop.
@@ -94,14 +125,6 @@ Tip: project rules in .claude/settings.json merge with these.
 3. **Add the pattern** to the correct array in `TARGET_FILE`.
 
 4. Print: "Added to global [list]: [pattern]  →  ~/.claude/settings.json"
-
-**Broad pattern detection rules** (trigger warning if ANY match):
-- `Bash(*)` — matches everything
-- `Bash(rm *)` or `Bash(rm:*)` — deletion without path restriction
-- `Bash(curl *)` or `Bash(curl:*)` — curl without host restriction
-- `Bash(wget *)` or `Bash(wget:*)` — wget without host restriction
-- `Bash(sudo *)` or `Bash(sudo:*)` — unrestricted sudo
-- Any pattern that is just a tool name with no qualifier: `Bash(python)`, `Bash(node)`
 
 ---
 
