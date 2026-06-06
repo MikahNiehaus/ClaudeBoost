@@ -18,6 +18,9 @@ What it does:
   9. Installs rag-server in editable mode, upgrades sentence-transformers stack,
      drops incompatible torchvision if present, runs health check.
  10. Installs edge-tts (Windows + macOS only — Linux not supported for speak).
+ 11. Installs netcoredbg from Samsung GitHub releases so mcp-debugger can step
+     through .NET/C# code. Adds the binary to the user PATH (winreg on Windows,
+     ~/.profile on macOS/Linux). Skipped if dotnet SDK is not present.
 """
 from __future__ import annotations
 
@@ -620,7 +623,7 @@ def update_settings() -> None:
     # it's running from ~/.claude/ (outside the repo tree).
     home_file = CLAUDE_DIR / "claudeboost-home.txt"
     home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
-    _ok(f"claudeboost-home.txt written → {home_file}")
+    _ok(f"claudeboost-home.txt written -> {home_file}")
 
     # statusLine — always use the Python-based RAG health script (cross-platform)
     new_sl_cmd = _statusline_cmd()
@@ -914,6 +917,153 @@ def install_edge_tts() -> None:
 
 
 # ---------------------------------------------------------------------------
+# netcoredbg: download from Samsung GitHub releases so mcp-debugger can step
+# through .NET/C# code. Skipped when dotnet SDK is not installed.
+# ---------------------------------------------------------------------------
+def _add_to_user_path(new_dir: str) -> None:
+    """Add new_dir to the user's persistent PATH.
+
+    Windows: writes to HKCU\\Environment\\PATH via winreg (no char-limit risk).
+    macOS/Linux: appends an export line to ~/.profile.
+    No-ops if the directory is already present.
+    """
+    if IS_WINDOWS:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS
+            )
+            try:
+                current, _ = winreg.QueryValueEx(key, "PATH")
+            except FileNotFoundError:
+                current = ""
+            if new_dir.lower() not in current.lower():
+                new_val = f"{current};{new_dir}" if current else new_dir
+                winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_val)
+                _ok("PATH updated (user registry) — restart terminal for it to take effect")
+            winreg.CloseKey(key)
+        except Exception as exc:
+            _warn(f"Could not update PATH via registry: {exc}")
+            _warn(f"  Add manually to your user PATH: {new_dir}")
+    else:
+        profile = Path.home() / ".profile"
+        export_line = f'\nexport PATH="$PATH:{new_dir}"\n'
+        try:
+            existing = profile.read_text(encoding="utf-8") if profile.exists() else ""
+            if new_dir not in existing:
+                with profile.open("a", encoding="utf-8") as f:
+                    f.write(export_line)
+                _ok("PATH updated in ~/.profile — restart terminal for it to take effect")
+        except Exception as exc:
+            _warn(f"Could not update ~/.profile: {exc}")
+            _warn(f'  Add manually: export PATH="$PATH:{new_dir}"')
+
+
+def install_netcoredbg() -> None:
+    """Download netcoredbg from Samsung/netcoredbg GitHub releases.
+
+    Uses only stdlib (urllib, zipfile, tarfile, winreg) — no extra deps.
+    Installs to ~/.netcoredbg/ and adds the binary dir to the user PATH.
+    """
+    import json as _json
+    import tarfile
+    import urllib.error
+    import urllib.request
+    import zipfile
+
+    _info("\nVerifying netcoredbg (mcp-debugger .NET support)...")
+
+    if shutil.which("netcoredbg"):
+        _ok("netcoredbg already on PATH")
+        return
+
+    if not shutil.which("dotnet"):
+        _skip("dotnet SDK not found — netcoredbg only needed for .NET debugging")
+        return
+
+    # Map platform + arch to the GitHub release asset name.
+    mach = platform.machine().lower()
+    if mach in ("x86_64", "amd64"):
+        arch = "x64"
+    elif mach in ("arm64", "aarch64"):
+        arch = "arm64"
+    else:
+        _warn(f"netcoredbg: unsupported architecture {platform.machine()} — install manually "
+              "from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    if IS_WINDOWS:
+        asset_name = "netcoredbg-win64.zip"
+    elif IS_MACOS:
+        asset_name = f"netcoredbg-osx-{arch}.tar.gz"
+    else:
+        asset_name = f"netcoredbg-linux-{arch}.tar.gz"
+
+    # Fetch latest release metadata from GitHub.
+    _info(f"  Fetching latest netcoredbg release ({asset_name})...")
+    api_url = "https://api.github.com/repos/Samsung/netcoredbg/releases/latest"
+    try:
+        req = urllib.request.Request(api_url, headers={"User-Agent": "ClaudeBoost-setup"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            release = _json.loads(resp.read())
+    except Exception as exc:
+        _warn(f"netcoredbg: could not fetch release info ({exc})")
+        _warn("  Install manually from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    asset_url = next(
+        (a["browser_download_url"] for a in release.get("assets", []) if a["name"] == asset_name),
+        None,
+    )
+    if not asset_url:
+        _warn(f"netcoredbg: asset {asset_name!r} not in release {release.get('tag_name', '?')}")
+        _warn("  Install manually from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    install_dir = Path.home() / ".netcoredbg"
+    install_dir.mkdir(exist_ok=True)
+    tmp_path = install_dir / asset_name
+
+    _info(f"  Downloading {release.get('tag_name', 'latest')} ...")
+    try:
+        urllib.request.urlretrieve(asset_url, tmp_path)
+    except Exception as exc:
+        _warn(f"netcoredbg: download failed ({exc})")
+        return
+
+    _info("  Extracting...")
+    try:
+        if asset_name.endswith(".zip"):
+            with zipfile.ZipFile(tmp_path) as zf:
+                zf.extractall(install_dir)
+        else:
+            with tarfile.open(tmp_path) as tf:
+                tf.extractall(install_dir)
+        tmp_path.unlink(missing_ok=True)
+    except Exception as exc:
+        _warn(f"netcoredbg: extraction failed ({exc})")
+        return
+
+    exe_name = "netcoredbg.exe" if IS_WINDOWS else "netcoredbg"
+    candidates = list(install_dir.rglob(exe_name))
+    if not candidates:
+        _warn(f"netcoredbg: binary {exe_name!r} not found after extraction")
+        return
+    bin_path = candidates[0]
+    if not IS_WINDOWS:
+        bin_path.chmod(bin_path.stat().st_mode | 0o755)
+
+    _add_to_user_path(str(bin_path.parent))
+
+    rc, out = run_cmd([str(bin_path), "--version"])
+    if rc == 0:
+        _ok(f"netcoredbg installed: {out.strip()}")
+    else:
+        _ok(f"netcoredbg installed at {bin_path}")
+        _warn("  Restart your terminal for the PATH change to take effect, then verify with: netcoredbg --version")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -935,6 +1085,7 @@ def main() -> int:
     install_rag_server()
     register_mcp_debugger()
     install_edge_tts()
+    install_netcoredbg()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")
