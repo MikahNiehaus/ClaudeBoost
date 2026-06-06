@@ -5,7 +5,8 @@ if CLAUDEBOOST_HOME is not configured in settings.json.
 Installed to ~/.claude/ensure-setup.py by setup.py so the path is stable
 across machines regardless of where ClaudeBoost is cloned.
 
-Self-locating via __file__ — no CLAUDEBOOST_HOME dependency.
+Locates setup.py via ~/.claude/claudeboost-home.txt (written by setup.py on
+first install) with a __file__-relative fallback. No CLAUDEBOOST_HOME dependency.
 Fires first on every prompt; exits silently when setup is already done.
 
 Sentinel file (~/.claude/.ensure-setup-triggered) prevents spawning multiple
@@ -42,12 +43,25 @@ def _needs_setup() -> bool:
 
 
 def _find_setup_script() -> Path | None:
-    """Locate setup.py via __file__ — works whether installed to ~/.claude/ or scripts/."""
-    candidates = [
-        Path(__file__).resolve().parent / "scripts" / "setup.py",  # ~/.claude/
-        Path(__file__).resolve().parent.parent / "scripts" / "setup.py",  # repo/scripts/
-        Path(__file__).resolve().parent / "setup.py",  # repo/scripts/ direct
+    """Locate setup.py. Works when running from ~/.claude/ or directly from scripts/."""
+    candidates = []
+
+    # Primary: read the path that setup.py wrote on first install. This works even
+    # when this file is copied outside the repo (e.g. ~/.claude/ensure-setup.py).
+    home_file = Path.home() / ".claude" / "claudeboost-home.txt"
+    try:
+        boost_home = Path(home_file.read_text(encoding="utf-8").strip())
+        candidates.append(boost_home / "scripts" / "setup.py")
+    except OSError:
+        pass
+
+    # Fallback: __file__-relative search for when the script is run from the repo
+    here = Path(__file__).resolve().parent
+    candidates += [
+        here / "setup.py",               # running as scripts/ensure-setup.py
+        here.parent / "scripts" / "setup.py",  # running from repo root
     ]
+
     for p in candidates:
         if p.exists():
             return p
