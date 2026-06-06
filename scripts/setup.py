@@ -797,6 +797,39 @@ def _cleanup_mcp_registration() -> None:
 
 
 # ---------------------------------------------------------------------------
+# mcp-debugger: register with `claude mcp` at user scope so it's available
+# in every Claude session. Idempotent — skips if already registered.
+# ---------------------------------------------------------------------------
+def register_mcp_debugger() -> None:
+    _info("\nVerifying mcp-debugger...")
+    rc, out = run_cmd(["claude", "mcp", "list"])
+    if rc != 0:
+        _skip("claude CLI not found — skipping mcp-debugger registration")
+        return
+
+    if "mcp-debugger" in out:
+        if "Connected" in out or "connected" in out:
+            _ok("mcp-debugger already registered and connected")
+        else:
+            _warn("mcp-debugger registered but not connected — ensure Node 22+ is installed")
+        return
+
+    _info("Registering mcp-debugger (user scope)...")
+    rc, out = run_cmd([
+        "claude", "mcp", "add", "mcp-debugger",
+        "--scope", "user",
+        "--", "npx", "-y", "@debugmcp/mcp-debugger", "stdio",
+    ])
+    if rc == 0:
+        _ok("mcp-debugger registered — run /mcp to connect")
+    else:
+        _warn(f"mcp-debugger registration failed (exit {rc})")
+        if out:
+            _warn(f"  {out[:200]}")
+        _warn("  To register manually: claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
+
+
+# ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
 # ---------------------------------------------------------------------------
@@ -840,6 +873,7 @@ def main() -> int:
     seed_state()
     update_settings()
     install_rag_server()
+    register_mcp_debugger()
     install_edge_tts()
 
     _info("\n=== Setup Complete ===")
