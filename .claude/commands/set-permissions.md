@@ -47,7 +47,7 @@ Parse the `permissions` object. If missing `allow`, `ask`, or `deny` arrays, tre
 
 ### `list`
 
-Print a formatted table of all three lists:
+Read `~/.claude/settings.json` (global settings). Then print:
 
 ```
 Project permissions — .claude/settings.json
@@ -55,17 +55,24 @@ Project permissions — .claude/settings.json
 
 ALLOW (N)
   [1] Bash(npm *)
-  [2] Read
+  [2] Read                    ← also in global allow (redundant)
   ...
 
 ASK (N)
   [1] Bash(git push:*)
+  [2] Bash(curl:*)            ← overrides global allow (Bash is in global allow)
   ...
 
 DENY (N)
   [1] Bash(rm -rf /)
   ...
 ```
+
+Annotations to add per entry:
+- `← also in global allow (redundant)` — appears in both global allow and project allow
+- `← overrides global allow` — in project ask, but global allow has `"Bash"` or a matching pattern (project ask restricts further, which may be intentional)
+- `← also in global ask (this allow has no effect)` — in project allow, but global ask has a matching pattern (global ask wins; this entry does nothing)
+- `← also in global deny (shadowed)` — in project allow/ask but global deny blocks it
 
 If a list is empty, print `  (empty)`.
 
@@ -77,9 +84,33 @@ If a list is empty, print `  (empty)`.
    - If already in the requested list → print "Already in [list]: [pattern]" and stop.
    - If in a DIFFERENT list → print warning: "Pattern is currently in [other-list]. Use `/set-permissions move [other-list] [target-list] <pattern>` to move it." Do NOT add a duplicate; stop.
 
-2. **Add the pattern** to the correct array in `TARGET_FILE`.
+2. **Global conflict check**: Read `~/.claude/settings.json`.
 
-3. Print: "Added to [list]: [pattern]  →  [TARGET_FILE]"
+   **If adding to `allow`**:
+   - If the global ask list contains the exact pattern OR a pattern that would match the same commands (e.g. global has `Bash(npm **)` and you're adding `Bash(npm:*)`), warn:
+     ```
+     Warning: ~/.claude/settings.json has a matching pattern in global ask.
+     Global ask beats project allow — this entry will have NO EFFECT.
+     To actually allow this without prompting, remove the global ask rule:
+       /set-global-permissions remove "[global-pattern]"
+     Add anyway? (yes/no)
+     ```
+     **Pause and wait for user confirmation before writing.**
+   - If the global deny list contains a matching pattern, warn: "A global deny rule blocks this command — adding it to project allow won't help. Remove the global deny rule first."
+
+   **If adding to `ask`**:
+   - If `"Bash"` is in global allow AND the pattern is `Bash(...)`, inform (not block):
+     ```
+     Note: ~/.claude/settings.json has "Bash" in global allow, meaning all Bash
+     commands are already auto-approved globally. Adding this to project ask
+     will make this specific command prompt in this project only.
+     This is intentional if you want extra confirmation here. Proceed? (yes/no)
+     ```
+     **Pause and wait for user confirmation before writing.**
+
+3. **Add the pattern** to the correct array in `TARGET_FILE`.
+
+4. Print: "Added to [list]: [pattern]  →  [TARGET_FILE]"
 
 ---
 
