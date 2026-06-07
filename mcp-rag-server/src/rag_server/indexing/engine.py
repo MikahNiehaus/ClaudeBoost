@@ -699,6 +699,8 @@ class IndexingEngine:
                         logger.info("In-place collection clear succeeded — proceeding with reindex.")
                     else:
                         logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
+                        # Evict the cached client so the next ChromaStore() opens fresh files.
+                        ChromaStore.evict_cache(str(chroma_dir))
             project_store = ChromaStore(persist_dir=str(chroma_dir))
             graph_store = SQLiteGraphStore(index_dir / "graph.db")
 
@@ -852,14 +854,15 @@ class IndexingEngine:
                             logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
             try:
-                # Path+section prepend at embed time: adds file identity to the vector
-                # so constant-name files (e.g. config.py with MAX_CHUNK_TOKENS) match
-                # natural-language queries. Only for code files — docs already have
-                # rich prose and the prefix adds noise. Stored content is unchanged.
-                if not _is_doc and not _is_pdf:
-                    texts = [f"[{rel_path}] [{c.section}]\n{c.content}" for c in raw_chunks]
-                else:
-                    texts = [c.content for c in raw_chunks]
+                # Embed raw content without path/section prefix for code files.
+                # Benchmark (CodeSearchNet 21K, MiniLM): prefix drops MRR from
+                # 0.868 → 0.587 because it dilutes code semantics with path
+                # metadata, creating a mismatch with natural-language queries.
+                # File/function-name search is handled by the FTS5 index, which
+                # indexes raw content — the embedding doesn't need the prefix.
+                # Doc files (.md, .pdf) also embed without prefix: they already
+                # have rich prose so no prefix was ever added for them.
+                texts = [c.content for c in raw_chunks]
                 embeddings = self._embedder.embed(texts)
 
                 store_chunks = []

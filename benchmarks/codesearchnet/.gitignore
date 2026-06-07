@@ -1,0 +1,4 @@
+# Raw dataset files (downloaded at runtime, not committed)
+data/*.jsonl
+data/*.parquet
+data/*.npy

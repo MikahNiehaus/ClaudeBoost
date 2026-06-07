@@ -594,6 +594,11 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
 
+    # --- UserPromptSubmit: research-task nudge ---
+    _install_hook(settings, "UserPromptSubmit", {
+        "hooks": [{"type": "command", "command": _py_cmd("research-task-nudge.py"), "timeout": 5000}],
+    }, sentinel="research-task-nudge.py", label="research-task reminder")
+
     # --- UserPromptSubmit: TTS interrupt ---
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
@@ -1001,6 +1006,49 @@ def register_mcp_debugger() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Playwright MCP: browser automation tools for browser-agent and /end-to-end-test.
+# Registered at user scope via `claude mcp add` so it's available in every
+# project. Requires Node/npx — works on Windows, macOS, and Linux.
+# ---------------------------------------------------------------------------
+def register_playwright_mcp() -> None:
+    _info("\nVerifying Playwright MCP...")
+
+    if not shutil.which("npx"):
+        _warn("npx not found — Playwright MCP requires Node.js")
+        _warn("  Install Node.js from https://nodejs.org/ then re-run /setup")
+        _warn("  Or register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
+        return
+
+    claude = _claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found — skipping Playwright MCP registration")
+        return
+
+    rc, out = run_cmd(claude + ["mcp", "list"])
+    if rc != 0:
+        _skip(f"claude mcp list failed (exit {rc}) — skipping Playwright MCP registration")
+        return
+
+    if "playwright" in out:
+        _ok("Playwright MCP already registered")
+        return
+
+    _info("Registering Playwright MCP (user scope)...")
+    rc, out = run_cmd(claude + [
+        "mcp", "add", "playwright",
+        "--scope", "user",
+        "--", "npx", "-y", "@playwright/mcp@latest",
+    ])
+    if rc == 0:
+        _ok("Playwright MCP registered — browser tools available after Claude Code restart")
+    else:
+        _warn(f"Playwright MCP registration failed (exit {rc})")
+        if out:
+            _warn(f"  {out[:200]}")
+        _warn("  To register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
+
+
+# ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
 # ---------------------------------------------------------------------------
@@ -1192,6 +1240,7 @@ def main() -> int:
     update_settings()
     install_rag_server()
     register_mcp_debugger()
+    register_playwright_mcp()
     install_edge_tts()
     install_netcoredbg()
 

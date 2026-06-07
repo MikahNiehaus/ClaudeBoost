@@ -333,6 +333,43 @@ If repair is needed, re-run Phase 1 (`setup.py`), then retry this check. `setup.
 
 ---
 
+### Check 10 — Playwright MCP (browser tools)
+
+Playwright MCP provides `mcp__playwright_*` tools used by `browser-agent` and `/end-to-end-test`. Without it, no browser automation is available in any session or agent.
+
+**10a. Is Node/npx available?**
+
+```bash
+python -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
+```
+
+If MISSING: mark WARN, skip 10b. Tell the user:
+> "Node.js is not installed. Playwright MCP requires it. Install from https://nodejs.org/ then re-run /setup."
+
+**10b. Is Playwright MCP registered?**
+
+```bash
+claude mcp list 2>/dev/null | grep -i playwright || echo "NOT_REGISTERED"
+```
+
+| Result | Meaning | Repair |
+|--------|---------|--------|
+| Shows `playwright` | **PASS** | — |
+| `NOT_REGISTERED` | Needs registration | Run repair below |
+| Command fails | Claude CLI not on PATH | Mark WARN, manual fix needed |
+
+**Repair (cross-platform — works on Windows, macOS, Linux):**
+
+```bash
+claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest
+```
+
+After repair, verify with `claude mcp list | grep playwright`. Up to 3 attempts before marking FAIL.
+
+**Note:** Changes take effect after restarting Claude Code — Playwright tools (`mcp__playwright_*`) will then be available directly in every session without spawning an agent.
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -355,6 +392,7 @@ statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
 Ollama (qwen3:4b)        : OK / WARN (<reason>)
 Permission gates         : OK (allow=N ask=N deny=N) / FAIL (<missing entries>)
+Playwright MCP           : OK / WARN (no Node.js) / FAIL
 
 ─────────────────────────────────────────
 ```

@@ -33,9 +33,11 @@ def _get_reranker():
             return _reranker
         try:
             from sentence_transformers.cross_encoder import CrossEncoder
-            from rag_server.config import RERANKER_MODEL
-            _reranker = CrossEncoder(RERANKER_MODEL, max_length=512)
-            logger.info("Cross-encoder reranker loaded: %s", RERANKER_MODEL)
+            from rag_server.config import DEVICE, RERANKER_MODEL
+            from rag_server.core.embedding import _resolve_device
+            device = _resolve_device()
+            _reranker = CrossEncoder(RERANKER_MODEL, max_length=512, device=device)
+            logger.info("Cross-encoder reranker loaded: %s (device=%s)", RERANKER_MODEL, DEVICE)
         except Exception as e:
             logger.warning("Cross-encoder reranker unavailable (%s) — reranking disabled", e)
             _reranker_unavailable = True

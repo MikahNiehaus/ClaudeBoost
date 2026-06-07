@@ -147,22 +147,38 @@ def _fts_content(content: str) -> str:
     return content
 
 
+_FTS_STOP_WORDS = frozenset({
+    "the", "a", "an", "is", "it", "in", "of", "to", "for", "on", "at",
+    "by", "or", "and", "if", "be", "as", "with", "from", "that", "this",
+    "are", "was", "were", "has", "have", "not", "no", "do", "can", "will",
+    "get", "set", "its", "all", "any", "when", "then", "than", "into",
+    "use", "used", "uses", "using", "given", "via", "per", "each",
+})
+
+
 def to_fts5_query(query: str) -> str:
     """Convert a free-text query to a safe FTS5 MATCH expression.
 
-    Short queries (1-3 words) use OR to improve recall for type-signature
-    lookups like "str None". Longer queries use implicit AND (all terms
-    must appear) for precision.
+    Short queries (1-3 meaningful terms) use OR for type-signature recall.
+    Medium queries (4-6 terms) use implicit AND for precision.
+    Long NL queries (>6 terms) return "" — FTS5 AND on docstrings never matches
+    code-only content, so skip to dense-only search.
     """
-    # Strip FTS5 operator characters
-    clean = re.sub(r'["""()\[\]{}\*\^\~\:\-\>\<\+]', " ", query)
-    terms = [t for t in clean.split() if len(t) >= 2]
+    # Keep only alphanumeric, underscores (code identifiers), and whitespace.
+    # FTS5 syntax errors on punctuation like periods, commas, backticks, etc.
+    clean = re.sub(r'[^a-zA-Z0-9_\s]', " ", query)
+    # Filter: min 2 chars, not a stop word
+    terms = [t for t in clean.split() if len(t) >= 2 and t.lower() not in _FTS_STOP_WORDS]
     if not terms:
+        return ""
+    if len(terms) > 5:
+        # Long NL query: FTS5 AND would require all N terms in code — nearly never matches.
+        # Defer to dense retrieval only.
         return ""
     if len(terms) == 1:
         return f"{terms[0]}*"
     if len(terms) <= 3:
-        # OR gives better recall for short exact-term queries
+        # OR gives better recall for short exact-term queries like "str None"
         return " OR ".join(terms)
-    # Longer query: all terms must appear
+    # 4-6 meaningful terms: AND (all must appear)
     return " ".join(terms)

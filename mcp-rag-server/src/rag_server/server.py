@@ -24,7 +24,7 @@ from rag_server.config import (
     RAG_INDEX_DIR,
     SCOPES,
 )
-from rag_server.core.embedding import SentenceTransformerEmbedding
+from rag_server.core.embedding import OnnxDirectMLEmbedding, SentenceTransformerEmbedding
 from rag_server.core.store import ChromaStore
 from rag_server.core.watcher import FileWatcher
 from rag_server.indexing.engine import IndexingEngine
@@ -169,11 +169,13 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             # Health issues are stored in projects.json by rag_index_project at index time.
             # Do NOT run live check_project_health() here — it opens a ChromaDB connection
             # per project, and with 60+ projects this causes rag_status to hang for minutes.
+            from rag_server.config import DEVICE
             return {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
                 "model": EMBEDDING_MODEL,
+                "device": DEVICE,
                 "embedding_dimensions": embedder.dimensions() if embedder.is_loaded else "not loaded yet",
                 "indexed_projects": indexed_projects,
             }
@@ -236,10 +238,12 @@ def sync_init() -> FileWatcher:
     # Write heartbeat immediately — guard needs a fresh timestamp before any tool call arrives.
     _write_heartbeat(model_loaded=False, index_ok=False)
 
-    embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
+    from rag_server.config import DEVICE
+    _EmbedCls = OnnxDirectMLEmbedding if DEVICE == "onnx-dml" else SentenceTransformerEmbedding
+    embedder = _EmbedCls(model_name=EMBEDDING_MODEL)
     if CODE_EMBEDDING_MODEL and CODE_EMBEDDING_MODEL != EMBEDDING_MODEL:
         logger.info("Code embedding model: %s", CODE_EMBEDDING_MODEL)
-        code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+        code_embedder = _EmbedCls(model_name=CODE_EMBEDDING_MODEL)
     else:
         code_embedder = embedder  # same model for all scopes
 
@@ -287,6 +291,7 @@ def sync_init() -> FileWatcher:
     if src_dir.is_dir():
         import importlib
         import rag_server.adapters.sqlite_graph_store as _gstore_mod
+        import rag_server.adapters.fts_store as _fts_mod
         import rag_server.core.community as _community_mod
         import rag_server.core.summarizer as _summarizer_mod
         import rag_server.indexing.engine as _engine_mod
@@ -298,12 +303,13 @@ def sync_init() -> FileWatcher:
             logger.info("Source changed, hot-reloading modules: %s", path)
             try:
                 importlib.reload(_gstore_mod)
+                importlib.reload(_fts_mod)
                 importlib.reload(_community_mod)
                 importlib.reload(_summarizer_mod)
                 importlib.reload(_engine_mod)
                 importlib.reload(_search_mod)
                 importlib.reload(_ctx_mod)
-                engine = _engine_mod.IndexingEngine(embedder=embedder, store=store)
+                engine = _engine_mod.IndexingEngine(embedder=code_embedder, store=store)
                 rag_search = _search_mod.rag_search
                 _context_mod = _ctx_mod
                 logger.info("Hot-reload complete — updated code is now active")
