@@ -452,16 +452,20 @@ def _fts_hybrid(
 
 
 def _rerank(results: list, query: str) -> list:
-    """Re-score results using a cross-encoder. Returns results in new ranked order.
+    """Re-order results using a cross-encoder, preserving original vector/BM25 scores.
 
-    Scores are sigmoid-normalised logits (0-1 range, higher = more relevant).
+    The cross-encoder is used solely for ranking order — it improves ordering for
+    natural-language queries against prose text.  Scores are intentionally NOT
+    replaced with sigmoid(logit) because the ms-marco cross-encoder was trained on
+    English web passages and produces near-zero logits for code content, which would
+    destroy the meaningful cosine-similarity scores from the vector stage.
+
     Falls back to original order if the reranker is unavailable or errors.
     """
     reranker = _get_reranker()
     if reranker is None:
         return results
     try:
-        from rag_server.ports.store_port import SearchResult as _SR
         pairs = [(query, r.content[:512]) for r in results]
         logits = reranker.predict(pairs)
         rescored = sorted(
@@ -469,10 +473,8 @@ def _rerank(results: list, query: str) -> list:
             key=lambda x: float(x[1]),
             reverse=True,
         )
-        return [
-            _SR(r.content, r.metadata, round(1.0 / (1.0 + math.exp(-float(s))), 4))
-            for r, s in rescored
-        ]
+        # Keep the original score — CE only controls ordering, not score value.
+        return [r for r, _s in rescored]
     except Exception as e:
         logger.warning("Reranker predict failed, using vector order: %s", e)
         return results

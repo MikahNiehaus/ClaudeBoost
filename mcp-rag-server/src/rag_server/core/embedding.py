@@ -262,6 +262,24 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         try:
             gpu_tps = _tps(self._ort_model)
             cpu_tps = _tps(self._cpu_model)
+
+            if cpu_tps >= gpu_tps:
+                # CPU is faster than the GPU (common on integrated graphics / weak DX12 adapters).
+                # Drop the DML session entirely — no split, no dual-session RAM cost.
+                import gc
+                logger.info(
+                    "GPU/CPU calibration — CPU: %.0f t/s beats GPU: %.0f t/s → "
+                    "releasing DML session, running CPU-only ONNX",
+                    cpu_tps, gpu_tps,
+                )
+                _dml_sess = self._ort_model   # hold reference until after swap
+                self._ort_model = self._cpu_model
+                self._cpu_model = None
+                self._has_dml = False
+                del _dml_sess                 # release DML session memory
+                gc.collect()
+                return
+
             total = gpu_tps + cpu_tps
             self._gpu_fraction = max(0.2, min(0.9, gpu_tps / total))
             logger.info(
