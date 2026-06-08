@@ -1,24 +1,26 @@
 # ClaudeBoost
 
-Multi-agent orchestration layer for Claude Code. 25 specialist agents, 106 knowledge
+**Created by Mikah Niehaus**
+
+Multi-agent orchestration layer for Claude Code. 24 specialist agents, 106 knowledge
 files, a local semantic RAG + GraphRAG server, and 44 slash commands — all wired
 together through hooks.
 
 ## What It Does
 
-ClaudeBoost turns Claude Code into a production-grade engineering assistant. Instead of
-one general-purpose model handling everything, it routes work to specialist agents,
-loads the right knowledge for each task, and enforces anti-hallucination checks before
-any finding reaches you.
+AI can write code fast. That's never been the bottleneck. The bottleneck is what the code looks like six months later — unapproved tables, inconsistent patterns, security gaps, zero tests. Most AI tools make this worse by making the same low-quality code arrive faster.
+
+ClaudeBoost takes a different approach. Instead of one general-purpose model handling everything, it routes work to 24 specialist agents — each focused on a single domain. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads the exact knowledge each agent needs before a single line is written. Every finding requires a `file:line` citation or it gets dropped. The goal is not faster code. It's production-ready, highly tested, maintainable code — delivered correctly the first time.
 
 The RAG server runs entirely locally. No external vector service. No API calls to embed
-your code. Your codebase stays on your machine.
+your code. Your codebase stays on your machine. Microsoft's GraphRAG costs around
+$30,000 to index 5 GB of data. ClaudeBoost indexes the same on a CPU, for free.
 
 ## What's Inside
 
 ```
 ClaudeBoost/
-├── agents/              25 specialist agent definitions (XML)
+├── agents/              24 specialist agent definitions (XML)
 ├── knowledge/           106 knowledge files (XML)
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
@@ -59,7 +61,7 @@ the session, and shows active workspaces. From there:
 /boost                   Start a session
 /index-project           Index your codebase for semantic search
 /workspace <task>        Create a workspace + implementation plan
-/code-review             14-pass parallel code review
+/code-review             15-pass code review (14 parallel + evaluator)
 /end-to-end-test         Browser E2E tests with screenshot evidence
 /security-review         OWASP-grounded security audit
 ```

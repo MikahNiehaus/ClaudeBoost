@@ -64,7 +64,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
 .rc-badge { display: inline-block; font-size: 8px; padding: 1px 6px; border-radius: 6px; margin-top: 5px; font-weight: 600; }
 
 /* === DETAIL PANEL === */
-.detail { position: fixed; right: 0; top: 0; height: 100vh; width: 360px; background: #0b1120; border-left: 1px solid #334155; padding: 22px; overflow-y: auto; z-index: 100; box-shadow: -6px 0 32px rgba(0,0,0,0.5); }
+.detail { position: fixed; right: 0; top: 0; height: 100vh; width: 360px; background: rgba(7, 11, 27, 0.82); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-left: 1px solid rgba(99,102,241,0.18); padding: 22px; overflow-y: auto; z-index: 100; box-shadow: -8px 0 40px rgba(0,0,0,0.6); }
 .detail.hidden { display: none; }
 .detail-close { float: right; background: none; border: none; color: #64748b; font-size: 20px; cursor: pointer; line-height: 1; transition: color 0.12s; }
 .detail-close:hover { color: #f1f5f9; }
@@ -137,11 +137,15 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
 <body>
 
 <div class="toolbar">
-  <h1>ClaudeBoost · How It Works
+  <h1>ClaudeBoost
     <span class="toolbar-badge">24 agents · 106 knowledge bases · 44 slash commands</span>
-    <span class="toolbar-sub">Architecture walkthrough</span>
   </h1>
-  <div>
+  <div style="font-size:16px;font-weight:700;color:#e879f9;letter-spacing:0.03em;line-height:1.2;margin-top:2px">Created by Mikah Niehaus</div>
+  <div style="display:flex;align-items:center;gap:6px">
+    <button onclick="adjustZoom(-0.1)" style="padding:7px 11px;font-size:14px;line-height:1">−</button>
+    <span id="zoom-display" style="min-width:36px;text-align:center;font-size:11px;color:#94a3b8;user-select:none">100%</span>
+    <button onclick="adjustZoom(0.1)" style="padding:7px 11px;font-size:14px;line-height:1">+</button>
+    <button onclick="fitToScreen()" style="font-weight:600;color:#7dd3fc;border-color:#1e4a6e">Fit</button>
     <button onclick="downloadSVG()">SVG</button>
     <button onclick="window.print()">PDF</button>
   </div>
@@ -433,7 +437,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
         <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('reviewer-detail')">
           <span class="card-icon">📋</span>
           <div class="card-title">Code Review System</div>
-          <div class="card-sub">15-pass Opus · verify gate</div>
+          <div class="card-sub">15 passes · 14 parallel Sonnet + evaluator</div>
           <div class="card-badge" style="color:#fcd34d">Production-ready</div>
         </div>
         <div class="card" style="border-left-color:#8b5cf6" onclick="showDetail('evaluator-detail')">
@@ -460,7 +464,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
     </div>
     <div class="rail-card star-card" style="border-left-color:#0ea5e9" onclick="showDetail('graph-rag-vs-ai')">
       <div class="rc-title">🌐 vs. Microsoft RAG</div>
-      <div class="rc-sub">Zero hallucinated edges — facts, not inferences</div>
+      <div class="rc-sub">Microsoft: ~$30k to index 5 GB · ClaudeBoost: free, on a CPU</div>
       <div class="rc-badge" style="background:#0c4a6e;color:#7dd3fc">Why it wins</div>
     </div>
     <div class="rail-card" style="border-left-color:#f59e0b" onclick="showDetail('context-survival')">
@@ -715,8 +719,11 @@ ${SEC('ClaudeBoost — deterministic parsing')}
 ${FR('#22c55e','tree-sitter parses AST — no AI','Pure parser, same output every run, 50+ languages')}
 ${AW()}${FR('#22c55e','Extract imports: "import AuthService from \'./auth\'"','Fact, not inference. Taken directly from the syntax tree.')}
 ${AW()}${FR('#22c55e','Graph edge created: consumer.ts → AuthService','100% accurate — exists in the AST or it doesn\'t')}
+${SEC('Cost & Speed')}
+${FR('#ef4444','Microsoft GraphRAG: ~$30,000 to index 5 GB','Inference tokens at scale. Slow. Cloud-dependent.')}
+${FR('#22c55e','ClaudeBoost: free · runs on a CPU · re-indexes on save','No cloud, no GPU, no waiting. File watcher triggers automatically.')}
 ${SEC('Result')}
-${FR('#a855f7','Zero hallucinated edges · milliseconds vs tokens','Faster, cheaper, and more accurate than AI extraction')}` },
+${FR('#a855f7','Zero hallucinated edges · 83% R@1 on CodeSearchNet · free','Beats GraphCodeBERT — Microsoft\'s strongest model — at zero cost')}` },
 
   'rag-tiers': { title: 'RAG Tiers 0-4 — Layered Knowledge Loading', badge: '🏗 Architecture',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every POST /context returns up to 5 tiers assembled from multiple sources. An agent working on TypeScript React code automatically gets all of this — without manual configuration.</div>
@@ -949,8 +956,12 @@ function showDetail(id) {
   document.getElementById('detail-file').textContent = c.file || '';
   document.getElementById('detail-body').innerHTML = c.html || '';
   document.getElementById('detail').classList.remove('hidden');
+  document.getElementById('board').style.paddingRight = '372px';
 }
-function closeDetail() { document.getElementById('detail').classList.add('hidden'); }
+function closeDetail() {
+  document.getElementById('detail').classList.add('hidden');
+  document.getElementById('board').style.paddingRight = '';
+}
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDetail(); closeChapters(); closeTranscript(); } });
 
 function downloadSVG() {
@@ -963,13 +974,13 @@ function downloadSVG() {
 const TOUR_SEGMENTS = [
   {
     label: 'Introduction',
-    text: 'Every developer who has shipped AI-generated code has hit the same wall. The feature works. The tests pass. Then you read the diff. There is a new database table nobody asked for. An auth approach nobody approved. Three different error handling patterns in the same file. Claude is powerful. Unguided, it is unpredictable. ClaudeBoost is what you put between you and that problem. Twenty-four specialist agents, one hundred and six knowledge bases, and a safety system that keeps every architectural decision in your hands — without changing how you type or work.',
+    text: 'AI can write code fast. That has never been the bottleneck. The bottleneck is what happens after. A new table nobody approved. An auth pattern nobody reviewed. Three different error-handling styles in the same file. It ships because the tests pass. Six months later, the codebase is a maintenance problem nobody wanted to own. Most AI coding tools make this worse — they just make the same low-quality code arrive faster. ClaudeBoost starts from a different premise entirely. Speed is a solved problem. Quality is the hard part. Twenty-four specialist agents — security, architecture, testing, database, observability — each focused on one domain and nothing else. A RAG system that loads exactly the right knowledge for every task before a single line is written. And a verify gate that requires a file-and-line citation before any finding gets acted on. The goal is not faster code. It is production-ready, highly tested, maintainable code — delivered correctly the first time.',
     highlights: [],
     scrollTo: null
   },
   {
     label: 'You — the Human in the Loop',
-    text: 'You work exactly as you always have. Type a request. Paste a ticket. Run a slash command. Nothing about your workflow changes. What changes is what happens behind the scenes. Before Claude touches code, it classifies the task, loads the right knowledge, and — for any architectural decision — stops and asks you. New endpoint? It waits. New database table? It waits. New auth strategy? It waits. You stay in the loop without having to chase it.',
+    text: 'You work exactly as you always have. Type a request. Paste a ticket. Run a slash command. Nothing about your workflow changes. What changes is what happens behind the scenes. Before Claude touches code, it classifies the task, loads the right knowledge, and — for any new endpoint, new table, or new dependency — stops and asks you. New endpoint? It waits. New database table? It waits. New auth strategy? It waits. You stay in the loop without having to chase it.',
     highlights: ['you', 'session-start'],
     scrollTo: 'you'
   },
@@ -987,13 +998,13 @@ const TOUR_SEGMENTS = [
   },
   {
     label: 'Specialist Agents — Opus for Strategy, Sonnet for Execution',
-    text: 'Twenty-four specialist agents. Each covers a specific engineering domain: security, performance, debugging, refactoring, testing, browser automation, DevOps, database, observability, compliance, and more. Three run on Opus — architect, reviewer, and ticket analyst — because they handle strategic decisions where reasoning depth matters most. The other twenty-one run on Sonnet: fast, focused, purpose-built. Every agent\'s first action is to call the RAG server and load the knowledge that is specifically relevant to its task. No agent goes in blind.',
-    highlights: ['architect-agent', 'reviewer-agent', 'evaluator-agent'],
+    text: 'Twenty-four specialist agents. Each covers a specific engineering domain: security, performance, debugging, refactoring, testing, browser automation, DevOps, database, observability, compliance, and more. Three run on Opus — architect, reviewer, and ticket analyst — because they handle strategic decisions where reasoning depth matters most. The other twenty-one run on Sonnet: fast, focused, purpose-built. Every agent\'s first action is to call the RAG server and load the knowledge that is specifically relevant to its task. It doesn\'t run on general training data — it researches, it indexes, and it decides from objective, current knowledge. No agent goes in blind.',
+    highlights: ['architect-agent', 'reviewer-agent', 'ticket-analyst-agent', 'evaluator-agent', 'security-agent', 'test-agent', 'e2e-agent', 'database-agent', 'devops-agent', 'research-agent'],
     scrollTo: 'architect-agent'
   },
   {
     label: 'RAG Server — The Knowledge Brain',
-    text: 'The RAG server runs locally on port eighty-six twelve. It indexes every agent and every knowledge file — one hundred and six of them — using sentence transformers for semantic search. Change an agent\'s behavior and the file watcher detects it, re-indexing within two seconds. No restart, no manual step. Three separate indexes feed this system: one for ClaudeBoost\'s own agents and knowledge, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
+    text: 'The RAG system inside ClaudeBoost is a custom architecture — designed by Mikah Niehaus specifically for agentic coding workflows. It runs entirely on your machine. No cloud, no GPU required — just a CPU and a local process on port eighty-six twelve. Microsoft\'s GraphRAG costs around thirty thousand dollars to index five gigabytes of data. This runs for free. And it outperforms GraphCodeBERT — Microsoft\'s strongest code-search model — with eighty-three percent recall-at-one on the CodeSearchNet benchmark, on a CPU, with no fine-tuning. When an agent or knowledge file changes, the file watcher catches it and re-indexes automatically. No restart. No manual step. Fast enough that you never notice it happened. Three separate indexes feed the system: one for ClaudeBoost\'s own agents and knowledge bases, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
     highlights: ['rag-server', 'agent-query'],
     scrollTo: 'rag-server'
   },
@@ -1022,15 +1033,15 @@ const TOUR_SEGMENTS = [
     scrollTo: 'workspace-context'
   },
   {
-    label: 'Code Review — 15 Passes, Opus, Verify Gate',
-    text: 'The code review system runs fifteen passes on Opus. The first fourteen cover security, logic, coding standards, performance, test gaps, documentation, observability, and ticket alignment — does this implementation actually match what was asked for? Every pass requires a file and line number citation, or the finding is dropped. Then the fifteenth pass runs. An independent evaluator reads only those citations. It never sees the original agent\'s reasoning. It reads the code and returns a verdict. Nothing ships on self-verification.',
+    label: 'Code Review — 15 Passes, Parallel + Evaluator',
+    text: 'The code review runs fifteen passes. Fourteen run in parallel on Sonnet specialist agents — security, logic, coding standards, performance, test gaps, documentation, observability, and ticket alignment. Does this implementation actually match what was asked for? Every pass requires a file and line number citation, or the finding is dropped. Then pass fifteen. An independent evaluator in a fresh context reads only those citations. It never sees the previous agents\' reasoning. It reads the code and returns a verdict. Nothing ships on self-verification.',
     highlights: ['reviewer-agent', 'reviewer-detail'],
     scrollTo: 'reviewer-detail'
   },
   {
     label: 'Summary — Production-Ready AI Development',
     text: 'We started with a problem: AI-generated code is powerful and unpredictable. Here is how ClaudeBoost addresses it. Twenty-four specialist agents routed to the right model. A five-tier RAG system that always loads the right knowledge. Deterministic graph search using tree-sitter — zero hallucinated edges. A verify gate where every finding needs a file and a line number or it gets dropped. An evaluator that never self-verifies. A workspace context system that survives compaction and restarts. Seven hook types that enforce behavior mechanically. And CONSULT mode that keeps every architectural decision in your hands. If you are shipping AI-assisted code in production, this is what the safety layer looks like. It installs in one command. Run slash boost — your next session will show you exactly what it catches.',
-    highlights: ['production-features'],
+    highlights: ['production-features', 'verify', 'rag-tiers', 'workspace-context', 'graph-rag-vs-ai', 'consult-q', 'parallel-agents'],
     scrollTo: 'production-features'
   }
 ];
@@ -1190,6 +1201,48 @@ function syncTranscriptHighlight(i){
   document.querySelectorAll('.transcript-seg').forEach((el,j)=>el.classList.toggle('active',j===i));
   const a=document.getElementById(`tseg-${i}`);if(a)a.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+
+// ─── Zoom / Fit ──────────────────────────────────────────────────────────────
+let currentZoom = 1.0;
+
+function setZoom(z) {
+  currentZoom = Math.max(0.4, Math.min(2.0, z));
+  document.getElementById('board').style.zoom = currentZoom;
+  document.getElementById('zoom-display').textContent = Math.round(currentZoom * 100) + '%';
+}
+
+function adjustZoom(delta) {
+  setZoom(Math.round((currentZoom + delta) * 10) / 10);
+}
+
+// Fit width only — keeps text readable, lets page scroll vertically
+function fitToScreen() {
+  const board = document.getElementById('board');
+  board.style.zoom = 1;
+  requestAnimationFrame(() => {
+    const availW = window.innerWidth - 12;
+    const boardW = board.scrollWidth;
+    // Never shrink below 75% — keeps text legible
+    setZoom(Math.max(0.75, Math.min(1.0, availW / boardW)));
+  });
+}
+
+// Ctrl/Cmd + scroll to zoom in/out
+document.addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  adjustZoom(e.deltaY < 0 ? 0.1 : -0.1);
+}, { passive: false });
+
+function calcZoom() {
+  return Math.max(0.75, Math.min(1.5, window.innerWidth / 1100));
+}
+window.addEventListener('load', () => {
+  setTimeout(() => setZoom(calcZoom()), 200);
+});
+window.addEventListener('resize', () => {
+  setZoom(calcZoom());
+});
 
 buildTicks();
 </script>
