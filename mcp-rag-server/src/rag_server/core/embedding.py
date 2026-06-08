@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"
 
+# Minimum texts in a batch before splitting across GPU + CPU in parallel.
+# Below this, thread-spawn overhead outweighs the speedup.
+_CPU_GPU_SPLIT_THRESHOLD = 8
+
 
 def _resolve_device() -> Union[str, "torch.device"]:
     """Return the torch device to pass to SentenceTransformer/CrossEncoder constructors.
@@ -139,6 +143,9 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
     def __init__(self, model_name: str = DEFAULT_MODEL):
         self._model_name = model_name
         self._ort_model = None
+        self._cpu_model = None       # parallel CPU-only session (created when DML is active)
+        self._has_dml = False        # True when DmlExecutionProvider loaded successfully
+        self._gpu_fraction = 0.5     # fraction of large batches routed to GPU (calibrated at load)
         self._tokenizer = None
         self._dim: int | None = None
         self._load_lock = threading.Lock()
@@ -164,7 +171,15 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
                     export=True,
                     provider="DmlExecutionProvider",
                 )
-                logger.info("ONNX DirectML model loaded (DmlExecutionProvider)")
+                self._has_dml = True
+                # Parallel CPU session for large-batch splitting.
+                # optimum reuses the already-exported ONNX — no second export needed.
+                self._cpu_model = ORTModelForFeatureExtraction.from_pretrained(
+                    self._model_name,
+                    export=True,
+                    provider="CPUExecutionProvider",
+                )
+                logger.info("ONNX model loaded — GPU: DmlExecutionProvider + CPU session ready")
             except Exception as e:
                 logger.warning("DirectML unavailable (%s) — falling back to CPU ONNX", e)
                 from optimum.onnxruntime import ORTModelForFeatureExtraction
@@ -173,9 +188,52 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
                     export=True,
                     provider="CPUExecutionProvider",
                 )
+                self._has_dml = False
+                self._cpu_model = None
                 logger.info("ONNX model loaded (CPUExecutionProvider)")
             from transformers import AutoTokenizer
             self._tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+            if self._has_dml and self._cpu_model is not None:
+                self._calibrate_split()
+
+    def _calibrate_split(self) -> None:
+        """Benchmark GPU vs CPU to set the optimal batch-split fraction.
+
+        Runs 1 warm-up + 2 timed passes on each session with a small batch.
+        GPU fraction = gpu_tps / (gpu_tps + cpu_tps), clamped to [0.2, 0.9].
+
+        This adapts automatically:
+        - Powerful discrete GPU (NVIDIA, AMD RX) → ~75-85% GPU
+        - Weak integrated GPU (Intel UHD, AMD integrated) → ~40-55% GPU
+        - GPU barely faster than CPU → ~50% GPU
+        """
+        import time
+        bench = self._tokenizer(
+            ["Calibration sentence for throughput measurement."] * 4,
+            padding=True, truncation=True, return_tensors="np", max_length=64,
+        )
+
+        def _tps(model) -> float:
+            model(**bench)  # warm-up (first DML call has JIT overhead)
+            times = []
+            for _ in range(2):
+                t = time.perf_counter()
+                model(**bench)
+                times.append(time.perf_counter() - t)
+            return 4.0 / min(times)  # texts/sec (best of 2 runs)
+
+        try:
+            gpu_tps = _tps(self._ort_model)
+            cpu_tps = _tps(self._cpu_model)
+            total = gpu_tps + cpu_tps
+            self._gpu_fraction = max(0.2, min(0.9, gpu_tps / total))
+            logger.info(
+                "GPU/CPU calibration — GPU: %.0f t/s, CPU: %.0f t/s → GPU gets %.0f%% of each batch",
+                gpu_tps, cpu_tps, self._gpu_fraction * 100,
+            )
+        except Exception as e:
+            logger.warning("GPU/CPU calibration failed (%s) — using 50/50 split", e)
+            self._gpu_fraction = 0.5
 
     def _mean_pool(self, token_embeddings, attention_mask):
         import numpy as np
@@ -191,8 +249,26 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         import numpy as np
         inputs = self._tokenizer(texts, padding=True, truncation=True,
                                   return_tensors="np", max_length=512)
-        outputs = self._ort_model(**inputs)
-        token_embeddings = outputs.last_hidden_state
+
+        if self._cpu_model is not None and len(texts) >= _CPU_GPU_SPLIT_THRESHOLD:
+            # Split batch: GPU gets _gpu_fraction (calibrated to relative throughput),
+            # CPU gets the remainder — both run simultaneously via thread pool.
+            from concurrent.futures import ThreadPoolExecutor
+            mid = max(1, round(len(texts) * self._gpu_fraction))
+            gpu_in = {k: v[:mid] for k, v in inputs.items()}
+            cpu_in = {k: v[mid:] for k, v in inputs.items()}
+
+            def _run(model, inp):
+                return np.asarray(model(**inp).last_hidden_state)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f_gpu = pool.submit(_run, self._ort_model, gpu_in)
+                f_cpu = pool.submit(_run, self._cpu_model, cpu_in)
+                token_embeddings = np.concatenate([f_gpu.result(), f_cpu.result()], axis=0)
+        else:
+            outputs = self._ort_model(**inputs)
+            token_embeddings = np.asarray(outputs.last_hidden_state)
+
         return self._mean_pool(token_embeddings, inputs["attention_mask"])
 
     def embed(self, texts: list[str]) -> list[list[float]]:
