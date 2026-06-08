@@ -981,7 +981,7 @@ const TOUR_SEGMENTS = [
   },
   {
     label: 'CONSULT Mode — You Control Architecture',
-    text: 'Here is the most important thing ClaudeBoost does. By default, when Claude detects an architectural trigger — a new endpoint, a new table, a new dependency, a new auth strategy — it stops. It spawns an Opus architect agent to research the options, then presents you two or three choices with clear tradeoffs. You pick one. You add constraints. Rate limits, size caps, whatever matters to your system. Then Claude implements. You cannot accidentally end up with an architecture you did not choose. Standards like parameterized queries and error logging apply automatically, in every mode.',
+    text: 'Here is the most important thing ClaudeBoost does. The obvious objection is that stopping for approval adds friction. It does not — CONSULT mode only fires on irreversible decisions. New table, new auth strategy, new external dependency — the five percent of cases where getting it wrong costs real time. Everything else runs at full speed. When it does stop, it spawns an Opus architect agent to research the options, then presents you two or three choices with clear tradeoffs. You pick one. You add constraints. Rate limits, size caps, whatever matters to your system. Then Claude implements. You cannot accidentally end up with an architecture you did not choose. Standards like parameterized queries and error logging apply automatically, in every mode.',
     highlights: ['consult-q', 'consult-yes', 'consult-no'],
     scrollTo: 'consult-q'
   },
@@ -999,7 +999,7 @@ const TOUR_SEGMENTS = [
   },
   {
     label: 'RAG Tiers 0-4 — Always the Right Context',
-    text: 'Every call to slash context returns up to five tiers of knowledge. Tier zero: hard guardrails — always applied, no exceptions. Tier one: that agent\'s own declared knowledge. Tier two: related domains loaded alongside it. Tier three: cross-domain standards found by semantic search across all one hundred and six knowledge bases. Tier four: relevant chunks from your project\'s actual source code, including every file that imports the files being worked on. A TypeScript React agent automatically gets the TypeScript guide, the React guide, your relevant source files, and their structural neighbors. All of that, with no configuration.',
+    text: 'Think of every agent call like a surgeon\'s instrument tray — only the tools needed for this operation are ready, and they\'re always in the right place. That is what the five-tier knowledge system does. The first tier is hard guardrails, always loaded, no exceptions. Then the agent\'s own declared knowledge. Then related domains. Then the right chunks from your actual project source code — including every file that imports the files being worked on. A TypeScript React agent automatically gets the TypeScript guide, the React guide, your relevant source files, and their structural neighbors. None of it requires configuration. It just loads.',
     highlights: ['rag-tiers', 'knowledge-rail'],
     scrollTo: 'rag-tiers'
   },
@@ -1023,13 +1023,13 @@ const TOUR_SEGMENTS = [
   },
   {
     label: 'Code Review — 15 Passes, Opus, Verify Gate',
-    text: 'The code review system runs fifteen passes on Opus. Passes one through three: security — injection, auth bypass, and secrets. Passes four and five: logic. Six and seven: coding standards. Eight and nine: performance. Ten and eleven: test coverage gaps. Twelve and thirteen: documentation and observability. Pass fourteen asks one question — does this implementation actually match the acceptance criteria? Pass fifteen is an independent evaluator that reads only the cited findings from the previous fourteen passes and returns a verdict. Nothing ships on self-verification.',
+    text: 'The code review system runs fifteen passes on Opus. The first fourteen cover security, logic, coding standards, performance, test gaps, documentation, observability, and ticket alignment — does this implementation actually match what was asked for? Every pass requires a file and line number citation, or the finding is dropped. Then the fifteenth pass runs. An independent evaluator reads only those citations. It never sees the original agent\'s reasoning. It reads the code and returns a verdict. Nothing ships on self-verification.',
     highlights: ['reviewer-agent', 'reviewer-detail'],
     scrollTo: 'reviewer-detail'
   },
   {
     label: 'Summary — Production-Ready AI Development',
-    text: 'We started with a problem: AI-generated code is powerful and unpredictable. Here is how ClaudeBoost addresses it. Twenty-four specialist agents routed to the right model. A five-tier RAG system that always loads the right knowledge. Deterministic graph search using tree-sitter — zero hallucinated edges. A verify gate where every finding needs a file and a line number or it gets dropped. An evaluator that never self-verifies. A workspace context system that survives compaction and restarts. Seven hook types that enforce behavior mechanically. And CONSULT mode that keeps every architectural decision in your hands. If you are shipping AI-assisted code in production, this is what the safety layer looks like.',
+    text: 'We started with a problem: AI-generated code is powerful and unpredictable. Here is how ClaudeBoost addresses it. Twenty-four specialist agents routed to the right model. A five-tier RAG system that always loads the right knowledge. Deterministic graph search using tree-sitter — zero hallucinated edges. A verify gate where every finding needs a file and a line number or it gets dropped. An evaluator that never self-verifies. A workspace context system that survives compaction and restarts. Seven hook types that enforce behavior mechanically. And CONSULT mode that keeps every architectural decision in your hands. If you are shipping AI-assisted code in production, this is what the safety layer looks like. It installs in one command. Run slash boost — your next session will show you exactly what it catches.',
     highlights: ['production-features'],
     scrollTo: 'production-features'
   }
