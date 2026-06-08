@@ -137,7 +137,8 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
     Works on Intel HD/UHD/Iris/Xe integrated, AMD Radeon integrated, and any DX12 GPU.
     No conflict with CUDA torch versions. Falls back to CPU if DML is unavailable.
 
-    Requires: pip install onnxruntime-directml optimum
+    Uses pre-exported ONNX models from ~/.cache/rag-onnx/<model-name>/model.onnx.
+    Requires: pip install onnxruntime-directml
     """
 
     def __init__(self, model_name: str = DEFAULT_MODEL):
@@ -149,12 +150,29 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         self._tokenizer = None
         self._dim: int | None = None
         self._load_lock = threading.Lock()
+        self._input_names: set[str] = set()  # ONNX model expected input names
         prefixes = _TASK_PREFIX_MODELS.get(model_name, ("", ""))
         self._query_prefix, self._doc_prefix = prefixes
 
     @property
     def is_loaded(self) -> bool:
         return self._ort_model is not None
+
+    def _resolve_onnx_path(self) -> str:
+        import pathlib, os
+        cache_dir = (
+            pathlib.Path(os.path.expanduser("~"))
+            / ".cache" / "rag-onnx"
+            / self._model_name.replace("/", "--")
+        )
+        onnx_path = cache_dir / "model.onnx"
+        if not onnx_path.exists():
+            raise FileNotFoundError(
+                f"ONNX model not found at {onnx_path}. "
+                f"Export it with: python -m optimum.exporters.onnx "
+                f"--model {self._model_name} {cache_dir}"
+            )
+        return str(onnx_path)
 
     def _load_model(self):
         if self._ort_model is not None:
@@ -163,36 +181,54 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
             if self._ort_model is not None:
                 return
             logger.info("Loading ONNX DirectML model: %s", self._model_name)
+            import onnxruntime as ort
+
+            onnx_path = self._resolve_onnx_path()
+            available = ort.get_available_providers()
+
             try:
-                from optimum.onnxruntime import ORTModelForFeatureExtraction
-                from transformers import AutoTokenizer
-                self._ort_model = ORTModelForFeatureExtraction.from_pretrained(
-                    self._model_name,
-                    export=True,
-                    provider="DmlExecutionProvider",
+                if "DmlExecutionProvider" not in available:
+                    raise RuntimeError("DmlExecutionProvider not in available providers")
+                self._ort_model = ort.InferenceSession(
+                    onnx_path,
+                    providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                 )
+                if self._ort_model.get_providers()[0] != "DmlExecutionProvider":
+                    raise RuntimeError(
+                        f"DML provider not active, got: {self._ort_model.get_providers()[0]}"
+                    )
                 self._has_dml = True
-                # Parallel CPU session for large-batch splitting.
-                # optimum reuses the already-exported ONNX — no second export needed.
-                self._cpu_model = ORTModelForFeatureExtraction.from_pretrained(
-                    self._model_name,
-                    export=True,
-                    provider="CPUExecutionProvider",
+                # Parallel CPU session — shares the same ONNX file, no re-export needed.
+                self._cpu_model = ort.InferenceSession(
+                    onnx_path,
+                    providers=["CPUExecutionProvider"],
                 )
                 logger.info("ONNX model loaded — GPU: DmlExecutionProvider + CPU session ready")
             except Exception as e:
                 logger.warning("DirectML unavailable (%s) — falling back to CPU ONNX", e)
-                from optimum.onnxruntime import ORTModelForFeatureExtraction
-                self._ort_model = ORTModelForFeatureExtraction.from_pretrained(
-                    self._model_name,
-                    export=True,
-                    provider="CPUExecutionProvider",
+                self._ort_model = ort.InferenceSession(
+                    onnx_path,
+                    providers=["CPUExecutionProvider"],
                 )
                 self._has_dml = False
                 self._cpu_model = None
-                logger.info("ONNX model loaded (CPUExecutionProvider)")
+                logger.info(
+                    "ONNX model loaded (%s)", self._ort_model.get_providers()[0]
+                )
+
             from transformers import AutoTokenizer
             self._tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+
+            # Cache expected input names to filter tokenizer output safely.
+            self._input_names = {inp.name for inp in self._ort_model.get_inputs()}
+
+            # Resolve hidden dimension via a minimal test inference.
+            test_enc = self._tokenizer(["d"], return_tensors="np", max_length=4)
+            test_in = {k: v for k, v in dict(test_enc).items() if k in self._input_names}
+            out = self._ort_model.run(["last_hidden_state"], test_in)
+            self._dim = out[0].shape[2]
+            logger.info("ONNX model ready. Dimensions: %d", self._dim)
+
             if self._has_dml and self._cpu_model is not None:
                 self._calibrate_split()
 
@@ -208,17 +244,18 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         - GPU barely faster than CPU → ~50% GPU
         """
         import time
-        bench = self._tokenizer(
+        bench_enc = self._tokenizer(
             ["Calibration sentence for throughput measurement."] * 4,
             padding=True, truncation=True, return_tensors="np", max_length=64,
         )
+        bench = {k: v for k, v in dict(bench_enc).items() if k in self._input_names}
 
-        def _tps(model) -> float:
-            model(**bench)  # warm-up (first DML call has JIT overhead)
+        def _tps(session) -> float:
+            session.run(["last_hidden_state"], bench)  # warm-up (first DML call has JIT overhead)
             times = []
             for _ in range(2):
                 t = time.perf_counter()
-                model(**bench)
+                session.run(["last_hidden_state"], bench)
                 times.append(time.perf_counter() - t)
             return 4.0 / min(times)  # texts/sec (best of 2 runs)
 
@@ -247,8 +284,9 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
 
     def _encode(self, texts: list[str]) -> list[list[float]]:
         import numpy as np
-        inputs = self._tokenizer(texts, padding=True, truncation=True,
-                                  return_tensors="np", max_length=512)
+        enc = self._tokenizer(texts, padding=True, truncation=True,
+                              return_tensors="np", max_length=512)
+        inputs = {k: v for k, v in dict(enc).items() if k in self._input_names}
 
         if self._cpu_model is not None and len(texts) >= _CPU_GPU_SPLIT_THRESHOLD:
             # Split batch: GPU gets _gpu_fraction (calibrated to relative throughput),
@@ -258,18 +296,18 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
             gpu_in = {k: v[:mid] for k, v in inputs.items()}
             cpu_in = {k: v[mid:] for k, v in inputs.items()}
 
-            def _run(model, inp):
-                return np.asarray(model(**inp).last_hidden_state)
+            def _run(session, inp):
+                return np.asarray(session.run(["last_hidden_state"], inp)[0])
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 f_gpu = pool.submit(_run, self._ort_model, gpu_in)
                 f_cpu = pool.submit(_run, self._cpu_model, cpu_in)
                 token_embeddings = np.concatenate([f_gpu.result(), f_cpu.result()], axis=0)
         else:
-            outputs = self._ort_model(**inputs)
-            token_embeddings = np.asarray(outputs.last_hidden_state)
+            out = self._ort_model.run(["last_hidden_state"], inputs)
+            token_embeddings = np.asarray(out[0])
 
-        return self._mean_pool(token_embeddings, inputs["attention_mask"])
+        return self._mean_pool(token_embeddings, enc["attention_mask"])
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         self._load_model()
@@ -285,6 +323,4 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
 
     def dimensions(self) -> int:
         self._load_model()
-        if self._dim is None:
-            self._dim = self._ort_model.config.hidden_size
         return self._dim
