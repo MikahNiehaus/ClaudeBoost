@@ -86,6 +86,17 @@ def rag_check(base_url):
         return False
 
 
+def rag_model_name(base_url):
+    """Return the code embedding model the server is currently using."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/status", timeout=5) as r:
+            data = json.loads(r.read())
+            # code_model may differ from the default knowledge model
+            return data.get("code_model") or data.get("model", "unknown")
+    except Exception:
+        return "unknown"
+
+
 def rag_index(base_url, project_path, force=True):
     body = json.dumps({"project_path": str(project_path), "force": force}).encode()
     req  = urllib.request.Request(
@@ -195,7 +206,8 @@ def main():
     if not rag_check(rag_url):
         print("ERROR: RAG server not ready. Start it with: python scripts/rag-server-start.py")
         sys.exit(1)
-    print("  Server ready.")
+    model_name = rag_model_name(rag_url)
+    print(f"  Server ready. Code embedding model: {model_name}")
 
     # 2. Load data
     print("\nLoading CodeSearchNet Python test set...")
@@ -265,7 +277,7 @@ def main():
         print(f"CODESEARCHNET BENCHMARK  —  Python, {pool_size}-function pool")
         print(f"Queries: {n_queries}  |  Seed: {args.seed}  |  Limit: {args.limit}")
         print(f"{'='*65}")
-        print(f"  ClaudeBoost RAG  (all-MiniLM-L6-v2 + graph augmentation):")
+        print(f"  ClaudeBoost RAG  ({model_name}):")
         print(f"    R@1   = {hits[1]}/{n_queries}  =  {r1:.3f}  ({r1:.1%})")
         print(f"    R@5   = {hits[5]}/{n_queries}  =  {r5:.3f}  ({r5:.1%})")
         print(f"    R@10  = {hits[10]}/{n_queries}  =  {r10:.3f}  ({r10:.1%})")
@@ -286,7 +298,7 @@ def main():
         out_path = RESULTS_DIR / out_name
         out_data = {
             "method":       "ClaudeBoost RAG",
-            "model":        "sentence-transformers/all-MiniLM-L6-v2 + graph augmentation",
+            "model":        model_name,
             "dataset":      "CodeSearchNet Python test set (Husain et al. 2019)",
             "pool_size":    pool_size,
             "n_queries":    n_queries,

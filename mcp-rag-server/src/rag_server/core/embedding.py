@@ -142,6 +142,8 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         self._tokenizer = None
         self._dim: int | None = None
         self._load_lock = threading.Lock()
+        prefixes = _TASK_PREFIX_MODELS.get(model_name, ("", ""))
+        self._query_prefix, self._doc_prefix = prefixes
 
     @property
     def is_loaded(self) -> bool:
@@ -195,10 +197,14 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         self._load_model()
+        if self._doc_prefix:
+            texts = [self._doc_prefix + t for t in texts]
         return self._encode(texts)
 
     def embed_query(self, text: str) -> list[float]:
         self._load_model()
+        if self._query_prefix:
+            text = self._query_prefix + text
         return self._encode([text])[0]
 
     def dimensions(self) -> int:

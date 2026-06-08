@@ -38,8 +38,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Components initialized in main(), accessed via module-level refs
-embedder: SentenceTransformerEmbedding | None = None
-code_embedder: SentenceTransformerEmbedding | None = None  # separate model for codebase scope (optional)
+from rag_server.ports.embedding_port import EmbeddingPort
+embedder: EmbeddingPort | None = None
+code_embedder: EmbeddingPort | None = None  # separate model for codebase scope (optional)
 store: ChromaStore | None = None
 engine: IndexingEngine | None = None
 
@@ -170,7 +171,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             # Do NOT run live check_project_health() here — it opens a ChromaDB connection
             # per project, and with 60+ projects this causes rag_status to hang for minutes.
             from rag_server.config import DEVICE
-            return {
+            status: dict = {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
@@ -179,6 +180,9 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 "embedding_dimensions": embedder.dimensions() if embedder.is_loaded else "not loaded yet",
                 "indexed_projects": indexed_projects,
             }
+            if code_embedder is not None and code_embedder is not embedder:
+                status["code_model"] = CODE_EMBEDDING_MODEL
+            return status
 
         elif name == "rag_context":
             return _build_context(

@@ -1,0 +1,57 @@
+Checking RAG server at http://127.0.0.1:8612...
+  Server ready. Code embedding model: flax-sentence-embeddings/st-codesearch-distilroberta-base
+
+Loading CodeSearchNet Python test set...
+  Total examples: 22176
+  Pool size: 22176 functions
+Writing 22176 stripped source files to C:\Users\grayw\AppData\Local\Temp\csn_bench_rfzjl1_g...
+  2000/22176...
+  4000/22176...
+  6000/22176...
+  8000/22176...
+  10000/22176...
+  12000/22176...
+  14000/22176...
+  16000/22176...
+  18000/22176...
+  20000/22176...
+  22000/22176...
+  Done in 21.7s
+
+Indexing 22176 functions into RAG...
+  Estimated time: ~90s per 1000 functions
+  Indexed 22176 files in 1270.2s (21.2 min)
+
+Evaluating 500 queries against 22176-function pool...
+  0/500  ETA: 0.0 min
+  50/500  ETA: 1.8 min
+  100/500  ETA: 1.5 min
+  150/500  ETA: 1.2 min
+  200/500  ETA: 1.0 min
+  250/500  ETA: 0.8 min
+  300/500  ETA: 0.6 min
+  350/500  ETA: 0.5 min
+  400/500  ETA: 0.3 min
+  450/500  ETA: 0.1 min
+
+=================================================================
+CODESEARCHNET BENCHMARK  —  Python, 22176-function pool
+Queries: 500  |  Seed: 42  |  Limit: 10
+=================================================================
+  ClaudeBoost RAG  (flax-sentence-embeddings/st-codesearch-distilroberta-base):
+    R@1   = 250/500  =  0.500  (50.0%)
+    R@5   = 387/500  =  0.774  (77.4%)
+    R@10  = 421/500  =  0.842  (84.2%)
+    MRR   = 0.617
+
+  Published baselines (Python, ~22K pool, Husain et al. 2019):
+    GraphCodeBERT (Microsoft):  MRR=0.769  R@1=0.723  R@5=0.852
+    CodeBERT:                   MRR=0.713  R@1=0.661  R@5=0.806
+    SelfAtt:                    MRR=0.690
+    NBOW:                       MRR=0.510
+=================================================================
+Note: pool_size=22176 vs published ~22,176
+      Smaller pool = higher absolute scores. Results are comparable
+      when pool_size >= 10,000.
+
+Results saved to C:\Users\grayw\OneDrive\prj\ClaudeBoost\benchmarks\codesearchnet\results\full_benchmark.json
