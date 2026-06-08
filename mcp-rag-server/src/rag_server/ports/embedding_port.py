@@ -6,6 +6,12 @@ from abc import ABC, abstractmethod
 class EmbeddingPort(ABC):
     """Port for generating text embeddings."""
 
+    @property
+    @abstractmethod
+    def is_loaded(self) -> bool:
+        """True if the model has been loaded into memory."""
+        ...
+
     @abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts. Returns list of vectors."""
