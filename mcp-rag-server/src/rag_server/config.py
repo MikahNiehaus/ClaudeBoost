@@ -34,15 +34,20 @@ RAG_INDEX_DIR = Path(os.environ.get("RAG_INDEX_DIR", _default_index_dir))
 CHROMA_DIR = RAG_INDEX_DIR / "chroma"
 MANIFEST_PATH = RAG_INDEX_DIR / "manifest.json"
 
-# Embedding model — all-MiniLM-L6-v2 (384d, ~22MB) loads in ~2s and is the default.
-# all-mpnet-base-v2 (768d, ~420MB) has better semantic resolution but takes 60-120s to load.
+# Embedding model for knowledge, agents, memories, and research RAG.
+# BAAI/bge-base-en-v1.5 (768d, ~440MB) — benchmarked best for semantic search.
+# Uses asymmetric retrieval: queries get a prefix, documents don't (handled in embedding.py).
 # Override per-machine via RAG_EMBEDDING_MODEL env var if needed.
-EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
 
-# Code-specific embedding model (optional). If set, codebase indexing and search
-# uses this model instead of EMBEDDING_MODEL. Must be downloaded locally first.
-# Example: export RAG_CODE_EMBEDDING_MODEL="nomic-ai/nomic-embed-code"
-CODE_EMBEDDING_MODEL = os.environ.get("RAG_CODE_EMBEDDING_MODEL", "")
+# Code-specific embedding model for codebase indexing and search.
+# st-codesearch-distilroberta-base (768d) — trained on code-query pairs, benchmarked best
+# across Python, JavaScript, Java, Go, Ruby, PHP (CodeSearchNet 1K-pool MRR > 0.80 on all).
+# Override via RAG_CODE_EMBEDDING_MODEL env var if needed.
+CODE_EMBEDDING_MODEL = os.environ.get(
+    "RAG_CODE_EMBEDDING_MODEL",
+    "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+)
 
 # Memory system path — where the file-based memory files live.
 # Defaults to the ClaudeBoost-project memory dir derived from CLAUDEBOOST_HOME.

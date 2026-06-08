@@ -8,7 +8,7 @@ from rag_server.ports.embedding_port import EmbeddingPort
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"
 
 
 def _resolve_device() -> Union[str, "torch.device"]:
@@ -32,6 +32,10 @@ def _resolve_device() -> Union[str, "torch.device"]:
 # Task-specific prefixes: (query_prefix, document_prefix)
 # Required for asymmetric retrieval models — query and document must use different prefixes.
 _TASK_PREFIX_MODELS = {
+    # BGE: asymmetric retrieval — queries need the instruction prefix, docs don't.
+    "BAAI/bge-base-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
+    "BAAI/bge-large-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
+    "BAAI/bge-small-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
     "nomic-ai/nomic-embed-text-v1":   ("search_query: ", "search_document: "),
     "nomic-ai/nomic-embed-text-v1.5": ("search_query: ", "search_document: "),
     "jinaai/jina-code-embeddings-0.5b": (
