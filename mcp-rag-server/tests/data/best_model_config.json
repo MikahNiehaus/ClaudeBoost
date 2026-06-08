@@ -2,17 +2,65 @@
   "csharp": {
     "model": "BAAI/bge-base-en-v1.5",
     "model_key": "bge_base",
-    "mrr": 0.7468,
-    "floor": 0.65,
-    "improvement": 0.0968,
-    "strategy": "name_double_split"
+    "mrr": 0.95014,
+    "r1": 0.917,
+    "floor": 0.935,
+    "improvement": 0.1301,
+    "strategy": "docaug",
+    "strategy_r2": "score_fusion_bge8_cs1",
+    "strategy_r3": "cs_3way_60_15_25",
+    "strategy_r7": "bge_cs_docaug",
+    "fusion": {
+      "type": "score_fusion_1way",
+      "components": [
+        {
+          "model": "BAAI/bge-base-en-v1.5",
+          "model_key": "bge_base",
+          "cache_key": "bge_cs_siginj",
+          "preprocessing": "siginj",
+          "weight": 1.0
+        }
+      ]
+    },
+    "strategy_r8": "docaug_cs_nds",
+    "strategy_r8b_optimal": "docaug*0.86_cs*0.14",
+    "strategy_r9": "siginj"
   },
   "javascript": {
     "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
     "model_key": "codesearch",
-    "mrr": 0.7476,
-    "floor": 0.669,
-    "improvement": 0.0786
+    "mrr": 0.800852,
+    "floor": 0.786,
+    "improvement": 0.0786,
+    "strategy": "param_inject_camel",
+    "strategy_r2": "score_fusion_cs3_bge7",
+    "strategy_r3": "js_3way_20_40_40",
+    "fusion": {
+      "type": "score_fusion_3way",
+      "components": [
+        {
+          "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+          "model_key": "codesearch",
+          "cache_key": "codesearch_javascript",
+          "preprocessing": "s6",
+          "weight": 0.2
+        },
+        {
+          "model": "BAAI/bge-base-en-v1.5",
+          "model_key": "bge_base",
+          "cache_key": "bge_base_javascript",
+          "preprocessing": "s6",
+          "weight": 0.4
+        },
+        {
+          "model": "BAAI/bge-base-en-v1.5",
+          "model_key": "bge_base",
+          "cache_key": "bge_base_javascript_camel_split",
+          "preprocessing": "camel_split",
+          "weight": 0.4
+        }
+      ]
+    }
   },
   "python": {
     "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",

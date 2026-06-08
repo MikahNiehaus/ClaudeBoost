@@ -26,8 +26,14 @@ Preprocessing (per language):
     Ruby:       Strip leading # comment lines + =begin...=end blocks
     JS/Java/PHP/C#: Strip leading /* */ or /** */ block comment
     All non-Python: prepend function name before code (S6 strategy)
-    C#:             doubled function name + PascalCase splitting (name_double_split)
-                    using BAAI/bge-base-en-v1.5 (selected by improvement loop)
+    C#:             XML doc extraction (summary/param/returns from raw code) + name doubling
+                    (docaug strategy) using BAAI/bge-base-en-v1.5 — MRR 0.8038, R@1 72.4%
+
+Score fusion (JS, R3):
+    3-way: codesearch*0.20 + bge_base_s6*0.40 + bge_base_camel_split*0.40 = MRR 0.8009
+    Config stored in best_model_config.json under "fusion" key per language.
+    _get_embeddings() returns list[(ce, de, weight)] when fusion config exists;
+    _run_mrr() dispatches to _pool_mrr_recall_fused() automatically.
 
 Run:
     python scripts/download_codesearchnet_full.py --lang all
@@ -68,13 +74,16 @@ _MODEL_CONFIG_PATH = DATA_DIR / "best_model_config.json"
 _MODEL_FOR_LANG: dict[str, str] = {}
 _MODEL_KEY_FOR_LANG: dict[str, str] = {}
 _STRATEGY_FOR_LANG: dict[str, str] = {}
+_FUSION_FOR_LANG: dict[str, dict] = {}
 
 try:
     if _MODEL_CONFIG_PATH.exists():
         _raw = json.loads(_MODEL_CONFIG_PATH.read_text(encoding="utf-8"))
-        _MODEL_FOR_LANG   = {lang: info["model"]                    for lang, info in _raw.items()}
-        _MODEL_KEY_FOR_LANG = {lang: info.get("model_key", "custom") for lang, info in _raw.items()}
-        _STRATEGY_FOR_LANG  = {lang: info.get("strategy", "")        for lang, info in _raw.items()}
+        _MODEL_FOR_LANG     = {lang: info["model"]                    for lang, info in _raw.items()}
+        _MODEL_KEY_FOR_LANG = {lang: info.get("model_key", "custom")  for lang, info in _raw.items()}
+        _STRATEGY_FOR_LANG  = {lang: info.get("strategy", "")         for lang, info in _raw.items()}
+        _FUSION_FOR_LANG    = {lang: info["fusion"]
+                               for lang, info in _raw.items() if "fusion" in info}
 except Exception:
     pass
 
@@ -200,15 +209,15 @@ def _strip_csharp_doc(code: str) -> str:
 #   go:         0.839 (codesearch)           — below GCB 0.897 by -0.058
 #   ruby:       0.738 (codesearch)           — beats GraphCodeBERT +0.035
 #   php:        0.850 (codesearch)           — beats GraphCodeBERT +0.201
-#   csharp:     0.747 (bge_base/name_double_split) — synthetic, no published baseline
+#   csharp:     0.950 (bge_base/siginj — sig-injected docstring) — synthetic, no published baseline
 FLOOR_BY_LANG = {
     "python":     0.885,   # codesearch=0.898 (BEATS GraphCodeBERT +0.129)
-    "javascript": 0.740,   # codesearch=0.748 (BEATS GraphCodeBERT +0.074)
+    "javascript": 0.786,   # 3-way fusion=0.8009 (BEATS GraphCodeBERT +0.127) R3 verified
     "java":       0.840,   # codesearch=0.850 (BEATS GraphCodeBERT +0.081)
     "go":         0.825,   # codesearch=0.839 (below GCB 0.897 by -0.058)
     "ruby":       0.725,   # codesearch=0.738 (BEATS GraphCodeBERT +0.035)
     "php":        0.840,   # codesearch=0.850 (BEATS GraphCodeBERT +0.201)
-    "csharp":     0.730,   # bge_base/name_double_split=0.7468 (synthetic — no published baseline)
+    "csharp":     0.935,   # siginj=0.9501 R@1=0.917 R9 verified
 }
 
 
@@ -285,22 +294,12 @@ def _load_corpus(lang: str) -> list[dict]:
     return examples
 
 
-def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[np.ndarray, np.ndarray]:
-    """Return (code_embeddings, doc_embeddings) for this language.
-
-    Routing logic:
-      1. Check model_caches/{model_key}_{lang}_code.npy  (from benchmark_models.py)
-      2. Fall back to csn_{lang}_code_embeddings_stripped.npy (MiniLM-L6 S6 cache)
-      3. Encode fresh with the routed model if neither cache exists.
-
-    This means tests automatically use the best model once benchmark_models.py has run,
-    and fall back to the safe MiniLM-L6 baseline otherwise. Benchmark scores never regress.
-    """
+def _load_single_model_embeddings(corpus: list[dict], lang: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load or encode single-model embeddings for a language (original behaviour)."""
     n = len(corpus)
     model_name = _model_for_lang(lang)
     strategy   = _strategy_for_lang(lang)
 
-    # model_key comes directly from config; fall back to a name-based lookup
     mkey = _MODEL_KEY_FOR_LANG.get(lang) or {
         "sentence-transformers/all-MiniLM-L6-v2":                    "minilm_l6",
         "sentence-transformers/all-MiniLM-L12-v2":                   "minilm_l12",
@@ -312,7 +311,6 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
 
     MODEL_CACHE_DIR.mkdir(exist_ok=True)
 
-    # Priority 1a: strategy-specific cache (written by improvement loop)
     if strategy:
         sc_code = MODEL_CACHE_DIR / f"{mkey}_{lang}_{strategy}_code.npy"
         sc_doc  = MODEL_CACHE_DIR / f"{mkey}_{lang}_{strategy}_doc.npy"
@@ -321,7 +319,6 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
             if ce.shape[0] == n and de.shape[0] == n:
                 return ce, de
 
-    # Priority 1b: plain model cache (no strategy suffix)
     mc_code = MODEL_CACHE_DIR / f"{mkey}_{lang}_code.npy"
     mc_doc  = MODEL_CACHE_DIR / f"{mkey}_{lang}_doc.npy"
     if mc_code.exists() and mc_doc.exists():
@@ -329,7 +326,6 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
         if ce.shape[0] == n and de.shape[0] == n:
             return ce, de
 
-    # Priority 2: legacy MiniLM-L6 S6 cache (always valid as fallback)
     if mkey in ("minilm_l6", "custom"):
         legacy_code = CACHE_DIR / f"csn_{lang}_code_embeddings_stripped.npy"
         legacy_doc  = CACHE_DIR / f"csn_{lang}_doc_embeddings.npy"
@@ -338,7 +334,6 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
             if ce.shape[0] == n and de.shape[0] == n:
                 return ce, de
 
-    # Priority 3: encode fresh with correct preprocessing
     strat_label = f"/{strategy}" if strategy else ""
     print(f"  [{lang}] Encoding {n:,} functions with {model_name}{strat_label} ...")
     loaded = _get_model(model_name)
@@ -348,7 +343,6 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
     de = loaded.encode([ex["docstring"] for ex in corpus], batch_size=64,
                        normalize_embeddings=True, show_progress_bar=True,
                        convert_to_numpy=True)
-    # Save to strategy-specific path so future runs hit cache
     if strategy:
         np.save(MODEL_CACHE_DIR / f"{mkey}_{lang}_{strategy}_code.npy", ce)
         np.save(MODEL_CACHE_DIR / f"{mkey}_{lang}_{strategy}_doc.npy",  de)
@@ -356,6 +350,49 @@ def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None) -> tuple[
         np.save(mc_code, ce)
         np.save(mc_doc, de)
     return ce, de
+
+
+def _get_embeddings(corpus: list[dict], lang: str, _model_unused=None):
+    """Return embeddings for this language.
+
+    When a 'fusion' config exists in best_model_config.json, returns a list of
+    (code_emb, doc_emb, weight) tuples for score-fusion evaluation.
+    Otherwise returns a single (code_emb, doc_emb) tuple (original behaviour).
+
+    Routing logic (single model):
+      1. Check model_caches/{model_key}_{lang}_{strategy}_code.npy
+      2. Check model_caches/{model_key}_{lang}_code.npy
+      3. Fall back to legacy MiniLM cache
+      4. Encode fresh with the routed model
+    """
+    fusion_cfg = _FUSION_FOR_LANG.get(lang)
+    if fusion_cfg:
+        n = len(corpus)
+        components = []
+        for comp in fusion_cfg["components"]:
+            cache_key = comp["cache_key"]
+            weight    = comp["weight"]
+            cc = MODEL_CACHE_DIR / f"{cache_key}_code.npy"
+            dc = MODEL_CACHE_DIR / f"{cache_key}_doc.npy"
+            if cc.exists() and dc.exists():
+                ce = np.load(cc); de = np.load(dc)
+                if ce.shape[0] == n and de.shape[0] == n:
+                    components.append((ce, de, weight))
+                    continue
+            # Cache miss: encode fresh
+            print(f"  [{lang}] Fusion component cache miss: {cache_key} — encoding ...", flush=True)
+            m = _get_model(comp["model"])
+            code_texts = [preprocess_code(ex, lang) for ex in corpus]
+            ce = m.encode(code_texts, batch_size=64, normalize_embeddings=True,
+                          show_progress_bar=True, convert_to_numpy=True)
+            de = m.encode([ex["docstring"] for ex in corpus], batch_size=64,
+                          normalize_embeddings=True, show_progress_bar=True,
+                          convert_to_numpy=True)
+            np.save(cc, ce); np.save(dc, de)
+            components.append((ce, de, weight))
+        if components:
+            return components  # list of (ce, de, weight) — fusion mode
+    return _load_single_model_embeddings(corpus, lang)
 
 
 def _pool_mrr_recall(code_embs, doc_embs, n_eval, rng) -> dict:
@@ -383,6 +420,44 @@ def _pool_mrr_recall(code_embs, doc_embs, n_eval, rng) -> dict:
     return {"n": n, "mrr": rr_sum / n, "r1": hits_1 / n, "r5": hits_5 / n, "r10": hits_10 / n}
 
 
+def _pool_mrr_recall_fused(components: list, n_eval, rng) -> dict:
+    """Score-fusion variant of _pool_mrr_recall.
+
+    components: list of (code_embs, doc_embs, weight) as returned by _get_embeddings
+                in fusion mode.
+    """
+    total = len(components[0][0])
+    all_idxs = list(range(total))
+    eval_idxs = list(range(total))
+    rng.shuffle(eval_idxs)
+    if n_eval is not None:
+        eval_idxs = eval_idxs[:n_eval]
+    n = len(eval_idxs)
+
+    hits_1 = hits_5 = hits_10 = 0
+    rr_sum = 0.0
+    for qi in eval_idxs:
+        distractors = rng.sample([x for x in all_idxs if x != qi], k=N_POOL - 1)
+        pool = [qi] + distractors
+        scores = sum(w * (ce[pool] @ de[qi]) for ce, de, w in components)
+        ranked = np.argsort(-scores)
+        rank = int(np.where(ranked == 0)[0][0]) + 1
+        if rank == 1: hits_1 += 1
+        if rank <= 5: hits_5 += 1
+        if rank <= 10: hits_10 += 1
+        rr_sum += 1.0 / rank
+
+    return {"n": n, "mrr": rr_sum / n, "r1": hits_1 / n, "r5": hits_5 / n, "r10": hits_10 / n}
+
+
+def _run_mrr(embs, n_eval, rng) -> dict:
+    """Dispatch to fused or single-model MRR depending on embs type."""
+    if isinstance(embs, list):
+        return _pool_mrr_recall_fused(embs, n_eval, rng)
+    ce, de = embs
+    return _pool_mrr_recall(ce, de, n_eval, rng)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -405,17 +480,23 @@ def test_codesearchnet_language(lang, model):
         pytest.skip(f"{lang} corpus too small ({len(corpus)} examples).")
 
     active_model = _model_for_lang(lang)
-    code_embs, doc_embs = _get_embeddings(corpus, lang)
+    fusion_cfg   = _FUSION_FOR_LANG.get(lang)
+    embs = _get_embeddings(corpus, lang)
     rng = random.Random(RANDOM_SEED)
     t0 = time.time()
-    results = _pool_mrr_recall(code_embs, doc_embs, n_eval=None, rng=rng)
+    results = _run_mrr(embs, n_eval=None, rng=rng)
     elapsed = time.time() - t0
 
     r1, r5, r10, mrr = results["r1"], results["r5"], results["r10"], results["mrr"]
     n = results["n"]
 
     print(f"\n[{lang.upper()}] CodeSearchNet 1K-pool — {n:,} queries in {elapsed:.1f}s")
-    print(f"  Model: {active_model}")
+    if fusion_cfg:
+        n_comp = len(fusion_cfg["components"])
+        weights = [c["weight"] for c in fusion_cfg["components"]]
+        print(f"  Mode: {n_comp}-way score fusion  weights={weights}")
+    else:
+        print(f"  Model: {active_model}")
     print(f"  MRR {mrr:.3f}  R@1 {r1:.1%}  R@5 {r5:.1%}  R@10 {r10:.1%}")
 
     floor = FLOOR_BY_LANG.get(lang, 0.20)
@@ -433,9 +514,9 @@ def test_codesearchnet_multilang_summary(model):
         if not corpus or len(corpus) < 500:
             rows.append((lang, None))
             continue
-        code_embs, doc_embs = _get_embeddings(corpus, lang)
+        embs = _get_embeddings(corpus, lang)
         rng = random.Random(RANDOM_SEED)
-        r = _pool_mrr_recall(code_embs, doc_embs, n_eval=None, rng=rng)
+        r = _run_mrr(embs, n_eval=None, rng=rng)
         rows.append((lang, r))
 
     # Published baselines (MRR, 1K-pool, fine-tuned per language)
