@@ -891,6 +891,13 @@ def _python_encode_strategy(corpus, model_name, model_key, strategy, cache_key):
     # BGE large + siginj
     ("BAAI/bge-large-en-v1.5",
      "bge_large", "siginj", "bge_large_python_siginj"),
+    # snowflake-arctic-embed-m v1 (137M params — CPU runnable; v2.0 requires trust_remote_code)
+    # Uses BGE-style encode (no e5 "query: " / "passage: " prefixes — different model family)
+    ("Snowflake/snowflake-arctic-embed-m",
+     "snowflake_m", "siginj", "snowflake_m_python_siginj"),
+    # snowflake default (no siginj — measure model-swap gain alone)
+    ("Snowflake/snowflake-arctic-embed-m",
+     "snowflake_m", "default", "snowflake_m_python"),
 ])
 def test_python_improve(model_name, model_key, strategy, cache_key):
     """Improvement loop: try candidate strategies for Python, report vs current best."""
@@ -964,19 +971,13 @@ def _e5_encode_strategy(corpus, model_name, model_key, strategy, cache_key):
     # e5-base-v2 default (no siginj — measure model-swap gain alone)
     ("intfloat/e5-base-v2",
      "e5_base", "default", "e5_base_python"),
-    # snowflake-arctic-embed-m-v2.0 + siginj (137M params — CoIR zero-shot = 52.2, just below 52.86)
-    ("Snowflake/snowflake-arctic-embed-m-v2",
-     "snowflake_m", "siginj", "snowflake_m_python_siginj"),
-    # snowflake-arctic-embed-m-v2.0 default
-    ("Snowflake/snowflake-arctic-embed-m-v2",
-     "snowflake_m", "default", "snowflake_m_python"),
 ])
 def test_python_e5_improve(model_name, model_key, strategy, cache_key):
-    """Improvement loop: test e5-base-v2 and snowflake for Python code search.
+    """Improvement loop: test e5-base-v2 for Python code search.
 
     Protocol constraint: CPU-runnable base models only (≤200M params).
+    Uses e5-specific 'query: ' / 'passage: ' prefixes.
     e5-base-v2 zero-shot CoIR = 50.3 (vs bge-base 46.6 — 3.7pt ahead).
-    snowflake-arctic-embed-m-v2.0 CoIR = 52.2 (just below 52.86 target).
 
     If e5+siginj achieves ~53+ CoIR, it beats Voyage-Code-002 and closes the loop.
     """
