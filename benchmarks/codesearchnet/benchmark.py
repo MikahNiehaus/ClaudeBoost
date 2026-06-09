@@ -36,6 +36,7 @@ import random
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -97,14 +98,74 @@ def rag_model_name(base_url):
         return "unknown"
 
 
+def _poll_index_progress(base_url: str, stop_event: threading.Event) -> None:
+    """Background thread: poll /index/progress and print a live progress bar."""
+    try:
+        from tqdm import tqdm
+        _use_tqdm = True
+    except ImportError:
+        _use_tqdm = False
+
+    bar = None
+    last_done = 0
+
+    while not stop_event.is_set():
+        try:
+            with urllib.request.urlopen(f"{base_url}/index/progress", timeout=3) as r:
+                p = json.loads(r.read())
+        except Exception:
+            time.sleep(1)
+            continue
+
+        if not p.get("active"):
+            time.sleep(1)
+            continue
+
+        total = p.get("files_total", 0)
+        done  = p.get("files_done", 0)
+        pct   = p.get("pct", 0)
+        eta   = p.get("eta_s")
+        cur   = p.get("current_file") or ""
+        chunks = p.get("chunks_created", 0)
+
+        if _use_tqdm:
+            if bar is None and total > 0:
+                bar = tqdm(total=total, unit="file", desc="Indexing", dynamic_ncols=True)
+            if bar is not None:
+                advance = done - last_done
+                if advance > 0:
+                    bar.update(advance)
+                    last_done = done
+                eta_str = f"{eta/60:.1f}min" if eta else "?"
+                bar.set_postfix({"chunks": chunks, "eta": eta_str, "file": cur[-30:] if cur else ""})
+        else:
+            eta_str = f"ETA {eta/60:.1f}min" if eta else ""
+            print(f"\r  [{pct:3d}%] {done}/{total} files  {chunks} chunks  {eta_str}  {cur[-40:] if cur else ''}",
+                  end="", flush=True)
+
+        time.sleep(0.5)
+
+    if _use_tqdm and bar is not None:
+        bar.close()
+    elif not _use_tqdm:
+        print()  # newline after the progress line
+
+
 def rag_index(base_url, project_path, force=True):
     body = json.dumps({"project_path": str(project_path), "force": force}).encode()
     req  = urllib.request.Request(
         f"{base_url}/index", data=body,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=7200) as r:
-        return json.loads(r.read())
+    stop = threading.Event()
+    t = threading.Thread(target=_poll_index_progress, args=(base_url, stop), daemon=True)
+    t.start()
+    try:
+        with urllib.request.urlopen(req, timeout=7200) as r:
+            return json.loads(r.read())
+    finally:
+        stop.set()
+        t.join(timeout=3)
 
 
 def rag_search(base_url, query, project_path, limit=10, min_score=0.0):

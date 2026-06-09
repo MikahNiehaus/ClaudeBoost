@@ -688,7 +688,7 @@ ${SEC('Enforcement')}
 ${FR('#c0392b','Spawn prompt without POST /context → blocked (exit code 2)','The spawn never reaches Claude')}` },
 
   'rag-server': { title: 'RAG MCP Server', badge: '🧠 Core Infrastructure', file: 'mcp-rag-server/',
-    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Custom MCP server on port 8612. Indexes 25 agents + 106 knowledge files using sentence-transformers for semantic search. File watcher hot-reloads changes in 2 seconds.</div>
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Custom MCP server on port 8612. Knowledge and agent RAG uses BGE base en v1.5 (768d, asymmetric). Codebase RAG uses per-language model routing: st-codesearch for Python/Java/Go, BGE + signature injection for C#. File watcher hot-reloads changes in 2 seconds.</div>
 ${TBL(['Index','Contents','When updated'],[
   ['ClaudeBoost RAG','agents/*.xml + knowledge/*.xml','Startup + file change (2s)'],
   ['Project RAG','Project source code','On demand via POST /index'],
@@ -723,7 +723,7 @@ ${SEC('Cost & Speed')}
 ${FR('#ef4444','Microsoft GraphRAG: ~$30,000 to index 5 GB','Inference tokens at scale. Slow. Cloud-dependent.')}
 ${FR('#22c55e','ClaudeBoost: free · runs on a CPU · re-indexes on save','No cloud, no GPU, no waiting. File watcher triggers automatically.')}
 ${SEC('Result')}
-${FR('#a855f7','Zero hallucinated edges · 83% R@1 on CodeSearchNet · free','Beats GraphCodeBERT — Microsoft\'s strongest model — at zero cost')}` },
+${FR('#a855f7','Zero hallucinated edges · C# MRR 0.950 · R@1 91.7% · free','Beats fine-tuned models for C# — zero training data, zero cloud cost')}` },
 
   'rag-tiers': { title: 'RAG Tiers 0-4 — Layered Knowledge Loading', badge: '🏗 Architecture',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every POST /context returns up to 5 tiers assembled from multiple sources. An agent working on TypeScript React code automatically gets all of this — without manual configuration.</div>
@@ -1004,7 +1004,7 @@ const TOUR_SEGMENTS = [
   },
   {
     label: 'RAG Server — The Knowledge Brain',
-    text: 'The RAG system inside ClaudeBoost is a custom architecture — designed by Mikah Niehaus specifically for agentic coding workflows. It runs entirely on your machine. No cloud, no GPU required — just a CPU and a local process on port eighty-six twelve. Microsoft\'s GraphRAG costs around thirty thousand dollars to index five gigabytes of data. This runs for free. And it outperforms GraphCodeBERT — Microsoft\'s strongest code-search model — with eighty-three percent recall-at-one on the CodeSearchNet benchmark, on a CPU, with no fine-tuning. When an agent or knowledge file changes, the file watcher catches it and re-indexes automatically. No restart. No manual step. Fast enough that you never notice it happened. Three separate indexes feed the system: one for ClaudeBoost\'s own agents and knowledge bases, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
+    text: 'The RAG system inside ClaudeBoost is a custom architecture — designed by Mikah Niehaus specifically for agentic coding workflows. It runs entirely on your machine. No cloud, no GPU required — just a CPU and a local process on port eighty-six twelve. Microsoft\'s GraphRAG costs around thirty thousand dollars to index five gigabytes of data. This runs for free. For C sharp, it uses signature injection — prepending the method signature to the document before embedding. The result: MRR zero point nine five zero and recall-at-one of ninety-one point seven percent. No fine-tuning. No training data. No cloud cost. Just a smarter document. When an agent or knowledge file changes, the file watcher catches it and re-indexes automatically. No restart. No manual step. Fast enough that you never notice it happened. Three separate indexes feed the system: one for ClaudeBoost\'s own agents and knowledge bases, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
     highlights: ['rag-server', 'agent-query'],
     scrollTo: 'rag-server'
   },

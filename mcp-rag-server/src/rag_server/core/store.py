@@ -174,9 +174,10 @@ class ChromaStore(StorePort):
         """Return the embedding dimension of the first stored vector, or None."""
         try:
             col = self._get_collection(collection)
-            result = col.peek(limit=1)
-            if result["embeddings"] and result["embeddings"][0]:
-                return len(result["embeddings"][0])
+            result = col.get(limit=1, include=["embeddings"])
+            embs = result.get("embeddings")
+            if embs is not None and len(embs) > 0 and embs[0] is not None:
+                return len(embs[0])
         except Exception as e:
             logger.warning("sample_dimension failed for %r — dimension mismatch detection may be skipped: %s", collection, e)
         return None

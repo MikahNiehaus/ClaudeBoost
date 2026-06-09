@@ -1,4 +1,20 @@
 {
+  "docs": {
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "avg_ndcg10": 0.488,
+    "floor": 0.460,
+    "improvement": 0.063,
+    "fiqa": 0.392,
+    "scifact": 0.738,
+    "nfcorpus": 0.369,
+    "arguana": 0.453,
+    "prev_best": {
+      "model": "sentence-transformers/all-MiniLM-L6-v2",
+      "model_key": "minilm",
+      "avg_ndcg10": 0.425
+    }
+  },
   "csharp": {
     "model": "BAAI/bge-base-en-v1.5",
     "model_key": "bge_base",
@@ -63,32 +79,68 @@
     }
   },
   "python": {
-    "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-    "model_key": "codesearch",
-    "mrr": 0.8979,
-    "floor": 0.845,
-    "improvement": 0.0529
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "mrr": 0.9313,
+    "r1": 0.900,
+    "floor": 0.890,
+    "improvement": 0.0863,
+    "strategy": "siginj",
+    "cache_key": "bge_base_python_siginj",
+    "prev_best": {
+      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+      "model_key": "codesearch",
+      "mrr": 0.8979,
+      "strategy": "none"
+    }
   },
   "java": {
-    "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-    "model_key": "codesearch",
-    "mrr": 0.8496,
-    "floor": 0.751,
-    "improvement": 0.0986
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "mrr": 0.8641,
+    "r1": 0.836,
+    "floor": 0.850,
+    "improvement": 0.0945,
+    "strategy": "siginj",
+    "cache_key": "bge_base_java_siginj",
+    "prev_best": {
+      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+      "model_key": "codesearch",
+      "mrr": 0.8496,
+      "strategy": "s6"
+    }
   },
   "go": {
-    "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-    "model_key": "codesearch",
-    "mrr": 0.839,
-    "floor": 0.77,
-    "improvement": 0.069
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "mrr": 0.8415,
+    "r1": 0.814,
+    "floor": 0.825,
+    "improvement": 0.0025,
+    "strategy": "siginj",
+    "cache_key": "bge_base_go_siginj",
+    "prev_best": {
+      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+      "model_key": "codesearch",
+      "mrr": 0.839,
+      "strategy": "none"
+    }
   },
   "ruby": {
-    "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-    "model_key": "codesearch",
-    "mrr": 0.7375,
-    "floor": 0.7,
-    "improvement": 0.0375
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "mrr": 0.7890,
+    "r1": 0.724,
+    "floor": 0.775,
+    "improvement": 0.0515,
+    "strategy": "siginj",
+    "cache_key": "bge_base_ruby_siginj",
+    "prev_best": {
+      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+      "model_key": "codesearch",
+      "mrr": 0.7375,
+      "strategy": "s6"
+    }
   },
   "php": {
     "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",

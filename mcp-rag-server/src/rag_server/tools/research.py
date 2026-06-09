@@ -97,18 +97,37 @@ def rag_index_research(
     if not embedder.is_loaded:
         return {"error": "Embedding model not ready yet — retry in 30-60 seconds."}
 
+    import shutil
     from rag_server.core.store import ChromaStore
 
     index_dir = _research_index_dir(workspace_path)
     index_dir.mkdir(parents=True, exist_ok=True)
 
     chroma_dir = index_dir / "chroma"
-    research_store = ChromaStore(persist_dir=str(chroma_dir))
-
     manifest = _load_manifest(index_dir)
+    model_dim = embedder.dimensions()
 
-    if not research_store.collection_exists(COLLECTION):
-        research_store.create_collection(COLLECTION)
+    # Detect dimension mismatch via manifest metadata (reliable across server restarts).
+    stored_dim = manifest.get("_meta", {}).get("embedding_dim")
+    if stored_dim and stored_dim != model_dim:
+        logger.warning(
+            "Research dimension mismatch: index=%dd, model=%dd — wiping and re-indexing.",
+            stored_dim, model_dim,
+        )
+        force = True
+
+    # Wipe chroma directory entirely on force re-index — ChromaDB's SegmentAPI caches
+    # segment metadata in-process, so delete_collection() alone leaves stale 384d metadata
+    # that causes dimension errors on the next upsert. rmtree + cache eviction is the only
+    # reliable reset. Content hashes are cleared so all sources re-embed.
+    if force and chroma_dir.exists():
+        ChromaStore.evict_cache(str(chroma_dir))
+        shutil.rmtree(chroma_dir)
+        manifest = {k: v for k, v in manifest.items() if k == "_meta"}  # keep _meta, drop hashes
+        manifest.clear()
+
+    research_store = ChromaStore(persist_dir=str(chroma_dir))
+    research_store.create_collection(COLLECTION)
 
     source_results = []
     total_chunks = 0
@@ -126,6 +145,8 @@ def rag_index_research(
         if result["status"] == "ok":
             total_chunks += result["chunks"]
 
+    # Persist embedding dimension so future restarts can detect model swaps.
+    manifest["_meta"] = {"embedding_dim": model_dim}
     _save_manifest(index_dir, manifest)
 
     elapsed_ms = int((time.time() - start) * 1000)

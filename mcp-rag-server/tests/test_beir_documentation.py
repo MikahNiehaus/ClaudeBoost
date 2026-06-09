@@ -242,7 +242,12 @@ def st_model():
         model_name = router.model_for_lang("docs")
     else:
         model_name = DEFAULT_MODEL
-    return SentenceTransformer(model_name)
+    try:
+        import torch
+        _device = "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        _device = "cpu"
+    return SentenceTransformer(model_name, device=_device)
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +340,235 @@ def test_beir_large_dataset(dataset, st_model):
     assert r["ndcg10"] >= floor, (
         f"{dataset} NDCG@10 {r['ndcg10']:.3f} below floor {floor:.3f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Model improvement loop
+# ---------------------------------------------------------------------------
+
+BEIR_IMPROVE_DATASETS = ["fiqa", "scifact", "nfcorpus", "arguana"]
+
+# Confirmed baseline (all-MiniLM-L6-v2)
+BEIR_IMPROVE_BASELINE = {
+    "fiqa":     0.369,
+    "scifact":  0.645,
+    "nfcorpus": 0.317,
+    "arguana":  0.370,
+}
+
+# (model_name, model_key, query_prefix, doc_prefix)
+# e5-large-v2 uses asymmetric prefixes per model card.
+# CPU speed note: bge-base/mpnet_base (~110M params) are CPU-fast.
+# bge-large/e5-large (~335M params) are 3x slower — benchmarked for ceiling,
+# deployed only if user explicitly enables high-quality mode.
+BEIR_IMPROVE_CANDIDATES = [
+    ("BAAI/bge-base-en-v1.5",                     "bge_base",   "",          ""),   # CPU-fast, already loaded for code
+    ("sentence-transformers/all-mpnet-base-v2",   "mpnet_base", "",          ""),   # CPU-fast, strong classic baseline
+    ("BAAI/bge-large-en-v1.5",                    "bge_large",  "",          ""),   # 335M, benchmark ceiling
+    ("intfloat/e5-large-v2",                       "e5_large",   "query: ",  "passage: "),  # 335M, MTEB top-tier
+]
+
+
+class BEIRDatasetWithKey:
+    """BEIRDataset variant with per-model-key embedding cache.
+
+    Raw text data (corpus_texts.json, qrels.json, queries.json) is shared in the
+    base beir/<dataset> directory to avoid redundant HuggingFace downloads.
+    Embeddings (corpus_embs.npy, query_embs.npy) are stored per model key.
+    """
+
+    HF_IDS = BEIRDataset.HF_IDS
+
+    def __init__(self, name, model, model_key, query_prefix="", doc_prefix=""):
+        self.name = name
+        self.model = model
+        self.model_key = model_key
+        self.query_prefix = query_prefix
+        self.doc_prefix = doc_prefix
+        # Shared raw-text cache (download once)
+        self.base_cache = DATA_DIR / name
+        self.base_cache.mkdir(parents=True, exist_ok=True)
+        # Per-model embedding cache
+        self.emb_cache = DATA_DIR.parent / "beir_improve" / model_key / name
+        self.emb_cache.mkdir(parents=True, exist_ok=True)
+
+    def _get_raw_data(self):
+        """Return (corpus_ids, corpus_texts, queries, qrels) — download once, cache raw texts."""
+        ct = self.base_cache / "corpus_texts.json"
+        ci = self.base_cache / "corpus_ids.json"
+        qq = self.base_cache / "queries.json"
+        ql = self.base_cache / "qrels.json"
+
+        if all(p.exists() for p in [ct, ci, qq, ql]):
+            print(f"  [{self.name}] Raw-text cache hit.", flush=True)
+            corpus_ids   = json.loads(ci.read_text("utf-8"))
+            corpus_texts = json.loads(ct.read_text("utf-8"))
+            queries      = json.loads(qq.read_text("utf-8"))
+            qrels        = json.loads(ql.read_text("utf-8"))
+            print(f"  [{self.name}] {len(corpus_ids):,} docs, {len(queries):,} queries", flush=True)
+            return corpus_ids, corpus_texts, queries, qrels
+
+        hf_id = self.HF_IDS[self.name]
+        print(f"  [{self.name}] Downloading {hf_id} ...", flush=True)
+
+        corpus_ds  = load_dataset(hf_id, "corpus",  split="corpus")
+        queries_ds = load_dataset(hf_id, "queries", split="queries")
+        qrels_ds   = load_dataset(hf_id, "default", split="test")
+
+        qrels = {}
+        test_qids = set()
+        for ex in qrels_ds:
+            qid = str(ex["query-id"])
+            cid = str(ex["corpus-id"])
+            rel = int(ex.get("score", 1))
+            if rel > 0:
+                qrels.setdefault(qid, {})[cid] = rel
+                test_qids.add(qid)
+
+        corpus_ids, corpus_texts = [], []
+        for ex in corpus_ds:
+            cid  = str(ex["_id"])
+            text = ((ex.get("title") or "") + " " + (ex.get("text") or "")).strip()
+            if text:
+                corpus_ids.append(cid)
+                corpus_texts.append(text)
+
+        queries = {}
+        for ex in queries_ds:
+            qid = str(ex["_id"])
+            if qid in test_qids:
+                queries[qid] = ex["text"]
+
+        ci.write_text(json.dumps(corpus_ids), "utf-8")
+        ct.write_text(json.dumps(corpus_texts), "utf-8")
+        ql.write_text(json.dumps(qrels), "utf-8")
+        qq.write_text(json.dumps(queries), "utf-8")
+        print(f"  [{self.name}] Raw texts cached. {len(corpus_ids):,} docs.", flush=True)
+        return corpus_ids, corpus_texts, queries, qrels
+
+    def load(self):
+        ce = self.emb_cache / "corpus_embs.npy"
+        qe = self.emb_cache / "query_embs.npy"
+
+        corpus_ids, corpus_texts, queries, qrels = self._get_raw_data()
+
+        if ce.exists() and qe.exists():
+            print(f"  [{self.name}] Embedding cache hit ({self.model_key}).", flush=True)
+            return np.load(ce), corpus_ids, np.load(qe), queries, qrels
+
+        doc_texts = [self.doc_prefix + t for t in corpus_texts] if self.doc_prefix else corpus_texts
+        print(f"  [{self.name}] Encoding {len(corpus_ids):,} docs ({self.model_key}) ...", flush=True)
+        t0 = time.time()
+        # batch_size=128 with fp16: safe VRAM even with 16K-char FIQA outliers; 2x GPU throughput
+        # History: bs=256 fp32 → 4 docs/s (VRAM overflow); bs=64 fp32 → 40 docs/s; bs=128 fp16 → target 80+ docs/s
+        corpus_embs = self.model.encode(
+            doc_texts, batch_size=128, normalize_embeddings=True,
+            show_progress_bar=True, convert_to_numpy=True,
+        )
+        print(f"  Corpus done {time.time()-t0:.1f}s. Encoding queries ...", flush=True)
+        query_ids = list(queries.keys())
+        q_texts = (
+            [self.query_prefix + queries[qid] for qid in query_ids]
+            if self.query_prefix else
+            [queries[qid] for qid in query_ids]
+        )
+        query_embs = self.model.encode(
+            q_texts, batch_size=128, normalize_embeddings=True,
+            show_progress_bar=True, convert_to_numpy=True,
+        )
+        np.save(ce, corpus_embs)
+        np.save(qe, query_embs)
+        print(f"  [{self.name}] Embeddings cached.", flush=True)
+        return corpus_embs, corpus_ids, query_embs, queries, qrels
+
+
+def _eval_beir_model(model_name, model_key, query_prefix="", doc_prefix=""):
+    """Evaluate one model across BEIR_IMPROVE_DATASETS. Returns per-dataset metrics dict."""
+    try:
+        import torch
+        _device = "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        _device = "cpu"
+    model = SentenceTransformer(model_name, device=_device)
+    # fp16 on GPU: 2x throughput + half VRAM → batch_size=128 safe even with long FIQA outliers
+    if _device == "cuda":
+        model.half()
+    print(f"  Device: {_device} ({'GPU fp16' if _device == 'cuda' else 'CPU fp32 fallback'})", flush=True)
+    results = {}
+    for ds_name in BEIR_IMPROVE_DATASETS:
+        ds = BEIRDatasetWithKey(ds_name, model, model_key, query_prefix, doc_prefix)
+        corpus_embs, corpus_ids, query_embs, queries, qrels = ds.load()
+        query_ids = list(queries.keys())
+        ndcg10 = mrr_ = rec5 = 0.0
+        n = 0
+        for i, qid in enumerate(query_ids):
+            if qid not in qrels:
+                continue
+            scores = corpus_embs @ query_embs[i]
+            ranked = [corpus_ids[j] for j in np.argsort(-scores)[:100]]
+            rel = qrels[qid]
+            ndcg10 += ndcg_at_k(ranked, rel, 10)
+            mrr_   += mrr(ranked, rel)
+            rec5   += recall_at_k(ranked, rel, 5)
+            n += 1
+        results[ds_name] = {"ndcg10": ndcg10 / n, "mrr": mrr_ / n, "rec5": rec5 / n, "n": n}
+        print(f"  [{ds_name}] NDCG@10={ndcg10/n:.3f}  MRR={mrr_/n:.3f}", flush=True)
+    return results
+
+
+@pytest.mark.parametrize("model_name,model_key,query_prefix,doc_prefix", BEIR_IMPROVE_CANDIDATES)
+def test_beir_improve(model_name, model_key, query_prefix, doc_prefix):
+    """BEIR doc model improvement loop — compare candidates vs all-MiniLM-L6-v2 baseline.
+
+    Baseline (all-MiniLM-L6-v2): FIQA=0.369, SciFact=0.645, NFCorpus=0.317, ArguAna=0.370
+    Avg baseline: 0.425
+    Win threshold: avg NDCG@10 > baseline avg + 0.020
+
+    To update best_model_config.json after a win:
+        python update_beir_best.py --model '<model_name>' --key '<model_key>'
+    """
+    if not HAS_ST:
+        pytest.skip("sentence-transformers not installed")
+    if not HAS_DS:
+        pytest.skip("datasets not installed")
+
+    baseline_avg = sum(BEIR_IMPROVE_BASELINE.values()) / len(BEIR_IMPROVE_BASELINE)
+    print(f"\nBEIR IMPROVE: {model_key} ({model_name})", flush=True)
+    if query_prefix:
+        print(f"  query_prefix='{query_prefix}'  doc_prefix='{doc_prefix}'", flush=True)
+
+    results = _eval_beir_model(model_name, model_key, query_prefix, doc_prefix)
+    scores = {ds: results[ds]["ndcg10"] for ds in BEIR_IMPROVE_DATASETS}
+    current_avg = sum(scores.values()) / len(scores)
+
+    print(f"\n{'='*72}")
+    print(f"BEIR IMPROVE RESULT — {model_key} ({model_name})")
+    print(f"{'='*72}")
+    print(f"  {'Dataset':<12} {'Baseline':>10}  {'This':>10}  {'Delta':>8}  Status")
+    print(f"  {'-'*58}")
+    for ds_name in BEIR_IMPROVE_DATASETS:
+        base  = BEIR_IMPROVE_BASELINE[ds_name]
+        score = scores[ds_name]
+        delta = score - base
+        tag = "BETTER" if delta > 0.005 else ("~same" if abs(delta) <= 0.005 else "worse")
+        print(f"  {ds_name:<12} {base:>10.3f}  {score:>10.3f}  {delta:>+8.3f}  {tag}")
+    print(f"  {'-'*58}")
+    print(f"  {'AVG':<12} {baseline_avg:>10.3f}  {current_avg:>10.3f}  "
+          f"{current_avg-baseline_avg:>+8.3f}")
+    print(f"{'='*72}")
+
+    cpu_flag = " [CPU-fast OK]" if model_key in ("bge_base", "mpnet_base") else " [3x slower on CPU -- benchmark only]"
+    if current_avg >= baseline_avg + 0.02:
+        print(f"  BEATS BASELINE by avg +{current_avg-baseline_avg:.3f}  "
+              f"(threshold 0.020){cpu_flag}")
+        if model_key in ("bge_base", "mpnet_base"):
+            print(f"  DEPLOYABLE - CPU-friendly, update best_model_config.json['docs']!")
+        else:
+            print(f"  Large model ceiling - note score gap but keep bge_base unless user opts in.")
+    else:
+        gap = baseline_avg + 0.02 - current_avg
+        print(f"  Does NOT beat baseline by 0.020 avg "
+              f"(got {current_avg-baseline_avg:+.3f}, need {gap:.3f} more){cpu_flag}")
 
 
 def test_beir_summary(st_model):

@@ -587,12 +587,18 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
         )
         return JSONResponse(result, status_code=500 if "error" in result else 200)
 
+    async def handle_rest_index_progress(request):
+        from starlette.responses import JSONResponse
+        import rag_server.indexing.engine as _eng_mod
+        return JSONResponse(_eng_mod._progress)
+
     starlette_app = Starlette(
         routes=[
             Route("/search", endpoint=handle_rest_search, methods=["POST"]),
             Route("/context", endpoint=handle_rest_context, methods=["POST"]),
             Route("/status", endpoint=handle_rest_status, methods=["GET"]),
             Route("/index", endpoint=handle_rest_index, methods=["POST"]),
+            Route("/index/progress", endpoint=handle_rest_index_progress, methods=["GET"]),
             Route("/scan", endpoint=handle_rest_scan, methods=["POST"]),
             Route("/index_research", endpoint=handle_rest_index_research, methods=["POST"]),
             Route("/warmup", endpoint=handle_rest_warmup, methods=["POST"]),

@@ -7,9 +7,9 @@
   "seed": 42,
   "limit": 10,
   "metrics": {
-    "MRR": 0.6167,
-    "R@1": 0.5,
-    "R@5": 0.774,
+    "MRR": 0.6438,
+    "R@1": 0.526,
+    "R@5": 0.786,
     "R@10": 0.842
   },
   "published_baselines": {
@@ -25,7 +25,7 @@
     }
   },
   "timing": {
-    "index_seconds": 1270.2,
-    "query_seconds": 88.1
+    "index_seconds": 2914.9,
+    "query_seconds": 240.0
   }
 }

@@ -141,7 +141,8 @@ def rag_search(
             }
 
         research_store = ChromaStore(persist_dir=str(research_chroma))
-        if research_store.collection_exists("research") and research_store.count("research") > 0:
+        research_store.create_collection("research")  # get_or_create — loads existing collection after server restart
+        if research_store.count("research") > 0:
             try:
                 results = research_store.search(
                     collection="research",
@@ -153,8 +154,8 @@ def rag_search(
             except Exception as e:
                 logger.error("Research store search failed: %s", e)
                 warnings.append(f"Research search failed: {e}")
-        elif not research_store.collection_exists("research"):
-            warnings.append("Research collection not found — run rag_index_research first.")
+        else:
+            warnings.append("Research collection is empty — run rag_index_research first.")
 
     # Codebase search uses a separate per-project store
     elif scope == "codebase":
