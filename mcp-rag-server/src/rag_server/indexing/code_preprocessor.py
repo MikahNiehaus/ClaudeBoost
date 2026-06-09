@@ -305,6 +305,36 @@ def _ruby_siginj(content: str) -> str:
     return stripped
 
 
+def _ruby_query_sig(content: str) -> str:
+    """Ruby query-side preprocessing: extract def line, split snake_case to NL words.
+
+    def calculate_discount_rate(price, base) → "calculate discount rate price base"
+
+    The split words match docstring vocabulary ("calculate the discount rate for a
+    given price") more directly than the raw snake_case identifier.
+    Only processes the first def line; returns content unchanged if no def found.
+    """
+    for line in content.split('\n'):
+        stripped_line = line.strip()
+        if not stripped_line.startswith('def '):
+            continue
+        m = re.match(r'def\s+(?:self\.)?(\w+)\s*(?:\(([^)]*)\))?', stripped_line)
+        if not m:
+            continue
+        method_name = m.group(1).rstrip('!?')
+        params_str = m.group(2) or ''
+        name_parts = [p.lower() for p in method_name.split('_') if p]
+        param_parts = []
+        for tok in re.findall(r'\b([a-zA-Z_]\w*)\b', params_str):
+            param_parts.extend(p.lower() for p in tok.split('_') if p)
+        all_words = name_parts + param_parts[:6]
+        prefix = ' '.join(w for w in all_words if len(w) > 1)
+        if prefix.strip():
+            return f"{prefix}\n\n{content}"
+        break
+    return content
+
+
 # ---------------------------------------------------------------------------
 # PHP preprocessing
 # ---------------------------------------------------------------------------
@@ -351,6 +381,98 @@ def _php_siginj(content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# JavaScript preprocessing
+# ---------------------------------------------------------------------------
+
+_CAMEL_SPLIT_RE = re.compile(r'(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])')
+
+
+def _camel_split(name: str) -> str:
+    """Split camelCase/PascalCase identifier into lowercase words.
+
+    Examples:
+        computeUniqueAsyncExpiration → compute unique async expiration
+        StatisticLabel               → statistic label
+        XMLParser                    → xml parser
+        getUserById                  → get user by id
+    """
+    parts = _CAMEL_SPLIT_RE.sub(' ', name)
+    parts = re.sub(r'[_\-]+', ' ', parts)
+    return ' '.join(p.lower() for p in parts.split() if p)
+
+
+def _js_extract_func_name(code: str) -> str:
+    """Extract function name from JavaScript code.
+
+    Handles named functions (67%), async functions, and const/let/var arrow forms.
+    Searches only the first few lines to avoid matching variables inside the body.
+    """
+    # Search first 500 chars — covers the declaration line for all common forms
+    head = code[:500]
+    m = re.search(r'(?:async\s+)?function\s+(\w+)\s*\(', head)
+    if m:
+        return m.group(1)
+    # const/let/var assignment — FIRST LINE ONLY to avoid body variable false positives
+    first_line = code.split('\n')[0]
+    m = re.search(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\(|async\s+\()',
+        first_line,
+    )
+    if m:
+        return m.group(1)
+    return ''
+
+
+def _js_siginj(content: str) -> str:
+    """JavaScript query siginj: split camelCase function name, prepend as NL words.
+
+    CamelCase names are opaque compound tokens to BGE
+    (computeUniqueAsyncExpiration → 1-4 subwords) but docstrings describe them
+    with plain English words ("Creates a unique async expiration time").
+    Splitting bridges the lexical gap deterministically.
+
+    For anonymous/unextracted functions: extract param names as fallback.
+    """
+    name = _js_extract_func_name(content)
+    if name:
+        split_name = _camel_split(name)
+        if split_name and split_name != name.lower():
+            return f"{split_name}\n\n{content}"
+    # Fallback: extract camelCase-split param names from first (...)
+    m = re.search(r'\(([^)]{1,120})\)', content.split('\n')[0])
+    if m:
+        param_names = re.findall(r'\b([a-zA-Z_]\w*)\b', m.group(1))
+        skip = {'async', 'function', 'const', 'let', 'var', 'return'}
+        param_names = [p for p in param_names if p not in skip][:4]
+        if param_names:
+            split_params = ' '.join(_camel_split(p) for p in param_names if _camel_split(p))
+            if split_params.strip():
+                return f"{split_params}\n\n{content}"
+    return content
+
+
+# ---------------------------------------------------------------------------
+# Default preprocessing (unrecognized languages)
+# ---------------------------------------------------------------------------
+
+_KNOWN_LANGUAGES = frozenset({
+    "python", "java", "csharp", "go", "ruby", "php", "javascript",
+})
+
+
+def _default_normalize(content: str) -> str:
+    """Generic preprocessing for unrecognized languages.
+
+    Applies whitespace normalization and camelCase/snake_case splitting.
+    Does NOT apply siginj signature extraction — cannot parse unknown syntax.
+    """
+    content = re.sub(r'\s+', ' ', content).strip()
+    content = _CAMEL_SPLIT_RE.sub(' ', content)
+    content = re.sub(r'(?<=[a-zA-Z0-9])_(?=[a-zA-Z])', ' ', content)
+    return content
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -361,11 +483,17 @@ def preprocess_chunk(content: str, lang: str) -> str:
       - "siginj": strip docstrings + prepend extracted function signature
       - "": no-op (return raw content)
 
+    Unknown languages (not in _KNOWN_LANGUAGES) get default normalization:
+    whitespace normalization + camelCase/snake_case splitting.
+
     Falls back gracefully on parse errors — always returns valid text.
     CPU-only, deterministic, microsecond latency per chunk.
     """
     strategy = _STRATEGIES.get(lang, "")
     if strategy != "siginj":
+        if lang not in _KNOWN_LANGUAGES:
+            logger.debug("code_preprocessor: unrecognized language %r — applying default normalization", lang)
+            return _default_normalize(content)
         return content
 
     try:
@@ -381,6 +509,8 @@ def preprocess_chunk(content: str, lang: str) -> str:
             return _ruby_siginj(content)
         if lang == "php":
             return _php_siginj(content)
+        if lang == "javascript":
+            return _js_siginj(content)
     except Exception as exc:
         logger.debug("siginj failed for %s: %s", lang, exc)
 

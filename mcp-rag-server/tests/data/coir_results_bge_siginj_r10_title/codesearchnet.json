@@ -1,0 +1,11 @@
+{
+  "ndcg10": 72.31377024937626,
+  "subtasks": {
+    "CodeSearchNet-go": 81.62261106276681,
+    "CodeSearchNet-java": 71.03237910230705,
+    "CodeSearchNet-javascript": 55.73378938455564,
+    "CodeSearchNet-ruby": 56.988563559242124,
+    "CodeSearchNet-python": 89.96611633471989,
+    "CodeSearchNet-php": 78.53916205266603
+  }
+}

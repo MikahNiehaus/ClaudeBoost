@@ -81,33 +81,38 @@
   "python": {
     "model": "BAAI/bge-base-en-v1.5",
     "model_key": "bge_base",
-    "mrr": 0.9313,
-    "r1": 0.900,
-    "floor": 0.890,
-    "improvement": 0.0863,
-    "strategy": "siginj",
+    "mrr": 0.9469,
+    "r1": 0.920,
+    "floor": 0.940,
+    "improvement": 0.1019,
+    "strategy": "siginj+name_boosted_hybrid",
+    "hybrid_alpha": 0.85,
+    "hybrid_bm25_mode": "name_boosted",
     "cache_key": "bge_base_python_siginj",
+    "note": "Name-boosted BM25+dense hybrid alpha=0.85. Func name x5 + sig x3 + body x1. Deterministic.",
     "prev_best": {
-      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-      "model_key": "codesearch",
-      "mrr": 0.8979,
-      "strategy": "none"
+      "model": "BAAI/bge-base-en-v1.5",
+      "model_key": "bge_base",
+      "mrr": 0.9450,
+      "strategy": "siginj+sigweighted_hybrid"
     }
   },
   "java": {
     "model": "BAAI/bge-base-en-v1.5",
     "model_key": "bge_base",
-    "mrr": 0.8641,
-    "r1": 0.836,
-    "floor": 0.850,
-    "improvement": 0.0945,
-    "strategy": "siginj",
+    "mrr": 0.8872,
+    "r1": 0.864,
+    "floor": 0.880,
+    "improvement": 0.1176,
+    "strategy": "siginj+hybrid",
+    "hybrid_alpha": 0.85,
     "cache_key": "bge_base_java_siginj",
+    "note": "BM25+dense hybrid alpha=0.85 (+2.31%). Deterministic, no new model.",
     "prev_best": {
-      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-      "model_key": "codesearch",
-      "mrr": 0.8496,
-      "strategy": "s6"
+      "model": "BAAI/bge-base-en-v1.5",
+      "model_key": "bge_base",
+      "mrr": 0.8641,
+      "strategy": "siginj"
     }
   },
   "go": {
@@ -129,24 +134,65 @@
   "ruby": {
     "model": "BAAI/bge-base-en-v1.5",
     "model_key": "bge_base",
-    "mrr": 0.7890,
-    "r1": 0.724,
-    "floor": 0.775,
-    "improvement": 0.0515,
-    "strategy": "siginj",
+    "mrr": 0.8021,
+    "r1": 0.752,
+    "floor": 0.793,
+    "improvement": 0.0646,
+    "strategy": "siginj+sigweighted_hybrid",
+    "hybrid_alpha": 0.85,
+    "hybrid_bm25_mode": "sig_weighted",
     "cache_key": "bge_base_ruby_siginj",
+    "note": "Sig-weighted BM25+dense hybrid alpha=0.85. Sig tokens x3 in BM25 index. Deterministic.",
     "prev_best": {
-      "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-      "model_key": "codesearch",
-      "mrr": 0.7375,
-      "strategy": "s6"
+      "model": "BAAI/bge-base-en-v1.5",
+      "model_key": "bge_base",
+      "mrr": 0.7993,
+      "strategy": "siginj+hybrid"
+    }
+  },
+  "coir_csn": {
+    "model": "BAAI/bge-base-en-v1.5",
+    "encoder": "BgeSiginJEncoder",
+    "preprocessing": "siginj + BGE instruction prefix on queries",
+    "max_seq_length": 256,
+    "avg_ndcg10": 72.25,
+    "target_beaten": "Voyage-Code-002 (52.86) +19.39 pts AND gte-modernbert-base stretch (71.5) +0.75 pts",
+    "round": "R9c v3",
+    "date": "2026-06-09",
+    "per_language": {
+      "go": 81.62,
+      "java": 70.97,
+      "javascript": 55.55,
+      "ruby": 56.87,
+      "python": 89.97,
+      "php": 78.54
+    },
+    "cache_keys": {
+      "corpus_version": "r9_fixed",
+      "query_version": "r9_q256"
+    },
+    "notes": "max_seq_length=256 fix essential — corpus was hitting 512-token limit causing 4x attention cost",
+    "prev_best": {
+      "avg_ndcg10": null,
+      "note": "R9c v2 aborted (166h ETA due to missing max_seq_length=256 on corpus)"
     }
   },
   "php": {
-    "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
-    "model_key": "codesearch",
-    "mrr": 0.8495,
-    "floor": 0.719,
-    "improvement": 0.1305
+    "model": "BAAI/bge-base-en-v1.5",
+    "model_key": "bge_base",
+    "mrr": 0.8669,
+    "r1": 0.832,
+    "floor": 0.857,
+    "improvement": 0.0174,
+    "strategy": "siginj+hybrid",
+    "hybrid_alpha": 0.85,
+    "cache_key": "bge_base_php_siginj",
+    "note": "BM25+dense hybrid alpha=0.85 (+0.26%). Deterministic, no new model.",
+    "prev_best": {
+      "model": "BAAI/bge-base-en-v1.5",
+      "model_key": "bge_base",
+      "mrr": 0.8643,
+      "strategy": "siginj"
+    }
   }
 }
