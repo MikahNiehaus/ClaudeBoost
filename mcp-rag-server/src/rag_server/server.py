@@ -109,6 +109,10 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 force=arguments.get("force", False),
             )
 
+        elif name == "rag_reset_research":
+            from rag_server.tools.research import rag_reset_research
+            return rag_reset_research(workspace_path=arguments["workspace_path"])
+
         elif name == "rag_index_memories":
             from rag_server.config import MEMORY_DIR
             from rag_server.tools.memory import rag_index_memories
@@ -594,6 +598,19 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
         )
         return JSONResponse(result, status_code=500 if "error" in result else 200)
 
+    async def handle_rest_reset_research(request):
+        from starlette.responses import JSONResponse
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON."}, status_code=400)
+        if not body.get("workspace_path"):
+            return JSONResponse({"error": "workspace_path is required."}, status_code=400)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _dispatch_tool, "rag_reset_research", body
+        )
+        return JSONResponse(result, status_code=500 if "error" in result else 200)
+
     async def handle_rest_warmup(request):
         from starlette.responses import JSONResponse
         if embedder is None:
@@ -617,6 +634,7 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
             Route("/index/progress", endpoint=handle_rest_index_progress, methods=["GET"]),
             Route("/scan", endpoint=handle_rest_scan, methods=["POST"]),
             Route("/index_research", endpoint=handle_rest_index_research, methods=["POST"]),
+            Route("/reset_research", endpoint=handle_rest_reset_research, methods=["POST"]),
             Route("/warmup", endpoint=handle_rest_warmup, methods=["POST"]),
         ]
     )

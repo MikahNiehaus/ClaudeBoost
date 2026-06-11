@@ -106,6 +106,19 @@ class ChromaStore(StorePort):
         except Exception as e:
             logger.warning("Failed to delete collection %r — stale data may persist: %s", collection, e)
 
+    def get_collection_dimension(self, collection: str) -> int | None:
+        """Return the embedding dimension stored in the collection, or None if unknown."""
+        try:
+            col = self._client.get_collection(collection)
+            # Peek at one item to infer dimension
+            result = col.peek(limit=1)
+            embeddings = result.get("embeddings")
+            if embeddings and len(embeddings) > 0:
+                return len(embeddings[0])
+        except Exception:
+            pass
+        return None
+
     def add_chunks(self, collection: str, chunks: list[Chunk]) -> int:
         if not chunks:
             return 0
