@@ -18,6 +18,9 @@ What it does:
   9. Installs rag-server in editable mode, upgrades sentence-transformers stack,
      drops incompatible torchvision if present, runs health check.
  10. Installs edge-tts (Windows + macOS only — Linux not supported for speak).
+ 11. Installs netcoredbg from Samsung GitHub releases so mcp-debugger can step
+     through .NET/C# code. Adds the binary to the user PATH (winreg on Windows,
+     ~/.profile on macOS/Linux). Skipped if dotnet SDK is not present.
 """
 from __future__ import annotations
 
@@ -243,13 +246,12 @@ def _is_junction(path: Path) -> bool:
 # Settings.json: env + statusLine + hooks.
 # ---------------------------------------------------------------------------
 def _statusline_cmd() -> str:
-    """Build the status line command using the current Python interpreter.
+    """Build the status line command.
 
-    Uses the interpreter that ran setup.py — portable across venvs and platforms.
-    CLAUDEBOOST_HOME is expanded at runtime from the env var (set in settings.json env).
+    Both CLAUDEBOOST_PYTHON and CLAUDEBOOST_HOME are expanded at runtime from
+    the env block in settings.json — no machine-specific paths baked in.
     """
-    interp = Path(sys.executable).as_posix()
-    return f'"{interp}" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
+    return '"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
 
 
 def _load_settings() -> dict:
@@ -264,39 +266,31 @@ def _load_settings() -> dict:
         sys.exit(1)
 
 
-def _script_path(name: str) -> str:
-    """Absolute POSIX path to a script in scripts/. Used in hook commands."""
-    return (BOOST_HOME / "scripts" / name).as_posix()
-
-
 def _py_cmd(script_name: str) -> str:
-    """Hook command that invokes a script with the current Python interpreter.
+    """Hook command that invokes a ClaudeBoost script.
 
-    Writing sys.executable avoids the `python` vs `python3` vs venv mess —
-    whichever interpreter ran setup is the one used by hooks. Critical on
-    macOS/Linux where `python` often doesn't exist (only `python3`).
+    Uses $CLAUDEBOOST_PYTHON and $CLAUDEBOOST_HOME — both set in the settings.json
+    env block by update_settings(). No machine-specific paths baked in: works after
+    repo moves, Python upgrades, and fresh clones on any machine.
     """
-    interp = Path(sys.executable).as_posix()
-    return f'"{interp}" "{_script_path(script_name)}"'
+    return f'"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/{script_name}"'
 
 
 def _hook_command_stale(cmd: str) -> bool:
-    """Stale = (1) contains literal $CLAUDEBOOST_HOME bash var, or
-    (2) references an absolute script path that no longer exists.
+    """Stale = references an absolute script path that no longer exists.
 
-    Paths containing other env-var refs (e.g. $HOME/.claude/ensure-setup.py,
-    %APPDATA%\\...) are left alone — we can't verify them without expansion,
-    and they are intentionally written that way to stay machine-portable.
+    Commands using env-var refs ($CLAUDEBOOST_PYTHON, $CLAUDEBOOST_HOME, $HOME,
+    %APPDATA%, etc.) are portable and left alone — can't verify statically, and
+    they're intentionally written that way.
     """
-    if "$CLAUDEBOOST_HOME" in cmd:
-        return True
     import re
     m = re.search(r'"([^"]+\.py)"', cmd)
     if m:
         candidate = m.group(1)
-        # Skip paths with unresolved env vars — can't statically verify.
+        # Env-var-relative paths are portable — skip
         if "$" in candidate or "%" in candidate:
             return False
+        # Absolute path that's gone — stale
         if not Path(candidate).exists():
             return True
     return False
@@ -593,13 +587,17 @@ def _install_all_hooks(settings: dict) -> None:
     shutil.copy2(ensure_src, ensure_dst)
     _ok(f"ensure-setup.py copied to {ensure_dst}")
 
-    # The hook command uses $HOME so it doesn't bake in a machine-specific
-    # absolute path. Wrap interpreter in quotes for paths with spaces.
-    interp = Path(sys.executable).as_posix()
-    ensure_cmd = f'"{interp}" "$HOME/.claude/ensure-setup.py"'
+    # $CLAUDEBOOST_PYTHON is set in the env block, so this stays portable across
+    # Python installs and repo locations. $HOME is stable on every platform.
+    ensure_cmd = '"$CLAUDEBOOST_PYTHON" "$HOME/.claude/ensure-setup.py"'
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
+
+    # --- UserPromptSubmit: research-task nudge ---
+    _install_hook(settings, "UserPromptSubmit", {
+        "hooks": [{"type": "command", "command": _py_cmd("research-task-nudge.py"), "timeout": 5000}],
+    }, sentinel="research-task-nudge.py", label="research-task reminder")
 
     # --- UserPromptSubmit: TTS interrupt ---
     _install_hook(settings, "UserPromptSubmit", {
@@ -617,12 +615,127 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="speak-tts.py", label="TTS speak hook")
 
 
+
+# ---------------------------------------------------------------------------
+# Permission gates: ensure global settings.json has the correct allow/ask/deny
+# entries for safe ClaudeBoost operation.
+#
+# Policy enforced here:
+#   allow  — "Bash" catch-all (safe because bash-guard.py PreToolUse hook
+#             enforces safety at the command level for every Bash call)
+#   ask    — every git/gh write operation; must prompt before modifying repo
+#   deny   — hard blocks: force-push main/master, catastrophic destructive ops
+#
+# All operations are additive. Existing user entries are never removed.
+# ---------------------------------------------------------------------------
+_GIT_WRITE_ASK = [
+    "Bash(git commit **)", "Bash(git commit)",
+    "Bash(git push)", "Bash(git push **)",
+    "Bash(git push --force **)", "Bash(git push -f **)",
+    "Bash(git add **)", "Bash(git add .)", "Bash(git add -A)",
+    "Bash(git merge **)", "Bash(git merge)",
+    "Bash(git rebase **)", "Bash(git rebase)",
+    "Bash(git reset **)", "Bash(git reset)",
+    "Bash(git restore **)",
+    "Bash(git clean **)",
+    "Bash(git checkout **)", "Bash(git checkout)",
+    "Bash(git switch **)", "Bash(git switch)",
+    "Bash(git stash **)", "Bash(git stash)",
+    "Bash(git cherry-pick **)", "Bash(git cherry-pick)",
+    "Bash(git revert **)", "Bash(git revert)",
+    "Bash(git pull **)", "Bash(git pull)",
+    "Bash(git init)", "Bash(git init **)",
+    "Bash(git clone **)",
+    "Bash(git remote add **)", "Bash(git remote remove **)", "Bash(git remote set-url **)",
+    "Bash(git rm **)", "Bash(git mv **)",
+    "Bash(git apply **)", "Bash(git am **)",
+    "Bash(git worktree **)",
+    "Bash(git branch -d **)", "Bash(git branch -m **)", "Bash(git branch -c **)",
+    "Bash(git branch --copy **)",
+    "Bash(git tag -a **)", "Bash(git tag -d **)", "Bash(git tag --delete **)",
+    "Bash(git config --global **)", "Bash(git config --system **)",
+    "Bash(git config --local **)", "Bash(git config --unset **)",
+    "Bash(git filter-branch **)", "Bash(git filter-repo **)",
+    "Bash(git reflog expire **)", "Bash(git reflog delete **)",
+    "Bash(git submodule add **)", "Bash(git submodule deinit **)",
+    "Bash(git sparse-checkout **)",
+    "Bash(git lfs track **)", "Bash(git lfs untrack **)",
+    "Bash(git notes add **)", "Bash(git notes edit **)", "Bash(git notes remove **)",
+    "Bash(gh pr create **)", "Bash(gh pr edit **)",
+    "Bash(gh pr merge **)", "Bash(gh pr close **)",
+    "Bash(gh issue create **)", "Bash(gh issue close **)",
+    "Bash(gh release **)", "Bash(gh repo create **)",
+    "Bash(gh gist create **)", "Bash(gh gist edit **)", "Bash(gh gist delete **)",
+]
+
+_GIT_DENY = [
+    "Bash(git push --force origin main **)",
+    "Bash(git push --force origin master **)",
+    "Bash(git push -f origin main **)",
+    "Bash(git push -f origin master **)",
+    "Bash(git branch -D **)",
+    "Bash(git branch --delete --force **)",
+    "Bash(git clean -fdx **)",
+    "Bash(git clean -fxd **)",
+    "Bash(git reset --hard HEAD~ **)",
+]
+
+_BASH_CATCHALL = "Bash"
+
+
+def _update_permissions(settings: dict) -> None:
+    """Ensure global settings.json has the correct ClaudeBoost permission entries.
+
+    Additive only — never removes entries the user added themselves.
+    """
+    perms = settings.setdefault("permissions", {})
+    allow: list = perms.setdefault("allow", [])
+    ask: list = perms.setdefault("ask", [])
+    deny: list = perms.setdefault("deny", [])
+
+    added_allow, added_ask, added_deny = 0, 0, 0
+
+    # "Bash" catch-all must be in allow so common dev commands don't prompt.
+    # bash-guard.py (PreToolUse) enforces the real safety policy.
+    if _BASH_CATCHALL not in allow:
+        allow.insert(0, _BASH_CATCHALL)
+        added_allow += 1
+
+    # Every git/gh write operation must prompt.
+    for entry in _GIT_WRITE_ASK:
+        if entry not in ask:
+            ask.append(entry)
+            added_ask += 1
+
+    # Hard blocks that should never be auto-approved even if "Bash" is in allow.
+    for entry in _GIT_DENY:
+        if entry not in deny:
+            deny.append(entry)
+            added_deny += 1
+
+    if added_allow or added_ask or added_deny:
+        _ok(
+            f"Permissions: +{added_allow} allow, +{added_ask} ask, "
+            f"+{added_deny} deny entries added"
+        )
+    else:
+        _skip("Permissions — all required entries already present")
+
+
 def update_settings() -> None:
     settings = _load_settings()
 
-    # CLAUDEBOOST_HOME env entry
+    # Env entries used by hook commands — both are machine-specific but set here
+    # so the hook command strings themselves stay portable (no baked-in paths).
     env = settings.setdefault("env", {})
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
+    env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
+
+    # Write a stable lookup file so ensure-setup.py can find the repo even when
+    # it's running from ~/.claude/ (outside the repo tree).
+    home_file = CLAUDE_DIR / "claudeboost-home.txt"
+    home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
+    _ok(f"claudeboost-home.txt written: {home_file}")
 
     # statusLine — always use the Python-based RAG health script (cross-platform)
     new_sl_cmd = _statusline_cmd()
@@ -634,6 +747,7 @@ def update_settings() -> None:
         _ok("statusLine - configured RAG health indicator")
 
     _install_all_hooks(settings)
+    _update_permissions(settings)
 
     write_json(SETTINGS_PATH, settings)
     _ok("settings.json - CLAUDEBOOST_HOME env added")
@@ -777,12 +891,53 @@ def install_rag_server() -> None:
     rc, out = run_cmd([sys.executable, str(start_script)])
     if rc == 0:
         _ok(f"RAG HTTP server running: {out.splitlines()[-1] if out else 'port 8612'}")
+        _prime_rag_session()
     else:
         _warn("RAG HTTP server did not start — run it manually:")
         _warn(f"  {sys.executable} \"{start_script}\"")
 
     # Clean up any stale MCP registration (idempotent)
     _cleanup_mcp_registration()
+
+
+# ---------------------------------------------------------------------------
+# RAG session prime: write the sentinel file and call /context so session-
+# primer.py doesn't block the first prompt after setup.
+# ---------------------------------------------------------------------------
+def _prime_rag_session() -> None:
+    import tempfile
+    import urllib.request
+    import urllib.error
+
+    # Write sentinel — session-primer.py checks for this file before every
+    # prompt. Without it, the UserPromptSubmit hook blocks with HARD STOP.
+    sentinel = Path(tempfile.gettempdir()) / "claudeboost_rag_ok"
+    try:
+        sentinel.touch()
+        _ok(f"RAG sentinel written: {sentinel}")
+    except OSError as e:
+        _warn(f"Could not write RAG sentinel ({e}) — run /rag after setup to prime the session")
+        return
+
+    # Call /context to warm the session — failures are non-fatal (model may
+    # still be loading; the server is confirmed running at this point).
+    try:
+        import json as _json
+        body = _json.dumps({
+            "agent": "debug-agent",
+            "task_description": "session start",
+            "max_tokens": 500,
+        }).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:8612/context", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = _json.loads(r.read())
+            sources = len(data.get("sources", []))
+            _ok(f"RAG session primed ({sources} sources)")
+    except Exception as e:
+        _warn(f"RAG context prime failed ({e}) — model may still be loading, run /rag if needed")
 
 
 # ---------------------------------------------------------------------------
@@ -820,11 +975,32 @@ def _cleanup_mcp_registration() -> None:
 # mcp-debugger: register with `claude mcp` at user scope so it's available
 # in every Claude session. Idempotent — skips if already registered.
 # ---------------------------------------------------------------------------
+def _claude_cmd() -> list[str] | None:
+    """Return a subprocess-safe claude invocation, or None if not found.
+
+    On Windows, `claude` installs as `claude.cmd` which subprocess.run can't
+    find without shell=True. We detect the .cmd variant explicitly.
+    """
+    for candidate in ("claude", "claude.cmd"):
+        path = shutil.which(candidate)
+        if path:
+            # On Windows, .cmd files must be run via cmd.exe
+            if candidate.endswith(".cmd"):
+                return ["cmd", "/c", path]
+            return [path]
+    return None
+
+
 def register_mcp_debugger() -> None:
     _info("\nVerifying mcp-debugger...")
-    rc, out = run_cmd(["claude", "mcp", "list"])
-    if rc != 0:
+    claude = _claude_cmd()
+    if claude is None:
         _skip("claude CLI not found — skipping mcp-debugger registration")
+        return
+
+    rc, out = run_cmd(claude + ["mcp", "list"])
+    if rc != 0:
+        _skip(f"claude mcp list failed (exit {rc}) — skipping mcp-debugger registration")
         return
 
     if "mcp-debugger" in out:
@@ -835,8 +1011,8 @@ def register_mcp_debugger() -> None:
         return
 
     _info("Registering mcp-debugger (user scope)...")
-    rc, out = run_cmd([
-        "claude", "mcp", "add", "mcp-debugger",
+    rc, out = run_cmd(claude + [
+        "mcp", "add", "mcp-debugger",
         "--scope", "user",
         "--", "npx", "-y", "@debugmcp/mcp-debugger", "stdio",
     ])
@@ -847,6 +1023,49 @@ def register_mcp_debugger() -> None:
         if out:
             _warn(f"  {out[:200]}")
         _warn("  To register manually: claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
+
+
+# ---------------------------------------------------------------------------
+# Playwright MCP: browser automation tools for browser-agent and /end-to-end-test.
+# Registered at user scope via `claude mcp add` so it's available in every
+# project. Requires Node/npx — works on Windows, macOS, and Linux.
+# ---------------------------------------------------------------------------
+def register_playwright_mcp() -> None:
+    _info("\nVerifying Playwright MCP...")
+
+    if not shutil.which("npx"):
+        _warn("npx not found — Playwright MCP requires Node.js")
+        _warn("  Install Node.js from https://nodejs.org/ then re-run /setup")
+        _warn("  Or register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
+        return
+
+    claude = _claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found — skipping Playwright MCP registration")
+        return
+
+    rc, out = run_cmd(claude + ["mcp", "list"])
+    if rc != 0:
+        _skip(f"claude mcp list failed (exit {rc}) — skipping Playwright MCP registration")
+        return
+
+    if "playwright" in out:
+        _ok("Playwright MCP already registered")
+        return
+
+    _info("Registering Playwright MCP (user scope)...")
+    rc, out = run_cmd(claude + [
+        "mcp", "add", "playwright",
+        "--scope", "user",
+        "--", "npx", "-y", "@playwright/mcp@latest",
+    ])
+    if rc == 0:
+        _ok("Playwright MCP registered — browser tools available after Claude Code restart")
+    else:
+        _warn(f"Playwright MCP registration failed (exit {rc})")
+        if out:
+            _warn(f"  {out[:200]}")
+        _warn("  To register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
 
 
 # ---------------------------------------------------------------------------
@@ -874,6 +1093,153 @@ def install_edge_tts() -> None:
 
 
 # ---------------------------------------------------------------------------
+# netcoredbg: download from Samsung GitHub releases so mcp-debugger can step
+# through .NET/C# code. Skipped when dotnet SDK is not installed.
+# ---------------------------------------------------------------------------
+def _add_to_user_path(new_dir: str) -> None:
+    """Add new_dir to the user's persistent PATH.
+
+    Windows: writes to HKCU\\Environment\\PATH via winreg (no char-limit risk).
+    macOS/Linux: appends an export line to ~/.profile.
+    No-ops if the directory is already present.
+    """
+    if IS_WINDOWS:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS
+            )
+            try:
+                current, _ = winreg.QueryValueEx(key, "PATH")
+            except FileNotFoundError:
+                current = ""
+            if new_dir.lower() not in current.lower():
+                new_val = f"{current};{new_dir}" if current else new_dir
+                winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_val)
+                _ok("PATH updated (user registry) — restart terminal for it to take effect")
+            winreg.CloseKey(key)
+        except Exception as exc:
+            _warn(f"Could not update PATH via registry: {exc}")
+            _warn(f"  Add manually to your user PATH: {new_dir}")
+    else:
+        profile = Path.home() / ".profile"
+        export_line = f'\nexport PATH="$PATH:{new_dir}"\n'
+        try:
+            existing = profile.read_text(encoding="utf-8") if profile.exists() else ""
+            if new_dir not in existing:
+                with profile.open("a", encoding="utf-8") as f:
+                    f.write(export_line)
+                _ok("PATH updated in ~/.profile — restart terminal for it to take effect")
+        except Exception as exc:
+            _warn(f"Could not update ~/.profile: {exc}")
+            _warn(f'  Add manually: export PATH="$PATH:{new_dir}"')
+
+
+def install_netcoredbg() -> None:
+    """Download netcoredbg from Samsung/netcoredbg GitHub releases.
+
+    Uses only stdlib (urllib, zipfile, tarfile, winreg) — no extra deps.
+    Installs to ~/.netcoredbg/ and adds the binary dir to the user PATH.
+    """
+    import json as _json
+    import tarfile
+    import urllib.error
+    import urllib.request
+    import zipfile
+
+    _info("\nVerifying netcoredbg (mcp-debugger .NET support)...")
+
+    if shutil.which("netcoredbg"):
+        _ok("netcoredbg already on PATH")
+        return
+
+    if not shutil.which("dotnet"):
+        _skip("dotnet SDK not found — netcoredbg only needed for .NET debugging")
+        return
+
+    # Map platform + arch to the GitHub release asset name.
+    mach = platform.machine().lower()
+    if mach in ("x86_64", "amd64"):
+        arch = "x64"
+    elif mach in ("arm64", "aarch64"):
+        arch = "arm64"
+    else:
+        _warn(f"netcoredbg: unsupported architecture {platform.machine()} — install manually "
+              "from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    if IS_WINDOWS:
+        asset_name = "netcoredbg-win64.zip"
+    elif IS_MACOS:
+        asset_name = f"netcoredbg-osx-{arch}.tar.gz"
+    else:
+        asset_name = f"netcoredbg-linux-{arch}.tar.gz"
+
+    # Fetch latest release metadata from GitHub.
+    _info(f"  Fetching latest netcoredbg release ({asset_name})...")
+    api_url = "https://api.github.com/repos/Samsung/netcoredbg/releases/latest"
+    try:
+        req = urllib.request.Request(api_url, headers={"User-Agent": "ClaudeBoost-setup"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            release = _json.loads(resp.read())
+    except Exception as exc:
+        _warn(f"netcoredbg: could not fetch release info ({exc})")
+        _warn("  Install manually from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    asset_url = next(
+        (a["browser_download_url"] for a in release.get("assets", []) if a["name"] == asset_name),
+        None,
+    )
+    if not asset_url:
+        _warn(f"netcoredbg: asset {asset_name!r} not in release {release.get('tag_name', '?')}")
+        _warn("  Install manually from https://github.com/Samsung/netcoredbg/releases")
+        return
+
+    install_dir = Path.home() / ".netcoredbg"
+    install_dir.mkdir(exist_ok=True)
+    tmp_path = install_dir / asset_name
+
+    _info(f"  Downloading {release.get('tag_name', 'latest')} ...")
+    try:
+        urllib.request.urlretrieve(asset_url, tmp_path)
+    except Exception as exc:
+        _warn(f"netcoredbg: download failed ({exc})")
+        return
+
+    _info("  Extracting...")
+    try:
+        if asset_name.endswith(".zip"):
+            with zipfile.ZipFile(tmp_path) as zf:
+                zf.extractall(install_dir)
+        else:
+            with tarfile.open(tmp_path) as tf:
+                tf.extractall(install_dir)
+        tmp_path.unlink(missing_ok=True)
+    except Exception as exc:
+        _warn(f"netcoredbg: extraction failed ({exc})")
+        return
+
+    exe_name = "netcoredbg.exe" if IS_WINDOWS else "netcoredbg"
+    candidates = list(install_dir.rglob(exe_name))
+    if not candidates:
+        _warn(f"netcoredbg: binary {exe_name!r} not found after extraction")
+        return
+    bin_path = candidates[0]
+    if not IS_WINDOWS:
+        bin_path.chmod(bin_path.stat().st_mode | 0o755)
+
+    _add_to_user_path(str(bin_path.parent))
+
+    rc, out = run_cmd([str(bin_path), "--version"])
+    if rc == 0:
+        _ok(f"netcoredbg installed: {out.strip()}")
+    else:
+        _ok(f"netcoredbg installed at {bin_path}")
+        _warn("  Restart your terminal for the PATH change to take effect, then verify with: netcoredbg --version")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -894,7 +1260,9 @@ def main() -> int:
     update_settings()
     install_rag_server()
     register_mcp_debugger()
+    register_playwright_mcp()
     install_edge_tts()
+    install_netcoredbg()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")

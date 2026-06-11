@@ -85,6 +85,13 @@ def start_server(port: int) -> subprocess.Popen:
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     env["TOKENIZERS_PARALLELISM"] = "false"
     env["TRANSFORMERS_VERBOSITY"] = "error"
+    # Windows fix: prevent OpenMP from spawning threads that conflict with the
+    # asyncio ThreadPoolExecutor. Without this, model.encode() segfaults (exit 139)
+    # when called from a thread pool thread. Batch size is always 1 for RAG queries
+    # so single-threaded BLAS has no performance cost.
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
 
     log_path = RAG_INDEX_DIR / "rag-server.log"
     RAG_INDEX_DIR.mkdir(parents=True, exist_ok=True)

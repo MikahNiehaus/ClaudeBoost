@@ -13,6 +13,8 @@ Blocked patterns:
   5. curl to non-localhost URLs  — safety gate (curl:* is in allow list)
   6. Co-Authored-By in commits   — anti-attribution policy
   7. $CLAUDEBOOST_HOME in Bash   — triggers simple_expansion prompt; use absolute path
+  8. ssh/scp to external hosts   — data exfiltration prevention
+  9. nc/netcat to external hosts — reverse shell prevention
 
 Exit codes:
   0 = allow (pass)
@@ -131,6 +133,63 @@ def check_cat_heredoc(command: str) -> str | None:
     return None
 
 
+def _strip_quoted(command: str) -> str:
+    """Remove quoted string literals so body text (e.g. git commit -m '...')
+    doesn't trip checks that look for command words inside the message."""
+    cleaned = re.sub(r'"' + r'(?:[^"\\\\]|\\\\.)*"', "", command)
+    cleaned = re.sub(r"'(?:[^'\\\\]|\\\\.)*'", "", cleaned)
+    return cleaned
+
+
+def check_ssh_external(command: str) -> str | None:
+    """Block ssh/scp to non-localhost hosts.
+
+    ssh-keygen, ssh-add, ssh-agent have no host argument so they won't match.
+    Quoted strings are stripped first so words inside commit messages don't
+    trigger false positives.
+    """
+    unquoted = _strip_quoted(command)
+    if not re.search(r"\b(ssh|scp)\b", unquoted):
+        return None
+    localhost_names = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+    # For ssh: match ssh [opts] [user@]host
+    for host in re.findall(r"\bssh\s+(?:-\S+\s+)*(?:\S+@)?([a-zA-Z0-9][\w.-]+)", unquoted):
+        if host not in localhost_names and not host.startswith("-"):
+            return (
+                f"BLOCKED: ssh/scp to external host '{host}' is not allowed. "
+                "Run this command yourself in the terminal if needed."
+            )
+    # For scp: remote paths always use user@host:/path or host:/path syntax
+    for host in re.findall(r"(?:\S+@)?([a-zA-Z0-9][\w.-]+):/", unquoted):
+        if host not in localhost_names:
+            return (
+                f"BLOCKED: ssh/scp to external host '{host}' is not allowed. "
+                "Run this command yourself in the terminal if needed."
+            )
+    return None
+
+
+def check_netcat(command: str) -> str | None:
+    """Block nc/ncat/netcat to external hosts — these can create reverse shells.
+
+    Quoted strings are stripped first to avoid false positives in commit messages.
+    """
+    unquoted = _strip_quoted(command)
+    if not re.search(r"\b(nc|ncat|netcat)\b", unquoted):
+        return None
+    hosts = re.findall(r"\b(?:nc|ncat|netcat)\s+(?:-\S+\s+)*([a-zA-Z0-9][\w.-]+)", unquoted)
+    localhost_names = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+    for host in hosts:
+        # Skip pure port numbers (e.g. `nc -l 8080`)
+        if host.isdigit():
+            continue
+        if host not in localhost_names and not host.startswith("-"):
+            return (
+                f"BLOCKED: nc/netcat to external host '{host}' is not allowed."
+            )
+    return None
+
+
 def check_curl_external(command: str) -> str | None:
     """Block curl to non-localhost URLs.
 
@@ -186,7 +245,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_compound_fallback, check_env_var_expansion, check_cat_heredoc, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_compound_fallback, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

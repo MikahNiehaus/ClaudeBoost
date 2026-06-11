@@ -1,6 +1,7 @@
 """ChromaDB vector store implementation."""
 
 import logging
+import threading
 from pathlib import Path
 
 from rag_server.ports.store_port import Chunk, SearchResult, StorePort
@@ -11,9 +12,26 @@ from rag_server.ports.store_port import Chunk, SearchResult, StorePort
 
 logger = logging.getLogger(__name__)
 
+# Process-wide client cache keyed by canonical persist_dir string.
+# ChromaDB's SegmentAPI has a process-wide shared singleton: opening two PersistentClient
+# instances in the same process causes the singleton to return wrong segment metadata for
+# the second client (manifests as dimension mismatch errors). Caching by path ensures only
+# one client ever exists per directory.
+_client_cache: dict[str, object] = {}
+_client_cache_lock = threading.Lock()
+
 
 class ChromaStore(StorePort):
     """Vector store backed by ChromaDB in embedded (SQLite) mode."""
+
+    @staticmethod
+    def evict_cache(persist_dir: str) -> None:
+        """Remove cached client for a path, e.g. after shutil.rmtree deletes the directory.
+        Next ChromaStore(persist_dir) call will create a fresh client against the new files.
+        """
+        key = str(Path(persist_dir).resolve())
+        with _client_cache_lock:
+            _client_cache.pop(key, None)
 
     def __init__(self, persist_dir: str):
         # Lazy import: chromadb takes ~2.5s to import due to its Rust/Tokio extensions.
@@ -29,24 +47,30 @@ class ChromaStore(StorePort):
             anonymized_telemetry=False,
         )
 
-        self._persist_dir = Path(persist_dir)
+        self._persist_dir = Path(persist_dir).resolve()
         self._persist_dir.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=str(self._persist_dir), settings=chroma_settings)
-        logger.info("ChromaDB initialized at %s", self._persist_dir)
+        cache_key = str(self._persist_dir)
+
+        with _client_cache_lock:
+            if cache_key not in _client_cache:
+                _client_cache[cache_key] = chromadb.PersistentClient(
+                    path=cache_key, settings=chroma_settings
+                )
+                logger.info("ChromaDB initialized at %s", self._persist_dir)
+            else:
+                logger.debug("ChromaDB client reused for %s", self._persist_dir)
+            self._client = _client_cache[cache_key]
 
     def close(self) -> None:
-        """Release references so GC can reclaim SQLite file handles.
-
-        Avoids calling _client._system.stop() — that stops shared ChromaDB components
-        and breaks other live ChromaStore instances in the same process. With project
-        indexes now stored outside OneDrive, plain GC is sufficient.
+        """Drop this store's reference to the shared client. The client stays in the
+        process-level cache so other ChromaStore instances (and future ones for the
+        same path) are unaffected. Actual SQLite handles are reclaimed by GC when the
+        cache is cleared at process exit.
         """
         try:
             del self._client
         except Exception as e:
-            logger.debug("ChromaDB client cleanup failed (non-fatal): %s", e)
-        import gc
-        gc.collect()
+            logger.debug("ChromaDB client cleanup (non-fatal): %s", e)
 
     def _get_collection(self, name: str):
         return self._client.get_collection(name)

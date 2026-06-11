@@ -1,0 +1,31 @@
+{
+  "method": "ClaudeBoost RAG",
+  "model": "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+  "dataset": "CodeSearchNet Python test set (Husain et al. 2019)",
+  "pool_size": 100,
+  "n_queries": 20,
+  "seed": 42,
+  "limit": 10,
+  "metrics": {
+    "MRR": 0.93,
+    "R@1": 0.9,
+    "R@5": 0.95,
+    "R@10": 1.0
+  },
+  "published_baselines": {
+    "GraphCodeBERT": {
+      "MRR": 0.769,
+      "R@1": 0.723,
+      "R@5": 0.852
+    },
+    "CodeBERT": {
+      "MRR": 0.713,
+      "R@1": 0.661,
+      "R@5": 0.806
+    }
+  },
+  "timing": {
+    "index_seconds": 19.4,
+    "query_seconds": 5.5
+  }
+}

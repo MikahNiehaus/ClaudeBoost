@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ClaudeBoost · How It Works</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; margin: 0; padding-bottom: 115px; scroll-behavior: smooth; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0f172a; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; } ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* === TOOLBAR === */
+.toolbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; background: #0f172a; border-bottom: 1px solid #1e293b; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 0 #7c3aed33, 0 4px 24px rgba(0,0,0,0.4); }
+.toolbar h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+.toolbar-sub { font-size: 11px; color: #64748b; margin-left: 12px; font-weight: 400; }
+.toolbar-badge { display: inline-block; font-size: 10px; padding: 3px 10px; border-radius: 10px; background: #3b0764; color: #c084fc; border: 1px solid #7c3aed; margin-left: 10px; font-weight: 600; letter-spacing: 0.2px; }
+.toolbar button { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 7px 16px; border-radius: 6px; cursor: pointer; margin-left: 8px; font-size: 12px; font-weight: 500; transition: background 0.15s, border-color 0.15s; }
+.toolbar button:hover { background: #334155; border-color: #475569; }
+
+/* === BOARD === */
+.board { display: grid; grid-template-columns: 162px 1fr 202px; gap: 24px; padding: 28px 24px; align-items: start; }
+
+/* === LAYERS === */
+.layers { display: flex; flex-direction: column; gap: 0; }
+.layer { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; }
+.layer-label { writing-mode: vertical-rl; text-orientation: mixed; font-size: 9px; letter-spacing: 3.5px; color: #64748b; text-transform: uppercase; min-width: 22px; padding-top: 6px; flex-shrink: 0; font-weight: 700; }
+.cards { display: flex; flex-wrap: wrap; gap: 12px; }
+.layer-arrow { color: #475569; font-size: 11px; padding: 5px 0 5px 36px; letter-spacing: 0.2px; }
+.layer-divider { border: none; border-top: 1px dashed #334155; margin: 8px 0 8px 36px; opacity: 0.5; }
+
+/* === CARD === */
+.card { background: #1e293b; border: 1px solid #334155; border-left: 4px solid #334155; border-radius: 8px; padding: 14px 16px; min-width: 138px; max-width: 205px; cursor: pointer; transition: background 0.16s, box-shadow 0.16s, border-color 0.16s; position: relative; }
+.card:hover { background: #253347; box-shadow: 0 4px 18px rgba(0,0,0,0.45), 0 1px 4px rgba(0,0,0,0.3); border-color: #475569; }
+.card-icon { font-size: 21px; display: block; margin-bottom: 7px; }
+.card-title { font-size: 13px; font-weight: 600; color: #f1f5f9; line-height: 1.3; }
+.card-sub { font-size: 11px; color: #94a3b8; margin-top: 4px; line-height: 1.45; }
+.card-badge { display: inline-block; font-size: 9px; padding: 2px 8px; border-radius: 10px; margin-top: 6px; font-weight: 600; border: 1px solid currentColor; }
+.card-status { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.status-pip { font-size: 8px; padding: 1px 5px; border-radius: 8px; background: #0f172a; }
+
+/* Unique marker */
+.star-card::after { content: '★ UNIQUE'; position: absolute; top: -8px; right: 6px; font-size: 7px; font-weight: 700; color: #fbbf24; background: #1e293b; padding: 1px 5px; border-radius: 4px; border: 1px solid #fbbf24; }
+
+.col-group { display: flex; flex-direction: column; gap: 8px; }
+.col-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 1.5px; padding-bottom: 4px; border-bottom: 1px solid #1e293b; font-weight: 700; }
+
+/* Decision rows */
+.decision-group { display: flex; flex-direction: column; gap: 8px; }
+.decision-row { display: flex; gap: 8px; align-items: flex-start; }
+.decision-divider { display: flex; align-items: center; gap: 6px; font-size: 9px; color: #475569; padding: 4px 0; }
+.decision-divider::before, .decision-divider::after { content: ''; flex: 1; height: 1px; background: #1e293b; }
+
+/* RAG exchange row */
+.rag-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rag-arrow-col { display: flex; flex-direction: column; align-items: center; gap: 2px; color: #475569; font-size: 9px; }
+.rag-arrow-line { width: 2px; height: 14px; background: #334155; }
+.rag-arrow-text { font-size: 8px; color: #64748b; writing-mode: vertical-rl; white-space: nowrap; }
+
+/* === RAILS === */
+.rail { display: flex; flex-direction: column; gap: 9px; padding-top: 12px; }
+.rail-card { background: #1e293b; border: 1px solid #334155; border-left: 3px solid #64748b; border-radius: 6px; padding: 11px 12px; cursor: pointer; transition: background 0.16s, box-shadow 0.16s, border-color 0.16s; position: relative; }
+.rail-card:hover { background: #253347; box-shadow: 0 3px 14px rgba(0,0,0,0.4); border-color: #475569; }
+.rc-title { font-size: 12px; font-weight: 600; color: #f1f5f9; }
+.rc-sub { font-size: 10px; color: #94a3b8; margin-top: 3px; line-height: 1.45; }
+.rc-badge { display: inline-block; font-size: 8px; padding: 1px 6px; border-radius: 6px; margin-top: 5px; font-weight: 600; }
+
+/* === DETAIL PANEL === */
+.detail { position: fixed; right: 0; top: 0; height: 100vh; width: 360px; background: rgba(7, 11, 27, 0.82); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-left: 1px solid rgba(99,102,241,0.18); padding: 22px; overflow-y: auto; z-index: 100; box-shadow: -8px 0 40px rgba(0,0,0,0.6); }
+.detail.hidden { display: none; }
+.detail-close { float: right; background: none; border: none; color: #64748b; font-size: 20px; cursor: pointer; line-height: 1; transition: color 0.12s; }
+.detail-close:hover { color: #f1f5f9; }
+.detail-badge { display: inline-block; font-size: 10px; padding: 3px 9px; border-radius: 10px; background: #1e293b; color: #94a3b8; margin-bottom: 5px; margin-top: 4px; font-weight: 500; }
+.detail-file { display: block; font-size: 9px; color: #475569; margin-bottom: 12px; font-family: 'Courier New', monospace; word-break: break-all; }
+.detail h2 { margin: 6px 0 14px; font-size: 16px; clear: both; font-weight: 700; letter-spacing: -0.2px; }
+#detail-body { font-size: 12px; line-height: 1.65; }
+
+/* === PRINT === */
+@media print {
+  .toolbar button, .detail, .audio-bar, .chapters-panel, .transcript-panel { display: none !important; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; padding-bottom: 0; }
+}
+
+/* === AUDIO BAR === */
+.audio-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0b1120; border-top: 1px solid #1e293b; padding: 11px 22px 9px; z-index: 200; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 -4px 24px rgba(0,0,0,0.5); }
+.audio-row-top { display: flex; align-items: center; gap: 13px; }
+.audio-btn { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 50%; width: 40px; height: 40px; font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.14s, border-color 0.14s, box-shadow 0.14s; }
+.audio-btn:hover { background: #334155; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+.audio-btn.active { background: #1d4ed8; border-color: #3b82f6; box-shadow: 0 0 14px rgba(59,130,246,0.35); }
+.audio-btn.stop-btn:hover { background: #7f1d1d; border-color: #ef4444; }
+.audio-info { flex: 1; min-width: 0; }
+.audio-section-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 2px; }
+.audio-section-text { font-size: 13px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.audio-section-text.idle { color: #7dd3fc; font-style: normal; font-weight: 500; letter-spacing: 0.1px; }
+.audio-counter { font-size: 12px; color: #64748b; flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 500; }
+.audio-select-group { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.audio-select-label { font-size: 9px; color: #475569; letter-spacing: 1px; text-transform: uppercase; }
+.audio-select { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 5px; padding: 3px 6px; font-size: 10px; cursor: pointer; }
+.audio-row-track { height: 22px; display: flex; align-items: center; }
+.audio-track-outer { width: 100%; height: 22px; display: flex; align-items: center; cursor: pointer; position: relative; user-select: none; }
+.audio-track-bg { width: 100%; height: 6px; background: #1e293b; border-radius: 3px; position: relative; overflow: visible; border: 1px solid #334155; }
+.audio-track-fill { height: 100%; background: linear-gradient(90deg, #1d4ed8, #3b82f6, #60a5fa); border-radius: 3px 0 0 3px; transition: width 0.35s linear; width: 0%; position: relative; z-index: 1; box-shadow: 0 0 8px rgba(59,130,246,0.5); }
+.audio-thumb { position: absolute; width: 14px; height: 14px; background: #60a5fa; border-radius: 50%; border: 2px solid #1d4ed8; top: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 4; left: 0%; }
+.audio-track-outer:hover .audio-thumb { opacity: 1; }
+.audio-tick { position: absolute; top: -4px; width: 1px; height: 14px; background: #334155; z-index: 3; transform: translateX(-50%); transition: background 0.25s; pointer-events: none; }
+.audio-tick.passed { background: #60a5fa; }
+@keyframes narrate-pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } 50% { box-shadow: 0 0 32px 8px rgba(59,130,246,0.6); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
+.card.narrating, .rail-card.narrating { outline: 2.5px solid #60a5fa; outline-offset: 3px; background: #172554 !important; animation: narrate-pulse 1.6s ease-in-out infinite; }
+.chapters-panel { position: fixed; bottom: 110px; left: 20px; right: 20px; max-width: 700px; margin: 0 auto; background: #0b1120; border: 1px solid #334155; border-radius: 10px; z-index: 210; display: none; padding: 14px 16px 10px; box-shadow: 0 -8px 36px rgba(0,0,0,0.7); }
+.chapters-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 9px; padding-bottom: 9px; border-bottom: 1px solid #1e293b; }
+.chapters-header span { font-size: 12px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.5px; }
+.chapters-close { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; line-height: 1; transition: color 0.12s; }
+.chapters-close:hover { color: #f1f5f9; }
+.chapter-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 3px; transition: background 0.12s; }
+.chapter-row:hover { background: #1e293b; }
+.chapter-row.active { background: #172554 !important; border-color: #3b82f6; }
+.chapter-num { font-size: 10px; color: #475569; min-width: 18px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.chapter-label { font-size: 13px; color: #f1f5f9; flex: 1; }
+.chapter-cards { font-size: 10px; color: #475569; flex-shrink: 0; }
+.transcript-panel { position: fixed; right: 0; top: 0; height: calc(100vh - 100px); width: 340px; background: #0b1220; border-left: 1px solid #334155; z-index: 115; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.2s ease; }
+.transcript-panel.open { transform: translateX(0); }
+.transcript-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 10px; background: #0f172a; border-bottom: 1px solid #1e293b; flex-shrink: 0; }
+.transcript-header-title { font-size: 11px; font-weight: 600; color: #f1f5f9; }
+.transcript-close { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
+.transcript-body { overflow-y: auto; flex: 1; padding: 8px 0 12px; }
+.transcript-seg { padding: 10px 14px; cursor: pointer; border-left: 3px solid transparent; transition: background 0.1s; }
+.transcript-seg:hover { background: #1e293b; }
+.transcript-seg.active { background: #0f2040; border-left-color: #3b82f6; }
+.tseg-num { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+.transcript-seg.active .tseg-num { color: #60a5fa; }
+.tseg-label { font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 5px; }
+.transcript-seg.active .tseg-label { color: #f1f5f9; }
+.tseg-text { font-size: 11px; color: #475569; line-height: 1.7; }
+.transcript-seg.active .tseg-text { color: #94a3b8; }
+.tseg-divider { height: 1px; background: #1e293b; margin: 0 14px; }
+.board.transcript-open { padding-right: 360px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>ClaudeBoost
+    <span class="toolbar-badge">24 agents · 106 knowledge bases · 44 slash commands</span>
+  </h1>
+  <div style="font-size:16px;font-weight:700;color:#e879f9;letter-spacing:0.03em;line-height:1.2;margin-top:2px">Created by Mikah Niehaus</div>
+  <div style="display:flex;align-items:center;gap:6px">
+    <button onclick="adjustZoom(-0.1)" style="padding:7px 11px;font-size:14px;line-height:1">−</button>
+    <span id="zoom-display" style="min-width:36px;text-align:center;font-size:11px;color:#94a3b8;user-select:none">100%</span>
+    <button onclick="adjustZoom(0.1)" style="padding:7px 11px;font-size:14px;line-height:1">+</button>
+    <button onclick="fitToScreen()" style="font-weight:600;color:#7dd3fc;border-color:#1e4a6e">Fit</button>
+    <button onclick="downloadSVG()">SVG</button>
+    <button onclick="window.print()">PDF</button>
+  </div>
+</div>
+
+<div class="board" id="board">
+
+  <!-- LEFT RAIL -->
+  <aside class="rail rail-left">
+    <div class="rail-card" style="border-left-color:#e74c3c" onclick="showDetail('global-rules')">
+      <div class="rc-title">🔒 Global Rules</div>
+      <div class="rc-sub">~/.claude/CLAUDE.md · always on</div>
+      <div class="rc-badge" style="background:#7f1d1d;color:#fca5a5">Non-negotiable</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#3498db" onclick="showDetail('slash-commands')">
+      <div class="rc-title">⌨ 44 Slash Commands</div>
+      <div class="rc-sub">.claude/commands/ · global mirror</div>
+    </div>
+    <div class="rail-card star-card" style="border-left-color:#f59e0b" onclick="showDetail('workspace-context')">
+      <div class="rc-title">🗂 Workspace Context</div>
+      <div class="rc-sub">Picks up where you left off — across sessions</div>
+      <div class="rc-badge" style="background:#78350f;color:#fcd34d">Anti-amnesia</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#10b981" onclick="showDetail('hooks-system')">
+      <div class="rc-title">⚙ 7 Hook Types</div>
+      <div class="rc-sub">Auto-fire · can't be argued past</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#8b5cf6" onclick="showDetail('consult-mode-detail')">
+      <div class="rc-title">🤝 CONSULT Protocol</div>
+      <div class="rc-sub">You approve architecture</div>
+    </div>
+  </aside>
+
+  <!-- MAIN LAYERS -->
+  <main class="layers">
+
+    <!-- INPUT -->
+    <section class="layer">
+      <div class="layer-label">INPUT</div>
+      <div class="cards">
+        <div class="card" style="border-left-color:#0ea5e9" onclick="showDetail('you')">
+          <span class="card-icon">👤</span>
+          <div class="card-title">You</div>
+          <div class="card-sub">Chat · tickets · slash commands</div>
+        </div>
+        <div class="card" style="border-left-color:#64748b" onclick="showDetail('session-start')">
+          <span class="card-icon">🚀</span>
+          <div class="card-title">Session Start</div>
+          <div class="card-sub">RAG verified · rules loaded · sentinel set</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layer-arrow">orchestrator classifies the request ↓</div>
+
+    <!-- TASK CLASSIFICATION -->
+    <section class="layer">
+      <div class="layer-label">CLASSIFICATION</div>
+      <div class="decision-group">
+        <div class="decision-row">
+          <div class="card" style="border-left-color:#f97316;max-width:210px" onclick="showDetail('classify-q')">
+            <span class="card-icon">🤔</span>
+            <div class="card-title">Simple or Complex?</div>
+            <div class="card-sub">Orchestrator decides before touching a file</div>
+          </div>
+        </div>
+        <div class="decision-divider">branches into</div>
+        <div class="decision-row">
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('simple-path')">
+            <div class="card-title">Simple Path</div>
+            <div class="card-sub">Direct execution — no ceremony</div>
+            <div class="card-badge" style="color:#22c55e">SIMPLE</div>
+          </div>
+          <div class="card" style="border-left-color:#f97316" onclick="showDetail('complex-path')">
+            <div class="card-title">Complex Path</div>
+            <div class="card-sub">workspace/ + sweep + agents</div>
+            <div class="card-badge" style="color:#f97316">COMPLEX</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layer-arrow">architectural changes check collaboration mode ↓</div>
+
+    <!-- COLLABORATIVE MODE -->
+    <section class="layer">
+      <div class="layer-label">COLLAB MODE</div>
+      <div class="decision-group">
+        <div class="decision-row">
+          <div class="card" style="border-left-color:#8b5cf6;max-width:210px" onclick="showDetail('consult-q')">
+            <span class="card-icon">🤝</span>
+            <div class="card-title">CONSULT Mode (default)</div>
+            <div class="card-sub">New endpoint / table / dependency? Ask first.</div>
+          </div>
+        </div>
+        <div class="decision-divider">routes to</div>
+        <div class="decision-row">
+          <div class="card" style="border-left-color:#8b5cf6" onclick="showDetail('consult-yes')">
+            <div class="card-title">Research + Propose</div>
+            <div class="card-sub">architect-agent (Opus) → 2-3 options → you pick</div>
+            <div class="card-badge" style="color:#8b5cf6">CONSULT</div>
+          </div>
+          <div class="card" style="border-left-color:#64748b" onclick="showDetail('consult-no')">
+            <div class="card-title">Autonomous</div>
+            <div class="card-sub">/auto to enable · /consult to restore</div>
+            <div class="card-badge" style="color:#64748b">AUTO</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layer-arrow">delegates specialized work to ↓</div>
+
+    <!-- AGENTS -->
+    <section class="layer">
+      <div class="layer-label">AGENTS</div>
+      <div class="cards" style="align-items:flex-start">
+        <div class="col-group">
+          <div class="col-label" style="color:#c084fc">Opus — Strategic</div>
+          <div class="card" style="border-left-color:#8e44ad" onclick="showDetail('architect-agent')">
+            <div class="card-title">architect-agent</div>
+            <div class="card-sub">System design · SOLID review</div>
+            <div class="card-badge" style="color:#c084fc">Opus</div>
+          </div>
+          <div class="card" style="border-left-color:#8e44ad" onclick="showDetail('reviewer-agent')">
+            <div class="card-title">reviewer-agent</div>
+            <div class="card-sub">15-pass code review</div>
+            <div class="card-badge" style="color:#c084fc">Opus</div>
+          </div>
+          <div class="card" style="border-left-color:#8e44ad" onclick="showDetail('ticket-analyst-agent')">
+            <div class="card-title">ticket-analyst-agent</div>
+            <div class="card-sub">Requirements → acceptance criteria</div>
+            <div class="card-badge" style="color:#c084fc">Opus</div>
+          </div>
+        </div>
+        <div class="col-group">
+          <div class="col-label" style="color:#67e8f9">Sonnet — Quality</div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('evaluator-agent')">
+            <div class="card-title">evaluator-agent</div>
+            <div class="card-sub">Reads cited code only — never self-verifies</div>
+          </div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('security-agent')">
+            <div class="card-title">security-agent</div>
+            <div class="card-sub">OWASP · auth · injection</div>
+          </div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('performance-agent')">
+            <div class="card-title">performance-agent</div>
+            <div class="card-sub">Profiling · bottlenecks · latency</div>
+          </div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('test-agent')">
+            <div class="card-title">test-agent</div>
+            <div class="card-sub">Tests as living documentation</div>
+          </div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('debug-agent')">
+            <div class="card-title">debug-agent</div>
+            <div class="card-sub">Root cause, not symptoms</div>
+          </div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('refactor-agent')">
+            <div class="card-title">refactor-agent</div>
+            <div class="card-sub">Safe refactor, behavior preserved</div>
+          </div>
+        </div>
+        <div class="col-group">
+          <div class="col-label" style="color:#86efac">Sonnet — Support</div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('e2e-agent')">
+            <div class="card-title">e2e-agent</div>
+            <div class="card-sub">UI testing · screenshots</div>
+          </div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('browser-agent')">
+            <div class="card-title">browser-agent</div>
+            <div class="card-sub">Playwright MCP · localhost only</div>
+          </div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('workflow-agent')">
+            <div class="card-title">workflow-agent</div>
+            <div class="card-sub">Multi-step coordination</div>
+          </div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('explore-agent')">
+            <div class="card-title">explore-agent</div>
+            <div class="card-sub">Codebase mapping · read-only</div>
+          </div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('ui-agent')">
+            <div class="card-title">ui-agent</div>
+            <div class="card-sub">Pixel-perfect frontend</div>
+          </div>
+          <div class="card" style="border-left-color:#06b6d4" onclick="showDetail('docs-agent')">
+            <div class="card-title">docs-agent</div>
+            <div class="card-sub">WHY not WHAT</div>
+          </div>
+        </div>
+        <div class="col-group">
+          <div class="col-label" style="color:#fca5a5">Sonnet — Specialized</div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('database-agent')">
+            <div class="card-title">database-agent</div>
+            <div class="card-sub">Schema · migrations · queries</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('observability-agent')">
+            <div class="card-title">observability-agent</div>
+            <div class="card-sub">Logging · metrics · tracing</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('devops-agent')">
+            <div class="card-title">devops-agent</div>
+            <div class="card-sub">CI/CD · infra as code</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('research-agent')">
+            <div class="card-title">research-agent</div>
+            <div class="card-sub">Web research + citations</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('compliance-agent')">
+            <div class="card-title">compliance-agent</div>
+            <div class="card-sub">CLAUDE.md rule verifier</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('standards-validator-agent')">
+            <div class="card-title">standards-validator-agent</div>
+            <div class="card-sub">SOLID · patterns · metrics</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('research-rag-agent')">
+            <div class="card-title">research-rag-agent</div>
+            <div class="card-sub">Indexes external docs to RAG</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('estimator-agent')">
+            <div class="card-title">estimator-agent</div>
+            <div class="card-sub">Fibonacci story points</div>
+          </div>
+          <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('e2e-agent2')">
+            <div class="card-title">rag-indexing-agent</div>
+            <div class="card-sub">Pre-scan before indexing</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layer-arrow">every agent calls POST /context as first action ↓</div>
+
+    <!-- RAG RETRIEVAL -->
+    <section class="layer">
+      <div class="layer-label">RAG RETRIEVAL</div>
+      <div class="rag-row">
+        <div class="card" style="border-left-color:#a855f7;max-width:155px" onclick="showDetail('agent-query')">
+          <span class="card-icon">🤖</span>
+          <div class="card-title">Agent (First Action)</div>
+          <div class="card-sub">POST /context before anything else</div>
+        </div>
+        <div class="rag-arrow-col">
+          <div class="rag-arrow-line"></div>
+          <div class="rag-arrow-text">agent + task →</div>
+          <div style="font-size:12px">→</div>
+          <div class="rag-arrow-text">← tiered docs</div>
+          <div class="rag-arrow-line"></div>
+        </div>
+        <div class="card star-card" style="border-left-color:#a855f7;max-width:180px" onclick="showDetail('rag-server')">
+          <span class="card-icon">🧠</span>
+          <div class="card-title">RAG MCP Server</div>
+          <div class="card-sub">Tiers 0-4 · 2s hot-reload · port 8612</div>
+          <div class="card-badge" style="color:#c084fc">sentence-transformers</div>
+        </div>
+        <div class="rag-arrow-col">
+          <div class="rag-arrow-line"></div>
+          <div class="rag-arrow-text">→ search →</div>
+          <div style="font-size:12px">→</div>
+          <div class="rag-arrow-text">← code chunks</div>
+          <div class="rag-arrow-line"></div>
+        </div>
+        <div class="card star-card" style="border-left-color:#0ea5e9;max-width:165px" onclick="showDetail('graph-rag')">
+          <span class="card-icon">🌐</span>
+          <div class="card-title">Graph RAG</div>
+          <div class="card-sub">tree-sitter AST · import/inherit chains</div>
+          <div class="card-badge" style="color:#7dd3fc">Deterministic</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layer-arrow">every finding must be proven before acting ↓</div>
+
+    <!-- ENFORCEMENT -->
+    <section class="layer">
+      <div class="layer-label">ENFORCEMENT</div>
+      <div class="cards">
+        <div class="card" style="border-left-color:#c0392b" onclick="showDetail('verify')">
+          <span class="card-icon">🔬</span>
+          <div class="card-title">Verify Gate</div>
+          <div class="card-sub">Every finding must cite file:line</div>
+          <div class="card-badge" style="color:#ef4444">Anti-hallucination</div>
+        </div>
+        <div class="card" style="border-left-color:#10b981" onclick="showDetail('hooks')">
+          <span class="card-icon">🪝</span>
+          <div class="card-title">7 Hook Types</div>
+          <div class="card-sub">Auto-fire at key lifecycle moments</div>
+        </div>
+        <div class="card" style="border-left-color:#f59e0b" onclick="showDetail('reviewer-detail')">
+          <span class="card-icon">📋</span>
+          <div class="card-title">Code Review System</div>
+          <div class="card-sub">15 passes · 14 parallel Sonnet + evaluator</div>
+          <div class="card-badge" style="color:#fcd34d">Production-ready</div>
+        </div>
+        <div class="card" style="border-left-color:#8b5cf6" onclick="showDetail('evaluator-detail')">
+          <span class="card-icon">✅</span>
+          <div class="card-title">Evaluator Agent</div>
+          <div class="card-sub">Reads only cited code — verdict without agent reasoning</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- RIGHT RAIL -->
+  <aside class="rail rail-right">
+    <div class="rail-card" style="border-left-color:#27ae60" onclick="showDetail('knowledge-rail')">
+      <div class="rc-title">📚 106 Knowledge Bases</div>
+      <div class="rc-sub">52 domains · 21 languages · 33 frameworks</div>
+      <div class="rc-badge" style="background:#14532d;color:#86efac">Semantic search</div>
+    </div>
+    <div class="rail-card star-card" style="border-left-color:#a855f7" onclick="showDetail('rag-tiers')">
+      <div class="rc-title">🏗 RAG Tiers 0-4</div>
+      <div class="rc-sub">Guardrails to source code — automatic, no config</div>
+      <div class="rc-badge" style="background:#3b0764;color:#d8b4fe">How it loads</div>
+    </div>
+    <div class="rail-card star-card" style="border-left-color:#0ea5e9" onclick="showDetail('graph-rag-vs-ai')">
+      <div class="rc-title">🌐 vs. Microsoft RAG</div>
+      <div class="rc-sub">Microsoft: ~$30k to index 5 GB · ClaudeBoost: free, on a CPU</div>
+      <div class="rc-badge" style="background:#0c4a6e;color:#7dd3fc">Why it wins</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#f59e0b" onclick="showDetail('context-survival')">
+      <div class="rc-title">🗂 Context Survival</div>
+      <div class="rc-sub">Handoffs · compaction · /clear-safe</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#22c55e" onclick="showDetail('parallel-agents')">
+      <div class="rc-title">⚡ Parallel Agents</div>
+      <div class="rc-sub">Up to 3 concurrent · budget-aware</div>
+    </div>
+    <div class="rail-card" style="border-left-color:#ef4444" onclick="showDetail('production-features')">
+      <div class="rc-title">🚀 Production Features</div>
+      <div class="rc-sub">Everything working together — overview</div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- DETAIL PANEL -->
+<div id="detail" class="detail hidden">
+  <button class="detail-close" onclick="closeDetail()">✕</button>
+  <div id="detail-badge" class="detail-badge"></div>
+  <code id="detail-file" class="detail-file"></code>
+  <h2 id="detail-title"></h2>
+  <div id="detail-body"></div>
+</div>
+
+<!-- AUDIO BAR -->
+<div class="audio-bar" id="audioBar">
+  <div class="audio-row-top">
+    <button class="audio-btn" id="playPauseBtn" title="Play / Pause" onclick="togglePlayPause()">▶</button>
+    <button class="audio-btn stop-btn" id="stopBtn" title="Stop" onclick="stopTour()" style="font-size:12px;">■</button>
+    <button class="audio-btn" id="chaptersBtn" title="Jump to segment" onclick="toggleChapters()" style="font-size:13px;">☰</button>
+    <button class="audio-btn" id="transcriptBtn" title="Show transcript" onclick="toggleTranscript()" style="font-size:11px;font-weight:700;">T</button>
+    <div class="audio-info">
+      <div class="audio-section-label">Now playing</div>
+      <div class="audio-section-text idle" id="audioSectionText">Press ▶ to start the guided audio walkthrough · click any card to explore</div>
+    </div>
+    <div class="audio-counter" id="audioProgressLabel">0 / 12</div>
+    <div class="audio-select-group">
+      <div class="audio-select-label">Speed</div>
+      <select class="audio-select" id="speedSelect">
+        <option value="0.85">0.85×</option>
+        <option value="0.95" selected>0.95×</option>
+        <option value="1.05">1.05×</option>
+        <option value="1.15">1.15×</option>
+      </select>
+    </div>
+    <div class="audio-select-group">
+      <div class="audio-select-label">Voice</div>
+      <select class="audio-select" id="voiceSelect" style="max-width:165px;"><option>Loading…</option></select>
+    </div>
+  </div>
+  <div class="audio-row-track">
+    <div class="audio-track-outer" id="audioTrackOuter" onclick="scrubTrack(event)">
+      <div class="audio-track-bg" id="audioTrackBg">
+        <div class="audio-track-fill" id="audioProgressFill"></div>
+      </div>
+      <div class="audio-thumb" id="audioThumb"></div>
+    </div>
+  </div>
+</div>
+
+<!-- TRANSCRIPT PANEL -->
+<div class="transcript-panel" id="transcriptPanel">
+  <div class="transcript-header">
+    <span class="transcript-header-title">📄 &nbsp;Transcript</span>
+    <button class="transcript-close" onclick="closeTranscript()">✕</button>
+  </div>
+  <div class="transcript-body" id="transcriptBody"></div>
+</div>
+
+<!-- CHAPTERS PANEL -->
+<div class="chapters-panel" id="chaptersPanel">
+  <div class="chapters-header">
+    <span>☰ &nbsp;Jump to segment</span>
+    <button class="chapters-close" onclick="closeChapters()">✕</button>
+  </div>
+  <div id="chaptersList"></div>
+</div>
+
+<script>
+// ─── Detail helpers ──────────────────────────────────────────────────────────
+const FR = (color, text, sub) => `<div style="background:#0a0f1e;border-left:3px solid ${color};border-radius:4px;padding:6px 9px;font-size:10px;color:#f1f5f9;margin-bottom:3px">${text}${sub ? `<br><span style="font-size:9px;color:#475569;margin-top:2px;display:block">${sub}</span>` : ''}</div>`;
+const AW = () => `<div style="color:#334155;font-size:10px;padding:1px 0 1px 10px">↓</div>`;
+const SEC = (t) => `<div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin:12px 0 5px;font-weight:600">${t}</div>`;
+const TBL = (headers, rows) => `<table style="width:100%;border-collapse:collapse;margin-top:6px"><tr style="border-bottom:1px solid #334155">${headers.map(h=>`<th style="text-align:left;padding:4px 6px;color:#475569;font-size:9px;text-transform:uppercase;font-weight:600">${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map((c,i)=>`<td style="padding:3px 6px;font-size:10px;color:${i===0?'#cbd5e1':'#94a3b8'}">${c}</td>`).join('')}</tr>`).join('')}</table>`;
+
+// ─── Component data ──────────────────────────────────────────────────────────
+const COMPONENTS = {
+
+  'you': { title: 'You — the human in the loop', badge: '👤 Input',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">You interact with Claude Code exactly as normal. ClaudeBoost changes how Claude thinks behind the scenes — not how you type.</div>
+${SEC('What you do')}
+${FR('#0ea5e9','Type a request, paste a ticket, or run a slash command','')}
+${AW()}${FR('#f97316','Orchestrator classifies and routes','No extra steps from you')}
+${AW()}${FR('#22c55e','Result delivered with file:line evidence','')}
+${SEC('Architecture decisions come back to you')}
+${FR('#8b5cf6','New endpoint / table / dependency?','CONSULT mode presents 2-3 options and waits for your approval')}` },
+
+  'session-start': { title: 'Session Start', badge: '🚀 Lifecycle',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every session starts with automatic health checks so you never work with a broken environment.</div>
+${FR('#10b981','GET /status — RAG server health','Confirms server is alive and indexes are current')}
+${AW()}${FR('#f59e0b','Load CLAUDE.md rules into context','jQuery ban, parameterized queries, no secrets — hard rules')}
+${AW()}${FR('#a855f7','Inject sentinel — agent spawns blocked without /rag','Guards against degraded sessions')}
+${SEC('If RAG is down')}
+${FR('#ef4444','HARD STOP — Claude tells you to run /rag','No investigation, no grepping as a substitute')}` },
+
+  'classify-q': { title: 'Simple or Complex?', badge: '🤔 Classification',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The orchestrator decides before reading a single file.</div>
+${SEC('Simple → direct execution')}
+<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>One-line fixes, typos, renames</li><li>Single-file changes</li><li>Quick codebase questions</li>
+</ul>
+${SEC('Complex → workspace + agents')}
+${TBL(['Tier','Files','Response'],[['FEATURE','5-10','workspace + subtasks'],['COMPLEX','10-15','workspace + plan + agents'],['COMPLEX+','>15','PRD first, then plan + agents']])}` },
+
+  'simple-path': { title: 'Simple Path — No Ceremony', badge: '✅ Direct',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Just do it. No workspace, no agents, no sweeps. POST /search still applies if you need to find something.</div>
+${FR('#22c55e','Read relevant file(s)','')}${AW()}${FR('#22c55e','Make the change','')}${AW()}${FR('#22c55e','Respond','')}
+<div style="font-size:10px;color:#64748b;margin-top:8px">Three similar lines of code beats a premature abstraction.</div>` },
+
+  'complex-path': { title: 'Complex Path — Sweep + Agents', badge: '🔄 Multi-agent',
+    html: `${FR('#f97316','1. Create workspace/[task-id]/ — announce in one line','')}
+${AW()}${FR('#f97316','2. POST /search mode=graph seeded from ticket entities','Builds scope graph — navigation map for the task')}
+${AW()}${FR('#f97316','3. Sweep-then-verify across 9 domains','Testing, docs, security, architecture, performance, review, clarity, browser testing, observability')}
+${AW()}${FR('#f97316','4. Every flag must cite file:line or be dropped','Verify gate — hallucination prevention')}
+${AW()}${FR('#f97316','5. Spawn specialist agents — up to 3 in parallel','Context < 50%: 3 agents. 50-75%: 2. Above 75%: 1 sequential')}` },
+
+  'consult-q': { title: 'CONSULT Mode — Default', badge: '🤝 Architecture Gate',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Protects you from Claude making unilateral architectural decisions.</div>
+${SEC('Triggers')}
+<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>New API endpoint, route, or controller action</li><li>New database table or schema change</li>
+  <li>New external dependency (npm/pip/nuget)</li><li>New module, service, or middleware</li>
+  <li>New auth strategy or concurrency model</li><li>New config surface or env variable</li>
+</ul>
+${SEC('Does NOT trigger')}
+<ul style="color:#64748b;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>Bug fixes, test additions, docs updates</li><li>Config value tweaks, renames, style fixes</li>
+  <li>Edits to workspace/, .claude/, knowledge/</li>
+</ul>` },
+
+  'consult-yes': { title: 'CONSULT Path — Research + Propose', badge: '🤝 Protocol',
+    html: `${FR('#a855f7','POST /search — research project context first','')}
+${AW()}${FR('#8e44ad','architect-agent (Opus) — design 2-3 options','Each with clear tradeoffs + file:line references')}
+${AW()}${FR('#8b5cf6','AskUserQuestion — present options','You pick one and add constraints (rate limits, size caps, etc.)')}
+${AW()}${FR('#8b5cf6','Log approval to state/session-approvals.json','Session-scoped — won\'t ask again for this')}
+${AW()}${FR('#22c55e','Implement the chosen option','')}
+${SEC('Standards still apply regardless')}
+<div style="font-size:10px;color:#64748b">Parameterized queries, logger.error, input validation — non-negotiable in both CONSULT and AUTO.</div>` },
+
+  'consult-no': { title: 'AUTO Mode', badge: '⚡ Toggle',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Skips the consultation gate. Use for prototyping or when you explicitly want Claude to decide.</div>
+${FR('#64748b','Run: /auto [optional reason]','Reason logged to session-approvals.json for audit trail')}
+${AW()}${FR('#64748b','Claude decides architecture autonomously','')}
+${SEC('Restore')}${FR('#8b5cf6','Run: /consult — immediately restores the gate','')}` },
+
+  'architect-agent': { title: 'architect-agent — Opus', badge: '🏗 Strategic', file: 'agents/architect-agent.xml',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Designs maintainable, scalable systems. The heavy-hitter for architectural decisions — always Opus.</div>
+${SEC('When spawned')}
+<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>CONSULT mode — present 2-3 architectural options</li><li>SOLID review on new classes / modules</li>
+  <li>PRD creation for large features</li><li>System design for new services</li>
+</ul>
+${SEC('Requirements')}
+${FR('#8b5cf6','≥2 file:line citations in spawn prompt','Prevents hallucinated designs')}
+${FR('#8b5cf6','Must call POST /context as first action','Loads architecture, SOLID, patterns knowledge')}` },
+
+  'reviewer-agent': { title: 'reviewer-agent — Opus', badge: '📋 15-pass', file: 'agents/reviewer-agent.xml',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The most thorough automated code review available. 15 passes, Opus model, verify gate on every finding.</div>
+${TBL(['Pass','Domain'],[
+  ['1-3','Security: injection, auth, secrets, OWASP'],
+  ['4-5','Logic: edge cases, off-by-one, null handling'],
+  ['6-7','Standards: SOLID, patterns, CLAUDE.md rules'],
+  ['8-9','Performance: N+1, missing indexes, memory leaks'],
+  ['10-11','Testing: coverage gaps, missing edge case tests'],
+  ['12-13','Docs + observability: logger.error, PII risk'],
+  ['14','Ticket alignment — does this match acceptance criteria?'],
+  ['15','Evaluator pass — independent verification of all findings']
+])}
+${SEC('Verify gate enforced')}
+${FR('#c0392b','Every flag must cite file:line','Finding something is NOT the goal — finding REAL things is')}` },
+
+  'ticket-analyst-agent': { title: 'ticket-analyst-agent — Opus', badge: '📋 Requirements', file: 'agents/ticket-analyst-agent.xml',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Transforms ambiguous tickets into crystal-clear tasks before work begins.</div>
+${FR('#8e44ad','Explicit scope with stated boundaries','')}
+${FR('#8e44ad','Acceptance criteria with measurable success','')}
+${FR('#8e44ad','Risk flags — missing requirements, ambiguities','')}
+${FR('#8e44ad','Saves ticket.md + context.md in workspace/','')}` },
+
+  'evaluator-agent': { title: 'evaluator-agent', badge: '✅ Quality Gate', file: 'agents/evaluator-agent.xml',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The independent verifier. Never self-verify — always spawn this after a finding.</div>
+${FR('#22c55e','Receives: specific file:line citations from another agent','')}
+${AW()}${FR('#22c55e','Reads ONLY those cited locations','No re-running the full investigation')}
+${AW()}${FR('#22c55e','Returns verdict: confirmed / false_positive / grade / blocker / warning','')}
+${SEC('Why never self-verify?')}
+<div style="font-size:10px;color:#94a3b8;line-height:1.6">An agent that finds a bug and then verifies its own finding has a conflict of interest. The evaluator has no stake — it reads only what was cited.</div>` },
+
+  'evaluator-detail': { title: 'Evaluator System — Multi-layer Anti-Hallucination', badge: '✅ System',
+    html: `${SEC('Layer 1 — Verify gate (in spawn prompts)')}
+${FR('#c0392b','Every finding must cite specific file + line number','If it can\'t point to real code, it\'s dropped — not reported')}
+${SEC('Layer 2 — Evaluator agent')}
+${FR('#8b5cf6','Spawned after any agent with findings','Reads ONLY cited locations, returns verdict')}
+${SEC('Layer 3 — PostToolUse hook')}
+${FR('#10b981','After 2 agent spawns without evaluator → reminder fires','Enforces the habit automatically')}
+${SEC('Layer 4 — NEEDS_VERIFICATION flag')}
+${FR('#f59e0b','Set in state/needs-verification.json','Stop hook checks — blocks session end if unverified')}
+${SEC('Result')}
+<div style="font-size:10px;color:#94a3b8;line-height:1.6">"Nothing found" is always a valid outcome. Reviewers who always find something are less valuable.</div>` },
+
+  'agent-query': { title: 'Agent — POST /context as First Action', badge: '🤖 Protocol',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The mandatory first action for every spawned agent. PreToolUse hook blocks spawns without it.</div>
+${FR('#a855f7','POST http://127.0.0.1:8612/context','Body: {agent, task_description, project_path, workspace_path}')}
+${AW()}${FR('#a855f7','Response: tiered knowledge (0-4)','Injected as system-level context before agent reasoning')}
+${SEC('Why project_path matters')}
+${FR('#0ea5e9','Enables Tier 4 — semantic search of project source code','')}
+${SEC('Why workspace_path matters')}
+${FR('#f59e0b','Enables Tier 3c — task-specific research docs indexed by /research-rag','')}
+${SEC('Enforcement')}
+${FR('#c0392b','Spawn prompt without POST /context → blocked (exit code 2)','The spawn never reaches Claude')}` },
+
+  'rag-server': { title: 'RAG MCP Server', badge: '🧠 Core Infrastructure', file: 'mcp-rag-server/',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Custom MCP server on port 8612. Knowledge and agent RAG uses BGE base en v1.5 (768d, asymmetric). Codebase RAG uses per-language model routing: st-codesearch for Python/Java/Go, BGE + signature injection for C#. File watcher hot-reloads changes in 2 seconds.</div>
+${TBL(['Index','Contents','When updated'],[
+  ['ClaudeBoost RAG','agents/*.xml + knowledge/*.xml','Startup + file change (2s)'],
+  ['Project RAG','Project source code','On demand via POST /index'],
+  ['Graph index','Import + inheritance graph','Built at index time, auto-augments /context']
+])}
+${SEC('API')}
+${FR('#a855f7','GET /status','Health + collection counts + indexed projects')}
+${FR('#a855f7','POST /context','4-tier knowledge fetch')}
+${FR('#a855f7','POST /search','Semantic search — scope: agents/knowledge/codebase')}
+${FR('#a855f7','POST /index','Index or re-index a project')}` },
+
+  'graph-rag': { title: 'Graph RAG — Structural Code Search', badge: '🌐 Unique Feature',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Combines vector search with a structural code graph built from tree-sitter AST parsing. Deterministic — no hallucinated edges.</div>
+${FR('#0ea5e9','1. tree-sitter parses every source file','Extracts: imports, function calls, class inheritance, exports')}
+${AW()}${FR('#0ea5e9','2. Build directed graph: A imports B = edge A→B','Stored in graph.db alongside the vector index')}
+${AW()}${FR('#0ea5e9','3. Search: seed vector results + structural neighbors','Files that import the seed files automatically included')}
+${SEC('Usage')}
+${FR('#a855f7','POST /search scope=codebase mode=graph','Vector matches + structural neighbors')}
+${SEC('Why it matters')}
+<div style="font-size:10px;color:#94a3b8;line-height:1.6">Search for "authentication" and get the auth service, plus every controller and middleware that imports it — without asking. That's the difference between finding where code is and understanding where it's used.</div>` },
+
+  'graph-rag-vs-ai': { title: 'Graph RAG vs. AI Extraction', badge: '🌐 Differentiator',
+    html: `${SEC('Microsoft GraphRAG — AI extraction')}
+${FR('#ef4444','Feed code to an LLM','Ask it to extract entities and relationships')}
+${AW()}${FR('#ef4444','LLM infers: "AuthService probably relates to TokenValidator"','Inference can hallucinate relationships that don\'t exist')}
+${AW()}${FR('#ef4444','Build graph from inferred data','Garbage in, garbage out')}
+${SEC('ClaudeBoost — deterministic parsing')}
+${FR('#22c55e','tree-sitter parses AST — no AI','Pure parser, same output every run, 50+ languages')}
+${AW()}${FR('#22c55e','Extract imports: "import AuthService from \'./auth\'"','Fact, not inference. Taken directly from the syntax tree.')}
+${AW()}${FR('#22c55e','Graph edge created: consumer.ts → AuthService','100% accurate — exists in the AST or it doesn\'t')}
+${SEC('Cost & Speed')}
+${FR('#ef4444','Microsoft GraphRAG: ~$30,000 to index 5 GB','Inference tokens at scale. Slow. Cloud-dependent.')}
+${FR('#22c55e','ClaudeBoost: free · runs on a CPU · re-indexes on save','No cloud, no GPU, no waiting. File watcher triggers automatically.')}
+${SEC('Result')}
+${FR('#a855f7','Zero hallucinated edges · C# MRR 0.950 · R@1 91.7% · free','Beats fine-tuned models for C# — zero training data, zero cloud cost')}` },
+
+  'rag-tiers': { title: 'RAG Tiers 0-4 — Layered Knowledge Loading', badge: '🏗 Architecture',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every POST /context returns up to 5 tiers assembled from multiple sources. An agent working on TypeScript React code automatically gets all of this — without manual configuration.</div>
+${SEC('Tier 0 — Hard guardrails')}
+${FR('#ef4444','Always loaded — non-negotiable','jQuery ban, parameterized queries, logger.error, no secrets')}
+${SEC('Tier 1 — Declared agent knowledge')}
+${FR('#f97316','knowledge: tags in the agent\'s XML file','security-agent declares: owasp-top10.xml, sql-injection.xml')}
+${SEC('Tier 2 — Co-loaded related domains')}
+${FR('#f59e0b','Related domains inferred from agent type','security-agent also gets: auth-patterns.xml, cryptography.xml')}
+${SEC('Tier 3 — Cross-domain standards')}
+${FR('#a855f7','Semantic search across ALL 106 knowledge bases','Query = agent + task → top-k relevant chunks')}
+${FR('#8b5cf6','Tier 3c: task-specific research','workspace_path → loads /research-rag indexed docs for this task')}
+${SEC('Tier 4 — Project source code')}
+${FR('#0ea5e9','Semantic search of codebase (project_path)','')}
+${FR('#06b6d4','Tier 4b: Graph RAG neighbors','Files that import the Tier 4 seed results — automatic')}` },
+
+  'knowledge-rail': { title: '106 Knowledge Bases', badge: '📚 Knowledge Layer', file: 'knowledge/',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">XML files covering every domain agents need. Loaded semantically at runtime — agents search them, not memorize them.</div>
+${TBL(['Category','Count','Examples'],[
+  ['Domain bases','52','security.xml, testing.xml, architecture.xml, logging.xml'],
+  ['Language guides','21','lang-typescript.xml, lang-python.xml, lang-csharp.xml'],
+  ['Framework guides','33','fw-react.xml, fw-aspnetcore.xml, fw-django.xml']
+])}
+${SEC('Hot-reload')}
+${FR('#10b981','Drop a new .xml file in knowledge/','File watcher detects change, re-indexes within 2 seconds')}` },
+
+  'verify': { title: 'Verify Gate — Anti-Hallucination', badge: '🔬 Core Safety',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every finding must be proven from actual code. Applies everywhere: reviews, planning, bug diagnosis, security audits.</div>
+${FR('#c0392b','Every finding must cite specific file + line number','If it can\'t point to real code, it\'s dropped — not reported')}
+${FR('#22c55e','"Nothing found" is always a valid outcome','Reviewers who find something on every pass are less valuable')}
+${SEC('Why this matters')}
+<div style="font-size:10px;color:#94a3b8;line-height:1.6;margin-bottom:8px">LLMs have strong pattern-matching that produces plausible-sounding findings about code they haven't actually read. The verify gate forces grounding every claim in real evidence before it reaches you.</div>
+${SEC('Enforcement chain')}
+${FR('#f97316','Agent spawn prompt includes verify gate instruction','')}
+${AW()}${FR('#8b5cf6','Agent returns findings with file:line citations','')}
+${AW()}${FR('#22c55e','Evaluator reads only cited locations, returns verdict','')}
+${AW()}${FR('#0ea5e9','Orchestrator acts only on confirmed findings','')}` },
+
+  'hooks': { title: '7 Hook Types — Auto-Fire at Lifecycle Events', badge: '⚙ Infrastructure',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Hooks fire outside Claude's reasoning — can't be argued past or rationalized around.</div>
+${TBL(['Hook','When','What'],[
+  ['SessionStart','Every new session','Verify RAG health, inject rules, set sentinel'],
+  ['UserPromptSubmit','Before prompt read','Stop TTS, inject session state'],
+  ['PreToolUse','Before any tool call','Block spawns missing /context; block dangerous bash'],
+  ['PostToolUse','After any tool call','RAG reminder, evaluator nudge, context checkpoint'],
+  ['PreCompact','Before compression','Save state, re-inject rules so they survive'],
+  ['SessionEnd','Session closes','Save handoff JSON for next session resume'],
+  ['Stop','Claude stops responding','Block if workspace context.md is stale']
+])}
+${SEC('bash-guard.py (PreToolUse)')}
+${FR('#c0392b','Blocks: cd && command patterns','Absolute paths only')}
+${FR('#c0392b','Blocks: backslash-escaped spaces','Prevents scanner triggering')}` },
+
+  'reviewer-detail': { title: 'Code Review System', badge: '📋 Production-ready',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The most thorough automated code review available. Opus-powered, 15-pass, verify gate, independent evaluator.</div>
+${FR('#8e44ad','Opus model only','reviewer-agent is routed to Opus — the most capable model')}
+${FR('#c0392b','Verify gate enforced','Every flag must cite file:line or it\'s dropped')}
+${FR('#22c55e','Pass 15 is an evaluator spawn','Independent verification of all findings from passes 1-14')}
+${FR('#f59e0b','Pass 14 checks ticket alignment','Does this implementation match the acceptance criteria?')}
+${SEC('Domains covered')}
+<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>Security: injection, auth bypass, secrets, OWASP top 10</li>
+  <li>Logic: edge cases, off-by-one, null handling, concurrency</li>
+  <li>Standards: SOLID, patterns, CLAUDE.md rules</li>
+  <li>Performance: N+1, missing indexes, memory leaks</li>
+  <li>Testing: coverage gaps, missing edge cases</li>
+  <li>Observability: missing logger.error, log PII risk</li>
+</ul>` },
+
+  'workspace-context': { title: 'Workspace Context — Anti-Amnesia System', badge: '🗂 Continuity',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Makes multi-session work reliable. Without this, every /clear or compaction event would lose all research progress.</div>
+${FR('#f59e0b','workspace/[task-id]/context.md','Current status, findings, next step, user constraints')}
+${FR('#f59e0b','workspace/[task-id]/ticket.md','Raw ticket — verbatim, never modified')}
+${FR('#f59e0b','workspace/[task-id]/plan.md','Implementation plan with per-scenario pass/fail status')}
+${SEC('When context.md gets written')}
+<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>After RAG search surfaces relevant files</li><li>After reading a file that confirms/refutes a hypothesis</li>
+  <li>After identifying root cause of a bug</li><li>After any architectural decision or user constraint</li>
+</ul>
+${SEC('Hooks that enforce this')}
+${FR('#10b981','PostToolUse: after 5 reads without update → nudge','')}
+${FR('#10b981','Stop hook: context.md stale >10 min → blocks stop','')}
+${FR('#10b981','PreCompact: auto-saves handoff-latest.json','')}` },
+
+  'context-survival': { title: 'Context Survival — Three Mechanisms', badge: '🗂 Continuity',
+    html: `${SEC('Mechanism 1 — workspace/context.md')}
+${FR('#f59e0b','Markdown file written throughout the session','Survives /clear if updated first — /clear-safe verifies before clearing')}
+${SEC('Mechanism 2 — state/handoff-latest.json')}
+${FR('#0ea5e9','Auto-saved after every Edit/Write','PreCompact writes richer conversation data')}
+${FR('#0ea5e9','Next session: /boost loads this','Resumes with full context of what was in progress')}
+${SEC('Mechanism 3 — PreCompact hook')}
+${FR('#10b981','Fires before Claude Code compacts context','Re-injects CLAUDE.md rules so they survive compression')}
+${SEC('Session window guard')}
+${FR('#64748b','Only workspaces touched in last 4 hours are "active"','Old workspace files don\'t trigger false alarms')}` },
+
+  'hooks-system': { title: '7 Hook Types — System Overview', badge: '⚙ Infrastructure',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">The hook system is what makes ClaudeBoost feel automatic. Hooks fire outside Claude's reasoning — can't be argued past.</div>
+${SEC('Command-type hooks (scripts)')}
+${FR('#10b981','bash-guard.py — blocks dangerous bash at PreToolUse','')}
+${FR('#10b981','rag-sentinel-guard.py — blocks agent spawns without /rag','')}
+${FR('#10b981','context-nudge.py — PostToolUse checkpoint + behavior enforcement','')}
+${FR('#10b981','stop-context-guard.py — blocks stop when context.md is stale','')}
+${FR('#10b981','session-primer.py — UserPromptSubmit session state injection','')}
+${SEC('Prompt-type hooks (LLM injection)')}
+${FR('#8b5cf6','SessionStart — load CLAUDE.md + RAG rules','')}
+${FR('#8b5cf6','PreCompact — re-inject rules before compression','')}` },
+
+  'consult-mode-detail': { title: 'CONSULT Protocol — Full Detail', badge: '🤝 Gate', file: 'knowledge/consult-mode.xml',
+    html: `${FR('#8b5cf6','New: API endpoint, route, controller action','')}
+${FR('#8b5cf6','New: database table, migration, schema change','')}
+${FR('#8b5cf6','New: external dependency (package install)','')}
+${FR('#8b5cf6','New: module, service, middleware, auth strategy','')}
+${FR('#8b5cf6','New: environment variable or config surface','')}
+${SEC('Full protocol')}
+${FR('#a855f7','1. POST /search — research existing patterns','')}
+${AW()}${FR('#8e44ad','2. architect-agent (Opus) with ≥2 file:line citations','')}
+${AW()}${FR('#8b5cf6','3. AskUserQuestion — present 2-3 options with tradeoffs','')}
+${AW()}${FR('#22c55e','4. You pick + add constraints','')}
+${AW()}${FR('#22c55e','5. Log approval, implement','')}` },
+
+  'global-rules': { title: 'Global Rules — Always Applied', badge: '🔒 Non-negotiable',
+    html: `${FR('#ef4444','Parameterized queries always — no SQL concatenation','')}
+${FR('#ef4444','OWASP top 10 awareness — see knowledge/security.xml','')}
+${FR('#ef4444','Auth/authz checks on every endpoint','')}
+${FR('#f59e0b','BLOCKER: missing logger.error in catch blocks','')}
+${FR('#f59e0b','BLOCKER: sensitive data in log output','')}
+${FR('#3498db','jQuery is BANNED — use React hooks / vanilla JS','')}
+${FR('#64748b','Playwright: localhost only — 127.0.0.1, *.local, *.test','')}` },
+
+  'slash-commands': { title: '44 Slash Commands — Available Everywhere', badge: '⌨ Interface',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">setup.py mirrors commands from .claude/commands/ to ~/.claude/commands/ — available in every project via symlink.</div>
+${FR('#f97316','/boost — activate all systems at session start','')}
+${FR('#f97316','/rag — start/restart the RAG server','')}
+${FR('#f97316','/setup — install + verify all components','')}
+${FR('#8b5cf6','/consult · /auto — toggle collaboration mode','')}
+${FR('#22c55e','/review — spawn reviewer-agent (Opus)','')}
+${FR('#a855f7','/research-rag [task-id] — index external docs for a task','')}
+${FR('#0ea5e9','/visualize — interactive architecture board (this diagram)','')}` },
+
+  'parallel-agents': { title: 'Parallel Agents — Budget-Aware', badge: '⚡ Performance',
+    html: `${TBL(['Context used','Max parallel agents'],[['Below 50%','3 agents concurrently'],['50% - 75%','2 agents'],['Above 75%','1 agent, sequential']])}
+${SEC('Why context budget matters')}
+<div style="font-size:10px;color:#94a3b8;line-height:1.6;margin-bottom:8px">Multi-agent overhead reaches 15× chat tokens (Anthropic research finding). At high context usage, spawning 3 agents simultaneously can overflow the window mid-task.</div>
+${SEC('Agent isolation')}
+${FR('#a855f7','Each agent calls POST /context independently','No shared context contamination')}
+${FR('#a855f7','Returns ## Summary block (≤300 words)','Orchestrator reads summary only — body doesn\'t bloat main context')}` },
+
+  'production-features': { title: 'Production-Ready Features', badge: '🚀 Overview',
+    html: `${SEC('Anti-hallucination')}
+${FR('#c0392b','Verify gate — file:line citation required or finding dropped','')}
+${FR('#c0392b','Evaluator-agent — never self-verify','')}
+${SEC('Knowledge')}
+${FR('#a855f7','106 knowledge bases loaded semantically — not memorized','')}
+${FR('#a855f7','Graph RAG: tree-sitter AST — zero hallucinated relationships','')}
+${SEC('Continuity')}
+${FR('#f59e0b','workspace/context.md survives compaction','')}
+${FR('#f59e0b','/clear-safe — verify before clearing, never lose work','')}
+${SEC('Safety')}
+${FR('#10b981','7 hook types enforce behavior mechanically','')}
+${FR('#10b981','CONSULT mode requires your approval for architecture','')}
+${SEC('Scale')}
+${FR('#22c55e','24 specialist agents, model-routed (Opus/Sonnet)','')}
+${FR('#22c55e','Up to 3 parallel agents, budget-aware','')}` },
+
+  'security-agent': { title: 'security-agent', badge: '🔒 Quality', file: 'agents/security-agent.xml',
+    html: `<ul style="color:#cbd5e1;font-size:10px;padding-left:14px;line-height:1.8;margin:4px 0">
+  <li>SQL injection — parameterized query enforcement</li><li>XSS — output encoding, CSP headers</li>
+  <li>Auth bypass — missing checks, JWT misuse</li><li>Secrets in source — API keys, connection strings</li>
+  <li>SSRF — unvalidated URLs</li><li>Broken access control</li>
+</ul>
+${FR('#c0392b','Verify gate — every finding must cite file:line','')}` },
+
+  'performance-agent': { title: 'performance-agent', badge: '⚡ Quality', file: 'agents/performance-agent.xml',
+    html: `${FR('#22c55e','N+1 queries — ORM lazy loading traps','')}
+${FR('#22c55e','Missing database indexes','')}
+${FR('#22c55e','Memory leaks — unclosed connections, growing caches','')}
+${FR('#22c55e','Inefficient algorithms — O(n²) vs O(n log n)','')}` },
+
+  'test-agent': { title: 'test-agent', badge: '🧪 Quality', file: 'agents/test-agent.xml',
+    html: `${FR('#22c55e','Happy path: basic functionality','')}
+${FR('#22c55e','Edge cases: null, empty, boundary values','')}
+${FR('#22c55e','Error paths: exception handling, validation failures','')}
+${FR('#22c55e','Integration: external calls, DB interactions','')}` },
+
+  'debug-agent': { title: 'debug-agent', badge: '🔍 Quality', file: 'agents/debug-agent.xml',
+    html: `${FR('#22c55e','1. Form hypothesis from error','What specifically went wrong')}
+${AW()}${FR('#22c55e','2. Verify hypothesis in code','Read actual code, not assumptions')}
+${AW()}${FR('#22c55e','3. Set breakpoint with mcp-debugger if needed','Step through execution, inspect variables')}
+${AW()}${FR('#22c55e','4. Report root cause with file:line','Minimum fix addressing the cause')}` },
+
+  'refactor-agent': { title: 'refactor-agent', badge: '♻ Quality', file: 'agents/refactor-agent.xml',
+    html: `${FR('#22c55e','1. Identify: long methods, deep nesting, duplication','')}
+${AW()}${FR('#22c55e','2. Plan: smallest safe change','')}
+${AW()}${FR('#22c55e','3. Verify: existing tests still pass','Adds tests if coverage is missing before refactoring')}` },
+
+  'e2e-agent': { title: 'e2e-agent — End-to-End UI Testing', badge: '🌐 Testing', file: 'agents/e2e-agent.xml',
+    html: `${FR('#06b6d4','1. Discover — RAG search + browser exploration','No assumptions about what the app contains')}
+${AW()}${FR('#06b6d4','2. Generate test plan','Grounded in what was actually found, not ticket assumptions')}
+${AW()}${FR('#06b6d4','3. Execute via Playwright MCP','Screenshots as evidence')}
+${AW()}${FR('#06b6d4','4. Report: PASS / FAIL / BLOCKED','Honest — never marks BLOCKED as PASS')}
+${SEC('mcp-debugger integration')}
+${FR('#8b5cf6','After UI pass: step-through debugging','Inspects runtime variables at exact line — no print statements')}` },
+
+  'e2e-agent2': { title: 'rag-indexing-agent', badge: '📊 Specialized', file: 'agents/rag-indexing-agent.xml',
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Pre-index scan before running force=true indexing. Analyzes file composition, flags potential issues.</div>
+${FR('#f59e0b','Prevents runaway indexing on huge projects','')}
+${FR('#f59e0b','Flags: binary files, node_modules, generated code','')}` },
+
+  'browser-agent': { title: 'browser-agent', badge: '🌐 Support', file: 'agents/browser-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Interactive browser testing via Playwright MCP. Never writes automation scripts — uses MCP tools directly. Localhost only.</div>` },
+  'workflow-agent': { title: 'workflow-agent', badge: '📋 Support', file: 'agents/workflow-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Plans and coordinates complex multi-step implementations. Systematic execution with verification at each phase.</div>` },
+  'ui-agent': { title: 'ui-agent', badge: '🎨 Support', file: 'agents/ui-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Pixel-perfect frontend implementation. No jQuery — React hooks and vanilla JS only.</div>` },
+  'explore-agent': { title: 'explore-agent', badge: '🔎 Support', file: 'agents/explore-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Codebase mapping and architecture analysis. Fast, read-only. Never modifies anything.</div>` },
+  'docs-agent': { title: 'docs-agent', badge: '📄 Support', file: 'agents/docs-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Documents WHY not WHAT. Comments explain purpose and rationale — the code shows what.</div>` },
+  'database-agent': { title: 'database-agent', badge: '🗄 Specialized', file: 'agents/database-agent.xml', html: `${FR('#f59e0b','Parameterized queries always enforced','')}${FR('#f59e0b','SQL transactions for multi-step operations','')}${FR('#f59e0b','Migration rollback plan always included','')}` },
+  'observability-agent': { title: 'observability-agent', badge: '📊 Specialized', file: 'agents/observability-agent.xml', html: `${FR('#f59e0b','logger.error in every catch block','')}${FR('#f59e0b','Structured logging — no free-text concatenation','')}${FR('#f59e0b','No PII in log output','')}` },
+  'devops-agent': { title: 'devops-agent', badge: '⚙ Specialized', file: 'agents/devops-agent.xml', html: `${FR('#f59e0b','Blue/green and canary deployment patterns','')}${FR('#f59e0b','IaC: Terraform, Bicep, CloudFormation','')}${FR('#f59e0b','Secrets management — never in source or logs','')}` },
+  'research-agent': { title: 'research-agent', badge: '🔍 Specialized', file: 'agents/research-agent.xml', html: `${FR('#f59e0b','Every claim verified with source citation','')}${FR('#f59e0b','Distinguishes: confirmed / inferred / uncertain','')}` },
+  'compliance-agent': { title: 'compliance-agent', badge: '✅ Specialized', file: 'agents/compliance-agent.xml', html: `<div style="font-size:11px;color:#94a3b8">Verifies orchestrator and agents follow CLAUDE.md rules. Identifies violations and recommends corrections.</div>` },
+  'standards-validator-agent': { title: 'standards-validator-agent', badge: '📐 Specialized', file: 'agents/standards-validator-agent.xml', html: `${FR('#f59e0b','Single Responsibility — one reason to change','')}${FR('#f59e0b','Open/Closed — extend, don\'t modify','')}${FR('#f59e0b','Dependency Inversion — depend on abstractions','')}` },
+  'research-rag-agent': { title: 'research-rag-agent', badge: '📚 Specialized', file: 'agents/research-rag-agent.xml', html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Finds, evaluates, and indexes external knowledge (web pages, PDFs, docs) into a per-task research RAG. Available to all agents via Tier 3c.</div>${FR('#f59e0b','/research-rag [task-id] triggers this agent','')}${FR('#f59e0b','Indexed at workspace/.rag-index/','')}` },
+  'estimator-agent': { title: 'estimator-agent', badge: '📊 Specialized', file: 'agents/estimator-agent.xml', html: `${FR('#f59e0b','1-2: trivial, 3-5: moderate, 8-13: complex','')}${FR('#f59e0b','Flags spikes (>13) — break down first','')}` },
+};
+
+// ─── Detail panel ────────────────────────────────────────────────────────────
+function showDetail(id) {
+  const c = COMPONENTS[id];
+  if (!c) return;
+  document.getElementById('detail-title').textContent = c.title;
+  document.getElementById('detail-badge').textContent = c.badge || '';
+  document.getElementById('detail-file').textContent = c.file || '';
+  document.getElementById('detail-body').innerHTML = c.html || '';
+  document.getElementById('detail').classList.remove('hidden');
+  document.getElementById('board').style.paddingRight = '372px';
+}
+function closeDetail() {
+  document.getElementById('detail').classList.add('hidden');
+  document.getElementById('board').style.paddingRight = '';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDetail(); closeChapters(); closeTranscript(); } });
+
+function downloadSVG() {
+  const board = document.getElementById('board');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${board.scrollWidth}" height="${board.scrollHeight}"><foreignObject width="100%" height="100%"><html xmlns="http://www.w3.org/1999/xhtml"><body style="margin:0;background:#020617">${board.outerHTML}</body></html></foreignObject></svg>`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([svg], {type:'image/svg+xml'})); a.download = 'how-it-works.svg'; a.click();
+}
+
+// ─── Tour segments ────────────────────────────────────────────────────────────
+const TOUR_SEGMENTS = [
+  {
+    label: 'Introduction',
+    text: 'AI can write code fast. That has never been the bottleneck. The bottleneck is what happens after. A new table nobody approved. An auth pattern nobody reviewed. Three different error-handling styles in the same file. It ships because the tests pass. Six months later, the codebase is a maintenance problem nobody wanted to own. Most AI coding tools make this worse — they just make the same low-quality code arrive faster. ClaudeBoost starts from a different premise entirely. Speed is a solved problem. Quality is the hard part. Twenty-four specialist agents — security, architecture, testing, database, observability — each focused on one domain and nothing else. A RAG system that loads exactly the right knowledge for every task before a single line is written. And a verify gate that requires a file-and-line citation before any finding gets acted on. The goal is not faster code. It is production-ready, highly tested, maintainable code — delivered correctly the first time.',
+    highlights: [],
+    scrollTo: null
+  },
+  {
+    label: 'You — the Human in the Loop',
+    text: 'You work exactly as you always have. Type a request. Paste a ticket. Run a slash command. Nothing about your workflow changes. What changes is what happens behind the scenes. Before Claude touches code, it classifies the task, loads the right knowledge, and — for any new endpoint, new table, or new dependency — stops and asks you. New endpoint? It waits. New database table? It waits. New auth strategy? It waits. You stay in the loop without having to chase it.',
+    highlights: ['you', 'session-start'],
+    scrollTo: 'you'
+  },
+  {
+    label: 'Task Classification — Simple vs Complex',
+    text: 'Before reading a single file, the orchestrator asks one question: is this simple or complex? Simple work — a typo fix, a rename, a one-liner — gets direct execution. No ceremony. Complex work — a ticket, a multi-file change, a new subsystem — gets a workspace folder, sweeps across nine quality domains, and the right specialist agents. Scope tiers: five to ten files is a feature. Ten to fifteen is complex. More than fifteen, or any new subsystem, requires a product requirements document first. The system scales its response to match the risk.',
+    highlights: ['classify-q', 'simple-path', 'complex-path'],
+    scrollTo: 'classify-q'
+  },
+  {
+    label: 'CONSULT Mode — You Control Architecture',
+    text: 'Here is the most important thing ClaudeBoost does. The obvious objection is that stopping for approval adds friction. It does not — CONSULT mode only fires on irreversible decisions. New table, new auth strategy, new external dependency — the five percent of cases where getting it wrong costs real time. Everything else runs at full speed. When it does stop, it spawns an Opus architect agent to research the options, then presents you two or three choices with clear tradeoffs. You pick one. You add constraints. Rate limits, size caps, whatever matters to your system. Then Claude implements. You cannot accidentally end up with an architecture you did not choose. Standards like parameterized queries and error logging apply automatically, in every mode.',
+    highlights: ['consult-q', 'consult-yes', 'consult-no'],
+    scrollTo: 'consult-q'
+  },
+  {
+    label: 'Specialist Agents — Opus for Strategy, Sonnet for Execution',
+    text: 'Twenty-four specialist agents. Each covers a specific engineering domain: security, performance, debugging, refactoring, testing, browser automation, DevOps, database, observability, compliance, and more. Three run on Opus — architect, reviewer, and ticket analyst — because they handle strategic decisions where reasoning depth matters most. The other twenty-one run on Sonnet: fast, focused, purpose-built. Every agent\'s first action is to call the RAG server and load the knowledge that is specifically relevant to its task. It doesn\'t run on general training data — it researches, it indexes, and it decides from objective, current knowledge. No agent goes in blind.',
+    highlights: ['architect-agent', 'reviewer-agent', 'ticket-analyst-agent', 'evaluator-agent', 'security-agent', 'test-agent', 'e2e-agent', 'database-agent', 'devops-agent', 'research-agent'],
+    scrollTo: 'architect-agent'
+  },
+  {
+    label: 'RAG Server — The Knowledge Brain',
+    text: 'The RAG system inside ClaudeBoost is a custom architecture — designed by Mikah Niehaus specifically for agentic coding workflows. It runs entirely on your machine. No cloud, no GPU required — just a CPU and a local process on port eighty-six twelve. Microsoft\'s GraphRAG costs around thirty thousand dollars to index five gigabytes of data. This runs for free. For C sharp, it uses signature injection — prepending the method signature to the document before embedding. The result: MRR zero point nine five zero and recall-at-one of ninety-one point seven percent. No fine-tuning. No training data. No cloud cost. Just a smarter document. When an agent or knowledge file changes, the file watcher catches it and re-indexes automatically. No restart. No manual step. Fast enough that you never notice it happened. Three separate indexes feed the system: one for ClaudeBoost\'s own agents and knowledge bases, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
+    highlights: ['rag-server', 'agent-query'],
+    scrollTo: 'rag-server'
+  },
+  {
+    label: 'RAG Tiers 0-4 — Always the Right Context',
+    text: 'Think of every agent call like a surgeon\'s instrument tray — only the tools needed for this operation are ready, and they\'re always in the right place. That is what the five-tier knowledge system does. The first tier is hard guardrails, always loaded, no exceptions. Then the agent\'s own declared knowledge. Then related domains. Then the right chunks from your actual project source code — including every file that imports the files being worked on. A TypeScript React agent automatically gets the TypeScript guide, the React guide, your relevant source files, and their structural neighbors. None of it requires configuration. It just loads.',
+    highlights: ['rag-tiers', 'knowledge-rail'],
+    scrollTo: 'rag-tiers'
+  },
+  {
+    label: 'Graph RAG vs. Microsoft RAG',
+    text: 'The graph index is where this system diverges from Microsoft GraphRAG. Microsoft\'s approach uses an AI model to extract code relationships — and AI models can hallucinate edges that do not exist. ClaudeBoost uses tree-sitter instead. Tree-sitter parses the abstract syntax tree directly. An import statement in the syntax tree is a fact, not an inference. The results: zero hallucinated edges. Millisecond parsing across fifty-plus languages. Structural search that finds not just where a function is defined, but everywhere it is called. And none of it costs inference tokens to build.',
+    highlights: ['graph-rag', 'graph-rag-vs-ai'],
+    scrollTo: 'graph-rag-vs-ai'
+  },
+  {
+    label: 'Verify Gate — Anti-Hallucination Protocol',
+    text: 'Every agent finding goes through the verify gate. The rule is simple: cite a file and a line number, or the finding is dropped. Not flagged for later — dropped. An agent that flags something on every pass is worth less than one that only flags real issues. Once findings are collected, an independent evaluator agent reads only the cited locations. It does not see the original agent\'s reasoning. It reads the code and returns a verdict. The orchestrator acts only on what the evaluator confirms.',
+    highlights: ['verify', 'evaluator-detail'],
+    scrollTo: 'verify'
+  },
+  {
+    label: 'Workspace Context — Anti-Amnesia System',
+    text: 'Context loss is what kills long AI sessions. The conversation compresses. Details fall out. Work has to be re-explained. ClaudeBoost solves this mechanically. A context file captures findings, decisions, next steps, and user constraints after every significant action. Three hooks enforce it. The PostToolUse hook nudges after five reads without an update. The Stop hook blocks the session from ending when context is stale. The PreCompact hook saves everything before the conversation gets compressed. Next session, slash boost loads the handoff and resumes exactly where you left off.',
+    highlights: ['workspace-context', 'context-survival'],
+    scrollTo: 'workspace-context'
+  },
+  {
+    label: 'Code Review — 15 Passes, Parallel + Evaluator',
+    text: 'The code review runs fifteen passes. Fourteen run in parallel on Sonnet specialist agents — security, logic, coding standards, performance, test gaps, documentation, observability, and ticket alignment. Does this implementation actually match what was asked for? Every pass requires a file and line number citation, or the finding is dropped. Then pass fifteen. An independent evaluator in a fresh context reads only those citations. It never sees the previous agents\' reasoning. It reads the code and returns a verdict. Nothing ships on self-verification.',
+    highlights: ['reviewer-agent', 'reviewer-detail'],
+    scrollTo: 'reviewer-detail'
+  },
+  {
+    label: 'Summary — Production-Ready AI Development',
+    text: 'We started with a problem: AI-generated code is powerful and unpredictable. Here is how ClaudeBoost addresses it. Twenty-four specialist agents routed to the right model. A five-tier RAG system that always loads the right knowledge. Deterministic graph search using tree-sitter — zero hallucinated edges. A verify gate where every finding needs a file and a line number or it gets dropped. An evaluator that never self-verifies. A workspace context system that survives compaction and restarts. Seven hook types that enforce behavior mechanically. And CONSULT mode that keeps every architectural decision in your hands. If you are shipping AI-assisted code in production, this is what the safety layer looks like. It installs in one command. Run slash boost — your next session will show you exactly what it catches.',
+    highlights: ['production-features', 'verify', 'rag-tiers', 'workspace-context', 'graph-rag-vs-ai', 'consult-q', 'parallel-agents'],
+    scrollTo: 'production-features'
+  }
+];
+
+// ─── Audio engine ─────────────────────────────────────────────────────────────
+let voices = [], tourIndex = 0, isPlaying = false, isPaused = false, currentUtterance = null;
+
+function loadVoices() {
+  voices = speechSynthesis.getVoices();
+  const sel = document.getElementById('voiceSelect');
+  if (!voices.length) return;
+  sel.innerHTML = '';
+  const scored = voices.filter(v => v.lang.startsWith('en')).map(v => {
+    let s=0,n=v.name.toLowerCase();
+    if(n.includes('andrew')&&n.includes('natural'))s+=100;if(n.includes('andrew')&&n.includes('online'))s+=98;
+    if(n.includes('andrew'))s+=80;if(n.includes('mark')&&n.includes('natural'))s+=60;
+    if(n.includes('guy')&&n.includes('natural'))s+=55;if(n.includes('mark')&&n.includes('online'))s+=50;
+    if(n.includes('david')&&n.includes('desktop'))s+=40;
+    if(n.includes('google')&&n.includes('us'))s+=50;if(v.lang==='en-US')s+=10;return{v,s};
+  }).sort((a,b)=>b.s-a.s);
+  scored.forEach(({v},i)=>{
+    const o=document.createElement('option');o.value=v.name;
+    o.textContent=v.name.replace('Microsoft ','').replace(' Online (Natural)',' ✦').replace(' Desktop','');
+    if(i===0)o.selected=true;sel.appendChild(o);
+  });
+}
+if(typeof speechSynthesis!=='undefined'){speechSynthesis.onvoiceschanged=loadVoices;loadVoices();}
+
+function getSelectedVoice(){const n=document.getElementById('voiceSelect').value;return voices.find(v=>v.name===n)||voices.find(v=>v.lang.startsWith('en'))||null;}
+function getSelectedRate(){return parseFloat(document.getElementById('speedSelect').value);}
+
+function setNarratingCards(ids){
+  document.querySelectorAll('.card.narrating,.rail-card.narrating').forEach(el=>el.classList.remove('narrating'));
+  let first=null;
+  ids.forEach(id=>{
+    const el=document.querySelector(`[onclick*="'${id}'"]`)||document.querySelector(`[onclick*="${id}"]`);
+    if(el){el.classList.add('narrating');if(!first)first=el;}
+  });
+  if(first)first.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function updateUI(i){
+  const seg=TOUR_SEGMENTS[i],total=TOUR_SEGMENTS.length,pct=((i+1)/total)*100;
+  document.getElementById('audioProgressFill').style.width=pct+'%';
+  document.getElementById('audioThumb').style.left=pct+'%';
+  document.getElementById('audioProgressLabel').textContent=`${i+1} / ${total}`;
+  document.querySelectorAll('.audio-tick').forEach((t,j)=>t.classList.toggle('passed',j<i));
+  const txt=document.getElementById('audioSectionText');txt.textContent=seg.label;txt.classList.remove('idle');
+  document.getElementById('playPauseBtn').textContent='⏸';document.getElementById('playPauseBtn').classList.add('active');
+  syncChapterHighlight(i);syncTranscriptHighlight(i);
+}
+
+function speakSegment(index){
+  if(index>=TOUR_SEGMENTS.length){finishTour();return;}
+  tourIndex=index;const seg=TOUR_SEGMENTS[index];
+  updateUI(index);setNarratingCards(seg.highlights||[]);
+  if(seg.highlights&&seg.highlights.length>0)showDetail(seg.highlights[0]);else closeDetail();
+  const utt=new SpeechSynthesisUtterance(seg.text);
+  utt.voice=getSelectedVoice();utt.rate=getSelectedRate();utt.pitch=1.0;utt.volume=1.0;
+  utt.onend=()=>{if(isPlaying)speakSegment(index+1);};
+  utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakSegment(index+1);};
+  currentUtterance=utt;speechSynthesis.speak(utt);
+}
+
+function finishTour(){
+  isPlaying=false;isPaused=false;currentUtterance=null;setNarratingCards([]);
+  document.getElementById('audioProgressFill').style.width='100%';
+  document.getElementById('audioThumb').style.left='100%';
+  document.getElementById('audioProgressLabel').textContent=`${TOUR_SEGMENTS.length} / ${TOUR_SEGMENTS.length}`;
+  document.querySelectorAll('.audio-tick').forEach(t=>t.classList.add('passed'));
+  document.getElementById('audioSectionText').textContent='Tour complete — click any card to explore';
+  document.getElementById('audioSectionText').classList.remove('idle');
+  document.getElementById('playPauseBtn').textContent='↺';document.getElementById('playPauseBtn').classList.remove('active');
+}
+
+function togglePlayPause(){
+  if(!isPlaying&&!isPaused){isPlaying=true;isPaused=false;speechSynthesis.cancel();speakSegment(0);return;}
+  if(isPlaying&&!isPaused){speechSynthesis.pause();isPaused=true;isPlaying=false;document.getElementById('playPauseBtn').textContent='▶';document.getElementById('playPauseBtn').classList.remove('active');return;}
+  if(isPaused){speechSynthesis.resume();isPaused=false;isPlaying=true;document.getElementById('playPauseBtn').textContent='⏸';document.getElementById('playPauseBtn').classList.add('active');return;}
+  isPlaying=true;isPaused=false;speechSynthesis.cancel();speakSegment(0);
+}
+
+function stopTour(){
+  isPlaying=false;isPaused=false;speechSynthesis.cancel();currentUtterance=null;setNarratingCards([]);
+  document.getElementById('playPauseBtn').textContent='▶';document.getElementById('playPauseBtn').classList.remove('active');
+  document.getElementById('audioProgressFill').style.width='0%';document.getElementById('audioThumb').style.left='0%';
+  document.getElementById('audioProgressLabel').textContent=`0 / ${TOUR_SEGMENTS.length}`;
+  document.querySelectorAll('.audio-tick').forEach(t=>t.classList.remove('passed'));
+  document.getElementById('audioSectionText').textContent='Press ▶ for the audio walkthrough';
+  document.getElementById('audioSectionText').classList.add('idle');
+}
+
+function buildTicks(){
+  const bg=document.getElementById('audioTrackBg'),total=TOUR_SEGMENTS.length;
+  TOUR_SEGMENTS.forEach((seg,i)=>{if(i===0)return;const t=document.createElement('div');t.className='audio-tick';t.style.left=(i/total*100)+'%';t.title=seg.label;bg.appendChild(t);});
+}
+
+function scrubTrack(event){
+  const outer=document.getElementById('audioTrackOuter'),rect=outer.getBoundingClientRect();
+  const pct=Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));
+  const idx=Math.min(Math.floor(pct*TOUR_SEGMENTS.length),TOUR_SEGMENTS.length-1);
+  speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(idx);
+}
+
+(function(){
+  let dragging=false;
+  function doScrub(cx){
+    const o=document.getElementById('audioTrackOuter');if(!o)return 0;
+    const r=o.getBoundingClientRect(),pct=Math.max(0,Math.min(1,(cx-r.left)/r.width));
+    const idx=Math.min(Math.floor(pct*TOUR_SEGMENTS.length),TOUR_SEGMENTS.length-1);
+    document.getElementById('audioProgressFill').style.width=(pct*100)+'%';
+    document.getElementById('audioThumb').style.left=(pct*100)+'%';
+    return idx;
+  }
+  document.addEventListener('DOMContentLoaded',()=>{
+    const o=document.getElementById('audioTrackOuter');if(!o)return;
+    o.addEventListener('mousedown',e=>{dragging=true;doScrub(e.clientX);e.preventDefault();});
+    document.addEventListener('mousemove',e=>{if(dragging)doScrub(e.clientX);});
+    document.addEventListener('mouseup',e=>{if(!dragging)return;dragging=false;const idx=doScrub(e.clientX);speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(idx);});
+  });
+})();
+
+function buildChaptersList(){
+  const list=document.getElementById('chaptersList');list.innerHTML='';
+  TOUR_SEGMENTS.forEach((seg,i)=>{
+    const row=document.createElement('div');row.id=`chapter-${i}`;
+    row.className='chapter-row'+(i===tourIndex&&isPlaying?' active':'');
+    const cc=(seg.highlights||[]).length;
+    row.innerHTML=`<span class="chapter-num">${i+1}</span><span class="chapter-label">${seg.label}</span><span class="chapter-cards">${cc?cc+' card'+(cc>1?'s':''):''}</span>`;
+    row.onclick=()=>{speechSynthesis.cancel();isPlaying=true;isPaused=false;closeChapters();speakSegment(i);};
+    list.appendChild(row);
+  });
+}
+function toggleChapters(){const p=document.getElementById('chaptersPanel');if(p.style.display==='block'){closeChapters();}else{buildChaptersList();p.style.display='block';document.getElementById('chaptersBtn').classList.add('active');}}
+function closeChapters(){document.getElementById('chaptersPanel').style.display='none';document.getElementById('chaptersBtn').classList.remove('active');}
+function syncChapterHighlight(i){document.querySelectorAll('.chapter-row').forEach((r,j)=>r.classList.toggle('active',j===i));}
+
+function buildTranscript(){
+  const body=document.getElementById('transcriptBody');body.innerHTML='';
+  TOUR_SEGMENTS.forEach((seg,i)=>{
+    if(i>0){const d=document.createElement('div');d.className='tseg-divider';body.appendChild(d);}
+    const div=document.createElement('div');
+    div.className='transcript-seg'+(i===tourIndex&&isPlaying?' active':'');div.id=`tseg-${i}`;
+    div.innerHTML=`<div class="tseg-num">${i+1} / ${TOUR_SEGMENTS.length}</div><div class="tseg-label">${seg.label}</div><div class="tseg-text">${seg.text}</div>`;
+    div.onclick=()=>{speechSynthesis.cancel();isPlaying=true;isPaused=false;speakSegment(i);};
+    body.appendChild(div);
+  });
+}
+function toggleTranscript(){
+  const p=document.getElementById('transcriptPanel');
+  if(p.classList.contains('open')){closeTranscript();}
+  else{buildTranscript();p.classList.add('open');document.getElementById('transcriptBtn').classList.add('active');document.getElementById('board').classList.add('transcript-open');syncTranscriptHighlight(tourIndex);}
+}
+function closeTranscript(){document.getElementById('transcriptPanel').classList.remove('open');document.getElementById('transcriptBtn').classList.remove('active');document.getElementById('board').classList.remove('transcript-open');}
+function syncTranscriptHighlight(i){
+  const p=document.getElementById('transcriptPanel');if(!p.classList.contains('open'))return;
+  document.querySelectorAll('.transcript-seg').forEach((el,j)=>el.classList.toggle('active',j===i));
+  const a=document.getElementById(`tseg-${i}`);if(a)a.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+// ─── Zoom / Fit ──────────────────────────────────────────────────────────────
+let currentZoom = 1.0;
+
+function setZoom(z) {
+  currentZoom = Math.max(0.4, Math.min(2.0, z));
+  document.getElementById('board').style.zoom = currentZoom;
+  document.getElementById('zoom-display').textContent = Math.round(currentZoom * 100) + '%';
+}
+
+function adjustZoom(delta) {
+  setZoom(Math.round((currentZoom + delta) * 10) / 10);
+}
+
+// Fit width only — keeps text readable, lets page scroll vertically
+function fitToScreen() {
+  const board = document.getElementById('board');
+  board.style.zoom = 1;
+  requestAnimationFrame(() => {
+    const availW = window.innerWidth - 12;
+    const boardW = board.scrollWidth;
+    // Never shrink below 75% — keeps text legible
+    setZoom(Math.max(0.75, Math.min(1.0, availW / boardW)));
+  });
+}
+
+// Ctrl/Cmd + scroll to zoom in/out
+document.addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  adjustZoom(e.deltaY < 0 ? 0.1 : -0.1);
+}, { passive: false });
+
+function calcZoom() {
+  return Math.max(0.75, Math.min(1.5, window.innerWidth / 1100));
+}
+window.addEventListener('load', () => {
+  setTimeout(() => setZoom(calcZoom()), 200);
+});
+window.addEventListener('resize', () => {
+  setZoom(calcZoom());
+});
+
+buildTicks();
+</script>
+</body>
+</html>

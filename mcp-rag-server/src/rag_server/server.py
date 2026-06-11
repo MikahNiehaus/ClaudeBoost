@@ -24,7 +24,7 @@ from rag_server.config import (
     RAG_INDEX_DIR,
     SCOPES,
 )
-from rag_server.core.embedding import SentenceTransformerEmbedding
+from rag_server.core.embedding import OnnxDirectMLEmbedding, SentenceTransformerEmbedding
 from rag_server.core.store import ChromaStore
 from rag_server.core.watcher import FileWatcher
 from rag_server.indexing.engine import IndexingEngine
@@ -38,10 +38,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Components initialized in main(), accessed via module-level refs
-embedder: SentenceTransformerEmbedding | None = None
-code_embedder: SentenceTransformerEmbedding | None = None  # separate model for codebase scope (optional)
+from rag_server.ports.embedding_port import EmbeddingPort
+embedder: EmbeddingPort | None = None
+code_embedder: EmbeddingPort | None = None  # separate model for codebase scope (optional)
 store: ChromaStore | None = None
-engine: IndexingEngine | None = None
+engine: IndexingEngine | None = None   # codebase project indexing (code_embedder)
+kb_engine: IndexingEngine | None = None  # knowledge/agents/memories indexing (embedder)
 
 
 def _dispatch_tool(name: str, arguments: dict) -> dict:
@@ -124,10 +126,10 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             force = arguments.get("force", False)
             scope = arguments.get("scope", "all")
             if scope == "all":
-                result = engine.index_all(force=force)
+                result = kb_engine.index_all(force=force)
                 result["scope"] = "all"
             else:
-                result = engine.index_scope(scope, force=force)
+                result = kb_engine.index_scope(scope, force=force)
                 result["scope"] = scope
             return result
 
@@ -184,15 +186,20 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             # Health issues are stored in projects.json by rag_index_project at index time.
             # Do NOT run live check_project_health() here — it opens a ChromaDB connection
             # per project, and with 60+ projects this causes rag_status to hang for minutes.
-            return {
+            from rag_server.config import DEVICE
+            status: dict = {
                 "status": "ready",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
                 "model": EMBEDDING_MODEL,
+                "device": DEVICE,
                 "embedding_dimensions": model_dim if model_dim else "not loaded yet",
                 "dimension_mismatch": dimension_mismatch,
                 "indexed_projects": indexed_projects,
             }
+            if code_embedder is not None and code_embedder is not embedder:
+                status["code_model"] = CODE_EMBEDDING_MODEL
+            return status
 
         elif name == "rag_context":
             return _build_context(
@@ -245,21 +252,42 @@ def sync_init() -> FileWatcher:
     inside an asyncio coroutine. ChromaDB calls in background tasks must use
     run_in_executor (see main_http()).
     """
-    global embedder, code_embedder, store, engine
+    global embedder, code_embedder, store, engine, kb_engine
 
     logger.info("Starting RAG server. Project root: %s", PROJECT_ROOT)
 
     # Write heartbeat immediately — guard needs a fresh timestamp before any tool call arrives.
     _write_heartbeat(model_loaded=False, index_ok=False)
 
-    embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
+    from rag_server.config import DEVICE
+    _EmbedCls = OnnxDirectMLEmbedding if DEVICE == "onnx-dml" else SentenceTransformerEmbedding
+    embedder = _EmbedCls(model_name=EMBEDDING_MODEL)
     if CODE_EMBEDDING_MODEL and CODE_EMBEDDING_MODEL != EMBEDDING_MODEL:
         logger.info("Code embedding model: %s", CODE_EMBEDDING_MODEL)
-        code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+        code_embedder = _EmbedCls(model_name=CODE_EMBEDDING_MODEL)
     else:
         code_embedder = embedder  # same model for all scopes
+
+    # Windows fix: force BLAS (PyTorch/MKL) initialization before SQLite opens.
+    # ChromaDB's PersistentClient eagerly opens SQLite in __init__. On Windows,
+    # BLAS and SQLite conflict if SQLite initializes first — any subsequent
+    # embed_query() call causes a segfault (exit code 139). Running a warmup
+    # inference here ensures BLAS memory regions are established before SQLite.
+    logger.info("Pre-warming embedding model before ChromaDB init...")
+    try:
+        embedder.embed_query("warmup")
+        if code_embedder is not embedder:
+            code_embedder.embed_query("warmup")
+        logger.info("Embedding model pre-warmed (%dd)", embedder.dimensions())
+    except Exception:
+        logger.warning(
+            "Pre-warm failed — PyTorch/SQLite conflict may still occur on /context calls",
+            exc_info=True,
+        )
+
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
     engine = IndexingEngine(embedder=code_embedder, store=store)
+    kb_engine = IndexingEngine(embedder=embedder, store=store)
 
     # Start file watcher for auto-indexing on changes
     watcher = FileWatcher()
@@ -272,7 +300,7 @@ def sync_init() -> FileWatcher:
         def _on_file_change(path: str):
             logger.info("File changed, re-indexing: %s", path)
             try:
-                engine.index_all()
+                kb_engine.index_all()
             except Exception:
                 logger.exception("Auto-index failed after file change: %s", path)
         watcher.watch(watch_paths, _on_file_change)
@@ -285,6 +313,7 @@ def sync_init() -> FileWatcher:
     if src_dir.is_dir():
         import importlib
         import rag_server.adapters.sqlite_graph_store as _gstore_mod
+        import rag_server.adapters.fts_store as _fts_mod
         import rag_server.core.community as _community_mod
         import rag_server.core.summarizer as _summarizer_mod
         import rag_server.indexing.engine as _engine_mod
@@ -292,16 +321,18 @@ def sync_init() -> FileWatcher:
         import rag_server.tools.context as _ctx_mod
 
         def _on_source_change(path: str):
-            global engine, rag_search, _context_mod
+            global engine, kb_engine, rag_search, _context_mod
             logger.info("Source changed, hot-reloading modules: %s", path)
             try:
                 importlib.reload(_gstore_mod)
+                importlib.reload(_fts_mod)
                 importlib.reload(_community_mod)
                 importlib.reload(_summarizer_mod)
                 importlib.reload(_engine_mod)
                 importlib.reload(_search_mod)
                 importlib.reload(_ctx_mod)
-                engine = _engine_mod.IndexingEngine(embedder=embedder, store=store)
+                engine = _engine_mod.IndexingEngine(embedder=code_embedder, store=store)
+                kb_engine = _engine_mod.IndexingEngine(embedder=embedder, store=store)
                 rag_search = _search_mod.rag_search
                 _context_mod = _ctx_mod
                 logger.info("Hot-reload complete — updated code is now active")
@@ -354,7 +385,7 @@ def _background_startup() -> None:
 
         logger.info("Background: auto-indexing default collections (incremental)...")
         _t0 = time.monotonic()
-        result = engine.index_all(force=False)
+        result = kb_engine.index_all(force=False)
         logger.info(
             "Background: startup indexing complete in %.1fs: %d files, %d chunks",
             time.monotonic() - _t0, result["files_indexed"], result["chunks_created"],
@@ -572,12 +603,18 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
         )
         return JSONResponse(result, status_code=500 if "error" in result else 200)
 
+    async def handle_rest_index_progress(request):
+        from starlette.responses import JSONResponse
+        import rag_server.indexing.engine as _eng_mod
+        return JSONResponse(_eng_mod._progress)
+
     starlette_app = Starlette(
         routes=[
             Route("/search", endpoint=handle_rest_search, methods=["POST"]),
             Route("/context", endpoint=handle_rest_context, methods=["POST"]),
             Route("/status", endpoint=handle_rest_status, methods=["GET"]),
             Route("/index", endpoint=handle_rest_index, methods=["POST"]),
+            Route("/index/progress", endpoint=handle_rest_index_progress, methods=["GET"]),
             Route("/scan", endpoint=handle_rest_scan, methods=["POST"]),
             Route("/index_research", endpoint=handle_rest_index_research, methods=["POST"]),
             Route("/warmup", endpoint=handle_rest_warmup, methods=["POST"]),

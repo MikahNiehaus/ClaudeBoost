@@ -1,0 +1,4 @@
+# Ignore transient benchmark runs — only keep the canonical full result
+*
+!.gitignore
+!full_benchmark.json

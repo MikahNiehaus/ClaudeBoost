@@ -76,19 +76,20 @@ Flexible — any combination:
               print(f\"{hit['score']:.3f}  {hit['source']}\")
       "
       ```
-      - PASS: top score ≥ 0.68 AND result from a `.xml` knowledge file
-      - WARN: top score 0.55–0.68
-      - FAIL: top score < 0.55 OR no results
+      **Score thresholds** (BGE asymmetric retrieval produces lower absolute cosine values than all-MiniLM):
+      - PASS: top score ≥ 0.50 AND result from the expected `.xml` knowledge file
+      - WARN: top score 0.42–0.50
+      - FAIL: top score < 0.42 OR no results OR wrong file ranked #1
 
       If WARN/FAIL: retry with query `"OWASP injection SQL authentication"`.
-      - If retry score ≥ 0.68: PASS (original query vocabulary mismatch). Show both scores.
-      - If still < 0.68: WARN — consider `/index-boost force` to rebuild embeddings.
+      - If retry score ≥ 0.50 and correct file: PASS (original query vocabulary mismatch). Show both scores.
+      - If still < 0.50: WARN — consider `/index-boost force` to rebuild embeddings.
 
    b. **Vector quality — agents** (1 search call):
       Same HTTP pattern, query `"agent spawning model routing task description"`, scope `"agents"`, limit 3.
-      - PASS: top score ≥ 0.68 AND result from an agents file
-      - WARN: top score 0.55–0.68
-      - FAIL: top score < 0.55 OR no results
+      - PASS: top score ≥ 0.50 AND result from an agents file
+      - WARN: top score 0.42–0.50
+      - FAIL: top score < 0.42 OR no results
 
       If WARN/FAIL: retry with query `"context endpoint orchestrator spawn"`.
 

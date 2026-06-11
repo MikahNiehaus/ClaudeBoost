@@ -1,6 +1,6 @@
 ---
 description: Index a project's codebase for semantic search
-allowed-tools: AskUserQuestion
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion
 ---
 
 # Index Project for Codebase RAG

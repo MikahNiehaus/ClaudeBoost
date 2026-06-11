@@ -25,6 +25,26 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_VERSION = 3
 
+# Module-level progress state — updated live by _index_files and _do_index_project.
+# Read via GET /index/progress without any locking; values are ints/strings so
+# individual reads are atomic on CPython (GIL). Callers should treat the snapshot
+# as advisory (file counts can shift slightly under concurrent requests).
+_progress: dict = {
+    "active": False,
+    "phase": "idle",
+    "files_total": 0,
+    "files_done": 0,
+    "files_indexed": 0,
+    "chunks_created": 0,
+    "files_skipped": 0,
+    "files_failed": 0,
+    "pct": 0,
+    "current_file": None,
+    "started_at": None,
+    "elapsed_s": 0.0,
+    "eta_s": None,
+}
+
 
 def _find_go_modules(project_path: str) -> dict[str, str]:
     """Find all go.mod files and return {mod_dir → module_name}.
@@ -312,8 +332,32 @@ class IndexingEngine:
         files_failed = 0
         file_errors: list[dict] = []
 
-        for file_path in file_paths:
+        _total = len(file_paths)
+        _start = time.monotonic()
+        _progress.update({
+            "active": True, "phase": scope,
+            "files_total": _total, "files_done": 0,
+            "files_indexed": 0, "chunks_created": 0,
+            "files_skipped": 0, "files_failed": 0,
+            "pct": 0, "current_file": None,
+            "started_at": time.time(), "elapsed_s": 0.0, "eta_s": None,
+        })
+
+        for _i, file_path in enumerate(file_paths):
             rel_path = self._relative_path(file_path)
+
+            # Update progress before each file so polling sees the current filename.
+            _elapsed = time.monotonic() - _start
+            _done = _i
+            _pct = int(100 * _done / _total) if _total else 100
+            _eta = (_elapsed / _done * (_total - _done)) if _done > 0 else None
+            _progress.update({
+                "files_done": _done, "current_file": rel_path,
+                "files_indexed": files_indexed, "chunks_created": chunks_created,
+                "files_skipped": files_unchanged, "files_failed": files_failed,
+                "pct": _pct, "elapsed_s": round(_elapsed, 1),
+                "eta_s": round(_eta, 0) if _eta is not None else None,
+            })
 
             try:
                 content = Path(file_path).read_text(encoding="utf-8")
@@ -379,6 +423,13 @@ class IndexingEngine:
                 files_failed += 1
                 file_errors.append({"file": rel_path, "type": "embed_error", "message": str(e)})
 
+        _progress.update({
+            "active": False, "phase": "idle", "pct": 100,
+            "files_done": _total, "current_file": None,
+            "files_indexed": files_indexed, "chunks_created": chunks_created,
+            "files_skipped": files_unchanged, "files_failed": files_failed,
+            "elapsed_s": round(time.monotonic() - _start, 1), "eta_s": 0,
+        })
         self._save_manifest()
         if files_failed:
             logger.warning(
@@ -699,6 +750,8 @@ class IndexingEngine:
                         logger.info("In-place collection clear succeeded — proceeding with reindex.")
                     else:
                         logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
+                        # Evict the cached client so the next ChromaStore() opens fresh files.
+                        ChromaStore.evict_cache(str(chroma_dir))
             project_store = ChromaStore(persist_dir=str(chroma_dir))
             graph_store = SQLiteGraphStore(index_dir / "graph.db")
 
@@ -770,7 +823,18 @@ class IndexingEngine:
         start_time = time.time()
         total_files = len(file_paths)
 
-        for file_path in file_paths:
+        _proj_label = f"project:{Path(project_path).name}"
+        _proj_start = time.monotonic()
+        _progress.update({
+            "active": True, "phase": _proj_label,
+            "files_total": total_files, "files_done": 0,
+            "files_indexed": 0, "chunks_created": 0,
+            "files_skipped": 0, "files_failed": 0,
+            "pct": 0, "current_file": None,
+            "started_at": time.time(), "elapsed_s": 0.0, "eta_s": None,
+        })
+
+        for _pi, file_path in enumerate(file_paths):
             # Relative path within the target project
             try:
                 rel_path = str(
@@ -778,6 +842,18 @@ class IndexingEngine:
                 ).replace("\\", "/")
             except ValueError:
                 rel_path = file_path.replace("\\", "/")
+
+            # Live progress update — visible via GET /index/progress
+            _p_elapsed = time.monotonic() - _proj_start
+            _p_eta = (_p_elapsed / _pi * (total_files - _pi)) if _pi > 0 else None
+            _progress.update({
+                "files_done": _pi, "current_file": rel_path,
+                "files_indexed": files_indexed, "chunks_created": chunks_created,
+                "files_skipped": files_unchanged, "files_failed": files_failed,
+                "pct": int(100 * _pi / total_files) if total_files else 100,
+                "elapsed_s": round(_p_elapsed, 1),
+                "eta_s": round(_p_eta, 0) if _p_eta is not None else None,
+            })
 
             _ext = Path(rel_path).suffix.lower()
             _is_pdf = _ext == ".pdf"
@@ -852,12 +928,19 @@ class IndexingEngine:
                             logger.warning("Graph edge add failed for %s: %s", rel_path, e)
 
             try:
-                # Path+section prepend at embed time: adds file identity to the vector
-                # so constant-name files (e.g. config.py with MAX_CHUNK_TOKENS) match
-                # natural-language queries. Only for code files — docs already have
-                # rich prose and the prefix adds noise. Stored content is unchanged.
-                if not _is_doc and not _is_pdf:
-                    texts = [f"[{rel_path}] [{c.section}]\n{c.content}" for c in raw_chunks]
+                # Embed raw content without path/section prefix for code files.
+                # Benchmark (CodeSearchNet 21K, MiniLM): prefix drops MRR from
+                # 0.868 → 0.587 because it dilutes code semantics with path
+                # metadata, creating a mismatch with natural-language queries.
+                # File/function-name search is handled by the FTS5 index, which
+                # indexes raw content — the embedding doesn't need the prefix.
+                # Doc files (.md, .pdf) also embed without prefix: they already
+                # have rich prose so no prefix was ever added for them.
+                if not _is_pdf and not _is_doc:
+                    from rag_server.indexing.code_preprocessor import preprocess_chunk
+                    from rag_server.core.project import extension_to_language as _ext_to_lang
+                    _chunk_lang = _ext_to_lang(Path(rel_path).suffix)
+                    texts = [preprocess_chunk(c.content, _chunk_lang) for c in raw_chunks]
                 else:
                     texts = [c.content for c in raw_chunks]
                 embeddings = self._embedder.embed(texts)
@@ -1101,6 +1184,13 @@ class IndexingEngine:
             logger.error("Failed to write project manifest to %s: %s", project_manifest_path, e)
 
         elapsed_s = round(time.time() - start_time, 1)
+        _progress.update({
+            "active": False, "phase": "idle", "pct": 100,
+            "files_done": total_files, "current_file": None,
+            "files_indexed": files_indexed, "chunks_created": chunks_created,
+            "files_skipped": files_unchanged, "files_failed": files_failed,
+            "elapsed_s": elapsed_s, "eta_s": 0,
+        })
         if files_failed:
             logger.warning(
                 "Indexed project %s (%s): %d files, %d chunks (%d unchanged, %d FAILED) in %.1fs",

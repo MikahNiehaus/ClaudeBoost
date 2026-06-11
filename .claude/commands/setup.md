@@ -134,6 +134,47 @@ If FAIL: repair → `pip install edge-tts`, then retry.
 
 ---
 
+### Check 4b — mcp-debugger: netcoredbg (.NET debugging)
+
+`netcoredbg` is required for mcp-debugger to step through .NET/C# code. Without it the E2E skill skips all code verification for .NET projects and warns the user at runtime. Install it now so it's always ready.
+
+**Step 1 — Confirm dotnet SDK is available:**
+```bash
+dotnet --version
+```
+If `dotnet` is not found: mark WARN (not FAIL), skip to Check 5. .NET is optional — skip this check only if dotnet itself isn't installed.
+
+**Step 2 — Check whether netcoredbg is on PATH:**
+```bash
+where netcoredbg
+```
+
+| Result | Meaning | Action |
+|--------|---------|--------|
+| Path printed | **PASS** | Continue |
+| Not found | Needs install | Run auto-repair below |
+
+**Auto-repair (if not found):**
+```bash
+dotnet tool install -g Samsung.Netcoredbg
+```
+
+After install, re-check `where netcoredbg`. If still not found, `%USERPROFILE%\.dotnet\tools` may not be on PATH. Fix it permanently in the user's environment:
+```bash
+$toolsDir = "$env:USERPROFILE\.dotnet\tools"
+$current = [System.Environment]::GetEnvironmentVariable('PATH','User')
+if ($current -notlike "*$toolsDir*") {
+    [System.Environment]::SetEnvironmentVariable('PATH', "$current;$toolsDir", 'User')
+    echo "PATH updated — restart terminal for it to take effect"
+}
+```
+
+Retry `where netcoredbg` after the PATH fix. Up to 3 attempts total before marking FAIL.
+
+**This check is mandatory.** Never skip it — even for non-.NET projects. mcp-debugger is a project-agnostic tool; the user may run E2E tests against .NET projects at any time.
+
+---
+
 ### Check 5 — Global CLAUDE.md
 
 ```bash
@@ -180,6 +221,155 @@ If the `comm` output lists any files (commands present in the repo but missing g
 
 ---
 
+### Check 8 — Ollama (community summaries LLM)
+
+Ollama is required for community summaries (qwen3:4b). Without it, `/index-boost` will still work but summaries won't be generated.
+
+**8a. Is Ollama installed?**
+
+```bash
+ollama --version
+```
+
+If the command is not found: tell the user to install Ollama from https://ollama.com/download and re-run `/setup`. Mark as WARN and skip 8b/8c — cannot auto-repair a missing binary.
+
+**8b. Is Ollama running?**
+
+```bash
+python -c "
+import urllib.request, urllib.error
+try:
+    urllib.request.urlopen('http://localhost:11434/', timeout=3)
+    print('RUNNING')
+except urllib.error.URLError:
+    print('NOT_RUNNING')
+"
+```
+
+If `NOT_RUNNING`: start it in the background:
+
+```bash
+nohup ollama serve > /tmp/ollama.log 2>&1 &
+sleep 3
+python -c "
+import urllib.request, urllib.error
+try:
+    urllib.request.urlopen('http://localhost:11434/', timeout=3)
+    print('RUNNING')
+except urllib.error.URLError:
+    print('STILL_NOT_RUNNING')
+"
+```
+
+If still not running after repair: mark as WARN — community summaries unavailable until Ollama starts. Continue.
+
+**8c. Is qwen3:4b pulled?**
+
+```bash
+ollama list | grep qwen3
+```
+
+If `qwen3:4b` is **not** in the list:
+
+```bash
+ollama pull qwen3:4b
+```
+
+This may take several minutes (~2.5 GB). Wait for it to complete, then re-verify with `ollama list | grep qwen3`.
+
+If pull succeeds: mark PASS.
+If pull fails: mark WARN — community summaries will fall back to path-based names until model is available.
+
+---
+
+### Check 9 — Permission Gates
+
+Verify that `~/.claude/settings.json` has the correct ClaudeBoost permission policy:
+- `"Bash"` is in allow (catch-all; bash-guard.py enforces safety at hook level)
+- All git/gh write operations are in ask (reads auto-approve, writes always prompt)
+- Force-push to main/master is in deny
+
+Run a quick audit:
+
+```bash
+python3 "C:/Users/mniehaus/AppData/Local/Temp/cb_perm_check.py"
+```
+
+Where `cb_perm_check.py` contains:
+
+```python
+import json, sys
+with open("C:/Users/mniehaus/.claude/settings.json", encoding="utf-8") as f:
+    s = json.load(f)
+allow = s["permissions"]["allow"]
+ask = s["permissions"]["ask"]
+deny = s["permissions"]["deny"]
+
+issues = []
+if "Bash" not in allow:
+    issues.append('MISSING: "Bash" in allow (catch-all needed for smooth dev workflow)')
+for entry in ["Bash(git commit **)", "Bash(git push **)", "Bash(git revert **)",
+              "Bash(git config --global **)", "Bash(git filter-branch **)"]:
+    if entry not in ask:
+        issues.append(f"MISSING from ask: {entry}")
+for entry in ["Bash(git push --force origin main **)", "Bash(git branch -D **)"]:
+    if entry not in deny:
+        issues.append(f"MISSING from deny: {entry}")
+
+if issues:
+    for i in issues: print("FAIL:", i)
+    sys.exit(1)
+else:
+    print(f"OK: allow={len(allow)} ask={len(ask)} deny={len(deny)}")
+    sys.exit(0)
+```
+
+| Result | Meaning | Repair |
+|--------|---------|--------|
+| `OK: allow=N ask=N deny=N` | **PASS** | — |
+| Any `FAIL:` line | Missing entries | Re-run `setup.py` — `_update_permissions()` adds missing entries idempotently |
+
+If repair is needed, re-run Phase 1 (`setup.py`), then retry this check. `setup.py` calls `_update_permissions()` which adds all required entries without removing any user-added entries.
+
+---
+
+### Check 10 — Playwright MCP (browser tools)
+
+Playwright MCP provides `mcp__playwright_*` tools used by `browser-agent` and `/end-to-end-test`. Without it, no browser automation is available in any session or agent.
+
+**10a. Is Node/npx available?**
+
+```bash
+python -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
+```
+
+If MISSING: mark WARN, skip 10b. Tell the user:
+> "Node.js is not installed. Playwright MCP requires it. Install from https://nodejs.org/ then re-run /setup."
+
+**10b. Is Playwright MCP registered?**
+
+```bash
+claude mcp list 2>/dev/null | grep -i playwright || echo "NOT_REGISTERED"
+```
+
+| Result | Meaning | Repair |
+|--------|---------|--------|
+| Shows `playwright` | **PASS** | — |
+| `NOT_REGISTERED` | Needs registration | Run repair below |
+| Command fails | Claude CLI not on PATH | Mark WARN, manual fix needed |
+
+**Repair (cross-platform — works on Windows, macOS, Linux):**
+
+```bash
+claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest
+```
+
+After repair, verify with `claude mcp list | grep playwright`. Up to 3 attempts before marking FAIL.
+
+**Note:** Changes take effect after restarting Claude Code — Playwright tools (`mcp__playwright_*`) will then be available directly in every session without spawning an agent.
+
+---
+
 ## Phase 3: Report
 
 Print a final status table:
@@ -196,9 +386,13 @@ RAG server health        : OK / FAIL (<reason>)
 Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL
+netcoredbg (mcp-debugger): OK vX.Y.Z / INSTALLED / WARN (no dotnet SDK) / FAIL
 CLAUDE.md                : OK / MISSING
 statusLine               : OK / MISSING (run `/mcp` after setup.py)
 Global commands synced   : OK (N/N) / MISSING: <list> (restart other instances)
+Ollama (qwen3:4b)        : OK / WARN (<reason>)
+Permission gates         : OK (allow=N ask=N deny=N) / FAIL (<missing entries>)
+Playwright MCP           : OK / WARN (no Node.js) / FAIL
 
 ─────────────────────────────────────────
 ```

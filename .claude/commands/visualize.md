@@ -73,6 +73,111 @@ Read the JSON output. Use the `layers`, `side_rails`, and card fields (`title`, 
 
 ---
 
+## Step 2c: Ticket Context Enrichment (runs whenever a workspace ticket is available)
+
+After gathering project/self-map data, check for active ticket context. This step turns a plain architecture map into a *why are we here* diagram.
+
+**Check for workspace files:**
+
+From the workspace detected in Phase 0b, look for (in order):
+- `<workspace>/ticket.md` — full ticket text with acceptance criteria
+- `<workspace>/context.md` — app map and key flows built during E2E testing
+- `<workspace>/plan.md` — test/implementation plan with per-scenario pass/fail/blocked status
+
+**If ticket files are found, extract:**
+- `TICKET_ID` — e.g., "TFF-1038"
+- `TICKET_SUMMARY` — one sentence: what does this ticket do?
+- `PROBLEM_STATEMENT` — what was broken or missing *before* this ticket? What triggered it?
+- `SOLUTION_DESCRIPTION` — what does the ticket deliver? What can users do now that they couldn't before?
+- `ACCEPTANCE_CRITERIA` — list of AC items, each with status: ✅ PASS / ❌ FAIL / ⏳ BLOCKED / 🔲 NOT TESTED
+  Pull statuses from `plan.md` TC rows: `[x]` = PASS, `[ ]` = open (check if BLOCKED in the note).
+
+**Add to the HTML diagram:**
+
+1. **TICKET layer** — place at the very top of the board, before all other layers. Contains two cards side by side:
+   - `ticket-problem` card (red accent `#ef4444`): titled "Before: [problem]" — what was missing/broken
+   - `ticket-solution` card (green accent `#22c55e`): titled "After: [what it delivers]" — the high-level outcome
+
+2. **Acceptance Criteria rail card** — add to left rail with red accent. Its detail panel shows a full AC table:
+   ```javascript
+   // AC table pattern:
+   `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">
+   <tr style="border-bottom:1px solid #334155">
+     <th style="text-align:left;padding:4px 6px;color:#64748b;font-weight:600">Scenario</th>
+     <th style="padding:4px 6px;color:#64748b;font-weight:600">TC</th>
+     <th style="padding:4px 6px;color:#64748b;font-weight:600">Status</th>
+   </tr>
+   <tr><td style="padding:3px 6px;color:#f1f5f9">Flag OFF → 404</td>
+       <td style="padding:3px 6px;color:#64748b">TC-002</td>
+       <td style="padding:3px 6px;color:#22c55e">✅ PASS</td></tr>
+   <!-- one row per scenario -->
+   </table>`
+   ```
+   Status colors: `#22c55e` = PASS, `#ef4444` = FAIL, `#f59e0b` = BLOCKED, `#475569` = NOT TESTED
+
+3. **Enhance ticket-relevant component detail panels** — for every card whose component directly implements or is changed by the ticket, add to its `html:` detail panel:
+   - A **Before/After** section using `FLOW_ROW` showing state before and after the ticket
+   - A **Scenario coverage** block listing which AC items this component is responsible for
+   - A **Code path** reference (file:line) for the key logic
+
+If no workspace ticket is found: skip this step silently and proceed to Step 3.
+
+---
+
+### Enhanced detail panel patterns (use in COMPONENTS `html:`)
+
+**Before/After state diagram** — use this for any component that changes behaviour:
+```javascript
+html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Description of what this component does.</div>
+${SECTION('Before', '')}
+${FLOW_ROW('#ef4444','❌ Old behaviour or missing state','What happened before this ticket')}
+${SECTION('After (this ticket)', '')}
+${FLOW_ROW('#22c55e','✅ New behaviour','What this ticket delivers at this component')}
+${SECTION('Code path', '')}
+${FLOW_ROW('#64748b','File.cs:line — key method or check','')}`
+```
+
+**Scenario / AC coverage table** — for components that implement multiple AC scenarios:
+```javascript
+html: `...
+${SECTION('Scenarios this covers', '')}
+<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">
+<tr style="border-bottom:1px solid #334155">
+  <th style="text-align:left;padding:3px 5px;color:#64748b">Scenario</th>
+  <th style="padding:3px 5px;color:#64748b">Status</th>
+</tr>
+<tr><td style="padding:3px 5px;color:#f1f5f9">Flag OFF → 404</td><td style="padding:3px 5px;color:#22c55e">✅ TC-002</td></tr>
+</table>`
+```
+
+**Dependency / blocked state diagram** — for components waiting on another ticket:
+```javascript
+html: `...
+${SECTION('Current state', '')}
+${FLOW_ROW('#f59e0b','⏳ BLOCKED','Reason: waiting on TFF-1033')}
+${SECTION('Unblocked when', '')}
+${FLOW_ROW('#22c55e','TFF-1033 deploys JWT endpoint','Then: configure Tableau:JwtEndpointUrl')}
+${ARROW()}
+${FLOW_ROW('#22c55e','TC-008, TC-TICKET-01, TC-009, TC-010 become testable','')}`
+```
+
+**Step-by-step flow diagram** — for integration flows with multiple hops:
+```javascript
+html: `...
+${SECTION('Integration flow', '')}
+${FLOW_ROW('#0ea5e9','Step 1: Admin navigates to /Reports/TableauValidation','')}
+${ARROW()}
+${FLOW_ROW('#a855f7','Step 2: Flag gate + role check','')}
+${ARROW()}
+${FLOW_ROW('#f97316','Step 3: Server fetches JWT from endpoint','')}
+${ARROW()}
+${FLOW_ROW('#06b6d4','Step 4: JWT injected into <tableau-viz> component','')}
+${ARROW()}
+${FLOW_ROW('#22c55e','Step 5: Dashboard renders in iframe','')} `
+```
+
+---
+
 ## Step 3: Write the HTML File
 
 Write a fully self-contained HTML file. No external CDN, no fonts, no network requests. All CSS and JS inline. **Use CSS flexbox layout throughout — never use pixel-positioned SVG elements.**
@@ -341,9 +446,27 @@ function downloadSVG() {
 
 ---
 
-## Step 3b: Add Audio Tour (MANDATORY)
+## Step 3b: Add Audio Tour (MANDATORY — DO NOT SIMPLIFY)
 
-Every visualization MUST include an interactive audio walkthrough using the Web Speech API. This is non-negotiable — users expect it in every diagram.
+Every visualization MUST include the **full audio bar system** using the Web Speech API. This is non-negotiable — users expect it in every diagram.
+
+**BANNED — do NOT use these simpler patterns:**
+- A small floating overlay div with prev/next/stop buttons
+- A toolbar button that toggles a tour mode
+- Any approach that does not include the full two-row audio bar at the bottom
+
+**REQUIRED — always use the exact system below.** The canonical reference implementation is at:
+`C:\Development\Food and Function\FoodAccessProject\workspace\TFF-1038\visualize\architecture.html`
+
+The full system includes:
+- Fixed two-row audio bar at the bottom with play/pause ▶⏸, stop ■, chapters ☰, transcript T
+- Voice selector (auto-populated from browser speech synthesis, scored to prefer Microsoft Andrew)
+- Speed selector (0.85× / 0.95× / 1.05× / 1.15×)
+- Scrub track with chapter tick marks and draggable thumb
+- Card pulse animation (blue glow) on highlighted cards during narration
+- Chapters panel (click ☰ to jump to any segment)
+- Transcript panel (click T to slide in full text, clickable to jump)
+- `body { padding-bottom: 110px; }` to leave room for the bar
 
 ### COMPONENTS pattern — ALWAYS use `html:` not `desc:`/`items:`
 
@@ -679,9 +802,11 @@ buildTicks();
 ### TOUR_SEGMENTS writing guide
 
 - Write 1 segment per major layer/section, plus 1 intro and 1 summary
+- **When a ticket is present**: add 2 dedicated segments right after the intro — one for the problem statement ("what was broken/missing before this ticket"), one for the solution ("what the ticket delivers and why it matters"). These anchor everything that follows.
 - Keep each segment 3–6 sentences — enough to explain but not overwhelming
 - `highlights` should list the card IDs that get the blue pulse outline during narration
 - Spell out abbreviations phonetically if TTS mangles them (e.g., "T F F dash 1040" not "TFF-1040")
+- For ticket-related cards in highlights: open their detail panel so the user sees the before/after diagram while listening
 
 ---
 

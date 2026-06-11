@@ -33,9 +33,11 @@ def _get_reranker():
             return _reranker
         try:
             from sentence_transformers.cross_encoder import CrossEncoder
-            from rag_server.config import RERANKER_MODEL
-            _reranker = CrossEncoder(RERANKER_MODEL, max_length=512)
-            logger.info("Cross-encoder reranker loaded: %s", RERANKER_MODEL)
+            from rag_server.config import DEVICE, RERANKER_MODEL
+            from rag_server.core.embedding import _resolve_device
+            device = _resolve_device()
+            _reranker = CrossEncoder(RERANKER_MODEL, max_length=512, device=device)
+            logger.info("Cross-encoder reranker loaded: %s (device=%s)", RERANKER_MODEL, DEVICE)
         except Exception as e:
             logger.warning("Cross-encoder reranker unavailable (%s) — reranking disabled", e)
             _reranker_unavailable = True
@@ -139,7 +141,8 @@ def rag_search(
             }
 
         research_store = ChromaStore(persist_dir=str(research_chroma))
-        if research_store.collection_exists("research") and research_store.count("research") > 0:
+        research_store.create_collection("research")  # get_or_create — loads existing collection after server restart
+        if research_store.count("research") > 0:
             try:
                 results = research_store.search(
                     collection="research",
@@ -151,8 +154,8 @@ def rag_search(
             except Exception as e:
                 logger.error("Research store search failed: %s", e)
                 warnings.append(f"Research search failed: {e}")
-        elif not research_store.collection_exists("research"):
-            warnings.append("Research collection not found — run rag_index_research first.")
+        else:
+            warnings.append("Research collection is empty — run rag_index_research first.")
 
     # Codebase search uses a separate per-project store
     elif scope == "codebase":
@@ -450,16 +453,20 @@ def _fts_hybrid(
 
 
 def _rerank(results: list, query: str) -> list:
-    """Re-score results using a cross-encoder. Returns results in new ranked order.
+    """Re-order results using a cross-encoder, preserving original vector/BM25 scores.
 
-    Scores are sigmoid-normalised logits (0-1 range, higher = more relevant).
+    The cross-encoder is used solely for ranking order — it improves ordering for
+    natural-language queries against prose text.  Scores are intentionally NOT
+    replaced with sigmoid(logit) because the ms-marco cross-encoder was trained on
+    English web passages and produces near-zero logits for code content, which would
+    destroy the meaningful cosine-similarity scores from the vector stage.
+
     Falls back to original order if the reranker is unavailable or errors.
     """
     reranker = _get_reranker()
     if reranker is None:
         return results
     try:
-        from rag_server.ports.store_port import SearchResult as _SR
         pairs = [(query, r.content[:512]) for r in results]
         logits = reranker.predict(pairs)
         rescored = sorted(
@@ -467,10 +474,8 @@ def _rerank(results: list, query: str) -> list:
             key=lambda x: float(x[1]),
             reverse=True,
         )
-        return [
-            _SR(r.content, r.metadata, round(1.0 / (1.0 + math.exp(-float(s))), 4))
-            for r, s in rescored
-        ]
+        # Keep the original score — CE only controls ordering, not score value.
+        return [r for r, _s in rescored]
     except Exception as e:
         logger.warning("Reranker predict failed, using vector order: %s", e)
         return results

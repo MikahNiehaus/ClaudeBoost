@@ -64,7 +64,7 @@ CODE_CACHE = CACHE_DIR / "csn_code_embeddings_stripped.npy"
 DOC_CACHE = CACHE_DIR / "csn_doc_embeddings.npy"
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-N_EVAL = 500        # queries to evaluate (statistically solid; full=21K takes hours)
+N_EVAL = None       # None = full corpus (21K+); override with an int for a quick smoke-test
 N_POOL = 1000       # 1 correct + 999 random distractors per query (official protocol)
 RANDOM_SEED = 42
 
@@ -218,6 +218,8 @@ def _pool_mrr_recall(
     total = len(correct_indices)
     indices_to_eval = list(range(total))
     rng.shuffle(indices_to_eval)
+    if n is None:
+        n = total
     indices_to_eval = indices_to_eval[:n]
 
     all_idxs = list(range(len(code_vecs)))
@@ -278,7 +280,8 @@ def test_codesearchnet_1k_pool_official(corpus, embeddings):
     # Correct index for query i is i itself (self-retrieval protocol)
     correct_indices = list(range(len(corpus)))
 
-    print(f"\n[CSN-1K] Running 1K-pool evaluation ({N_EVAL} queries, pool={N_POOL}) ...")
+    n_queries_desc = f"full corpus ({len(corpus):,})" if N_EVAL is None else str(N_EVAL)
+    print(f"\n[CSN-1K] Running 1K-pool evaluation ({n_queries_desc} queries, pool={N_POOL}) ...")
     t0 = time.time()
     results = _pool_mrr_recall(
         query_vecs=doc_embs,
@@ -302,15 +305,16 @@ def test_codesearchnet_1k_pool_official(corpus, embeddings):
     print(f"{'='*64}")
     print(f"  Model:    {MODEL_NAME}")
     print(f"  Corpus:   {len(corpus):,} Python functions (full test set)")
-    print(f"  Queries:  {n} (random sample, seed={RANDOM_SEED})")
+    query_label = f"{n:,} (full corpus)" if N_EVAL is None else f"{n:,} (random sample, seed={RANDOM_SEED})"
+    print(f"  Queries:  {query_label}")
     print(f"  Pool:     {N_POOL} per query (1 correct + 999 random distractors)")
     print()
-    print(f"  {'Metric':<12} {'ClaudeBoost':>12}  {'NBOW':>8}  {'CodeBERT':>10}  {'GraphCodeBERT':>14}")
-    print(f"  {'-'*60}")
-    print(f"  {'Recall@1':<12} {r1:>11.1%}  {'~38%':>8}  {'~59%':>10}  {'~68%':>14}")
-    print(f"  {'Recall@5':<12} {r5:>11.1%}  {'~65%':>8}  {'~85%':>10}  {'~90%':>14}")
-    print(f"  {'Recall@10':<12} {r10:>11.1%}  {'~75%':>8}  {'~90%':>10}  {'~94%':>14}")
-    print(f"  {'MRR':<12} {mrr:>12.3f}  {'0.510':>8}  {'0.713':>10}  {'0.769':>14}")
+    print(f"  {'Metric':<12} {'ClaudeBoost':>12}  {'NBOW':>8}  {'CodeBERT':>10}  {'GraphCodeBERT':>14}  {'UniXcoder':>10}")
+    print(f"  {'-'*70}")
+    print(f"  {'Recall@1':<12} {r1:>11.1%}  {'~38%':>8}  {'~59%':>10}  {'~68%':>14}  {'~72%':>10}")
+    print(f"  {'Recall@5':<12} {r5:>11.1%}  {'~65%':>8}  {'~85%':>10}  {'~90%':>14}  {'~92%':>10}")
+    print(f"  {'Recall@10':<12} {r10:>11.1%}  {'~75%':>8}  {'~90%':>10}  {'~94%':>14}  {'~95%':>10}")
+    print(f"  {'MRR':<12} {mrr:>12.3f}  {'0.510':>8}  {'0.713':>10}  {'0.769':>14}  {'0.791':>10}")
     print()
     print(f"  Eval time: {elapsed:.1f}s for {n} queries")
     print(f"{'='*64}")
@@ -319,6 +323,10 @@ def test_codesearchnet_1k_pool_official(corpus, embeddings):
     print("  all-MiniLM-L6-v2 is a general-purpose model; code-specialized")
     print("  models like CodeBERT fine-tune on code-docstring pairs.")
 
+    # Regression guard — must beat published GraphCodeBERT baseline
+    assert mrr > 0.769, (
+        f"Regression: MRR {mrr:.3f} < GraphCodeBERT 0.769. Embedding pipeline degraded."
+    )
     # Sanity checks — any working embedding model should clear these bars
     assert mrr >= 0.20, (
         f"MRR = {mrr:.3f} is below floor (0.20). Embedding pipeline broken."

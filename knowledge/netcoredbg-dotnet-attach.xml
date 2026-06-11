@@ -1,0 +1,59 @@
+<knowledge-base name="netcoredbg-dotnet-attach" version="1.0">
+<triggers>netcoredbg, dotnet debugger, attach debugger, mcp-debugger dotnet, debug aspnet, debug csharp process, DAP tcp</triggers>
+<overview>How to attach netcoredbg to a running .NET process via TCP DAP for use with mcp-debugger. Includes the correct DAP protocol flow, known limitations, and Windows-specific issues.</overview>
+
+<setup>
+  <step>Download from https://github.com/Samsung/netcoredbg/releases (latest: 3.1.3-1062, Dec 2025)</step>
+  <step>Extract netcoredbg-win64.zip to C:/tools/netcoredbg/</step>
+  <step>Find target process PID: Get-Process -Name 'PantryLocator.WebAdmin' | Select-Object Id</step>
+  <step>Start in server+attach mode: netcoredbg.exe --interpreter=vscode --server=4711 --attach &lt;PID&gt;</step>
+  <step>IMPORTANT: Must include --attach &lt;PID&gt;. Server-only mode (no --attach) resets connection immediately.</step>
+</setup>
+
+<dap-protocol-flow>
+  <critical>netcoredbg sends ALL module/thread events IMMEDIATELY after client connects, BEFORE the client sends initialize.</critical>
+  <critical>The client MUST send initialize CONCURRENTLY (in a background recv thread), not sequentially after draining events.</critical>
+  <sequence>
+    <step>1. Client connects to TCP port 4711</step>
+    <step>2. Server immediately streams 100+ module events and thread events</step>
+    <step>3. Client sends initialize request (do NOT wait for event stream to finish — send immediately)</step>
+    <step>4. Server sends capabilities event + initialize response + initialized event</step>
+    <step>5. Client IMMEDIATELY sends configurationDone when initialized event arrives (no delay)</step>
+    <step>6. Server sends configurationDone response — session is live</step>
+    <step>7. Client can now send setBreakpoints and wait for stopped events</step>
+  </sequence>
+  <pitfall>Any sleep between connect and initialize sends will cause connection reset — the event stream completes and server closes if no initialize arrives in time.</pitfall>
+</dap-protocol-flow>
+
+<net10-incompatibility>
+  <status>BLOCKED as of 2026-06</status>
+  <symptom>netcoredbg crashes (and kills the target process) immediately after setBreakpoints is sent</symptom>
+  <symptom>initialize handshake succeeds, initialized event fires, but first post-handshake command crashes the server</symptom>
+  <root-cause>netcoredbg 3.1.3 cannot inject breakpoints into .NET 10 processes on Windows</root-cause>
+  <check-runtime>Look at module event paths — if they include 'Microsoft.NETCore.App\10.0.0' the process is running on .NET 10</check-runtime>
+  <note>DOTNET_ROLL_FORWARD=Disable does NOT help if the project itself targets net10.0 (TargetFramework in csproj)</note>
+  <workaround>Use Visual Studio Attach to Process — vsdbg is fully .NET 10 compatible</workaround>
+  <workaround>Use VS Code with C# Dev Kit extension — also uses vsdbg internally</workaround>
+</net10-incompatibility>
+
+<mcp-debugger-behavior>
+  <issue>mcp-debugger create_debug_session with host+port triggers attach immediately — gets ECONNRESET because it cannot handle the server-first event stream</issue>
+  <issue>mcp-debugger attach_to_process with host+port has the same issue — connects but server resets connection before initialize can be sent</issue>
+  <root-cause>mcp-debugger sends initialize synchronously after connecting, but netcoredbg may have already finished streaming events and closed by then</root-cause>
+  <status>mcp-debugger does not work with netcoredbg for .NET 10 projects — use raw TCP DAP client (Python script) or VS debugger</status>
+</mcp-debugger-behavior>
+
+<python-dap-client>
+  <description>Working Python pattern for DAP with netcoredbg — concurrent recv thread sends initialize immediately on connect</description>
+  <file>C:/Users/mniehaus/AppData/Local/Temp/test-dap-v5.py (from TFF-1038 session)</file>
+  <key-pattern>Start recv in thread. Send initialize with minimal delay (0.05s). In on_msg handler: when initialized event arrives, IMMEDIATELY send configurationDone (no sleep).</key-pattern>
+  <encoding>Force UTF-8 stdout on Windows: sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)</encoding>
+</python-dap-client>
+
+<app-restart-pattern>
+  <description>When netcoredbg crashes the target, restart with</description>
+  <script>C:/Users/mniehaus/AppData/Local/Temp/start-app.ps1</script>
+  <wait>python C:/Users/mniehaus/AppData/Local/Temp/wait-port.py 44392</wait>
+</app-restart-pattern>
+
+</knowledge-base>

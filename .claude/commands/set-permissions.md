@@ -47,7 +47,7 @@ Parse the `permissions` object. If missing `allow`, `ask`, or `deny` arrays, tre
 
 ### `list`
 
-Print a formatted table of all three lists:
+Read `~/.claude/settings.json` (global settings). Then print:
 
 ```
 Project permissions — .claude/settings.json
@@ -55,17 +55,25 @@ Project permissions — .claude/settings.json
 
 ALLOW (N)
   [1] Bash(npm *)
-  [2] Read
+  [2] Read                    ← also in global allow (redundant)
   ...
 
 ASK (N)
   [1] Bash(git push:*)
+  [2] Bash(curl:*)            ← overrides global allow (Bash is in global allow)
   ...
 
 DENY (N)
   [1] Bash(rm -rf /)
   ...
 ```
+
+Annotations to add per entry:
+- `← also in global allow (redundant)` — appears in both global allow and project allow
+- `← overrides global allow` — in project ask, but global allow has `"Bash"` or a matching pattern (project ask restricts further, which may be intentional)
+- `← also in global ask (this allow has no effect)` — in project allow, but global ask has a matching pattern (global ask wins; this entry does nothing)
+- `← also in global deny (shadowed)` — in project allow/ask but global deny blocks it
+- `← git write in wrong list (should be in ask)` — a git/gh write operation sitting in project allow; it will auto-approve without prompting, breaking the git read-only policy
 
 If a list is empty, print `  (empty)`.
 
@@ -77,9 +85,49 @@ If a list is empty, print `  (empty)`.
    - If already in the requested list → print "Already in [list]: [pattern]" and stop.
    - If in a DIFFERENT list → print warning: "Pattern is currently in [other-list]. Use `/set-permissions move [other-list] [target-list] <pattern>` to move it." Do NOT add a duplicate; stop.
 
-2. **Add the pattern** to the correct array in `TARGET_FILE`.
+2. **Global conflict check**: Read `~/.claude/settings.json`.
 
-3. Print: "Added to [list]: [pattern]  →  [TARGET_FILE]"
+   **If adding to `allow`**:
+   - If the global ask list contains the exact pattern OR a pattern that would match the same commands (e.g. global has `Bash(npm **)` and you're adding `Bash(npm:*)`), warn:
+     ```
+     Warning: ~/.claude/settings.json has a matching pattern in global ask.
+     Global ask beats project allow — this entry will have NO EFFECT.
+     To actually allow this without prompting, remove the global ask rule:
+       /set-global-permissions remove "[global-pattern]"
+     Add anyway? (yes/no)
+     ```
+     **Pause and wait for user confirmation before writing.**
+   - If the global deny list contains a matching pattern, warn: "A global deny rule blocks this command — adding it to project allow won't help. Remove the global deny rule first."
+
+   **If adding to `ask`**:
+   - If `"Bash"` is in global allow AND the pattern is `Bash(...)`, inform (not block):
+     ```
+     Note: ~/.claude/settings.json has "Bash" in global allow, meaning all Bash
+     commands are already auto-approved globally. Adding this to project ask
+     will make this specific command prompt in this project only.
+     This is intentional if you want extra confirmation here. Proceed? (yes/no)
+     ```
+     **Pause and wait for user confirmation before writing.**
+
+3. **Git write policy check** (applies when adding to `allow` only):
+
+   A pattern is a git write if it matches `Bash(git <subcommand>` where subcommand is any of: `commit`, `push`, `add`, `merge`, `rebase`, `reset`, `restore`, `clean`, `checkout`, `switch`, `stash`, `cherry-pick`, `revert`, `pull`, `rm`, `mv`, `init`, `clone`, `filter-branch`, `filter-repo`, `submodule`, `lfs`, `notes`, `worktree`, `sparse-checkout`, `am`, `apply`, `reflog`, `remote add`, `remote remove`, `remote set-url`, `branch -d`, `branch -m`, `branch -c`, `branch --copy`, `tag -a`, `tag -d`, `tag --delete`, `config --global`, `config --system`, `config --local`, `config --unset`. Also matches `Bash(gh pr create`, `Bash(gh pr edit`, `Bash(gh pr merge`, `Bash(gh pr close`, `Bash(gh issue create`, `Bash(gh issue close`, `Bash(gh release`, `Bash(gh repo create`, `Bash(gh gist`.
+
+   If the pattern is a git/gh write operation:
+   ```
+   Policy warning: "[pattern]" is a git write operation.
+   Git writes must always prompt — that's the point of having them in the global ask list.
+   Adding this to allow means it auto-approves without prompting, which breaks the policy.
+
+   Add to ask instead?  /set-permissions ask "[pattern]"
+
+   Type 'override' to add to allow anyway, or anything else to cancel.
+   ```
+   **Pause and wait for user response.** Only proceed if the user types `override`.
+
+4. **Add the pattern** to the correct array in `TARGET_FILE`.
+
+5. Print: "Added to [list]: [pattern]  →  [TARGET_FILE]"
 
 ---
 
@@ -87,8 +135,17 @@ If a list is empty, print `  (empty)`.
 
 1. Search all three lists for the exact pattern.
 2. If not found → print "Pattern not found in any list: [pattern]" and stop.
-3. Remove it from whichever list(s) contain it.
-4. Print: "Removed from [list]: [pattern]  →  [TARGET_FILE]"
+3. **Git write policy check** — if the pattern is found in `ask` AND matches a git/gh write operation (same subcommand list as the allow check above):
+   ```
+   Policy warning: "[pattern]" is a git write operation that must always prompt.
+   Removing it from ask means it falls through to the "Bash" global allow catch-all
+   and will auto-approve without prompting — breaking the git read-only policy.
+
+   Type 'confirmed' to remove anyway, or anything else to cancel.
+   ```
+   **Pause and wait for user response.** Only proceed if the user types `confirmed`.
+4. Remove it from whichever list(s) contain it.
+5. Print: "Removed from [list]: [pattern]  →  [TARGET_FILE]"
 
 ---
 
@@ -98,8 +155,16 @@ Valid list names: `allow`, `ask`, `deny`.
 
 1. Verify `from-list` and `to-list` are valid names. If not → print valid options and stop.
 2. Check the pattern exists in `from-list`. If not → print "Pattern not found in [from-list]: [pattern]" and stop.
-3. Remove from `from-list`, add to `to-list`.
-4. Print: "Moved [pattern]: [from-list] → [to-list]  →  [TARGET_FILE]"
+3. **Git write policy check** — if `to-list` is `allow` AND the pattern is a git/gh write operation (same subcommand list as above):
+   ```
+   Policy warning: "[pattern]" is a git write operation that must always prompt.
+   Moving it to allow means it will auto-approve without prompting, breaking the policy.
+
+   Type 'override' to move to allow anyway, or anything else to cancel.
+   ```
+   **Pause and wait for user response.** Only proceed if the user types `override`.
+4. Remove from `from-list`, add to `to-list`.
+5. Print: "Moved [pattern]: [from-list] → [to-list]  →  [TARGET_FILE]"
 
 ---
 

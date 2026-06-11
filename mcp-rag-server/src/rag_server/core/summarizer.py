@@ -2,9 +2,8 @@
 
 Priority order:
   1. Cache hit (member_hash + model both match) — return immediately.
-  2. Ollama at localhost:11434 — good for local dev sessions.
-  3. Claude API (ANTHROPIC_API_KEY env var) — standard sessions without Ollama.
-  4. Neither available — raises RuntimeError with a clear message.
+  2. Ollama at localhost:11434 — run `ollama serve` and `ollama pull qwen3:4b`.
+  3. Neither available — raises RuntimeError with a clear message.
 
 There is no heuristic fallback. Path-based summaries are noise, not signal.
 If the summary can't be generated, the caller knows about it immediately.
@@ -13,7 +12,6 @@ If the summary can't be generated, the caller knows about it immediately.
 import hashlib
 import json
 import logging
-import os
 import re
 import urllib.request
 from pathlib import Path
@@ -29,9 +27,6 @@ _OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 _PROMPT_CHAR_BUDGET = 150
 _MAX_MEMBERS_IN_PROMPT = 10
 _TIMEOUT_SECONDS = 600
-_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
-
-
 # Bump when the prompt or extraction logic changes significantly.
 # Existing cached summaries will have a different hash and be regenerated.
 _HASH_VERSION = "v4"
@@ -68,9 +63,8 @@ def summarize_community(
 ) -> str:
     """Return a cached or freshly-generated summary for the community.
 
-    Cache hit: member_hash matches and model is any known LLM model → return cached text.
-    Cache miss: try Ollama, then Claude API.
-    No LLM available: raises RuntimeError with a clear message.
+    Cache hit: member_hash matches → return cached text.
+    Cache miss: try Ollama. If Ollama is unavailable, raises RuntimeError with a clear message.
     """
     if not members:
         return ""
@@ -78,11 +72,9 @@ def summarize_community(
     member_hash = compute_member_hash(members)
 
     cached = graph_store.get_community_summary(community_id)
-    _known_models = (model, _CLAUDE_MODEL)
     if (
         cached
         and cached["member_hash"] == member_hash
-        and cached["model"] in _known_models
     ):
         logger.debug("Community %d summary cache hit (model=%s)", community_id, cached["model"])
         return cached["summary"]
@@ -103,23 +95,15 @@ def summarize_community(
         + context_block
     )
 
-    # Try Ollama first
+    # Try Ollama
     ollama_text = _summarize_via_ollama(prompt, model)
     if ollama_text:
         graph_store.save_community_summary(community_id, ollama_text, member_hash, model)
         logger.debug("Community %d summary via Ollama (%d chars)", community_id, len(ollama_text))
         return ollama_text
 
-    # Try Claude API
-    claude_text = _summarize_via_claude(prompt)
-    if claude_text:
-        graph_store.save_community_summary(community_id, claude_text, member_hash, _CLAUDE_MODEL)
-        logger.debug("Community %d summary via Claude API (%d chars)", community_id, len(claude_text))
-        return claude_text
-
-
     # Small multi-member communities: generate a name-based summary from all member paths.
-    # Better than nothing when both LLMs are unavailable.
+    # Better than nothing when Ollama is unavailable.
     if len(members) <= 5:
         names = ", ".join(
             Path(m).stem.replace("-", " ").replace("_", " ") for m in members
@@ -129,11 +113,10 @@ def summarize_community(
         logger.info("Community %d small-cluster path-fallback summary", community_id)
         return fallback
 
-    # Neither LLM is available — fail clearly
+    # Ollama is not available — fail clearly
     raise RuntimeError(
-        f"Community {community_id} summary failed: Ollama is not running and "
-        "ANTHROPIC_API_KEY is not set. Start Ollama (ollama serve) or set "
-        "ANTHROPIC_API_KEY to generate community summaries."
+        f"Community {community_id} summary failed: Ollama is not running. "
+        "Start Ollama with `ollama serve` and pull the model with `ollama pull qwen3:4b`."
     )
 
 
@@ -167,7 +150,7 @@ def _extract_summary(text: str) -> str:
        are handled correctly.
     3. Paragraph-walk heuristic — walk backward from the end, stopping at analysis markers.
 
-    Claude API responses are always clean (no markers, no preamble).
+    Clean responses (no markers, no preamble) return immediately via the first-paragraph check.
     """
     # 1. </think> tag — take everything after it
     if "</think>" in text:
@@ -180,7 +163,7 @@ def _extract_summary(text: str) -> str:
         return text.strip()
 
     # If the first paragraph looks clean, the whole response is the summary.
-    # Claude API responses always take this path. Do NOT run label detection on
+    # Clean (non-qwen3) responses always take this path. Do NOT run label detection on
     # already-clean text — the body might contain phrases like "final version"
     # that would cause false matches.
     first_lower = paragraphs[0].lower()
@@ -213,7 +196,7 @@ def _extract_summary(text: str) -> str:
         return _clean_extracted("\n\n".join(clean))
 
     # Nothing clean found — all paragraphs look like analysis.
-    # Return "" so the caller falls through to Claude API or path fallback.
+    # Return "" so the caller falls through to path fallback.
     return ""
 
 
@@ -259,32 +242,10 @@ def _summarize_via_ollama(prompt: str, model: str) -> str:
             return ""
         return full
     except OSError:
-        logger.info("Ollama not reachable — will try Claude API")
+        logger.info("Ollama not reachable at %s", _OLLAMA_CHAT_URL)
         return ""
     except Exception:
         logger.warning("Ollama chat request failed", exc_info=True)
-        return ""
-
-
-def _summarize_via_claude(prompt: str) -> str:
-    """Return summary text from Claude Haiku via ANTHROPIC_API_KEY, or '' if unavailable."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return ""
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model=_CLAUDE_MODEL,
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
-    except ImportError:
-        logger.debug("anthropic package not installed — Claude API fallback unavailable")
-        return ""
-    except Exception:
-        logger.warning("Claude API summarizer failed", exc_info=True)
         return ""
 
 

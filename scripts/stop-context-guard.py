@@ -24,6 +24,7 @@ from pathlib import Path
 THRESHOLD = 5        # tool uses before guard activates (was 40 -- too lenient)
 FIRE_EVERY = 5       # only check every N uses past threshold (was 20)
 STALE_MINUTES = 10   # context.md older than this is considered stale (was 20)
+SESSION_WINDOW_HOURS = 4  # workspaces untouched longer than this aren't "active" this session
 
 
 def main() -> int:
@@ -48,13 +49,19 @@ def main() -> int:
     if (edit_count - THRESHOLD) % FIRE_EVERY != 0:
         return 0
 
-    # Find all active workspace context.md files
+    # Find workspace context.md files touched this session.
+    # Ignore workspaces from previous sessions — a context.md from yesterday
+    # has nothing to do with today's work and shouldn't block stopping.
     if not workspace_dir.exists():
         return 0
 
-    context_files = list(workspace_dir.glob("*/context.md"))
+    session_cutoff = time.time() - SESSION_WINDOW_HOURS * 3600
+    context_files = [
+        f for f in workspace_dir.glob("*/context.md")
+        if f.stat().st_mtime >= session_cutoff
+    ]
     if not context_files:
-        return 0
+        return 0  # no active workspace this session
 
     # Check the most recently modified context.md
     most_recent = max(context_files, key=lambda f: f.stat().st_mtime)
