@@ -434,17 +434,7 @@ Write `$WORKSPACE_ABS/plan.md`:
 [Copy checklist from definition-of-done.md]
 ```
 
-**4d — Anti-Hallucination Verification.**
-
-Before presenting the plan to the user, run `/audit $WORKSPACE_ABS/plan.md` with:
-- Input type: `output`
-- Stated goal: contents of `$WORKSPACE_ABS/ticket.md`
-- Dimensions: O1 Completion Coverage, O3 Goal Alignment, O4 Internal Consistency, P6 Completion Coverage
-
-If verdict is VERIFIED or PARTIALLY VERIFIED: present the plan and ask for approval as normal.
-If verdict is UNVERIFIED: surface the specific gaps identified by the audit alongside the plan so the user can see what's missing before approving.
-
-**4e — Present plan to user.**
+**4d — Present plan to user.**
 
 Print the full plan. Then ask:
 

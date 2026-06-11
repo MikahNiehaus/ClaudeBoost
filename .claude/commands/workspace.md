@@ -582,16 +582,6 @@ Last updated: [today]
 
 ---
 
-## Phase 5.5: Anti-Hallucination Verification
-
-Before presenting the plan to the user, run `/audit $WORKSPACE_ABS/plan.md` with:
-- Input type: `output`
-- Stated goal: the task description from `$ARGUMENTS` (or from `goal.md` / `ticket.md` if a full ticket was pasted)
-- Dimensions: O1 Completion Coverage, O3 Goal Alignment, O4 Internal Consistency, P6 Completion Coverage
-
-If verdict is VERIFIED or PARTIALLY VERIFIED: present the plan to the user as normal.
-If verdict is UNVERIFIED: surface the specific gaps identified by the audit alongside the plan so the user can see what's missing before approving.
-
 ## Phase 6: Present to User
 
 Print the full `plan.md`.
