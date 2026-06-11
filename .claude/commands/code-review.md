@@ -144,14 +144,34 @@ mode=graph surfaces structural neighbours (what imports/inherits from the change
 
 Read only the files that appeared in the RAG search results above — they are already identified as the most relevant. Do NOT skip this — agents need to be primed with precise instructions, not generic ones.
 
-**1d — Ticket context:**
+**1d — Ticket context (read BEFORE analyzing the diff):**
 
 Check for ticket/issue reference in:
 1. `$ARGUMENTS` — does it mention a ticket number, PR, or issue URL?
 2. `git log --oneline -5` — any ticket refs in commit messages?
 3. `workspace/*/ticket.md` files if any exist
 
-If found, read it fully. Pass 8 (Ticket Alignment) is mandatory regardless.
+If found, read it fully **before proceeding to pass selection**. Extract and print this block verbatim before continuing — this is a hard gate, do not proceed to Phase 2 until it is printed:
+
+```
+TICKET CONTEXT EXTRACTED:
+  TICKET_ARTIFACT_TYPE     : <endpoint | page | service | component | controller | migration | other — use exact ticket wording>
+  TICKET_ACCEPTANCE_CRITERIA:
+    - AC1: <first item>
+    - AC2: <second item>
+    ...
+  TICKET_ROUTING_OR_PATTERN: <any routing, pattern, or integration constraints — e.g. "on the Admin Portal", "same response shape as other authenticated endpoints", or "none stated">
+```
+
+If no ticket is found, print:
+```
+TICKET CONTEXT EXTRACTED:
+  TICKET_ARTIFACT_TYPE     : unknown — no ticket found, using git commit intent
+  TICKET_ACCEPTANCE_CRITERIA: none — inferred from commit messages
+  TICKET_ROUTING_OR_PATTERN: none stated
+```
+
+Pass 8 (Ticket Alignment) is mandatory regardless.
 
 **1e — Report findings to user:**
 
@@ -281,9 +301,27 @@ Question: Read every line like you didn't write it. "Why does this exist? What w
 
 **Pass 8 — Ticket Alignment (NEVER SKIP)**
 Question: Does this PR implement exactly what the ticket asks for — no more, no less?
-- Re-read the ticket/commit intent after reviewing the code. Check acceptance criteria one by one.
+- **Read the ticket FIRST, before the diff.** Use `TICKET_ARTIFACT_TYPE`, `TICKET_ACCEPTANCE_CRITERIA`, and `TICKET_ROUTING_OR_PATTERN` extracted in Phase 1d.
+- **Artifact type check** — if the ticket says "endpoint", verify the implementation is a Controller action, not a Razor Page, and vice versa. If the ticket says "page", verify a Razor Page was used. Any mismatch between the ticket's artifact language and the implementation pattern is a BLOCKER.
+- **Architecture prerequisites check** — if the implementation uses a pattern (e.g. a Controller), verify the infrastructure for it exists (e.g. `MapControllers()` wired in Startup, correct service registrations). If it doesn't exist, flag as BLOCKER: "Pattern requires infrastructure that isn't set up."
+- **Acceptance criteria** — check each AC item one by one against the diff. Missing item = BLOCKER. Partially implemented = WARNING.
 - Flag scope creep — anything added that wasn't in the ticket.
 - Flag missing items — anything in the ticket not addressed by the diff.
+
+Pass 8 output MUST include these fields or the Evaluator will treat it as an incomplete pass:
+```json
+{
+  "pass": 8,
+  "name": "Ticket Alignment",
+  "artifact_type_checked": true,
+  "artifact_type_match": true,
+  "prerequisites_verified": true,
+  "findings": []
+}
+```
+If `artifact_type_checked` is missing or false → Evaluator flags Pass 8 as INCOMPLETE (automatic WARNING).
+If `artifact_type_match` is false → Evaluator upgrades to BLOCKER regardless of findings array.
+If `prerequisites_verified` is false → Evaluator flags as WARNING to investigate manually.
 
 **Pass 9 — Spec Precision**
 USE_GRAPH: yes

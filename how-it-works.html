@@ -189,7 +189,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
         <div class="card" style="border-left-color:#0ea5e9" onclick="showDetail('you')">
           <span class="card-icon">👤</span>
           <div class="card-title">You</div>
-          <div class="card-sub">Chat · tickets · slash commands</div>
+          <div class="card-sub">Say what you want, or paste a ticket</div>
         </div>
         <div class="card" style="border-left-color:#64748b" onclick="showDetail('session-start')">
           <span class="card-icon">🚀</span>
@@ -410,8 +410,8 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
         </div>
         <div class="card star-card" style="border-left-color:#0ea5e9;max-width:165px" onclick="showDetail('graph-rag')">
           <span class="card-icon">🌐</span>
-          <div class="card-title">Graph RAG</div>
-          <div class="card-sub">tree-sitter AST · import/inherit chains</div>
+          <div class="card-title">Dependency Graph Search</div>
+          <div class="card-sub">import & inherit chains · zero hallucinated edges</div>
           <div class="card-badge" style="color:#7dd3fc">Deterministic</div>
         </div>
       </div>
@@ -503,7 +503,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
       <div class="audio-section-label">Now playing</div>
       <div class="audio-section-text idle" id="audioSectionText">Press ▶ to start the guided audio walkthrough · click any card to explore</div>
     </div>
-    <div class="audio-counter" id="audioProgressLabel">0 / 12</div>
+    <div class="audio-counter" id="audioProgressLabel">0 / 7</div>
     <div class="audio-select-group">
       <div class="audio-select-label">Speed</div>
       <select class="audio-select" id="speedSelect">
@@ -557,19 +557,29 @@ const TBL = (headers, rows) => `<table style="width:100%;border-collapse:collaps
 const COMPONENTS = {
 
   'you': { title: 'You — the human in the loop', badge: '👤 Input',
-    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">You interact with Claude Code exactly as normal. ClaudeBoost changes how Claude thinks behind the scenes — not how you type.</div>
-${SEC('What you do')}
-${FR('#0ea5e9','Type a request, paste a ticket, or run a slash command','')}
-${AW()}${FR('#f97316','Orchestrator classifies and routes','No extra steps from you')}
-${AW()}${FR('#22c55e','Result delivered with file:line evidence','')}
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Say what you want, or paste a ticket. That is the entire input. ClaudeBoost handles everything behind the scenes — your workflow doesn't change.</div>
+${SEC('Three ways to interact')}
+${FR('#0ea5e9','Type a request','e.g. "fix the login bug" or "add dark mode to the settings page"')}
+${FR('#0ea5e9','Paste a ticket','Drop in the full ticket text — Jira, Linear, Notion, plain text, anything')}
+${FR('#0ea5e9','Run a slash command','e.g. /boost to start, /code-review when done, /rag if something breaks')}
+${AW()}${FR('#f97316','Orchestrator reads it and decides what to do','No extra steps from you')}
+${AW()}${FR('#22c55e','Result delivered with file:line citations on every finding','')}
 ${SEC('Architecture decisions come back to you')}
-${FR('#8b5cf6','New endpoint / table / dependency?','CONSULT mode presents 2-3 options and waits for your approval')}` },
+${FR('#8b5cf6','New endpoint / table / dependency?','ClaudeBoost stops, presents 2-3 options, and waits for your pick')}` },
 
   'session-start': { title: 'Session Start', badge: '🚀 Lifecycle',
-    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every session starts with automatic health checks so you never work with a broken environment.</div>
+    html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every session starts with automatic health checks so you never work with a broken environment. Run <strong style="color:#f1f5f9">/boost</strong> to trigger this.</div>
 ${FR('#10b981','GET /status — RAG server health','Confirms server is alive and indexes are current')}
 ${AW()}${FR('#f59e0b','Load CLAUDE.md rules into context','jQuery ban, parameterized queries, no secrets — hard rules')}
 ${AW()}${FR('#a855f7','Inject sentinel — agent spawns blocked without /rag','Guards against degraded sessions')}
+${SEC('Status indicators (bottom of screen)')}
+<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">
+<tr><td style="padding:3px 6px;color:#22c55e;font-weight:700">CB ●</td><td style="color:#cbd5e1">ClaudeBoost active — rules and hooks loaded</td></tr>
+<tr><td style="padding:3px 6px;color:#22c55e;font-weight:700">RAG ●</td><td style="color:#cbd5e1">Knowledge server running on port 8612</td></tr>
+<tr><td style="padding:3px 6px;color:#22c55e;font-weight:700">PW ●</td><td style="color:#cbd5e1">Playwright ready — browser automation available</td></tr>
+<tr><td style="padding:3px 6px;color:#22c55e;font-weight:700">DBG ●</td><td style="color:#cbd5e1">Debugger connected — step-through debugging available</td></tr>
+</table>
+<div style="font-size:10px;color:#64748b;margin-top:6px">All green = every system live. Any red = run /rag or /setup to fix.</div>
 ${SEC('If RAG is down')}
 ${FR('#ef4444','HARD STOP — Claude tells you to run /rag','No investigation, no grepping as a substitute')}` },
 
@@ -700,7 +710,7 @@ ${FR('#a855f7','POST /context','4-tier knowledge fetch')}
 ${FR('#a855f7','POST /search','Semantic search — scope: agents/knowledge/codebase')}
 ${FR('#a855f7','POST /index','Index or re-index a project')}` },
 
-  'graph-rag': { title: 'Graph RAG — Structural Code Search', badge: '🌐 Unique Feature',
+  'graph-rag': { title: 'Dependency Graph Search', badge: '🌐 Unique Feature',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Combines vector search with a structural code graph built from tree-sitter AST parsing. Deterministic — no hallucinated edges.</div>
 ${FR('#0ea5e9','1. tree-sitter parses every source file','Extracts: imports, function calls, class inheritance, exports')}
 ${AW()}${FR('#0ea5e9','2. Build directed graph: A imports B = edge A→B','Stored in graph.db alongside the vector index')}
@@ -710,7 +720,7 @@ ${FR('#a855f7','POST /search scope=codebase mode=graph','Vector matches + struct
 ${SEC('Why it matters')}
 <div style="font-size:10px;color:#94a3b8;line-height:1.6">Search for "authentication" and get the auth service, plus every controller and middleware that imports it — without asking. That's the difference between finding where code is and understanding where it's used.</div>` },
 
-  'graph-rag-vs-ai': { title: 'Graph RAG vs. AI Extraction', badge: '🌐 Differentiator',
+  'graph-rag-vs-ai': { title: 'Dependency Graph vs. AI Extraction', badge: '🌐 Differentiator',
     html: `${SEC('Microsoft GraphRAG — AI extraction')}
 ${FR('#ef4444','Feed code to an LLM','Ask it to extract entities and relationships')}
 ${AW()}${FR('#ef4444','LLM infers: "AuthService probably relates to TokenValidator"','Inference can hallucinate relationships that don\'t exist')}
@@ -723,7 +733,7 @@ ${SEC('Cost & Speed')}
 ${FR('#ef4444','Microsoft GraphRAG: ~$30,000 to index 5 GB','Inference tokens at scale. Slow. Cloud-dependent.')}
 ${FR('#22c55e','ClaudeBoost: free · runs on a CPU · re-indexes on save','No cloud, no GPU, no waiting. File watcher triggers automatically.')}
 ${SEC('Result')}
-${FR('#a855f7','Zero hallucinated edges · C# MRR 0.950 · R@1 91.7% · free','Beats fine-tuned models for C# — zero training data, zero cloud cost')}` },
+${FR('#a855f7','Zero hallucinated edges · 83% R@1 on CodeSearchNet · free','Beats GraphCodeBERT (68% R@1) — a leading code-search model — at zero cost')}` },
 
   'rag-tiers': { title: 'RAG Tiers 0-4 — Layered Knowledge Loading', badge: '🏗 Architecture',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Every POST /context returns up to 5 tiers assembled from multiple sources. An agent working on TypeScript React code automatically gets all of this — without manual configuration.</div>
@@ -738,7 +748,7 @@ ${FR('#a855f7','Semantic search across ALL 106 knowledge bases','Query = agent +
 ${FR('#8b5cf6','Tier 3c: task-specific research','workspace_path → loads /research-rag indexed docs for this task')}
 ${SEC('Tier 4 — Project source code')}
 ${FR('#0ea5e9','Semantic search of codebase (project_path)','')}
-${FR('#06b6d4','Tier 4b: Graph RAG neighbors','Files that import the Tier 4 seed results — automatic')}` },
+${FR('#06b6d4','Tier 4b: Dependency graph neighbors','Files that import the Tier 4 seed results — automatic')}` },
 
   'knowledge-rail': { title: '106 Knowledge Bases', badge: '📚 Knowledge Layer', file: 'knowledge/',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">XML files covering every domain agents need. Loaded semantically at runtime — agents search them, not memorize them.</div>
@@ -855,12 +865,16 @@ ${FR('#64748b','Playwright: localhost only — 127.0.0.1, *.local, *.test','')}`
 
   'slash-commands': { title: '44 Slash Commands — Available Everywhere', badge: '⌨ Interface',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">setup.py mirrors commands from .claude/commands/ to ~/.claude/commands/ — available in every project via symlink.</div>
-${FR('#f97316','/boost — activate all systems at session start','')}
-${FR('#f97316','/rag — start/restart the RAG server','')}
-${FR('#f97316','/setup — install + verify all components','')}
-${FR('#8b5cf6','/consult · /auto — toggle collaboration mode','')}
-${FR('#22c55e','/review — spawn reviewer-agent (Opus)','')}
+${SEC('Session flow')}
+${FR('#f97316','/boost — start of every session','Verifies RAG, loads workspace context, confirms all 4 status indicators are green')}
+${FR('#f97316','/rag — start/restart the RAG server','Run this if the RAG dot goes red')}
+${SEC('During a ticket')}
+${FR('#8b5cf6','/consult · /auto — toggle how Claude handles architecture','CONSULT = ask first (default). AUTO = just do it.')}
+${FR('#22c55e','/code-review — run the 15-pass review','14 parallel Sonnet agents + 1 independent evaluator. Use when implementation is done.')}
+${FR('#22c55e','/review — spawn reviewer-agent (Opus)','Full code review with verify gate')}
 ${FR('#a855f7','/research-rag [task-id] — index external docs for a task','')}
+${SEC('Other')}
+${FR('#f97316','/setup — install + verify all components','')}
 ${FR('#0ea5e9','/visualize — interactive architecture board (this diagram)','')}` },
 
   'parallel-agents': { title: 'Parallel Agents — Budget-Aware', badge: '⚡ Performance',
@@ -877,7 +891,7 @@ ${FR('#c0392b','Verify gate — file:line citation required or finding dropped',
 ${FR('#c0392b','Evaluator-agent — never self-verify','')}
 ${SEC('Knowledge')}
 ${FR('#a855f7','106 knowledge bases loaded semantically — not memorized','')}
-${FR('#a855f7','Graph RAG: tree-sitter AST — zero hallucinated relationships','')}
+${FR('#a855f7','Dependency Graph Search: tree-sitter AST — zero hallucinated relationships','')}
 ${SEC('Continuity')}
 ${FR('#f59e0b','workspace/context.md survives compaction','')}
 ${FR('#f59e0b','/clear-safe — verify before clearing, never lose work','')}
@@ -973,76 +987,86 @@ function downloadSVG() {
 // ─── Tour segments ────────────────────────────────────────────────────────────
 const TOUR_SEGMENTS = [
   {
-    label: 'Introduction',
-    text: 'AI can write code fast. That has never been the bottleneck. The bottleneck is what happens after. A new table nobody approved. An auth pattern nobody reviewed. Three different error-handling styles in the same file. It ships because the tests pass. Six months later, the codebase is a maintenance problem nobody wanted to own. Most AI coding tools make this worse — they just make the same low-quality code arrive faster. ClaudeBoost starts from a different premise entirely. Speed is a solved problem. Quality is the hard part. Twenty-four specialist agents — security, architecture, testing, database, observability — each focused on one domain and nothing else. A RAG system that loads exactly the right knowledge for every task before a single line is written. And a verify gate that requires a file-and-line citation before any finding gets acted on. The goal is not faster code. It is production-ready, highly tested, maintainable code — delivered correctly the first time.',
+    label: 'Introduction — The Problem with AI Code',
+    text: 'AI can write code fast. That has never been the bottleneck. The bottleneck is what happens after. A new table nobody approved. An auth pattern nobody reviewed. Three different error-handling styles in the same file. It ships because the tests pass. Six months later, the codebase is a maintenance problem nobody wanted to own. Most AI coding tools make this worse — they just make the same low-quality code arrive faster. ClaudeBoost starts from a different premise. Speed is a solved problem. Quality is the hard part. Let\'s follow one ticket through the system and see exactly what that looks like.',
     highlights: [],
     scrollTo: null
   },
   {
-    label: 'You — the Human in the Loop',
-    text: 'You work exactly as you always have. Type a request. Paste a ticket. Run a slash command. Nothing about your workflow changes. What changes is what happens behind the scenes. Before Claude touches code, it classifies the task, loads the right knowledge, and — for any new endpoint, new table, or new dependency — stops and asks you. New endpoint? It waits. New database table? It waits. New auth strategy? It waits. You stay in the loop without having to chase it.',
-    highlights: ['you', 'session-start'],
-    scrollTo: 'you'
+    label: 'The Ticket Arrives — Starting a Session',
+    text: 'Your manager drops a ticket: add profile photo upload. JPEG or PNG, max five megabytes. You open Claude Code. Here is the input: say what you want, or paste the ticket. No template, no special format. You type slash boost. Four indicators appear at the bottom of your screen: CB, RAG, PW, and DBG. All green means every system is live. ClaudeBoost active, the knowledge server running, browser testing ready, the debugger connected. Slash boost starts every session. Slash code review ends it. Slash rag restarts the knowledge server if anything goes red. You paste the ticket. The orchestrator reads it and asks one question before touching any file: is this simple, or complex? A new API endpoint and a new database column are structural changes, expensive to reverse. This classifies as complex. A workspace folder is created, and the orchestrator maps the files it will need to touch.',
+    highlights: ['you', 'session-start', 'slash-commands', 'classify-q', 'complex-path'],
+    scrollTo: 'you',
+    steps: [
+      {text: 'Your manager drops a ticket: add profile photo upload. JPEG or PNG, max five megabytes.', card: null},
+      {text: 'You open Claude Code. Here is the input: say what you want, or paste the ticket. No template, no special format.', card: 'you'},
+      {text: 'You type slash boost. Four indicators appear at the bottom of your screen: CB, RAG, PW, and DBG. All green means every system is live. ClaudeBoost active, the knowledge server running, browser testing ready, the debugger connected.', card: 'session-start'},
+      {text: 'Slash boost starts every session. Slash code review ends it. Slash rag restarts the knowledge server if anything goes red.', card: 'slash-commands'},
+      {text: 'You paste the ticket. The orchestrator reads it and asks one question before touching any file: is this simple, or complex?', card: 'classify-q'},
+      {text: 'A new API endpoint and a new database column are structural changes, expensive to reverse. This classifies as complex. A workspace folder is created, and the orchestrator maps the files it will need to touch.', card: 'complex-path'}
+    ]
   },
   {
-    label: 'Task Classification — Simple vs Complex',
-    text: 'Before reading a single file, the orchestrator asks one question: is this simple or complex? Simple work — a typo fix, a rename, a one-liner — gets direct execution. No ceremony. Complex work — a ticket, a multi-file change, a new subsystem — gets a workspace folder, sweeps across nine quality domains, and the right specialist agents. Scope tiers: five to ten files is a feature. Ten to fifteen is complex. More than fifteen, or any new subsystem, requires a product requirements document first. The system scales its response to match the risk.',
-    highlights: ['classify-q', 'simple-path', 'complex-path'],
-    scrollTo: 'classify-q'
+    label: 'It Asks Before It Builds — CONSULT Mode',
+    text: 'Before writing a line of code, ClaudeBoost stops. CONSULT mode fires automatically. A new endpoint is a decision that is expensive to reverse, so the system asks before acting. An Opus architect agent researches your codebase and presents three options: direct to cloud storage, server side processing, or a third party service. Tradeoffs in plain language. You pick one. You add your requirements. Five megabyte limit, virus scan before storage, whatever your system needs. That choice is locked in for the session. Everything else runs at full speed from here.',
+    highlights: ['consult-q', 'architect-agent', 'consult-yes'],
+    scrollTo: 'consult-q',
+    steps: [
+      {text: 'Before writing a line of code, ClaudeBoost stops. CONSULT mode fires automatically. A new endpoint is a decision that is expensive to reverse, so the system asks before acting.', card: 'consult-q'},
+      {text: 'An Opus architect agent researches your codebase and presents three options: direct to cloud storage, server side processing, or a third party service. Tradeoffs in plain language. You pick one.', card: 'architect-agent'},
+      {text: 'You add your requirements. Five megabyte limit, virus scan before storage, whatever your system needs. That choice is locked in for the session. Everything else runs at full speed from here.', card: 'consult-yes'}
+    ]
   },
   {
-    label: 'CONSULT Mode — You Control Architecture',
-    text: 'Here is the most important thing ClaudeBoost does. The obvious objection is that stopping for approval adds friction. It does not — CONSULT mode only fires on irreversible decisions. New table, new auth strategy, new external dependency — the five percent of cases where getting it wrong costs real time. Everything else runs at full speed. When it does stop, it spawns an Opus architect agent to research the options, then presents you two or three choices with clear tradeoffs. You pick one. You add constraints. Rate limits, size caps, whatever matters to your system. Then Claude implements. You cannot accidentally end up with an architecture you did not choose. Standards like parameterized queries and error logging apply automatically, in every mode.',
-    highlights: ['consult-q', 'consult-yes', 'consult-no'],
-    scrollTo: 'consult-q'
+    label: 'The Right Knowledge Loads — RAG in Action',
+    text: 'Every agent queries the knowledge server before it starts. This is what makes each one an expert, not just generically, but for this specific task. The RAG system loads knowledge in layers. Hard guardrails first. Then the agent\'s declared domain. OWASP for the security agent. Your testing conventions for the test agent. Your migration standards for the database agent. Then related areas. The last layer is your actual codebase. The security agent does not just know file upload security in general. It knows your validation layer. Your auth patterns. The exact path a file takes through your specific app. That specificity is what separates a useful finding from a generic warning. What makes codebase search accurate is structural mapping. The system knows which files import which, which classes extend which. When an agent looks at your upload handler, it automatically surfaces your auth middleware, your validation layer, everything structurally connected to the files being changed. Not just files that mention similar words. Files that actually depend on each other. The server runs on your machine. No cloud, no GPU, just a CPU. It reindexes fast enough that you never notice it happened. And it outperforms leading code search models at zero ongoing cost.',
+    highlights: ['agent-query', 'rag-tiers', 'knowledge-rail', 'graph-rag', 'rag-server'],
+    scrollTo: 'agent-query',
+    steps: [
+      {text: 'Every agent queries the knowledge server before it starts. This is what makes each one an expert, not just generically, but for this specific task.', card: 'agent-query'},
+      {text: 'The RAG system loads knowledge in layers. Hard guardrails first. Then the agent\'s declared domain. OWASP for the security agent. Your testing conventions for the test agent. Your migration standards for the database agent. Then related areas.', card: 'rag-tiers'},
+      {text: 'The last layer is your actual codebase. The security agent does not just know file upload security in general. It knows your validation layer. Your auth patterns. The exact path a file takes through your specific app. That specificity is what separates a useful finding from a generic warning.', card: 'knowledge-rail'},
+      {text: 'What makes codebase search accurate is structural mapping. The system knows which files import which, which classes extend which. When an agent looks at your upload handler, it automatically surfaces your auth middleware, your validation layer, everything structurally connected to the files being changed. Not just files that mention similar words. Files that actually depend on each other.', card: 'graph-rag'},
+      {text: 'The server runs on your machine. No cloud, no GPU, just a CPU. It reindexes fast enough that you never notice it happened. And it outperforms leading code search models at zero ongoing cost.', card: 'rag-server'}
+    ]
   },
   {
-    label: 'Specialist Agents — Opus for Strategy, Sonnet for Execution',
-    text: 'Twenty-four specialist agents. Each covers a specific engineering domain: security, performance, debugging, refactoring, testing, browser automation, DevOps, database, observability, compliance, and more. Three run on Opus — architect, reviewer, and ticket analyst — because they handle strategic decisions where reasoning depth matters most. The other twenty-one run on Sonnet: fast, focused, purpose-built. Every agent\'s first action is to call the RAG server and load the knowledge that is specifically relevant to its task. It doesn\'t run on general training data — it researches, it indexes, and it decides from objective, current knowledge. No agent goes in blind.',
-    highlights: ['architect-agent', 'reviewer-agent', 'ticket-analyst-agent', 'evaluator-agent', 'security-agent', 'test-agent', 'e2e-agent', 'database-agent', 'devops-agent', 'research-agent'],
-    scrollTo: 'architect-agent'
+    label: 'Specialists Get to Work — Agents and the Verify Gate',
+    text: 'The security agent checks that uploaded files are validated before they reach storage. File type, size, content. It knows exactly where your validation code lives because RAG loaded your codebase. The test agent writes the edge cases: zero byte files, corrupt headers, concurrent uploads from the same user. Then Playwright drives the browser through the actual upload flow end to end. The debugger steps through any failure at the code level. Both were confirmed live when you ran slash boost. The performance agent spots that the new column needs a database index. Small thing, easy to miss, already caught before the PR. Every finding comes back with an exact file name and line number. If it cannot point to real code in your project, it is out. The workspace captures proof of every check. An independent evaluator reads only the cited locations. It does not see the agents\' reasoning. It reads the code and returns a verdict. The orchestrator acts only on what the evaluator confirms.',
+    highlights: ['security-agent', 'test-agent', 'e2e-agent', 'performance-agent', 'verify', 'evaluator-detail'],
+    scrollTo: 'security-agent',
+    steps: [
+      {text: 'The security agent checks that uploaded files are validated before they reach storage. File type, size, content. It knows exactly where your validation code lives because RAG loaded your codebase.', card: 'security-agent'},
+      {text: 'The test agent writes the edge cases: zero byte files, corrupt headers, concurrent uploads from the same user.', card: 'test-agent'},
+      {text: 'Then Playwright drives the browser through the actual upload flow end to end. The debugger steps through any failure at the code level. Both were confirmed live when you ran slash boost.', card: 'e2e-agent'},
+      {text: 'The performance agent spots that the new column needs a database index. Small thing, easy to miss, already caught before the PR.', card: 'performance-agent'},
+      {text: 'Every finding comes back with an exact file name and line number. If it cannot point to real code in your project, it is out. The workspace captures proof of every check.', card: 'verify'},
+      {text: 'An independent evaluator reads only the cited locations. It does not see the agents\' reasoning. It reads the code and returns a verdict. The orchestrator acts only on what the evaluator confirms.', card: 'evaluator-detail'}
+    ]
   },
   {
-    label: 'RAG Server — The Knowledge Brain',
-    text: 'The RAG system inside ClaudeBoost is a custom architecture — designed by Mikah Niehaus specifically for agentic coding workflows. It runs entirely on your machine. No cloud, no GPU required — just a CPU and a local process on port eighty-six twelve. Microsoft\'s GraphRAG costs around thirty thousand dollars to index five gigabytes of data. This runs for free. For C sharp, it uses signature injection — prepending the method signature to the document before embedding. The result: MRR zero point nine five zero and recall-at-one of ninety-one point seven percent. No fine-tuning. No training data. No cloud cost. Just a smarter document. When an agent or knowledge file changes, the file watcher catches it and re-indexes automatically. No restart. No manual step. Fast enough that you never notice it happened. Three separate indexes feed the system: one for ClaudeBoost\'s own agents and knowledge bases, one for your project\'s source code, and a graph index that maps the structural relationships between files — which files import which, which classes inherit from which.',
-    highlights: ['rag-server', 'agent-query'],
-    scrollTo: 'rag-server'
+    label: 'The Code Review — 15 Passes, Nothing Self-Verified',
+    text: 'When the implementation is ready, you type slash code review. One command from the same place you have been working. Fifteen passes run. The first fourteen are parallel. Each one is a RAG primed specialist: a security agent that loaded your auth patterns, a performance agent that loaded your database conventions, a test coverage agent that knows your testing style. Every pass requires a file and line number or the finding is out. Then pass fifteen: an independent evaluator in a fresh context. It never sees the previous agents\' reasoning. It reads only the cited code and returns a verdict. Nothing ships on self verification.',
+    highlights: ['slash-commands', 'reviewer-detail', 'evaluator-detail'],
+    scrollTo: 'slash-commands',
+    steps: [
+      {text: 'When the implementation is ready, you type slash code review. One command from the same place you have been working.', card: 'slash-commands'},
+      {text: 'Fifteen passes run. The first fourteen are parallel. Each one is a RAG primed specialist: a security agent that loaded your auth patterns, a performance agent that loaded your database conventions, a test coverage agent that knows your testing style. Every pass requires a file and line number or the finding is out.', card: 'reviewer-detail'},
+      {text: 'Then pass fifteen: an independent evaluator in a fresh context. It never sees the previous agents\' reasoning. It reads only the cited code and returns a verdict. Nothing ships on self verification.', card: 'evaluator-detail'}
+    ]
   },
   {
-    label: 'RAG Tiers 0-4 — Always the Right Context',
-    text: 'Think of every agent call like a surgeon\'s instrument tray — only the tools needed for this operation are ready, and they\'re always in the right place. That is what the five-tier knowledge system does. The first tier is hard guardrails, always loaded, no exceptions. Then the agent\'s own declared knowledge. Then related domains. Then the right chunks from your actual project source code — including every file that imports the files being worked on. A TypeScript React agent automatically gets the TypeScript guide, the React guide, your relevant source files, and their structural neighbors. None of it requires configuration. It just loads.',
-    highlights: ['rag-tiers', 'knowledge-rail'],
-    scrollTo: 'rag-tiers'
-  },
-  {
-    label: 'Graph RAG vs. Microsoft RAG',
-    text: 'The graph index is where this system diverges from Microsoft GraphRAG. Microsoft\'s approach uses an AI model to extract code relationships — and AI models can hallucinate edges that do not exist. ClaudeBoost uses tree-sitter instead. Tree-sitter parses the abstract syntax tree directly. An import statement in the syntax tree is a fact, not an inference. The results: zero hallucinated edges. Millisecond parsing across fifty-plus languages. Structural search that finds not just where a function is defined, but everywhere it is called. And none of it costs inference tokens to build.',
-    highlights: ['graph-rag', 'graph-rag-vs-ai'],
-    scrollTo: 'graph-rag-vs-ai'
-  },
-  {
-    label: 'Verify Gate — Anti-Hallucination Protocol',
-    text: 'Every agent finding goes through the verify gate. The rule is simple: cite a file and a line number, or the finding is dropped. Not flagged for later — dropped. An agent that flags something on every pass is worth less than one that only flags real issues. Once findings are collected, an independent evaluator agent reads only the cited locations. It does not see the original agent\'s reasoning. It reads the code and returns a verdict. The orchestrator acts only on what the evaluator confirms.',
-    highlights: ['verify', 'evaluator-detail'],
-    scrollTo: 'verify'
-  },
-  {
-    label: 'Workspace Context — Anti-Amnesia System',
-    text: 'Context loss is what kills long AI sessions. The conversation compresses. Details fall out. Work has to be re-explained. ClaudeBoost solves this mechanically. A context file captures findings, decisions, next steps, and user constraints after every significant action. Three hooks enforce it. The PostToolUse hook nudges after five reads without an update. The Stop hook blocks the session from ending when context is stale. The PreCompact hook saves everything before the conversation gets compressed. Next session, slash boost loads the handoff and resumes exactly where you left off.',
-    highlights: ['workspace-context', 'context-survival'],
-    scrollTo: 'workspace-context'
-  },
-  {
-    label: 'Code Review — 15 Passes, Parallel + Evaluator',
-    text: 'The code review runs fifteen passes. Fourteen run in parallel on Sonnet specialist agents — security, logic, coding standards, performance, test gaps, documentation, observability, and ticket alignment. Does this implementation actually match what was asked for? Every pass requires a file and line number citation, or the finding is dropped. Then pass fifteen. An independent evaluator in a fresh context reads only those citations. It never sees the previous agents\' reasoning. It reads the code and returns a verdict. Nothing ships on self-verification.',
-    highlights: ['reviewer-agent', 'reviewer-detail'],
-    scrollTo: 'reviewer-detail'
-  },
-  {
-    label: 'Summary — Production-Ready AI Development',
-    text: 'We started with a problem: AI-generated code is powerful and unpredictable. Here is how ClaudeBoost addresses it. Twenty-four specialist agents routed to the right model. A five-tier RAG system that always loads the right knowledge. Deterministic graph search using tree-sitter — zero hallucinated edges. A verify gate where every finding needs a file and a line number or it gets dropped. An evaluator that never self-verifies. A workspace context system that survives compaction and restarts. Seven hook types that enforce behavior mechanically. And CONSULT mode that keeps every architectural decision in your hands. If you are shipping AI-assisted code in production, this is what the safety layer looks like. It installs in one command. Run slash boost — your next session will show you exactly what it catches.',
-    highlights: ['production-features', 'verify', 'rag-tiers', 'workspace-context', 'graph-rag-vs-ai', 'consult-q', 'parallel-agents'],
-    scrollTo: 'production-features'
+    label: 'The PR Lands — And Next Session Picks Up Where You Left Off',
+    text: 'The pull request lands already reviewed, already tested, already secure. One ticket, from paste to PR, with every quality check run and the proof captured in the workspace. The workspace context file has everything: every finding with its file and line, every decision you made, every constraint you added. Seven hook types enforce behavior across the full lifecycle: before a tool runs, after it runs, before a prompt submits, at session start. They fire at the shell level and cannot be argued past. Next session, slash boost loads the handoff. You do not re-explain anything. The orchestrator knows exactly where you left off. This is production ready AI development. It installs in one command. Run slash boost and your next session will show you exactly what it catches.',
+    highlights: ['workspace-context', 'context-survival', 'hooks-system', 'slash-commands', 'production-features'],
+    scrollTo: 'workspace-context',
+    steps: [
+      {text: 'The pull request lands already reviewed, already tested, already secure. One ticket, from paste to PR, with every quality check run and the proof captured in the workspace.', card: 'workspace-context'},
+      {text: 'The workspace context file has everything: every finding with its file and line, every decision you made, every constraint you added. Three hooks keep it current throughout the session.', card: 'context-survival'},
+      {text: 'Seven hook types enforce behavior across the full lifecycle: before a tool runs, after it runs, before a prompt submits, at session start. They fire at the shell level and cannot be argued past.', card: 'hooks-system'},
+      {text: 'Next session, slash boost loads the handoff. You do not re-explain anything. The orchestrator knows exactly where you left off.', card: 'slash-commands'},
+      {text: 'This is production ready AI development. It installs in one command. Run slash boost and your next session will show you exactly what it catches.', card: 'production-features'}
+    ]
   }
 ];
 
@@ -1097,12 +1121,32 @@ function updateUI(i){
 function speakSegment(index){
   if(index>=TOUR_SEGMENTS.length){finishTour();return;}
   tourIndex=index;const seg=TOUR_SEGMENTS[index];
-  updateUI(index);setNarratingCards(seg.highlights||[]);
-  if(seg.highlights&&seg.highlights.length>0)showDetail(seg.highlights[0]);else closeDetail();
-  const utt=new SpeechSynthesisUtterance(seg.text);
+  updateUI(index);
+  if(seg.steps&&seg.steps.length>0){
+    speakStep(index,0);
+  }else{
+    setNarratingCards(seg.highlights||[]);
+    if(seg.highlights&&seg.highlights.length>0)showDetail(seg.highlights[0]);else closeDetail();
+    const utt=new SpeechSynthesisUtterance(seg.text);
+    utt.voice=getSelectedVoice();utt.rate=getSelectedRate();utt.pitch=1.0;utt.volume=1.0;
+    utt.onend=()=>{if(isPlaying)speakSegment(index+1);};
+    utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakSegment(index+1);};
+    currentUtterance=utt;speechSynthesis.speak(utt);
+  }
+}
+
+function speakStep(segIndex,stepIndex){
+  if(!isPlaying)return;
+  const seg=TOUR_SEGMENTS[segIndex];
+  const steps=seg.steps;
+  if(stepIndex>=steps.length){speakSegment(segIndex+1);return;}
+  const step=steps[stepIndex];
+  if(step.card){setNarratingCards([step.card]);showDetail(step.card);}
+  else{setNarratingCards([]);closeDetail();}
+  const utt=new SpeechSynthesisUtterance(step.text);
   utt.voice=getSelectedVoice();utt.rate=getSelectedRate();utt.pitch=1.0;utt.volume=1.0;
-  utt.onend=()=>{if(isPlaying)speakSegment(index+1);};
-  utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakSegment(index+1);};
+  utt.onend=()=>{if(isPlaying)speakStep(segIndex,stepIndex+1);};
+  utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakStep(segIndex,stepIndex+1);};
   currentUtterance=utt;speechSynthesis.speak(utt);
 }
 
