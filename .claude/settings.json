@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\""
           }
         ]
       },
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\""
           }
         ]
       },
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\""
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/session-primer.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-primer.py\""
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\""
           }
         ]
       }
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-save.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-save.py\""
           }
         ]
       },
@@ -86,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\""
           }
         ]
       }
@@ -97,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-agent-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-agent-guard.py\""
           }
         ]
       },
@@ -106,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\""
           }
         ]
       },
@@ -115,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
           }
         ]
       },
@@ -124,7 +124,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
           }
         ]
       }
@@ -134,7 +134,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\""
           }
         ]
       }
@@ -144,7 +144,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\""
           }
         ]
       },
@@ -152,7 +152,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\""
           }
         ]
       }

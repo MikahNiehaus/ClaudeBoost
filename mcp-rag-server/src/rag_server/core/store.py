@@ -31,7 +31,18 @@ class ChromaStore(StorePort):
         """
         key = str(Path(persist_dir).resolve())
         with _client_cache_lock:
-            _client_cache.pop(key, None)
+            client = _client_cache.pop(key, None)
+        if client is not None:
+            # Popping our cache is not enough: chromadb keeps its own process-wide
+            # system cache keyed by settings, so a new PersistentClient for this path
+            # would reuse the stale system whose SQLite pool still points at the
+            # deleted files (every write then fails with "attempt to write a
+            # readonly database"). close() releases the system and stops it once
+            # the refcount hits zero — we hold the only client per path.
+            try:
+                client.close()
+            except Exception as e:
+                logger.debug("ChromaDB client close during evict (non-fatal): %s", e)
 
     def __init__(self, persist_dir: str):
         # Lazy import: chromadb takes ~2.5s to import due to its Rust/Tokio extensions.
