@@ -153,13 +153,28 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             }
 
         elif name == "rag_status":
+            # Live model dimension — only if already loaded; never trigger a load here
+            # (status must stay sub-second).
+            model_dim = embedder.dimensions() if embedder.is_loaded else None
+            dimension_mismatch: list[str] = []
             collections_status = {}
             for scope_name, scope_config in SCOPES.items():
                 col = scope_config["collection"]
-                collections_status[scope_name] = {
+                entry = {
                     "chunks": store.count(col),
                     "files": store.count_sources(col) if store.collection_exists(col) else 0,
                 }
+                # Flag collections whose stored vectors don't match the active model's
+                # dimension. A model swap leaves these unqueryable — searches silently
+                # return 0. Only check populated collections, and only once the model is up.
+                if model_dim and entry["chunks"] > 0:
+                    stored_dim = store.sample_dimension(col)
+                    if stored_dim:
+                        entry["stored_dim"] = stored_dim
+                        entry["dim_ok"] = stored_dim == model_dim
+                        if stored_dim != model_dim:
+                            dimension_mismatch.append(scope_name)
+                collections_status[scope_name] = entry
             # Load per-project graph registry written by rag_index_project
             registry_path = RAG_INDEX_DIR / "projects.json"
             indexed_projects: dict = {}
@@ -178,7 +193,8 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 "collections": collections_status,
                 "model": EMBEDDING_MODEL,
                 "device": DEVICE,
-                "embedding_dimensions": embedder.dimensions() if embedder.is_loaded else "not loaded yet",
+                "embedding_dimensions": model_dim if model_dim else "not loaded yet",
+                "dimension_mismatch": dimension_mismatch,
                 "indexed_projects": indexed_projects,
             }
             if code_embedder is not None and code_embedder is not embedder:

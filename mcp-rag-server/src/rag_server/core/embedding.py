@@ -92,12 +92,22 @@ class SentenceTransformerEmbedding(EmbeddingPort):
                 kwargs: dict = {"device": device}
                 if self._trust_remote:
                     kwargs["trust_remote_code"] = True
+                # Offline first — a cached load is fast and skips a network HEAD on every
+                # start. If the cache is missing or partial (fresh install, interrupted
+                # download, a swapped model that was never fetched), fall back to an online
+                # load so the model self-heals instead of cascading into HTTP 500s on every
+                # /index and silent 0-result searches. FileNotFoundError (which
+                # LocalEntryNotFoundError subclasses) and the offline OSError both land here.
                 try:
+                    logger.info("Loading embedding model (offline): %s", self._model_name)
                     self._model = SentenceTransformer(self._model_name, local_files_only=True, **kwargs)
-                except Exception:
-                    # Model not cached locally — download on first use, then enforce local-only.
-                    logger.info("Model not cached locally, downloading: %s", self._model_name)
-                    self._model = SentenceTransformer(self._model_name, **kwargs)
+                except OSError:
+                    logger.warning(
+                        "Embedding model %s not in local cache — downloading once from "
+                        "HuggingFace (needs internet, ~1 min). Later loads stay offline.",
+                        self._model_name,
+                    )
+                    self._model = SentenceTransformer(self._model_name, local_files_only=False, **kwargs)
                 self._batch_size = EMBED_BATCH_SIZE
                 # Don't call self.dimensions() here — it calls _load_model() which
                 # tries to re-acquire _load_lock, deadlocking since this is non-reentrant.
