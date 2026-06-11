@@ -748,10 +748,14 @@ class IndexingEngine:
                         del _fb_store
                         gc.collect()
                         logger.info("In-place collection clear succeeded — proceeding with reindex.")
-                    else:
-                        logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
-                        # Evict the cached client so the next ChromaStore() opens fresh files.
-                        ChromaStore.evict_cache(str(chroma_dir))
+                if not last_err:
+                    # Directory was deleted (rmtree or PowerShell). Evict the cached client
+                    # so the next ChromaStore() opens fresh files — a cached client holds
+                    # SQLite handles to the deleted inodes and every write fails with
+                    # "attempt to write a readonly database". rmtree succeeds first try on
+                    # macOS/Linux, so this must run outside the failure-fallback block.
+                    logger.info("Wiped stale chroma directory for clean re-index: %s", chroma_dir)
+                    ChromaStore.evict_cache(str(chroma_dir))
             project_store = ChromaStore(persist_dir=str(chroma_dir))
             graph_store = SQLiteGraphStore(index_dir / "graph.db")
 
