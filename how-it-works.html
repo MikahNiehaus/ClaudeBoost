@@ -410,8 +410,8 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
         </div>
         <div class="card star-card" style="border-left-color:#0ea5e9;max-width:165px" onclick="showDetail('graph-rag')">
           <span class="card-icon">🌐</span>
-          <div class="card-title">Graph RAG</div>
-          <div class="card-sub">tree-sitter AST · import/inherit chains</div>
+          <div class="card-title">Dependency Graph Search</div>
+          <div class="card-sub">import & inherit chains · zero hallucinated edges</div>
           <div class="card-badge" style="color:#7dd3fc">Deterministic</div>
         </div>
       </div>
@@ -710,7 +710,7 @@ ${FR('#a855f7','POST /context','4-tier knowledge fetch')}
 ${FR('#a855f7','POST /search','Semantic search — scope: agents/knowledge/codebase')}
 ${FR('#a855f7','POST /index','Index or re-index a project')}` },
 
-  'graph-rag': { title: 'Graph RAG — Structural Code Search', badge: '🌐 Unique Feature',
+  'graph-rag': { title: 'Dependency Graph Search', badge: '🌐 Unique Feature',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Combines vector search with a structural code graph built from tree-sitter AST parsing. Deterministic — no hallucinated edges.</div>
 ${FR('#0ea5e9','1. tree-sitter parses every source file','Extracts: imports, function calls, class inheritance, exports')}
 ${AW()}${FR('#0ea5e9','2. Build directed graph: A imports B = edge A→B','Stored in graph.db alongside the vector index')}
@@ -720,7 +720,7 @@ ${FR('#a855f7','POST /search scope=codebase mode=graph','Vector matches + struct
 ${SEC('Why it matters')}
 <div style="font-size:10px;color:#94a3b8;line-height:1.6">Search for "authentication" and get the auth service, plus every controller and middleware that imports it — without asking. That's the difference between finding where code is and understanding where it's used.</div>` },
 
-  'graph-rag-vs-ai': { title: 'Graph RAG vs. AI Extraction', badge: '🌐 Differentiator',
+  'graph-rag-vs-ai': { title: 'Dependency Graph vs. AI Extraction', badge: '🌐 Differentiator',
     html: `${SEC('Microsoft GraphRAG — AI extraction')}
 ${FR('#ef4444','Feed code to an LLM','Ask it to extract entities and relationships')}
 ${AW()}${FR('#ef4444','LLM infers: "AuthService probably relates to TokenValidator"','Inference can hallucinate relationships that don\'t exist')}
@@ -748,7 +748,7 @@ ${FR('#a855f7','Semantic search across ALL 106 knowledge bases','Query = agent +
 ${FR('#8b5cf6','Tier 3c: task-specific research','workspace_path → loads /research-rag indexed docs for this task')}
 ${SEC('Tier 4 — Project source code')}
 ${FR('#0ea5e9','Semantic search of codebase (project_path)','')}
-${FR('#06b6d4','Tier 4b: Graph RAG neighbors','Files that import the Tier 4 seed results — automatic')}` },
+${FR('#06b6d4','Tier 4b: Dependency graph neighbors','Files that import the Tier 4 seed results — automatic')}` },
 
   'knowledge-rail': { title: '106 Knowledge Bases', badge: '📚 Knowledge Layer', file: 'knowledge/',
     html: `<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">XML files covering every domain agents need. Loaded semantically at runtime — agents search them, not memorize them.</div>
@@ -891,7 +891,7 @@ ${FR('#c0392b','Verify gate — file:line citation required or finding dropped',
 ${FR('#c0392b','Evaluator-agent — never self-verify','')}
 ${SEC('Knowledge')}
 ${FR('#a855f7','106 knowledge bases loaded semantically — not memorized','')}
-${FR('#a855f7','Graph RAG: tree-sitter AST — zero hallucinated relationships','')}
+${FR('#a855f7','Dependency Graph Search: tree-sitter AST — zero hallucinated relationships','')}
 ${SEC('Continuity')}
 ${FR('#f59e0b','workspace/context.md survives compaction','')}
 ${FR('#f59e0b','/clear-safe — verify before clearing, never lose work','')}
