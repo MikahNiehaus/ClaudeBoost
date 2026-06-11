@@ -544,6 +544,12 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("bash-guard.py")}],
     }, sentinel="bash-guard.py", label="Bash guard (command-type)")
 
+    # --- PreToolUse: git guard (asks before state-changing git commands) ---
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": _py_cmd("git-guard.py")}],
+    }, sentinel="git-guard.py", label="git guard (command-type)")
+
     # --- PreToolUse: process-kill safety ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Bash(pkill*)|Bash(killall*)|Bash(*Stop-Process*)|Bash(*taskkill*/IM*)",
