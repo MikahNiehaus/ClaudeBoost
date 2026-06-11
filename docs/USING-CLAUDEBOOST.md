@@ -46,6 +46,22 @@ For a one-line fix or a doc update, none of that applies. The system doesn't add
 
 ## 4. Slash commands
 
+Most slash commands are used internally by agents — you rarely call them directly. The ones you'll reach for in day-to-day work are:
+
+| Command | When to use it |
+|---------|---------------|
+| `/boost` | Start of every session |
+| `/workspace` | Any complex task, multi-file feature, or ticket |
+| `/code-review` | Before merging — full 15-pass review with grade |
+| `/audit` | Verify a plan, a config, a document, or agent output |
+| `/index-project` | Once per project, then after major structural changes |
+| `/end-to-end-test` | Browser-level verification of a running local app |
+| `/research-rag` | Before implementing against an external API or unfamiliar library |
+
+Everything else in the tables below is available, but most of it runs automatically — you won't need to invoke it by name unless you have a specific reason.
+
+---
+
 ### Session Management
 
 | Command | What it does | Example |
@@ -341,21 +357,49 @@ For simple bugs where the cause is obvious, Claude handles it directly without s
 
 ```
 /code-review
+/code-review last 3 commits
+/code-review feature-branch
+/code-review feature-branch diff main
 ```
-or for a lighter structured pass:
-```
-/review
-```
-Both spawn `reviewer-agent` (Opus). `/code-review` runs 15 parallel passes covering security, performance, patterns, test coverage, logic, and clarity. `/review` gives you a structured A–F grade with specific findings and a recommended action for each. All findings from both commands go through the verify gate — every flag needs a `file:line` citation before it reaches you.
 
-### 3. Add a new feature
+14 agents run in parallel batches, each covering a specific dimension: simplicity, dead code, debug leftovers, project patterns, common-pattern violations, fresh eyes, ticket alignment, spec precision, manual smoke test, schema migrations, platform footguns, banned dependencies, and test coverage/logging. A 15th evaluator agent (Opus) then classifies every finding — BLOCKER, WARNING, NIT, or FALSE POSITIVE.
+
+It also runs your test suite automatically against the changed files. Test failures are automatic BLOCKERs, no matter what the other passes say.
+
+**Grade scale:**
+- A: no blockers, no warnings
+- B: no blockers, warnings or nits only
+- C: meaningful warnings, no blockers
+- D: 1–2 blockers
+- F: 3+ blockers or any test failure
+
+Every BLOCKER and WARNING needs a specific `file:line` citation before it reaches you. The evaluator discards anything without one — so "no issues found" is a valid and clean result.
+
+For a lighter pass with a letter grade but no parallel batches, use `/review`. For a security-only pass, use `/security-review`.
+
+### 3. Start a complex task or feature
 
 ```
 /workspace add payment plan support to the subscription API
+/workspace ASC-1175 <paste ticket text>
 ```
-This creates a workspace folder, runs a planning sweep across testing, security, architecture, performance, and other domains, and identifies which agents to use for each phase. In CONSULT mode, any new endpoints, tables, or dependencies will trigger a proposal before Claude writes any code. You get the architectural options with trade-offs, pick one, and implementation proceeds.
 
-For large features (more than 15 source files, or a new subsystem), use `/create-prd` first. That generates a proper requirements document and task breakdown before any code is written.
+Creates `workspace/[task-id]/` with:
+- `ticket.md` — verbatim ticket text (immutable after creation)
+- `plan.md` — step-by-step implementation plan, each step mapped to an agent and knowledge base
+- `context.md` — living state record: what was found, what's next, open questions
+
+The planner searches your project's codebase via RAG to build the plan — it knows which files are in scope before any agent spawns. If your project isn't indexed yet, it warns you and offers to index it first.
+
+**What it detects from your description:**
+- Work type: Feature, Bug Fix, Refactor, Architecture, Research, Security, Database, etc.
+- Complexity tier: 5–10 files (FEATURE), 10+ files (COMPLEX), 15+ source files or new subsystem (COMPLEX+ — recommends `/create-prd` first)
+
+In CONSULT mode, any new endpoints, tables, dependencies, modules, or auth strategies trigger a proposal before code is written. You get options with trade-offs, pick one, and implementation proceeds.
+
+`context.md` is updated after every significant finding. It's how tasks survive `/clear` — run `/clear-safe` before clearing, then `/restore` in the new session to pick up exactly where you left off.
+
+For large features (15+ source files or a new subsystem), use `/create-prd` first to generate a requirements document and task breakdown.
 
 ### 4. Write tests
 
@@ -363,40 +407,132 @@ For unit and integration tests: describe what needs testing. Claude spawns `test
 
 For browser E2E tests:
 ```
-/end-to-end-test
+/end-to-end-test http://localhost:3000
+/end-to-end-test http://localhost:5173 auth
+/end-to-end-test http://localhost:3000 all
 ```
-`e2e-agent` uses Playwright, discovers the running app via RAG, writes a test plan, executes it against localhost, and captures screenshots at each step as evidence. Requires a running local server — it won't test against external URLs.
 
-### 5. Security audit
+What happens:
+1. **Discovery** — crawls the app via browser + codebase RAG to map all routes, forms, and entities. Builds an App Map and component registry.
+2. **Flow map** — identifies the 5–10 highest-risk user journeys (not just pages). Scores each by risk: auth, data writes, revenue paths, prior bugs.
+3. **Test plan** — generates test cases from journeys and writes them to `workspace/e2e-.../plan.md` before any test runs. The plan predates execution — this prevents fabricated results.
+4. **Execution** — runs each test using only browser tools. No direct DB queries, no API shortcuts. Each passing test gets a screenshot with a red annotation box on the verified element.
+5. **Debugger step-through** — after each passing UI test, attaches to the running server process and steps through the code path to confirm the server actually hit. Works for .NET (requires `netcoredbg`) and Node.js (built-in inspector). If the server can't be found, tests run UI-only.
+6. **Screenshot audit** — evaluator-agent independently checks every screenshot for annotation presence, correct placement, and post-action state. Flags any that need a retake.
+
+Scope options: `auth`, `crud`, `nav`, `errors`, `responsive`, or `all` (default).
+
+**Hard safety rules:** refuses to run against staging or production URLs. Checks the URL statically and again after navigation (catches OAuth redirects to non-local environments).
+
+Requires a running local server — it will not test against external URLs under any circumstances.
+
+### 5. Audit code, configs, documents, or agent output
 
 ```
-/security-review
+/audit workspace/my-feature/plan.md
+/audit src/auth/login.ts
+/audit https://some-local-page
+/audit "claim or statement to verify"
 ```
-Reviews the current branch by default. Add `--full` for a whole-project audit. Covers OWASP Top 10, auth/authz patterns, injection vectors, hardcoded secrets, insecure defaults, and misconfigured headers. All findings are independently verified by `evaluator-agent` before they reach you — no unverified flags.
 
-### 6. Research a library or API
+Works on any input: a file path, a block of code, a config, a URL, a claim, a document, or pasted text. It detects the input type automatically and picks 3–6 relevant audit dimensions.
+
+**Dimensions by input type:**
+- Code/file: logic & correctness, security, error handling, performance, completeness, conventions
+- Config: schema validity, security, completeness, best practices
+- URL: content accuracy, credibility signals, red flags, security signals
+- Document/claim: factual accuracy, internal consistency, completeness, logical validity
+- Process or agent output: completion coverage, evidence quality, goal alignment, internal consistency, specificity
+
+Each dimension runs as a separate parallel agent. A final Opus verdict agent synthesizes the results into: **LEGIT / MOSTLY LEGIT / SUSPICIOUS / INVALID / INCOMPLETE**.
+
+Any finding without a specific quote, line number, or field name is discarded as a false positive by the verdict agent.
+
+**Most useful for:**
+- Auditing a `plan.md` or `prd.md` before you start executing it (checks goal alignment, specificity, ClaudeBoost protocol compliance)
+- Verifying an agent's findings before acting on them
+- Quick security pass on a new config or an untrusted code snippet
+
+For a dedicated security pass on your current branch changes, use `/security-review` instead. Add `--full` for a whole-project audit covering OWASP Top 10, auth/authz, injection, secrets, and headers.
+
+### 6. Research an external API or library before implementing
 
 ```
-/research-rag Stripe Connect integration patterns
+/research-rag my-feature-workspace Stripe Connect integration
+/research-rag my-feature-workspace https://docs.stripe.com/connect https://docs.stripe.com/api
 ```
-`research-rag-agent` fetches the relevant docs (URLs or PDFs you point it at), builds a workspace-scoped index, and makes that knowledge searchable during implementation. The index is persistent for the task — not global. After the task is done, it's not maintained, so don't reuse it across tasks.
 
-For lighter research (quick library comparison, answering a specific question), just ask. `research-agent` does web lookups and synthesizes results without building a persistent index.
+Builds a per-task research index from external sources and makes it searchable during implementation.
 
-### 7. Refactor messy code
+**Build phase:**
+1. Searches for relevant docs if you don't provide URLs directly (prioritizes official docs, GitHub, MDN, OWASP)
+2. Shows you a source table with tier ratings (A = official docs/arxiv; B = Stack Overflow, vendor blogs; C = personal blogs — flagged for your approval)
+3. Waits for you to approve the source list before indexing anything
+4. Indexes approved sources into `workspace/[task-id]/.rag-index/research/`
+5. Runs an evaluator to verify the index is non-empty and search-ready
+
+**During implementation:**
+Both of these searches are mandatory on every query — the skill enforces it:
+- `POST /search scope=research` — finds content from the indexed external docs
+- `POST /search scope=codebase mode=graph` — finds structural neighbors in your own project
+
+Research finds external context the codebase doesn't have. Graph search finds what imports or inherits from the code you're about to touch. They're complementary.
+
+The index is scoped to the task — it doesn't pollute the global ClaudeBoost RAG or other task workspaces. Re-running the same task-id is safe; unchanged sources are skipped.
+
+PDF support is automatic — pass a PDF URL directly and it gets chunked. If it's a scanned image PDF (0 chunks), you'll need an OCR'd version.
+
+For quick, one-off research (comparing two libraries, answering a specific question), just ask. That goes to `research-agent` which does a web lookup and synthesizes an answer without building a persistent index.
+
+### 7. Index your project for semantic search
+
+```
+/index-project
+/index-project C:/Development/MyApp
+/index-project nectar
+/index-project MyApp typescript,csharp
+```
+
+Scans your project, embeds all source files into a per-project vector index, and builds a structural graph index (imports, inheritance chains). After indexing, Claude can find relevant files by description rather than guessing names.
+
+**What you get:**
+- Vector search — "find the payment processing logic", "where is auth handled?"
+- Graph search — "what imports this module?", "what changes if I modify class Foo?"
+
+**Path resolution:** pass a full path, a short project name (fuzzy matching works — "nectar" finds "NectarBenefits"), or nothing to use the current directory.
+
+**Quality checks after indexing (7 checks, auto-fixed where possible):**
+- Coverage: detects file types excluded from the index (`.vue`, `.razor`, etc.)
+- Graph liveness: verifies graph edges are activating in search results
+- Relevance quality: checks top search scores with a language-specific query
+- Manifest integrity: confirms the index was written correctly
+- Context pipeline: end-to-end smoke test through `POST /context`
+- .ragignore compliance: verifies excluded directories are actually excluded
+- Community summaries: checks that all knowledge communities have LLM summaries
+
+**When to run:**
+- Once when you start working on a new project
+- After major structural changes (new modules, large refactors)
+- If RAG search results seem off (`GET /status` will show a stale index)
+
+You don't need to pass `force` unless you see a health warning — incremental mode skips unchanged files automatically.
+
+---
+
+### 8. Refactor messy code
 
 Describe what needs cleaning up — a function that's grown too large, a module with unclear responsibilities, a naming convention that got inconsistent across the codebase. Claude spawns `refactor-agent`, which restructures and renames while keeping behavior the same.
 
 For rename campaigns that touch many files, `refactor-agent` searches all occurrences first and lists every match before changing anything. That's intentional — the rule is to grep before touching, then update all occurrences in one pass. No silent partial updates.
 
-### 8. See the architecture
+### 9. See the architecture
 
 ```
 /visualize
 ```
 Generates an interactive board of your project's architecture and opens it in the browser. Shows the layers of the system, how components connect, and where decisions were made. Useful for onboarding a new team member, planning a large change, or just getting reoriented in a codebase you haven't touched in a while.
 
-### 9. Context window full mid-task
+### 10. Context window full mid-task
 
 This happens on long sessions. The fix is:
 
@@ -412,7 +548,7 @@ Then `/clear` to clear the context. In the new session:
 
 The key is running `/clear-safe` *before* `/clear`, not after. Once you clear the context, that information is gone if you didn't save it.
 
-### 10. Review what changed
+### 11. Review what changed
 
 ```
 /changes

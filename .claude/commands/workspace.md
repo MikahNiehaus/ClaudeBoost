@@ -172,6 +172,50 @@ $ARGUMENTS
 
 Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ticket is detected (per CLAUDE.md convention: "Ticket pasted → Save verbatim to `workspace/[task-id]/ticket.md`").
 
+### 1d — Create feature branch
+
+If `WORKSPACE_ROOT` is a git repo, create a feature branch for the task:
+
+```bash
+git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree 2>/dev/null && echo "GIT_REPO" || echo "NOT_GIT"
+```
+
+If NOT_GIT or WORKSPACE_ROOT is CLAUDEBOOST_HOME: skip this step silently.
+
+If GIT_REPO:
+
+```bash
+# 1. Look for the latest sprint branch (local or remote).
+#    Sprint branches match: sprint/*, sprint-*, sprint_*
+#    Pick the most recent by committer date so you always branch from the newest sprint.
+SPRINT_BRANCH=$(git -C "$WORKSPACE_ROOT" branch -a --sort=-committerdate \
+  | sed 's|^[* ]*||; s|^remotes/[^/]*/||' \
+  | grep -E '^sprint[-/_]' \
+  | head -1)
+
+# 2. Fall back: use origin/HEAD → main/master if no sprint branch exists.
+if [ -n "$SPRINT_BRANCH" ]; then
+  BASE_BRANCH="$SPRINT_BRANCH"
+else
+  BASE_BRANCH=$(git -C "$WORKSPACE_ROOT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+  BASE_BRANCH=${BASE_BRANCH:-main}
+fi
+
+BRANCH_NAME="feature/$WORKSPACE_ID"
+
+git -C "$WORKSPACE_ROOT" checkout -b "$BRANCH_NAME" "$BASE_BRANCH" 2>&1
+```
+
+If that fails because the branch already exists, check it out instead:
+
+```bash
+git -C "$WORKSPACE_ROOT" checkout "$BRANCH_NAME" 2>&1
+```
+
+Report: "Created branch `feature/$WORKSPACE_ID` from `$BASE_BRANCH`."
+
+Record in `context.md` under **Key Decisions**: "Branch: `feature/$WORKSPACE_ID` (base: `$BASE_BRANCH`)"
+
 ---
 
 ## Phase 1.5: Information Sufficiency Gate
@@ -596,6 +640,9 @@ Workspace ready: $WORKSPACE_ABS/
   [screenshots/ — attached images (N files) — only if screenshots were saved]
   plan.md     — step-by-step ClaudeBoost implementation plan
   context.md  — session state (restored after /clear via handoff)
+
+Branch         : feature/$WORKSPACE_ID  (base: $BASE_BRANCH)
+                 [omit this line if no git repo was detected]
 
 To start executing:
   [Step 1 exact command]
