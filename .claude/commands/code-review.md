@@ -144,14 +144,19 @@ mode=graph surfaces structural neighbours (what imports/inherits from the change
 
 Read only the files that appeared in the RAG search results above — they are already identified as the most relevant. Do NOT skip this — agents need to be primed with precise instructions, not generic ones.
 
-**1d — Ticket context:**
+**1d — Ticket context (read BEFORE analyzing the diff):**
 
 Check for ticket/issue reference in:
 1. `$ARGUMENTS` — does it mention a ticket number, PR, or issue URL?
 2. `git log --oneline -5` — any ticket refs in commit messages?
 3. `workspace/*/ticket.md` files if any exist
 
-If found, read it fully. Pass 8 (Ticket Alignment) is mandatory regardless.
+If found, read it fully **before proceeding to pass selection**. Extract and record:
+- `TICKET_ARTIFACT_TYPE` — what kind of thing does the ticket ask for? (endpoint, page, service, component, API controller, migration, etc.) Look for exact wording like "endpoint", "page", "API", "controller".
+- `TICKET_ACCEPTANCE_CRITERIA` — list each AC item explicitly.
+- `TICKET_ROUTING_OR_PATTERN` — does the ticket specify how it should be routed, structured, or integrated? (e.g. "on the Admin Portal", "same response shape as other authenticated endpoints")
+
+Pass 8 (Ticket Alignment) is mandatory regardless. If no ticket is found, use git commit messages as intent.
 
 **1e — Report findings to user:**
 
@@ -281,7 +286,10 @@ Question: Read every line like you didn't write it. "Why does this exist? What w
 
 **Pass 8 — Ticket Alignment (NEVER SKIP)**
 Question: Does this PR implement exactly what the ticket asks for — no more, no less?
-- Re-read the ticket/commit intent after reviewing the code. Check acceptance criteria one by one.
+- **Read the ticket FIRST, before the diff.** Use `TICKET_ARTIFACT_TYPE`, `TICKET_ACCEPTANCE_CRITERIA`, and `TICKET_ROUTING_OR_PATTERN` extracted in Phase 1d.
+- **Artifact type check** — if the ticket says "endpoint", verify the implementation is a Controller action, not a Razor Page, and vice versa. If the ticket says "page", verify a Razor Page was used. Any mismatch between the ticket's artifact language and the implementation pattern is a BLOCKER.
+- **Architecture prerequisites check** — if the implementation uses a pattern (e.g. a Controller), verify the infrastructure for it exists (e.g. `MapControllers()` wired in Startup, correct service registrations). If it doesn't exist, flag as BLOCKER: "Pattern requires infrastructure that isn't set up."
+- **Acceptance criteria** — check each AC item one by one against the diff. Missing item = BLOCKER. Partially implemented = WARNING.
 - Flag scope creep — anything added that wasn't in the ticket.
 - Flag missing items — anything in the ticket not addressed by the diff.
 
