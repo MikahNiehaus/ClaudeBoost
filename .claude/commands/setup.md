@@ -198,9 +198,11 @@ p = os.path.expanduser('~/.claude/settings.json')
 s = json.load(open(p))
 sl = s.get('statusLine', {})
 cmd = sl.get('command', '')
-print('PRESENT' if 'ClaudeBoost' in cmd else 'MISSING')
+print('PRESENT' if 'rag-statusline' in cmd else 'MISSING')
 "
 ```
+
+(The statusLine command is `\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-statusline.py\"` — match on the script name, not on 'ClaudeBoost', which never appears in that mixed case.)
 
 If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/rag` to start the server.
 

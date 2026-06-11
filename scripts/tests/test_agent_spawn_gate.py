@@ -53,6 +53,30 @@ def test_passes_with_http_context_call(boost_home):
     assert result.stderr == b""
 
 
+def test_passes_with_workspace_path_in_prompt(boost_home):
+    """Regression: a prompt that already includes workspace_path must pass.
+
+    A function-local `import os` inside the workspace_path branch made `os`
+    local to the whole function. When the branch was skipped (workspace_path
+    present), the later os.environ access raised UnboundLocalError and the
+    hook crashed with a traceback on every well-formed spawn.
+    """
+    prompt = (
+        _BASE_PROMPT.replace(
+            '"project_path":"/test/project"',
+            '"project_path":"/test/project","workspace_path":"/test/project/workspace/task-1"',
+        )
+    )
+    result = run_hook(
+        "agent-spawn-gate.py",
+        _spawn(prompt),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert b"Traceback" not in result.stderr
+    assert result.stderr == b""
+
+
 def test_passes_with_legacy_rag_context(boost_home):
     """Legacy rag_context keyword still accepted for backward compat."""
     prompt = "Call rag_context with project_path='/test/project' as first action"
@@ -154,6 +178,20 @@ def test_passes_evaluator_spawn_and_clears_flag(boost_home):
     )
     assert result.returncode == 0
     assert not flag.exists(), "flag should be cleared after evaluator-agent spawn"
+
+
+def test_passes_verdict_spawn_and_clears_flag(boost_home):
+    """A verdict-synthesis spawn counts as the evaluator pass and clears the flag."""
+    flag = _write_flag(boost_home)
+    assert flag.exists()
+
+    result = run_hook(
+        "agent-spawn-gate.py",
+        _spawn(_BASE_PROMPT, description="Opus verdict synthesis"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert not flag.exists(), "flag should be cleared after a verdict spawn"
 
 
 def test_passes_normally_without_flag(boost_home):

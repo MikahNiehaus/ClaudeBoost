@@ -40,9 +40,24 @@ def check_cd_compound(command: str) -> str | None:
                 "Use `git -C \"/path\" ...` instead. "
                 "Compound cd+git triggers a permission prompt."
             )
+        if following in ("npm", "npx", "yarn", "pnpm"):
+            return (
+                "BLOCKED: Do not use `cd && " + following + "`. "
+                "Use `npm --prefix \"/path\" run <script>` to run package scripts, "
+                "or pass the directory to the tool itself "
+                "(e.g. `npx vitest run --root \"/path\"`, `npx jest --rootDir \"/path\"`). "
+                "Compound cd commands trigger a permission prompt."
+            )
+        if following == "make":
+            return (
+                "BLOCKED: Do not use `cd && make`. "
+                "Use `make -C \"/path\" <target>` instead. "
+                "Compound cd commands trigger a permission prompt."
+            )
         return (
             "BLOCKED: Do not use `cd && command`. "
-            "Use absolute paths directly instead. "
+            "Use absolute paths, or the tool's own directory flag "
+            "(git -C, make -C, npm --prefix, vitest --root). "
             "Compound cd commands trigger a permission prompt."
         )
     return None

@@ -107,6 +107,26 @@ def test_silent_when_evaluator_ran():
     assert result.stderr == b""
 
 
+def test_silent_on_verdict_description_and_clears_flag(boost_home):
+    """A verdict-synthesis run is the evaluator step — suppress and clear the flag.
+
+    Without this, the gate re-flags the evaluator's own findings and the
+    next spawn gets blocked again, looping forever.
+    """
+    flag = boost_home / "state" / "needs-verification.json"
+    flag.write_text('{"flagged_at": "old"}', encoding="utf-8")
+
+    response = '"severity": "high" — confirmed finding from verdict pass'
+    result = run_hook(
+        "verify-gate-cmd.py",
+        _task_response(response, description="Opus verdict synthesis"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stderr == b""
+    assert not flag.exists(), "flag should be cleared after the verdict run"
+
+
 def test_silent_during_audit_run(boost_home):
     """During an active /audit run, suppress regardless of finding severity — no flag written."""
     audit_flag = boost_home / "state" / "audit-in-progress.json"

@@ -331,6 +331,46 @@ def _clean_stale_hooks(settings: dict) -> None:
         _ok("No stale hooks found")
 
 
+# Prompt-type hooks replaced by command-type scripts. The old entries linger in
+# settings.json from earlier installs and keep firing alongside the replacement:
+# the prompt-type VERIFY GATE blocks continuation after every agent spawn, which
+# is exactly what verify-gate-cmd.py was written to stop.
+_SUPERSEDED_PROMPT_SENTINELS = (
+    "VERIFY GATE: Scan agent output",       # replaced by verify-gate-cmd.py
+    "AGENT SPAWN QUALITY ROUTING",          # replaced by agent-spawn-gate.py
+)
+
+
+def _remove_superseded_hooks(settings: dict) -> None:
+    hooks = settings.get("hooks") or {}
+    removed = 0
+    for hook_type in list(hooks.keys()):
+        new_entries = []
+        for entry in hooks[hook_type] or []:
+            inner = entry.get("hooks") if isinstance(entry, dict) else None
+            if not inner:
+                new_entries.append(entry)
+                continue
+            healthy = []
+            for h in inner:
+                text = (h.get("prompt", "") or "") if isinstance(h, dict) else ""
+                if text and any(s in text for s in _SUPERSEDED_PROMPT_SENTINELS):
+                    _warn(f"[CLEAN] hooks.{hook_type} - removing superseded prompt hook: {text[:60]}...")
+                    removed += 1
+                else:
+                    healthy.append(h)
+            if healthy:
+                entry["hooks"] = healthy
+                new_entries.append(entry)
+        if new_entries:
+            hooks[hook_type] = new_entries
+        else:
+            del hooks[hook_type]
+    settings["hooks"] = hooks
+    if removed:
+        _ok(f"Removed {removed} superseded prompt hook(s)")
+
+
 def _install_hook(settings: dict, hook_type: str, entry: dict,
                   sentinel: str, label: str) -> None:
     """Append a hook entry once. Sentinel substring identifies an existing
@@ -371,6 +411,7 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
 def _install_all_hooks(settings: dict) -> None:
     _info("\nCleaning up stale hooks...")
     _clean_stale_hooks(settings)
+    _remove_superseded_hooks(settings)
 
     # --- SessionStart: workflow routing ---
     _install_hook(settings, "SessionStart", {
@@ -502,6 +543,12 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": _py_cmd("bash-guard.py")}],
     }, sentinel="bash-guard.py", label="Bash guard (command-type)")
+
+    # --- PreToolUse: git guard (asks before state-changing git commands) ---
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": _py_cmd("git-guard.py")}],
+    }, sentinel="git-guard.py", label="git guard (command-type)")
 
     # --- PreToolUse: process-kill safety ---
     _install_hook(settings, "PreToolUse", {

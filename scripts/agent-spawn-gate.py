@@ -77,23 +77,24 @@ def main() -> int:
         )
     if "workspace_path" not in prompt_lower:
         # Check if there is an active workspace — only nudge when one exists.
-        import os
-        boost_home = os.environ.get("CLAUDEBOOST_HOME", "")
-        active_ws_file = os.path.join(boost_home, "state", "active-workspace.json") if boost_home else ""
+        # NOTE: do not import os/json locally here. A function-local import makes
+        # the name local to the WHOLE function, so when this branch is skipped
+        # (prompt already has workspace_path), later os.environ access raises
+        # UnboundLocalError and the hook crashes on every well-formed spawn.
+        boost_home_env = os.environ.get("CLAUDEBOOST_HOME", "")
+        active_ws_file = os.path.join(boost_home_env, "state", "active-workspace.json") if boost_home_env else ""
         if active_ws_file and os.path.exists(active_ws_file):
             try:
-                import json as _json
-                from pathlib import Path as _Path
-                ws_data = _json.loads(open(active_ws_file).read())
+                ws_data = json.loads(open(active_ws_file, encoding="utf-8").read())
                 # New schema has workspace_path directly; old schema has only workspace (ID)
                 ws_path = ws_data.get("workspace_path") or ws_data.get("path") or ""
                 if not ws_path:
                     # Fall back: look up workspace_path in the registry by workspace ID
                     ws_id = ws_data.get("workspace", "")
-                    if ws_id and boost_home:
-                        reg_file = os.path.join(boost_home, "state", "workspaces.json")
+                    if ws_id and boost_home_env:
+                        reg_file = os.path.join(boost_home_env, "state", "workspaces.json")
                         if os.path.exists(reg_file):
-                            reg = _json.loads(open(reg_file).read())
+                            reg = json.loads(open(reg_file, encoding="utf-8").read())
                             ws_path = (reg.get(ws_id) or {}).get("workspace_path", "")
                 if ws_path:
                     nudges.append(
@@ -138,7 +139,13 @@ def main() -> int:
     flag = boost_home / "state" / "needs-verification.json"
     audit_active = (boost_home / "state" / "audit-in-progress.json").exists()
     if flag.exists() and not audit_active:
-        is_evaluator = "evaluator-agent" in prompt_lower or "evaluator_agent" in prompt_lower
+        # "verdict" covers evaluator passes named e.g. "Opus verdict synthesis"
+        is_evaluator = (
+            "evaluator-agent" in prompt_lower
+            or "evaluator_agent" in prompt_lower
+            or "verdict" in prompt_lower
+            or "verdict" in description.lower()
+        )
         if is_evaluator:
             try:
                 flag.unlink(missing_ok=True)
