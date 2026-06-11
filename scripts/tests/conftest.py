@@ -35,6 +35,12 @@ def rag_live(tmp_path: Path) -> dict:
 
 
 @pytest.fixture()
-def rag_dead() -> dict:
-    """Env dict that makes _rag_is_live() return False (no heartbeat)."""
-    return {"RAG_INDEX_DIR": "", "LOCALAPPDATA": ""}
+def rag_dead(tmp_path: Path) -> dict:
+    """Env dict that makes _rag_is_live() return False (no heartbeat).
+
+    Must point at a real-but-empty location, not "": the guard treats an
+    empty RAG_INDEX_DIR as unset and falls back to the repo's own
+    .rag-index. On macOS that fallback resolves whenever the dev server is
+    running, so the test would block instead of failing open.
+    """
+    return {"RAG_INDEX_DIR": str(tmp_path / "no-rag-index"), "LOCALAPPDATA": ""}

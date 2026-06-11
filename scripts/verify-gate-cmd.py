@@ -78,8 +78,14 @@ def main() -> int:
     if any(marker in desc for marker in REVIEW_PASS_MARKERS):
         return 0
 
-    # Suppress after evaluator-agent runs — it IS the verification step
-    if "evaluator" in desc:
+    # Suppress after evaluator-agent runs — it IS the verification step.
+    # "verdict" covers evaluator passes named e.g. "Opus verdict synthesis";
+    # without it the gate re-flags the evaluator's own output and loops.
+    if "evaluator" in desc or "verdict" in desc:
+        try:
+            _FLAG.unlink(missing_ok=True)
+        except Exception:
+            pass
         return 0
 
     # Only nudge if the response actually contains severity findings
