@@ -1,11 +1,22 @@
 ---
 argument-hint: <task-id> [topic] [url1 url2 ...]
-description: Build a workspace-scoped research RAG from web pages, PDFs, and docs — then search it during implementation
+description: Index user-curated sources (specific URLs or PDFs) into a workspace research index — includes an approval gate before indexing. Use when you have specific docs in mind.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebSearch, WebFetch
 ---
 
-Build a per-task research RAG from external sources (web pages, PDFs, docs) scoped to the
-current task workspace. The research index lives at `workspace/[task-id]/.rag-index/research/`
+Build a research index from sources YOU specify. You provide the URLs (or a topic for
+discovery), review the source list, then approve before anything is indexed.
+
+**When to use this vs `/research-task`:**
+- `/research-rag` — you have specific docs, papers, or URLs in mind. Pauses for your
+  approval before indexing. Good for one-off questions or curated deep-dives.
+- `/research-task` — you want automatic source discovery from ticket entities, no
+  approval pause, runs end-to-end. Good for routine pre-task research.
+
+Both write to the same Tier 3c workspace path and auto-load when agents are spawned
+with `workspace_path`. The difference is source discovery, not persistence.
+
+The research index lives at `workspace/[task-id]/.rag-index/research/`
 and does not pollute the global ClaudeBoost RAG or any project codebase index.
 
 ---
