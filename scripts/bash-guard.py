@@ -116,27 +116,54 @@ def check_compound_fallback(command: str) -> str | None:
     return None
 
 
+def _assigned_vars(command: str) -> set[str]:
+    """Names of variables defined within the command itself.
+
+    A variable you assign and then use in the same command (SHA=$(git rev-parse
+    HEAD); ... $SHA) is locally scoped, not an environment expansion, so it
+    shouldn't be blocked. Quotes are stripped first so a `FOO=bar` sitting
+    inside a quoted string isn't mistaken for a real assignment.
+    """
+    cleaned = _strip_quoted(command)
+    names: set[str] = set()
+    # NAME=value at a command position (single =, not == / != comparisons)
+    for m in re.finditer(r"(?:^|[\s;&|\n(])([A-Za-z_][A-Za-z0-9_]*)=(?!=)", cleaned):
+        names.add(m.group(1))
+    # for NAME in ...   and C-style  for (( NAME=...
+    for m in re.finditer(r"\bfor\s+\(?\(?\s*([A-Za-z_][A-Za-z0-9_]*)", cleaned):
+        names.add(m.group(1))
+    # read [-opts] NAME
+    for m in re.finditer(r"\bread\b(?:\s+-\S+)*\s+([A-Za-z_][A-Za-z0-9_]*)", cleaned):
+        names.add(m.group(1))
+    return names
+
+
 def check_env_var_expansion(command: str) -> str | None:
     """Block $VARNAME env expansion in Bash commands.
 
-    Claude Code's built-in simple_expansion scanner prompts on any $VAR
-    regardless of the allow list. Use absolute paths or shell-safe alternatives.
+    Claude Code's built-in simple_expansion scanner prompts on environment
+    expansions regardless of the allow list. Use the ${VAR} brace form (which
+    the scanner accepts) or an absolute path.
 
     Exceptions: $() command substitution and ${VAR} brace form are not flagged
-    by the scanner, so we only block the bare $WORD form. Single-quoted
-    strings are stripped first — '$VAR' never expands in shell, so the
-    scanner has no reason to prompt on it (grep patterns, JSON bodies).
+    by the scanner, so we only block the bare $WORD form. Single-quoted strings
+    are stripped first ('$VAR' never expands in shell). Variables assigned
+    earlier in the same command are locally scoped, so references to them pass.
     """
     scannable = _strip_quoted(command, single_only=True)
+    assigned = _assigned_vars(command)
     # Match bare $WORD (not preceded by { which would be ${VAR})
-    match = re.search(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]*)", scannable)
-    if match:
-        var = match.group(0)
+    for match in re.finditer(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]*)", scannable):
+        name = match.group(1)
+        if name in assigned:
+            continue
         return (
-            f"BLOCKED: Do not use {var} in Bash commands. "
-            "Claude Code's simple_expansion scanner prompts on $VAR regardless of the allow list. "
-            "Use absolute paths instead. "
-            "For log files: read them with the Read tool or use the full path directly."
+            f"BLOCKED: Do not use ${name} in Bash commands. "
+            "Claude Code's simple_expansion scanner prompts on environment expansions "
+            "regardless of the allow list. "
+            f"Use the brace form ${{{name}}} (the scanner accepts it) or an absolute path. "
+            "Variables you assign earlier in the same command are fine to reference. "
+            "For log files, use the Read tool."
         )
     return None
 

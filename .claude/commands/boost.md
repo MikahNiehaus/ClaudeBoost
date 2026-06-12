@@ -15,7 +15,10 @@ JSON line.
 
 **Why one script:** `bash-guard.py` blocks bare `$VAR` expansion and multiline
 `python -c`, and macOS has no bare `python`. The script avoids all three. Do NOT
-re-introduce inline `python -c`, `$VAR`, or bare `python` here — they get blocked.
+re-introduce inline `python -c`, bare `$VAR`, or a bare `python`/`python3` token
+here — they get blocked or fail to resolve on some platforms. Use the brace-form
+interpreter `"${CLAUDEBOOST_PYTHON}"` (setup stores a forward-slash path that
+works in Git Bash on Windows too) and `${CLAUDEBOOST_HOME}` for paths.
 
 ## Run it
 
@@ -25,15 +28,15 @@ never `$ARGUMENTS`, so the guard stays happy). The script writes
 
 - `$ARGUMENTS` is `true`:
   ```bash
-  python3 "${CLAUDEBOOST_HOME}/scripts/boost-run.py" true
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/boost-run.py" true
   ```
 - `$ARGUMENTS` is `false`:
   ```bash
-  python3 "${CLAUDEBOOST_HOME}/scripts/boost-run.py" false
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/boost-run.py" false
   ```
 - `$ARGUMENTS` is `verify` or empty:
   ```bash
-  python3 "${CLAUDEBOOST_HOME}/scripts/boost-run.py" verify
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/boost-run.py" verify
   ```
 
 (`${CLAUDEBOOST_HOME}` brace form passes the guard; the env var is set by

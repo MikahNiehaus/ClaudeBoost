@@ -84,7 +84,7 @@ Check for collision — read `state/workspaces.json` (under CLAUDEBOOST_HOME) wi
 
 2. **ClaudeBoost meta-work detection** — scan `$ARGUMENTS` for these keywords: `agent`, `skill`, `knowledge base`, `knowledge file`, `ClaudeBoost`, `rag server`, `hook`, `boost`. If two or more match, set `WORKSPACE_ROOT = $CLAUDEBOOST_HOME`. This handles tasks that are literally about improving ClaudeBoost itself.
 
-3. **Most recent project from registry** — check for previously used projects. Read `state/workspaces.json` (under CLAUDEBOOST_HOME) with the **Read tool**; if you need the recency ordering, use the Write tool to save this as `/tmp/cb_recent_projects.py` and run it with `python3 /tmp/cb_recent_projects.py` (multiline `python3 -c` is blocked by bash-guard):
+3. **Most recent project from registry** — check for previously used projects. Read `state/workspaces.json` (under CLAUDEBOOST_HOME) with the **Read tool**; if you need the recency ordering, use the Write tool to save this as `/tmp/cb_recent_projects.py` and run it with `"${CLAUDEBOOST_PYTHON}" /tmp/cb_recent_projects.py` (multiline `python3 -c` is blocked by bash-guard; the brace-form interpreter resolves on every platform):
 ```python
 import json
 from pathlib import Path
@@ -119,7 +119,7 @@ mkdir -p "$WORKSPACE_ABS"
 
 **Register, protect, and mark active:**
 ```bash
-python3 "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
 
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then

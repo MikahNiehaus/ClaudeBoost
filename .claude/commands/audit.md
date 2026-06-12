@@ -18,7 +18,7 @@ Input: **$ARGUMENTS**
 
 Run this Bash command to set the flag (resolves CLAUDEBOOST_HOME dynamically):
 ```bash
-python -c "import os,json,pathlib; p=pathlib.Path(os.environ.get('CLAUDEBOOST_HOME',''))/'state'/'audit-in-progress.json'; p.write_text(json.dumps({'active':True}))"
+"${CLAUDEBOOST_PYTHON}" -c "import os,json,pathlib; p=pathlib.Path(os.environ.get('CLAUDEBOOST_HOME',''))/'state'/'audit-in-progress.json'; p.write_text(json.dumps({'active':True}))"
 ```
 
 **0a — Detect project path (before loading context):**
@@ -319,7 +319,7 @@ If AUDIT_SCOPE = completion-verification, use these verdict labels instead of LE
 
 **Clear audit flag first** (before any output — ensures cleanup even if interrupted):
 ```bash
-python -c "import os,pathlib; pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','')).joinpath('state','audit-in-progress.json').unlink(missing_ok=True)"
+"${CLAUDEBOOST_PYTHON}" -c "import os,pathlib; pathlib.Path(os.environ.get('CLAUDEBOOST_HOME','')).joinpath('state','audit-in-progress.json').unlink(missing_ok=True)"
 ```
 
 Output the full verdict report. Lead with the severity count header on the very first line:

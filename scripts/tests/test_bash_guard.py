@@ -300,3 +300,43 @@ class TestStripQuotedEdgeCases:
         """|| echo buried in a double-quoted message — stripped, no block."""
         cmd = 'git commit -m "handle || echo case in parser"'
         allow(cmd)
+
+
+# ===========================================================================
+# INLINE-ASSIGNED VARS — a var you define and use in the same command is
+# locally scoped, not an environment expansion, so don't block it.
+# ===========================================================================
+
+class TestInlineAssignedVars:
+
+    def test_sha_assigned_then_referenced(self):
+        """The reported case: SHA=$(git rev-parse HEAD) then $SHA in a query."""
+        cmd = (
+            "SHA=$(git rev-parse HEAD); until az pipelines runs list "
+            "--organization https://dev.azure.com/org --project App --top 6 "
+            "--query \"[?sourceVersion=='$SHA']\" -o tsv; do sleep 10; done"
+        )
+        allow(cmd)
+
+    def test_sha_used_in_double_quotes(self):
+        allow('SHA=$(git rev-parse HEAD); echo "checking $SHA"')
+
+    def test_for_loop_variable_bare(self):
+        allow("for hook in SessionStart Stop; do echo $hook; done")
+
+    def test_base_assigned_used_in_diff(self):
+        allow('BASE=main && git diff "origin/$BASE...HEAD"')
+
+    def test_read_loop_variable(self):
+        allow("while read -r line; do echo $line; done < /tmp/f")
+
+    def test_multiple_inline_assignments(self):
+        allow("A=1 B=2; echo $A $B")
+
+    def test_assigned_var_does_not_exempt_real_env_var(self):
+        """X is assigned, but $TEMP in the same command is still an env expansion."""
+        block("X=$(date); ls $TEMP")
+
+    def test_comparison_equals_is_not_an_assignment(self):
+        """`= ` here is a test comparison, not an assignment, so $x stays blocked."""
+        block('test "$x" = "$y"')

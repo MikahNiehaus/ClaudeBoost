@@ -25,7 +25,7 @@ Toggle text-to-speech so Claude's responses are spoken aloud via edge-tts (free 
    - **`voice <name>`**: Write updated state with the new voice name (e.g. `en-US-AndrewNeural`). Confirm:
      > Voice changed to **<name>**. Next response will use the new voice.
 
-   - **`voices`**: Run `Bash: python -m edge_tts --list-voices 2>/dev/null | grep "en-US"` and display the results as a table. If edge-tts is not installed, tell the user to run `pip install edge-tts`.
+   - **`voices`**: Run `Bash: "${CLAUDEBOOST_PYTHON}" -m edge_tts --list-voices 2>/dev/null | grep "en-US"` and display the results as a table. If edge-tts is not installed, tell the user to run `pip install edge-tts`.
 
 3. **When writing state**, use this format:
    ```json
@@ -37,7 +37,7 @@ Toggle text-to-speech so Claude's responses are spoken aloud via edge-tts (free 
    }
    ```
 
-4. **Verify edge-tts** (only on `on`): Run `Bash: python -c "import edge_tts; print('ok')"`. If it fails, tell the user:
+4. **Verify edge-tts** (only on `on`): Run `Bash: "${CLAUDEBOOST_PYTHON}" -c "import edge_tts; print('ok')"`. If it fails, tell the user:
    > edge-tts is not installed. Run `pip install edge-tts` first.
 
 5. **Pair with /voice**: Mention that `/voice` enables speech-to-text input (built into Claude Code). Together `/voice` + `/speak` give two-way voice conversation.
