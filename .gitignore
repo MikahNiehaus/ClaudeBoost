@@ -1,5 +1,5 @@
 workspace/
-mcp-rag-server/tests/data/coir_emb_cache/
+mcp-rag-server/tests/data/
 .playwright-mcp/
 references/
 mcp-rag-server/.rag-index/

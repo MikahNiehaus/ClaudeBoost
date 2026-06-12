@@ -32,7 +32,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -40,7 +41,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -48,7 +50,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -58,7 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-primer.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-primer.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -68,7 +72,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -78,7 +83,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-save.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-save.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -86,7 +92,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -97,7 +104,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/agent-spawn-gate.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/agent-spawn-gate.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -106,7 +114,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -115,7 +124,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -124,7 +134,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-read-guard.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -134,7 +145,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -144,7 +156,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\"",
+            "timeout": 10
           }
         ]
       },
@@ -152,7 +165,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\"",
+            "timeout": 10
           }
         ]
       }
