@@ -28,12 +28,19 @@ import sys
 
 
 def check_cd_compound(command: str) -> str | None:
-    """Detect cd + && compound commands."""
-    # Match: cd <path> && <command>
-    if re.search(r"\bcd\s+.+\s*&&\s*", command):
-        # Extract what command follows &&
-        match = re.search(r"&&\s*(\w+)", command)
-        following = match.group(1) if match else "command"
+    """Detect `cd <path> && <command>` immediate compounds.
+
+    Only the immediate compound trips Claude Code's prompt. A standalone
+    `cd /path; git ...` (cd ended by ; or newline) is fine, and the && in
+    `git add X && git commit` joins the two gits, not the cd — so the match
+    must not cross a command separator (; | & newline). Quotes are stripped
+    first so a cd inside a commit message doesn't false-match.
+    """
+    cleaned = _strip_quoted(command)
+    # cd <path> && <cmd>, with no separator between the cd target and the &&
+    match = re.search(r"\bcd\s+[^;&|\n]+&&\s*(\w+)?", cleaned)
+    if match:
+        following = match.group(1) or "command"
         if following == "git":
             return (
                 "BLOCKED: Do not use `cd && git`. "

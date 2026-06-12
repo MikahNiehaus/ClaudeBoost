@@ -340,3 +340,41 @@ class TestInlineAssignedVars:
     def test_comparison_equals_is_not_an_assignment(self):
         """`= ` here is a test comparison, not an assignment, so $x stays blocked."""
         block('test "$x" = "$y"')
+
+
+# ===========================================================================
+# CD COMPOUND — only `cd <path> && <cmd>` immediate compounds block. A
+# semicolon-separated cd, or a && that joins two later commands, is fine.
+# ===========================================================================
+
+class TestCdCompound:
+
+    def test_cd_semicolon_then_git_add_and_commit(self):
+        """cd /path; git add X && git commit — the && joins the gits, not the cd."""
+        cmd = (
+            "cd /Users/geoff/repo; "
+            "git add a.ts b.ts && git commit -m \"fix: thing\""
+        )
+        allow(cmd)
+
+    def test_cd_semicolon_then_git_commit_heredoc(self):
+        """The reported case: cd ; git add && git commit -m \"$(cat <<'EOF' ...)\"."""
+        cmd = (
+            "cd /Users/geoff/repo; git add x.ts && "
+            "git commit -m \"$(cat <<'EOF'\nfix: mfa\nEOF\n)\""
+        )
+        allow(cmd)
+
+    def test_cd_semicolon_standalone(self):
+        """cd /path; git status — cd ended by ; is standalone, no compound."""
+        allow("cd /repo; git status")
+
+    def test_cd_compound_inside_quoted_message_is_not_a_real_cd(self):
+        """`cd /x && y` buried in a commit message must not trip the cd check."""
+        allow('git commit -m "ran cd /tmp && rm -rf x by mistake"')
+
+    def test_real_cd_compound_still_blocks(self):
+        block("cd /repo && git status", message_contains="git -C")
+
+    def test_real_cd_compound_with_quoted_path_still_blocks(self):
+        block('cd "/path with spaces" && git log')
