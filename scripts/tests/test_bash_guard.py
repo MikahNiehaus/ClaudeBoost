@@ -155,22 +155,6 @@ class TestBlock:
         cmd = "cd /Users/demo/client && npm install"
         block(cmd)
 
-    # || echo / || print fallbacks ---------------------------------------
-
-    def test_real_or_echo_fallback_blocked(self):
-        """cat file || echo missing — a genuine shell fallback, not quoted."""
-        cmd = "cat /tmp/somefile 2>/dev/null || echo missing"
-        block(cmd)
-
-    def test_real_or_print_fallback_blocked(self):
-        cmd = "cmd || print result"
-        block(cmd)
-
-    def test_conditional_or_echo_with_test_builtin(self):
-        """[ -f file ] && echo yes || echo no — real shell operators."""
-        cmd = '[ -f "/tmp/somefile" ] && echo yes || echo no'
-        block(cmd)
-
     # $VAR bare env expansion -------------------------------------------
 
     def test_bare_dollar_temp_blocked(self):
@@ -274,16 +258,9 @@ class TestBlock:
 class TestStripQuotedEdgeCases:
 
     def test_escaped_double_quote_inside_dq_string_does_not_break_stripping(self):
-        """An escaped quote mid-string — e.g. "a\\"b" — shouldn't confuse the regex.
-        If stripping breaks, the real || echo after the string might slip through."""
-        # The outer single quotes here are Python quoting; the command has a
-        # double-quoted string with an escaped double quote inside it.
-        cmd = r'git commit -m "fix \"quote\" issue" || echo done'
-        block(cmd)
-
-    def test_real_pipe_or_echo_after_single_quoted_containing_pipe_or_echo(self):
-        """A quoted literal with || echo is harmless, but a REAL || echo after it should block."""
-        cmd = "grep 'foo || echo bar' /tmp/x || echo fallback"
+        """An escaped quote mid-string shouldn't confuse _strip_quoted, so a real
+        bare $VAR after the string is still detected and blocked."""
+        cmd = r'git commit -m "fix \"quote\" issue" && ls $HOME'
         block(cmd)
 
     def test_dollar_var_in_double_quotes_blocks_even_with_single_quoted_var_earlier(self):
@@ -378,3 +355,44 @@ class TestCdCompound:
 
     def test_real_cd_compound_with_quoted_path_still_blocks(self):
         block('cd "/path with spaces" && git log')
+
+
+# ===========================================================================
+# || echo fallbacks are NO LONGER blocked — ClaudeBoost's catch-all "Bash"
+# allow entry means echo never prompts, so the old block was pure noise.
+# ===========================================================================
+
+class TestCompoundFallbackAllowed:
+
+    def test_or_echo_fallback_allowed(self):
+        allow("cat /tmp/somefile 2>/dev/null || echo missing")
+
+    def test_or_print_fallback_allowed(self):
+        allow("cmd || print result")
+
+    def test_and_echo_or_echo_idiom_allowed(self):
+        allow('[ -f "/tmp/somefile" ] && echo yes || echo no')
+
+    def test_token_check_idiom_allowed(self):
+        allow('[ -n "${GH_TOKEN}" ] && echo set || echo unset')
+
+
+# ===========================================================================
+# OFF SWITCH — CLAUDEBOOST_BASH_GUARD=off lets everything through.
+# ===========================================================================
+
+class TestOffSwitch:
+
+    def _run(self, command, value):
+        return run_hook("bash-guard.py", _bash(command), env_overrides={"CLAUDEBOOST_BASH_GUARD": value})
+
+    def test_off_lets_a_normally_blocked_command_through(self):
+        for value in ("off", "0", "false", "disabled", "no", "OFF"):
+            r = self._run("cd /repo && git status", value)
+            assert r.returncode == 0, f"CLAUDEBOOST_BASH_GUARD={value!r} should disable the guard"
+
+    def test_unset_or_on_still_guards(self):
+        # empty / "on" / anything else keeps the guard active
+        for value in ("", "on", "1", "true"):
+            r = self._run("cd /repo && git status", value)
+            assert r.returncode == 2, f"CLAUDEBOOST_BASH_GUARD={value!r} should keep the guard on"

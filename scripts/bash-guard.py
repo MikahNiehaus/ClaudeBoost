@@ -16,6 +16,13 @@ Blocked patterns:
   8. ssh/scp to external hosts   — data exfiltration prevention
   9. nc/netcat to external hosts — reverse shell prevention
 
+Each pattern here trips a Claude Code BUILT-IN scanner that prompts regardless of
+the allow list. We do NOT block `|| echo` style fallbacks: ClaudeBoost's setup
+puts "Bash" as a catch-all allow entry, so sub-commands like echo never prompt.
+
+Off switch: set CLAUDEBOOST_BASH_GUARD=off (in ~/.claude/settings.json env) to
+disable the guard entirely.
+
 Exit codes:
   0 = allow (pass)
   2 = block (Claude sees stderr message and retries)
@@ -23,6 +30,7 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
@@ -98,27 +106,6 @@ def check_python_multiline_c(command: str) -> str | None:
             "Write the Python to a file like /tmp/cb_script.py, then run "
             "`python /tmp/cb_script.py`. "
             "This avoids the prompt and is cleaner anyway."
-        )
-    return None
-
-
-def check_compound_fallback(command: str) -> str | None:
-    """Block compound commands that use || echo or || print as fallbacks.
-
-    When a command like `cat file 2>/dev/null || echo "..."` is evaluated,
-    Claude Code checks sub-commands in compound statements independently.
-    The echo sub-command often doesn't match an allow entry, causing a prompt.
-    Split these into separate Bash calls instead.
-
-    Quoted strings are stripped first — a `|| echo` inside a string literal
-    (JSON body, grep pattern, commit message) is never a shell operator.
-    """
-    unquoted = _strip_quoted(command)
-    if re.search(r"\|\|\s*echo\b", unquoted) or re.search(r"\|\|\s*print\b", unquoted):
-        return (
-            "BLOCKED: Do not use '|| echo' or '|| print' compound fallbacks. "
-            "Claude Code checks sub-commands independently and echo may not be matched. "
-            "Split into separate Bash calls, or use the Read tool which never prompts."
         )
     return None
 
@@ -331,8 +318,12 @@ def main() -> int:
     if not command:
         return 0
 
+    # Full off switch — set CLAUDEBOOST_BASH_GUARD=off to let everything through.
+    if os.environ.get("CLAUDEBOOST_BASH_GUARD", "").strip().lower() in ("off", "0", "false", "disabled", "no"):
+        return 0
+
     # Run checks in order
-    for check in [check_compound_fallback, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)
