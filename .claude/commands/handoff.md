@@ -26,25 +26,19 @@ losing your place in a task.
 ### 1. Save workspace state
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/session-clear-save.py'])" 2>/dev/null || true
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/session-clear-save.py" 2>/dev/null || true
 ```
 
 ### 2. If a message was provided, store it in the handoff file
 
-```bash
-python3 -c "
-import json, os, sys
-from pathlib import Path
-home = os.environ.get('CLAUDEBOOST_HOME', '')
-f = Path(home) / 'state' / 'handoff-latest.json'
-msg = '''$ARGUMENTS'''.strip()
-if f.exists() and msg:
-    d = json.loads(f.read_text(encoding='utf-8'))
-    d['handoff_message'] = msg
-    f.write_text(json.dumps(d, indent=2), encoding='utf-8')
-    print('Handoff message saved.')
-"
-```
+If `$ARGUMENTS` is non-empty, add it to the handoff state with the file tools (no
+shell python — bash-guard blocks multiline `python -c`):
+
+1. **Read** `state/handoff-latest.json` (under CLAUDEBOOST_HOME). If it doesn't
+   exist, skip this step.
+2. **Write** it back with a `"handoff_message"` field set to the trimmed
+   `$ARGUMENTS` text, preserving the other fields.
+3. Confirm "Handoff message saved."
 
 ### 3. Report to user
 

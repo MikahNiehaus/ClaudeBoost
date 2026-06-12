@@ -53,9 +53,9 @@ DIFF=$(git diff; git diff --staged)
 # --staged: only staged
 DIFF=$(git diff --staged)
 
-# --branch: branch diff (detect base branch)
-BASE=$(git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null | sed 's|origin/||' || git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "main")
-DIFF=$(git diff origin/$BASE...HEAD)
+# --branch: branch diff (detect base branch; ${BASE:-main} instead of || echo, which bash-guard blocks)
+BASE=$(git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null | sed 's|origin/||' || git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
+DIFF=$(git diff "origin/${BASE:-main}...HEAD")
 
 # --pr <url>: PR diff
 DIFF=$(gh pr diff <url>)

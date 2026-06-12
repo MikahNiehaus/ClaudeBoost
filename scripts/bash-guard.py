@@ -16,6 +16,13 @@ Blocked patterns:
   8. ssh/scp to external hosts   — data exfiltration prevention
   9. nc/netcat to external hosts — reverse shell prevention
 
+Each pattern here trips a Claude Code BUILT-IN scanner that prompts regardless of
+the allow list. We do NOT block `|| echo` style fallbacks: ClaudeBoost's setup
+puts "Bash" as a catch-all allow entry, so sub-commands like echo never prompt.
+
+Off switch: set CLAUDEBOOST_BASH_GUARD=off (in ~/.claude/settings.json env) to
+disable the guard entirely.
+
 Exit codes:
   0 = allow (pass)
   2 = block (Claude sees stderr message and retries)
@@ -23,17 +30,25 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
 
 def check_cd_compound(command: str) -> str | None:
-    """Detect cd + && compound commands."""
-    # Match: cd <path> && <command>
-    if re.search(r"\bcd\s+.+\s*&&\s*", command):
-        # Extract what command follows &&
-        match = re.search(r"&&\s*(\w+)", command)
-        following = match.group(1) if match else "command"
+    """Detect `cd <path> && <command>` immediate compounds.
+
+    Only the immediate compound trips Claude Code's prompt. A standalone
+    `cd /path; git ...` (cd ended by ; or newline) is fine, and the && in
+    `git add X && git commit` joins the two gits, not the cd — so the match
+    must not cross a command separator (; | & newline). Quotes are stripped
+    first so a cd inside a commit message doesn't false-match.
+    """
+    cleaned = _strip_quoted(command)
+    # cd <path> && <cmd>, with no separator between the cd target and the &&
+    match = re.search(r"\bcd\s+[^;&|\n]+&&\s*(\w+)?", cleaned)
+    if match:
+        following = match.group(1) or "command"
         if following == "git":
             return (
                 "BLOCKED: Do not use `cd && git`. "
@@ -45,7 +60,8 @@ def check_cd_compound(command: str) -> str | None:
                 "BLOCKED: Do not use `cd && " + following + "`. "
                 "Use `npm --prefix \"/path\" run <script>` to run package scripts, "
                 "or pass the directory to the tool itself "
-                "(e.g. `npx vitest run --root \"/path\"`, `npx jest --rootDir \"/path\"`). "
+                "(e.g. `npx tsc --noEmit -p \"/path\"`, `npx vitest run --root \"/path\"`, "
+                "`npx jest --rootDir \"/path\"`). "
                 "Compound cd commands trigger a permission prompt."
             )
         if following == "make":
@@ -94,41 +110,54 @@ def check_python_multiline_c(command: str) -> str | None:
     return None
 
 
-def check_compound_fallback(command: str) -> str | None:
-    """Block compound commands that use || echo or || print as fallbacks.
+def _assigned_vars(command: str) -> set[str]:
+    """Names of variables defined within the command itself.
 
-    When a command like `cat file 2>/dev/null || echo "..."` is evaluated,
-    Claude Code checks sub-commands in compound statements independently.
-    The echo sub-command often doesn't match an allow entry, causing a prompt.
-    Split these into separate Bash calls instead.
+    A variable you assign and then use in the same command (SHA=$(git rev-parse
+    HEAD); ... $SHA) is locally scoped, not an environment expansion, so it
+    shouldn't be blocked. Quotes are stripped first so a `FOO=bar` sitting
+    inside a quoted string isn't mistaken for a real assignment.
     """
-    if re.search(r"\|\|\s*echo\b", command) or re.search(r"\|\|\s*print\b", command):
-        return (
-            "BLOCKED: Do not use '|| echo' or '|| print' compound fallbacks. "
-            "Claude Code checks sub-commands independently and echo may not be matched. "
-            "Split into separate Bash calls, or use the Read tool which never prompts."
-        )
-    return None
+    cleaned = _strip_quoted(command)
+    names: set[str] = set()
+    # NAME=value at a command position (single =, not == / != comparisons)
+    for m in re.finditer(r"(?:^|[\s;&|\n(])([A-Za-z_][A-Za-z0-9_]*)=(?!=)", cleaned):
+        names.add(m.group(1))
+    # for NAME in ...   and C-style  for (( NAME=...
+    for m in re.finditer(r"\bfor\s+\(?\(?\s*([A-Za-z_][A-Za-z0-9_]*)", cleaned):
+        names.add(m.group(1))
+    # read [-opts] NAME
+    for m in re.finditer(r"\bread\b(?:\s+-\S+)*\s+([A-Za-z_][A-Za-z0-9_]*)", cleaned):
+        names.add(m.group(1))
+    return names
 
 
 def check_env_var_expansion(command: str) -> str | None:
     """Block $VARNAME env expansion in Bash commands.
 
-    Claude Code's built-in simple_expansion scanner prompts on any $VAR
-    regardless of the allow list. Use absolute paths or shell-safe alternatives.
+    Claude Code's built-in simple_expansion scanner prompts on environment
+    expansions regardless of the allow list. Use the ${VAR} brace form (which
+    the scanner accepts) or an absolute path.
 
     Exceptions: $() command substitution and ${VAR} brace form are not flagged
-    by the scanner, so we only block the bare $WORD form.
+    by the scanner, so we only block the bare $WORD form. Single-quoted strings
+    are stripped first ('$VAR' never expands in shell). Variables assigned
+    earlier in the same command are locally scoped, so references to them pass.
     """
+    scannable = _strip_quoted(command, single_only=True)
+    assigned = _assigned_vars(command)
     # Match bare $WORD (not preceded by { which would be ${VAR})
-    match = re.search(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]+)", command)
-    if match:
-        var = match.group(0)
+    for match in re.finditer(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]*)", scannable):
+        name = match.group(1)
+        if name in assigned:
+            continue
         return (
-            f"BLOCKED: Do not use {var} in Bash commands. "
-            "Claude Code's simple_expansion scanner prompts on $VAR regardless of the allow list. "
-            "Use absolute paths instead. "
-            "For log files: read them with the Read tool or use the full path directly."
+            f"BLOCKED: Do not use ${name} in Bash commands. "
+            "Claude Code's simple_expansion scanner prompts on environment expansions "
+            "regardless of the allow list. "
+            f"Use the brace form ${{{name}}} (the scanner accepts it) or an absolute path. "
+            "Variables you assign earlier in the same command are fine to reference. "
+            "For log files, use the Read tool."
         )
     return None
 
@@ -148,12 +177,42 @@ def check_cat_heredoc(command: str) -> str | None:
     return None
 
 
-def _strip_quoted(command: str) -> str:
+def _strip_quoted(command: str, single_only: bool = False) -> str:
     """Remove quoted string literals so body text (e.g. git commit -m '...')
-    doesn't trip checks that look for command words inside the message."""
-    cleaned = re.sub(r'"' + r'(?:[^"\\\\]|\\\\.)*"', "", command)
-    cleaned = re.sub(r"'(?:[^'\\\\]|\\\\.)*'", "", cleaned)
-    return cleaned
+    doesn't trip checks that look for command words inside the message.
+
+    single_only=True keeps double-quoted content (the shell still expands
+    $VAR there) and removes only single-quoted literals. A character scanner
+    rather than a regex: an apostrophe or single quote nested inside "..."
+    is literal to the shell and must not start a bogus single-quoted span,
+    otherwise "...'$VAR'..." would hide a real expansion.
+
+    Unbalanced quotes leave the tail untouched so checks stay conservative.
+    """
+    out = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == '"':
+            j = i + 1
+            while j < n and command[j] != '"':
+                j += 2 if command[j] == "\\" else 1
+            if j >= n:
+                out.append(command[i:])
+                break
+            out.append(command[i : j + 1] if single_only else '""')
+            i = j + 1
+        elif c == "'":
+            j = command.find("'", i + 1)
+            if j == -1:
+                out.append(command[i:])
+                break
+            out.append("''")
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def check_ssh_external(command: str) -> str | None:
@@ -259,8 +318,12 @@ def main() -> int:
     if not command:
         return 0
 
+    # Full off switch — set CLAUDEBOOST_BASH_GUARD=off to let everything through.
+    if os.environ.get("CLAUDEBOOST_BASH_GUARD", "").strip().lower() in ("off", "0", "false", "disabled", "no"):
+        return 0
+
     # Run checks in order
-    for check in [check_compound_fallback, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

@@ -96,9 +96,9 @@ The markdown file format:
 
 Ensure the `textual` dependency is installed, then open the interactive viewer in a new terminal tab and start the chat watcher background process:
 ```bash
-python -c "import textual" 2>/dev/null || pip install textual
-wt.exe -w 0 new-tab --title "CHANGES" python "$CLAUDEBOOST_HOME/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
-mkdir -p "$TEMP/claudeboost" && nohup python "$CLAUDEBOOST_HOME/scripts/chat-watcher.py" > "$TEMP/claudeboost/chat-watcher.log" 2>&1 &
+"${CLAUDEBOOST_PYTHON}" -c "import textual" 2>/dev/null || pip install textual
+wt.exe -w 0 new-tab --title "CHANGES" "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/changes-viewer.py" "workspace/[task-id]/changes/changes.json"
+mkdir -p "${TEMP}/claudeboost" && nohup "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/chat-watcher.py" > "${TEMP}/claudeboost/chat-watcher.log" 2>&1 &
 ```
 
 The `chat-watcher.py` script polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for 15 minutes and answers questions using `claude -p` (Claude Code CLI, no API key needed). It runs completely independently — no manual monitoring needed.

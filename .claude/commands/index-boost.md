@@ -27,12 +27,7 @@ Flexible — any combination:
 
 2. **Health check** — call `GET http://127.0.0.1:8612/status` via Bash:
    ```bash
-   python3 -c "
-   import json, urllib.request
-   with urllib.request.urlopen('http://127.0.0.1:8612/status', timeout=5) as r:
-       data = json.loads(r.read())
-       print(json.dumps(data, indent=2))
-   "
+   curl -s --max-time 5 http://127.0.0.1:8612/status
    ```
    If it fails, stop and tell the user: "RAG not connected — run `/rag` to start the server, then retry."
 
@@ -40,15 +35,10 @@ Flexible — any combination:
    - knowledge: N chunks, N files
    - agents: N chunks, N files
 
-3. **Index** — call `POST http://127.0.0.1:8612/index` via Bash:
+3. **Index** — call `POST http://127.0.0.1:8612/index` via Bash (substitute the
+   parsed `<scope>` string and `<force>` boolean into the JSON):
    ```bash
-   python3 -c "
-   import json, urllib.request
-   body = json.dumps({'scope': '<scope>', 'force': <force>}).encode()
-   req = urllib.request.Request('http://127.0.0.1:8612/index', data=body, headers={'Content-Type': 'application/json'})
-   with urllib.request.urlopen(req, timeout=120) as r:
-       print(json.dumps(json.loads(r.read()), indent=2))
-   "
+   curl -s --max-time 120 -X POST http://127.0.0.1:8612/index -H "Content-Type: application/json" -d '{"scope":"<scope>","force":<force>}'
    ```
 
 4. **Report results**:
@@ -66,16 +56,9 @@ Flexible — any combination:
 
    a. **Vector quality — knowledge** (1 search call):
       ```bash
-      python3 -c "
-      import json, urllib.request
-      body = json.dumps({'query': 'security parameterized queries input validation', 'scope': 'knowledge', 'limit': 5}).encode()
-      req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-      with urllib.request.urlopen(req, timeout=10) as r:
-          data = json.loads(r.read())
-          for hit in data.get('results', []):
-              print(f\"{hit['score']:.3f}  {hit['source']}\")
-      "
+      curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"security parameterized queries input validation","scope":"knowledge","limit":5}'
       ```
+      Read the `results` array — each hit has `score` and `source`.
       **Score thresholds** (BGE asymmetric retrieval produces lower absolute cosine values than all-MiniLM):
       - PASS: top score ≥ 0.50 AND result from the expected `.xml` knowledge file
       - WARN: top score 0.42–0.50

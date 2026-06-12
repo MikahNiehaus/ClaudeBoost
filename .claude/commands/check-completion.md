@@ -82,6 +82,6 @@ npm run coverage -- --json | jq '.total.lines.pct'
 # Run tests
 npm test; echo "Exit code: $?"
 
-# Check lint errors
-npm run lint 2>&1 | grep -c "error" || echo "0"
+# Check lint errors (grep -c prints 0 itself when nothing matches; no fallback needed)
+npm run lint 2>&1 | grep -c "error"
 ```

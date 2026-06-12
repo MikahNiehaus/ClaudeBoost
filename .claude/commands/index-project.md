@@ -173,15 +173,16 @@ $ARGUMENTS — flexible, any of:
         - WARN: results found under an excluded directory — exclusion did not take effect
         **Auto-fix when WARN:** The server loaded old code. Clear pycache and reconnect:
         ```bash
-        find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
+        find "${CLAUDEBOOST_HOME}/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
         echo "Restart the RAG HTTP server (run /rag), then re-run /index-project force"
         ```
         Report: "WARN — .ragignore not active. Clear pycache and restart the RAG server (/rag)."
 
    g. **Community summary health** — verify that all knowledge communities have LLM summaries:
-      Run this exact command:
-      ```bash
-      python3 -c "
+      Save this to a temp file with the Write tool (bash-guard blocks multiline
+      `python -c`), then run it with `"${CLAUDEBOOST_PYTHON}" /tmp/cb_community_health.py`:
+      ```python
+      # /tmp/cb_community_health.py
       import sqlite3, os
       db_path = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'rag-server-index', 'kb_graph.db')
       if not os.path.exists(db_path):
@@ -193,7 +194,6 @@ $ARGUMENTS — flexible, any of:
           db.close()
           status = 'PASS' if summaries >= communities and communities > 0 else 'FAIL'
           print(f'{status}: {summaries}/{communities} community summaries exist')
-      "
       ```
       - PASS: summaries == communities AND communities > 0
       - SKIP: kb_graph.db not found (server not yet indexed ClaudeBoost knowledge)

@@ -77,7 +77,7 @@ If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
 
 First check the registry for a project-scoped workspace:
 ```bash
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--get','$TICKET_ID'])" 2>/dev/null
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" --get "$TICKET_ID" 2>/dev/null
 ```
 If it returns a path, use that as `WORKSPACE_ABS`. Set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
 
@@ -150,7 +150,7 @@ What goes where:
 
 ```bash
 # Register so /restore and /clear-safe can find this workspace
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$TASK_ID','$WORKSPACE_ABS','$WORKSPACE_ROOT']).returncode)"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
 
 # Add workspace/ to project .gitignore if writing to a project dir
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
@@ -593,13 +593,18 @@ Detected server processes:
 
 If `language = csharp`: check that `netcoredbg` is available (mcp-debugger requires it for .NET).
 
-Run:
+Run (two separate calls — compound `|| echo` fallbacks and bare `$VAR` are blocked by bash-guard):
 ```bash
-command -v netcoredbg 2>/dev/null || ([ -n "$NETCOREDBG_PATH" ] && [ -f "$NETCOREDBG_PATH/netcoredbg.exe" ] && echo "$NETCOREDBG_PATH/netcoredbg.exe") || echo NOT_FOUND
+command -v netcoredbg
 ```
 
-- If the command returns a path → continue to attach.
-- If output is `NOT_FOUND` → set `DEBUG_ENABLED = false`. Print the following, then skip to the TC loop:
+If that errors, check the configured path:
+```bash
+ls "${NETCOREDBG_PATH}/netcoredbg.exe"
+```
+
+- If either command returns a path → continue to attach (use that path).
+- If both error → NOT_FOUND: set `DEBUG_ENABLED = false`. Print the following, then skip to the TC loop:
 
 ```
 netcoredbg not found. mcp-debugger requires netcoredbg for .NET debugging.

@@ -27,10 +27,7 @@ If `$CLAUDEBOOST_HOME` is set, proceed to Phase 1.
 
 If `$CLAUDEBOOST_HOME` is empty:
 
-1. Try extracting from `~/.claude/settings.json`:
-   ```bash
-   python -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/settings.json'))); print(d.get('env',{}).get('CLAUDEBOOST_HOME','MISSING'))" 2>/dev/null || echo "MISSING"
-   ```
+1. Try extracting from `~/.claude/settings.json`: read it with the **Read tool** and look for the `env.CLAUDEBOOST_HOME` key. If the file does not exist or the key is absent → treat as `MISSING`. (Read never prompts; the old `python -c ... || echo` form is blocked by bash-guard.)
 2. If a valid path is returned: run `export CLAUDEBOOST_HOME=<path>` so Phase 1 can use it.
 3. If `MISSING` (settings.json absent, or exists but has no `CLAUDEBOOST_HOME` key): ask the user:
    > "This appears to be a fresh install. What is the full path to your ClaudeBoost repo?"
@@ -45,7 +42,7 @@ Announce: `ClaudeBoost home: <path>`
 Installs hooks, registers MCP server, seeds state files, installs Python deps. All steps are idempotent.
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/setup.py']).returncode)"
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/setup.py"
 ```
 
 (On macOS/Linux where only `python3` is on PATH, use `python3` instead.)
@@ -78,14 +75,14 @@ This ensures every subsequent check and all future sessions see the latest agent
 ### Check 1 — RAG Server Health
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; r=subprocess.run([sys.executable,h+'/scripts/check-rag-health.py']); print('EXIT='+str(r.returncode))"
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/check-rag-health.py"; echo "EXIT=$?"
 ```
 
 | Exit | Meaning | Repair |
 |------|---------|--------|
 | 0 | **PASS** | — |
-| 2 | Dependency drift (tokenizers/transformers mismatch) | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
-| 3 | Wrong install path | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
+| 2 | Dependency drift (tokenizers/transformers mismatch) | `"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/reinstall-rag.py"` then retry |
+| 3 | Wrong install path | `"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/reinstall-rag.py"` then retry |
 | 1 | Unknown error | Mark FAIL, include output — manual fix needed |
 
 ---
@@ -96,9 +93,11 @@ All seven hook types must be registered in `~/.claude/settings.json`:
 
 ```bash
 for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
-  python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/check-hooks.py','$hook'],capture_output=True).returncode)" && echo "OK: $hook" || echo "MISSING: $hook"
+  "${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/check-hooks.py" "${hook}"; echo "${hook} exit:$?"
 done
 ```
+
+`exit:0` = OK, anything else = MISSING. (Brace-form variables and no `|| echo` — both required by bash-guard.)
 
 If any are MISSING: re-run `setup.py` (hooks are additive — re-running never duplicates), then retry.
 
@@ -107,7 +106,7 @@ If any are MISSING: re-run `setup.py` (hooks are additive — re-running never d
 ### Check 3 — State Files
 
 ```bash
-ls "$CLAUDEBOOST_HOME/state/"
+ls "${CLAUDEBOOST_HOME}/state/"
 ```
 
 Required: `claudeboost-mode.json`, `session-approvals.json`, `speak-state.json`
@@ -117,7 +116,7 @@ If any are missing: re-run `setup.py` (it seeds missing files while preserving e
 Also verify that `claudeboost-mode.json` contains `"mode": "CONSULT"`:
 
 ```bash
-python -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
 ```
 
 If mode is not `CONSULT`: re-run `setup.py` — it now resets any non-CONSULT value back to CONSULT automatically.
@@ -127,7 +126,7 @@ If mode is not `CONSULT`: re-run `setup.py` — it now resets any non-CONSULT va
 ### Check 4 — edge-tts (for /speak)
 
 ```bash
-python -c "import edge_tts; print('ok')"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import edge_tts; print('ok')"
 ```
 
 If FAIL: repair → `pip install edge-tts`, then retry.
@@ -177,9 +176,7 @@ Retry `where netcoredbg` after the PATH fix. Up to 3 attempts total before marki
 
 ### Check 5 — Global CLAUDE.md
 
-```bash
-head -3 ~/.claude/CLAUDE.md 2>/dev/null || echo "MISSING"
-```
+Read `~/.claude/CLAUDE.md` with the **Read tool** (limit 3 lines). If the Read errors, the file is MISSING.
 
 If missing: **do not auto-copy** — the project CLAUDE.md documents ClaudeBoost internals and must not be used as the global user file. Instead, warn the user:
 
@@ -191,18 +188,10 @@ Mark as WARN (not FAIL) and continue. Do not retry — this requires manual user
 
 ### Check 6 — statusLine
 
-```bash
-python -c "
-import json, os
-p = os.path.expanduser('~/.claude/settings.json')
-s = json.load(open(p))
-sl = s.get('statusLine', {})
-cmd = sl.get('command', '')
-print('PRESENT' if 'rag-statusline' in cmd else 'MISSING')
-"
-```
-
-(The statusLine command is `\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-statusline.py\"` — match on the script name, not on 'ClaudeBoost', which never appears in that mixed case.)
+**Read** `~/.claude/settings.json` with the Read tool and check the
+`statusLine.command` value: PRESENT if it contains `rag-statusline`, MISSING
+otherwise. (Match on the script name, not on 'ClaudeBoost', which never appears
+in that mixed case. The full command is `"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"`.)
 
 If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/rag` to start the server.
 
@@ -213,10 +202,10 @@ If MISSING: re-run `setup.py` — it now creates the statusLine on fresh install
 Project `.claude/commands/` only load when Claude Code's cwd is inside the ClaudeBoost repo. `setup.py` mirrors every command to `~/.claude/commands/` so all skills (`/workspace`, `/explore`, `/audit`, etc.) are available in **every** Claude instance regardless of directory. Verify the global dir has the full set:
 
 ```bash
-SRC=$(ls "$CLAUDEBOOST_HOME/.claude/commands/"*.md 2>/dev/null | wc -l)
+SRC=$(ls "${CLAUDEBOOST_HOME}/.claude/commands/"*.md 2>/dev/null | wc -l)
 DST=$(ls ~/.claude/commands/*.md 2>/dev/null | wc -l)
-echo "project=$SRC global=$DST"
-comm -23 <(ls "$CLAUDEBOOST_HOME/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
+echo "project=${SRC} global=${DST}"
+comm -23 <(ls "${CLAUDEBOOST_HOME}/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
 ```
 
 If the `comm` output lists any files (commands present in the repo but missing globally), re-run `setup.py` — section 2b syncs them. Then **restart any other Claude instances** for them to pick up the new commands (the command list is read at startup).
@@ -238,29 +227,18 @@ If the command is not found: tell the user to install Ollama from https://ollama
 **8b. Is Ollama running?**
 
 ```bash
-python -c "
-import urllib.request, urllib.error
-try:
-    urllib.request.urlopen('http://localhost:11434/', timeout=3)
-    print('RUNNING')
-except urllib.error.URLError:
-    print('NOT_RUNNING')
-"
+curl -s --max-time 3 http://localhost:11434/
 ```
 
-If `NOT_RUNNING`: start it in the background:
+Non-empty output (Ollama answers `Ollama is running`) means RUNNING; an error or
+empty output means NOT_RUNNING.
+
+If `NOT_RUNNING`: start it in the background, then re-check:
 
 ```bash
 nohup ollama serve > /tmp/ollama.log 2>&1 &
 sleep 3
-python -c "
-import urllib.request, urllib.error
-try:
-    urllib.request.urlopen('http://localhost:11434/', timeout=3)
-    print('RUNNING')
-except urllib.error.URLError:
-    print('STILL_NOT_RUNNING')
-"
+curl -s --max-time 3 http://localhost:11434/
 ```
 
 If still not running after repair: mark as WARN — community summaries unavailable until Ollama starts. Continue.
@@ -294,14 +272,14 @@ Verify that `~/.claude/settings.json` has the correct ClaudeBoost permission pol
 Run a quick audit:
 
 ```bash
-python3 "C:/Users/mniehaus/AppData/Local/Temp/cb_perm_check.py"
+"${CLAUDEBOOST_PYTHON:-python3}" /tmp/cb_perm_check.py
 ```
 
 Where `cb_perm_check.py` contains:
 
 ```python
-import json, sys
-with open("C:/Users/mniehaus/.claude/settings.json", encoding="utf-8") as f:
+import json, os, sys
+with open(os.path.expanduser("~/.claude/settings.json"), encoding="utf-8") as f:
     s = json.load(f)
 allow = s["permissions"]["allow"]
 ask = s["permissions"]["ask"]
@@ -342,7 +320,7 @@ Playwright MCP provides `mcp__playwright_*` tools used by `browser-agent` and `/
 **10a. Is Node/npx available?**
 
 ```bash
-python -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
 ```
 
 If MISSING: mark WARN, skip 10b. Tell the user:
@@ -351,13 +329,13 @@ If MISSING: mark WARN, skip 10b. Tell the user:
 **10b. Is Playwright MCP registered?**
 
 ```bash
-claude mcp list 2>/dev/null | grep -i playwright || echo "NOT_REGISTERED"
+claude mcp list 2>/dev/null | grep -i playwright
 ```
 
 | Result | Meaning | Repair |
 |--------|---------|--------|
 | Shows `playwright` | **PASS** | — |
-| `NOT_REGISTERED` | Needs registration | Run repair below |
+| No output / grep exits 1 | Needs registration | Run repair below |
 | Command fails | Claude CLI not on PATH | Mark WARN, manual fix needed |
 
 **Repair (cross-platform — works on Windows, macOS, Linux):**
