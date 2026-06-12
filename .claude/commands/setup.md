@@ -27,10 +27,7 @@ If `$CLAUDEBOOST_HOME` is set, proceed to Phase 1.
 
 If `$CLAUDEBOOST_HOME` is empty:
 
-1. Try extracting from `~/.claude/settings.json`:
-   ```bash
-   python -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/settings.json'))); print(d.get('env',{}).get('CLAUDEBOOST_HOME','MISSING'))" 2>/dev/null || echo "MISSING"
-   ```
+1. Try extracting from `~/.claude/settings.json`: read it with the **Read tool** and look for the `env.CLAUDEBOOST_HOME` key. If the file does not exist or the key is absent → treat as `MISSING`. (Read never prompts; the old `python -c ... || echo` form is blocked by bash-guard.)
 2. If a valid path is returned: run `export CLAUDEBOOST_HOME=<path>` so Phase 1 can use it.
 3. If `MISSING` (settings.json absent, or exists but has no `CLAUDEBOOST_HOME` key): ask the user:
    > "This appears to be a fresh install. What is the full path to your ClaudeBoost repo?"
@@ -96,9 +93,11 @@ All seven hook types must be registered in `~/.claude/settings.json`:
 
 ```bash
 for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
-  python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/check-hooks.py','$hook'],capture_output=True).returncode)" && echo "OK: $hook" || echo "MISSING: $hook"
+  python "${CLAUDEBOOST_HOME}/scripts/check-hooks.py" "${hook}"; echo "${hook} exit:$?"
 done
 ```
+
+`exit:0` = OK, anything else = MISSING. (Brace-form variables and no `|| echo` — both required by bash-guard.)
 
 If any are MISSING: re-run `setup.py` (hooks are additive — re-running never duplicates), then retry.
 
@@ -107,7 +106,7 @@ If any are MISSING: re-run `setup.py` (hooks are additive — re-running never d
 ### Check 3 — State Files
 
 ```bash
-ls "$CLAUDEBOOST_HOME/state/"
+ls "${CLAUDEBOOST_HOME}/state/"
 ```
 
 Required: `claudeboost-mode.json`, `session-approvals.json`, `speak-state.json`
@@ -177,9 +176,7 @@ Retry `where netcoredbg` after the PATH fix. Up to 3 attempts total before marki
 
 ### Check 5 — Global CLAUDE.md
 
-```bash
-head -3 ~/.claude/CLAUDE.md 2>/dev/null || echo "MISSING"
-```
+Read `~/.claude/CLAUDE.md` with the **Read tool** (limit 3 lines). If the Read errors, the file is MISSING.
 
 If missing: **do not auto-copy** — the project CLAUDE.md documents ClaudeBoost internals and must not be used as the global user file. Instead, warn the user:
 
@@ -213,10 +210,10 @@ If MISSING: re-run `setup.py` — it now creates the statusLine on fresh install
 Project `.claude/commands/` only load when Claude Code's cwd is inside the ClaudeBoost repo. `setup.py` mirrors every command to `~/.claude/commands/` so all skills (`/workspace`, `/explore`, `/audit`, etc.) are available in **every** Claude instance regardless of directory. Verify the global dir has the full set:
 
 ```bash
-SRC=$(ls "$CLAUDEBOOST_HOME/.claude/commands/"*.md 2>/dev/null | wc -l)
+SRC=$(ls "${CLAUDEBOOST_HOME}/.claude/commands/"*.md 2>/dev/null | wc -l)
 DST=$(ls ~/.claude/commands/*.md 2>/dev/null | wc -l)
-echo "project=$SRC global=$DST"
-comm -23 <(ls "$CLAUDEBOOST_HOME/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
+echo "project=${SRC} global=${DST}"
+comm -23 <(ls "${CLAUDEBOOST_HOME}/.claude/commands/" 2>/dev/null | sort) <(ls ~/.claude/commands/ 2>/dev/null | sort)
 ```
 
 If the `comm` output lists any files (commands present in the repo but missing globally), re-run `setup.py` — section 2b syncs them. Then **restart any other Claude instances** for them to pick up the new commands (the command list is read at startup).
@@ -351,13 +348,13 @@ If MISSING: mark WARN, skip 10b. Tell the user:
 **10b. Is Playwright MCP registered?**
 
 ```bash
-claude mcp list 2>/dev/null | grep -i playwright || echo "NOT_REGISTERED"
+claude mcp list 2>/dev/null | grep -i playwright
 ```
 
 | Result | Meaning | Repair |
 |--------|---------|--------|
 | Shows `playwright` | **PASS** | — |
-| `NOT_REGISTERED` | Needs registration | Run repair below |
+| No output / grep exits 1 | Needs registration | Run repair below |
 | Command fails | Claude CLI not on PATH | Mark WARN, manual fix needed |
 
 **Repair (cross-platform — works on Windows, macOS, Linux):**

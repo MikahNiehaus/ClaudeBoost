@@ -593,13 +593,18 @@ Detected server processes:
 
 If `language = csharp`: check that `netcoredbg` is available (mcp-debugger requires it for .NET).
 
-Run:
+Run (two separate calls — compound `|| echo` fallbacks and bare `$VAR` are blocked by bash-guard):
 ```bash
-command -v netcoredbg 2>/dev/null || ([ -n "$NETCOREDBG_PATH" ] && [ -f "$NETCOREDBG_PATH/netcoredbg.exe" ] && echo "$NETCOREDBG_PATH/netcoredbg.exe") || echo NOT_FOUND
+command -v netcoredbg
 ```
 
-- If the command returns a path → continue to attach.
-- If output is `NOT_FOUND` → set `DEBUG_ENABLED = false`. Print the following, then skip to the TC loop:
+If that errors, check the configured path:
+```bash
+ls "${NETCOREDBG_PATH}/netcoredbg.exe"
+```
+
+- If either command returns a path → continue to attach (use that path).
+- If both error → NOT_FOUND: set `DEBUG_ENABLED = false`. Print the following, then skip to the TC loop:
 
 ```
 netcoredbg not found. mcp-debugger requires netcoredbg for .NET debugging.

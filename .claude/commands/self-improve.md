@@ -30,7 +30,7 @@ Split `$ARGUMENTS` on whitespace. Examine the first token:
 - Contains `/` or `\` or starts with a drive letter (e.g. `C:`) → `MODE = PROJECT`, `PROJECT_PATH = first token`
 - Otherwise, check: does `$CLAUDEBOOST_HOME/workspace/<first-token>/` exist?
   ```bash
-  ls "$CLAUDEBOOST_HOME/workspace/<first-token>/" 2>/dev/null
+  ls "${CLAUDEBOOST_HOME}/workspace/<first-token>/" 2>/dev/null
   ```
   - If yes → `MODE = WORKSPACE`, `WORKSPACE_ID = first token`, `WORKSPACE_ABS = $CLAUDEBOOST_HOME/workspace/$WORKSPACE_ID`
   - If no → assume it's a partial path or typo; ask:

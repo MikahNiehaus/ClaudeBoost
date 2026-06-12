@@ -173,7 +173,7 @@ $ARGUMENTS — flexible, any of:
         - WARN: results found under an excluded directory — exclusion did not take effect
         **Auto-fix when WARN:** The server loaded old code. Clear pycache and reconnect:
         ```bash
-        find "$CLAUDEBOOST_HOME/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
+        find "${CLAUDEBOOST_HOME}/mcp-rag-server" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
         echo "Restart the RAG HTTP server (run /rag), then re-run /index-project force"
         ```
         Report: "WARN — .ragignore not active. Clear pycache and restart the RAG server (/rag)."

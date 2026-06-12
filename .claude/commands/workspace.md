@@ -12,13 +12,24 @@ Creates a workspace for your goal and produces a step-by-step implementation pla
 
 ---
 
+## Snippet conventions (read first)
+
+Bash snippets in this file mix two kinds of `$NAMES` — treat them differently:
+
+- **Placeholders** (`$ARGUMENTS`, `$WORKSPACE_ID`, `$WORKSPACE_ABS`, `$WORKSPACE_ROOT`, `$PROJECT_PATH`, `$TASK_ID`): values YOU resolve in earlier phases. Substitute the actual literal value into the command before running it. Never pass them to Bash as shell variables — they don't exist in the shell, and bash-guard blocks bare `$VAR` anyway.
+- **Runtime shell variables** (`${SPRINT_BRANCH}`, `${BASE_BRANCH}`, `${BRANCH_NAME}`, `${TEMP}`, `${CLAUDEBOOST_HOME}`): assigned or exported in the shell itself. Always written in `${VAR}` brace form, which both bash-guard and Claude Code's expansion scanner accept.
+
+---
+
 ## Phase 0: Session Readiness Check
 
 Before loading RAG context, verify the session is properly boosted:
 
 ```bash
-[ -f "$TEMP/claudeboost_active" ] && echo "BOOSTED" || echo "NOT_BOOSTED"
+ls "${TEMP}/claudeboost_active"
 ```
+
+If `ls` succeeds the session is BOOSTED; if it errors the session is NOT_BOOSTED. (Brace form `${TEMP}` and no `|| echo` fallback — both keep bash-guard happy.)
 
 If NOT_BOOSTED, emit this warning **once** and proceed — do NOT block:
 > "⚠ Session not boosted. Graph RAG and project codebase search will not be available.
@@ -63,19 +74,7 @@ Derive a slug from `$ARGUMENTS`:
 
 Set `WORKSPACE_ID = [slug]`.
 
-Check for collision — if that slug already exists in the registry, append `-2`, `-3`, etc.:
-```bash
-python3 -c "
-import json, os
-from pathlib import Path
-home = Path(os.environ.get('CLAUDEBOOST_HOME', ''))
-try:
-    reg = json.loads((home / 'state' / 'workspaces.json').read_text(encoding='utf-8'))
-    print('\n'.join(reg.keys()))
-except Exception:
-    pass
-"
-```
+Check for collision — read `state/workspaces.json` (under CLAUDEBOOST_HOME) with the **Read tool** and look at its keys. If that slug already exists, append `-2`, `-3`, etc. Do NOT use multiline `python3 -c` for this — bash-guard blocks it; the Read tool never prompts.
 
 ### 1b — Determine workspace root and create workspace
 
@@ -85,9 +84,8 @@ except Exception:
 
 2. **ClaudeBoost meta-work detection** — scan `$ARGUMENTS` for these keywords: `agent`, `skill`, `knowledge base`, `knowledge file`, `ClaudeBoost`, `rag server`, `hook`, `boost`. If two or more match, set `WORKSPACE_ROOT = $CLAUDEBOOST_HOME`. This handles tasks that are literally about improving ClaudeBoost itself.
 
-3. **Most recent project from registry** — check for previously used projects:
-```bash
-python3 -c "
+3. **Most recent project from registry** — check for previously used projects. Read `state/workspaces.json` (under CLAUDEBOOST_HOME) with the **Read tool**; if you need the recency ordering, use the Write tool to save this as `/tmp/cb_recent_projects.py` and run it with `python3 /tmp/cb_recent_projects.py` (multiline `python3 -c` is blocked by bash-guard):
+```python
 import json
 from pathlib import Path
 import os
@@ -104,7 +102,6 @@ try:
     [print(p) for p in projects[:3]]
 except Exception as e:
     pass
-"
 ```
 
 If this returns exactly one project path: use it as `PROJECT_PATH` and tell the user `"Using project: {PROJECT_PATH}"`.
@@ -122,7 +119,7 @@ mkdir -p "$WORKSPACE_ABS"
 
 **Register, protect, and mark active:**
 ```bash
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$WORKSPACE_ID','$WORKSPACE_ABS','$WORKSPACE_ROOT']).returncode)"
+python3 "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
 
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
@@ -130,13 +127,15 @@ if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   fi
 fi
 
-python3 -c "
-import json, os
-from pathlib import Path
-home = Path(os.environ.get('CLAUDEBOOST_HOME', ''))
-active = {'workspace': '$WORKSPACE_ID', 'workspace_path': '$WORKSPACE_ABS', 'project_path': '$WORKSPACE_ROOT'}
-(home / 'state' / 'active-workspace.json').write_text(json.dumps(active, indent=2), encoding='utf-8')
-"
+```
+
+Then write `state/active-workspace.json` (under CLAUDEBOOST_HOME) directly with the **Write tool** (Read it first if it exists):
+```json
+{
+  "workspace": "$WORKSPACE_ID",
+  "workspace_path": "$WORKSPACE_ABS",
+  "project_path": "$WORKSPACE_ROOT"
+}
 ```
 
 Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
@@ -177,8 +176,10 @@ Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ti
 If `WORKSPACE_ROOT` is a git repo, create a feature branch for the task:
 
 ```bash
-git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree 2>/dev/null && echo "GIT_REPO" || echo "NOT_GIT"
+git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree
 ```
+
+If it prints `true` → GIT_REPO; if it errors → NOT_GIT. (No `|| echo` fallback — bash-guard blocks it.)
 
 If NOT_GIT or WORKSPACE_ROOT is CLAUDEBOOST_HOME: skip this step silently.
 
@@ -194,8 +195,8 @@ SPRINT_BRANCH=$(git -C "$WORKSPACE_ROOT" branch -a --sort=-committerdate \
   | head -1)
 
 # 2. Fall back: use origin/HEAD → main/master if no sprint branch exists.
-if [ -n "$SPRINT_BRANCH" ]; then
-  BASE_BRANCH="$SPRINT_BRANCH"
+if [ -n "${SPRINT_BRANCH}" ]; then
+  BASE_BRANCH="${SPRINT_BRANCH}"
 else
   BASE_BRANCH=$(git -C "$WORKSPACE_ROOT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
   BASE_BRANCH=${BASE_BRANCH:-main}
@@ -203,13 +204,15 @@ fi
 
 BRANCH_NAME="feature/$WORKSPACE_ID"
 
-git -C "$WORKSPACE_ROOT" checkout -b "$BRANCH_NAME" "$BASE_BRANCH" 2>&1
+git -C "$WORKSPACE_ROOT" checkout -b "${BRANCH_NAME}" "${BASE_BRANCH}" 2>&1
 ```
+
+(Runtime shell variables use the `${VAR}` brace form throughout — bash-guard blocks bare `$VAR` because Claude Code's scanner prompts on it.)
 
 If that fails because the branch already exists, check it out instead:
 
 ```bash
-git -C "$WORKSPACE_ROOT" checkout "$BRANCH_NAME" 2>&1
+git -C "$WORKSPACE_ROOT" checkout "${BRANCH_NAME}" 2>&1
 ```
 
 Report: "Created branch `feature/$WORKSPACE_ID` from `$BASE_BRANCH`."

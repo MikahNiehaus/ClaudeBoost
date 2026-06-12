@@ -40,9 +40,11 @@ Reviews the diff between the current branch and its base for security issues.
 ### Step 1: Get the diff
 
 ```bash
-BASE=$(git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null | sed 's|origin/||' || git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "main")
-git diff origin/$BASE...HEAD
+BASE=$(git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null | sed 's|origin/||' || git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
+git diff "origin/${BASE:-main}...HEAD"
 ```
+
+(`${BASE:-main}` replaces the `|| echo "main"` fallback — bash-guard blocks `|| echo`, and bare `$BASE` would trigger Claude Code's expansion prompt.)
 
 If the diff is empty, report "No branch changes to review" and stop.
 

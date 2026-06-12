@@ -32,11 +32,11 @@ Split `$ARGUMENTS` on whitespace. Treat the full string as a natural-language de
 Scan for active workspaces and read their names + ticket summaries:
 ```bash
 # ClaudeBoost-local workspaces
-for d in "$CLAUDEBOOST_HOME/workspace/"/*/; do
-  [ -d "$d" ] || continue
-  name=$(basename "$d")
+for d in "${CLAUDEBOOST_HOME}/workspace/"/*/; do
+  [ -d "${d}" ] || continue
+  name=$(basename "${d}")
   if [ -f "${d}ticket.md" ] || [ -f "${d}context.md" ]; then
-    echo "WORKSPACE:$name (local)"
+    echo "WORKSPACE:${name} (local)"
     [ -f "${d}ticket.md" ] && head -5 "${d}ticket.md"
     echo "---"
   fi
@@ -101,12 +101,16 @@ Set:
 - `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`
 - `DESCRIPTION = $ARGUMENTS` stripped of the task ID token (useful context for agents)
 
+> Snippet convention: `$TASK_ID`, `$WORKSPACE_ABS`, `$WORKSPACE_ROOT`, `$ARGUMENTS` are placeholders — substitute the actual literal values before running a snippet; never pass them to Bash as shell variables (bash-guard blocks bare `$VAR`). `${VAR}` brace form marks real runtime shell variables.
+
 **0b — Resume vs fresh.**
 
 Check if `$WORKSPACE_ABS` exists:
 ```bash
-ls "$WORKSPACE_ABS/" 2>/dev/null && echo "EXISTS" || echo "NEW"
+ls "$WORKSPACE_ABS/"
 ```
+
+If `ls` succeeds → EXISTS; if it errors → NEW. (No `|| echo` fallback — bash-guard blocks it.)
 
 If **EXISTS** and `ticket.md` is present: print "Resuming `$WORKSPACE_ABS` — ticket already saved." Read the existing `ticket.md` and `context.md` for full context. Skip Phase 0c (ticket capture).
 

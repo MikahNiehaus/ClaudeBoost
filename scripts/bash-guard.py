@@ -45,7 +45,8 @@ def check_cd_compound(command: str) -> str | None:
                 "BLOCKED: Do not use `cd && " + following + "`. "
                 "Use `npm --prefix \"/path\" run <script>` to run package scripts, "
                 "or pass the directory to the tool itself "
-                "(e.g. `npx vitest run --root \"/path\"`, `npx jest --rootDir \"/path\"`). "
+                "(e.g. `npx tsc --noEmit -p \"/path\"`, `npx vitest run --root \"/path\"`, "
+                "`npx jest --rootDir \"/path\"`). "
                 "Compound cd commands trigger a permission prompt."
             )
         if following == "make":
@@ -101,8 +102,12 @@ def check_compound_fallback(command: str) -> str | None:
     Claude Code checks sub-commands in compound statements independently.
     The echo sub-command often doesn't match an allow entry, causing a prompt.
     Split these into separate Bash calls instead.
+
+    Quoted strings are stripped first — a `|| echo` inside a string literal
+    (JSON body, grep pattern, commit message) is never a shell operator.
     """
-    if re.search(r"\|\|\s*echo\b", command) or re.search(r"\|\|\s*print\b", command):
+    unquoted = _strip_quoted(command)
+    if re.search(r"\|\|\s*echo\b", unquoted) or re.search(r"\|\|\s*print\b", unquoted):
         return (
             "BLOCKED: Do not use '|| echo' or '|| print' compound fallbacks. "
             "Claude Code checks sub-commands independently and echo may not be matched. "
@@ -118,10 +123,13 @@ def check_env_var_expansion(command: str) -> str | None:
     regardless of the allow list. Use absolute paths or shell-safe alternatives.
 
     Exceptions: $() command substitution and ${VAR} brace form are not flagged
-    by the scanner, so we only block the bare $WORD form.
+    by the scanner, so we only block the bare $WORD form. Single-quoted
+    strings are stripped first — '$VAR' never expands in shell, so the
+    scanner has no reason to prompt on it (grep patterns, JSON bodies).
     """
+    scannable = _strip_quoted(command, single_only=True)
     # Match bare $WORD (not preceded by { which would be ${VAR})
-    match = re.search(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]+)", command)
+    match = re.search(r"(?<!\{)\$([A-Za-z_][A-Za-z0-9_]*)", scannable)
     if match:
         var = match.group(0)
         return (
@@ -148,12 +156,42 @@ def check_cat_heredoc(command: str) -> str | None:
     return None
 
 
-def _strip_quoted(command: str) -> str:
+def _strip_quoted(command: str, single_only: bool = False) -> str:
     """Remove quoted string literals so body text (e.g. git commit -m '...')
-    doesn't trip checks that look for command words inside the message."""
-    cleaned = re.sub(r'"' + r'(?:[^"\\\\]|\\\\.)*"', "", command)
-    cleaned = re.sub(r"'(?:[^'\\\\]|\\\\.)*'", "", cleaned)
-    return cleaned
+    doesn't trip checks that look for command words inside the message.
+
+    single_only=True keeps double-quoted content (the shell still expands
+    $VAR there) and removes only single-quoted literals. A character scanner
+    rather than a regex: an apostrophe or single quote nested inside "..."
+    is literal to the shell and must not start a bogus single-quoted span,
+    otherwise "...'$VAR'..." would hide a real expansion.
+
+    Unbalanced quotes leave the tail untouched so checks stay conservative.
+    """
+    out = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == '"':
+            j = i + 1
+            while j < n and command[j] != '"':
+                j += 2 if command[j] == "\\" else 1
+            if j >= n:
+                out.append(command[i:])
+                break
+            out.append(command[i : j + 1] if single_only else '""')
+            i = j + 1
+        elif c == "'":
+            j = command.find("'", i + 1)
+            if j == -1:
+                out.append(command[i:])
+                break
+            out.append("''")
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def check_ssh_external(command: str) -> str | None:

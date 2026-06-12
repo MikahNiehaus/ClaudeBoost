@@ -61,8 +61,10 @@ Parse the JSON output and note:
 The sentinel tells session-primer.py that RAG is verified for this session:
 
 ```bash
-touch "$TEMP/claudeboost_rag_ok"
+touch "${TEMP}/claudeboost_rag_ok"
 ```
+
+(Brace form `${TEMP}` — bash-guard blocks bare `$TEMP` because Claude Code's expansion scanner prompts on it.)
 
 ---
 

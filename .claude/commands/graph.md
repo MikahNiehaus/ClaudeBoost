@@ -24,11 +24,11 @@ Parse `$ARGUMENTS`:
 
 **If no TASK_ID given**, scan active workspaces:
 ```bash
-for d in "$CLAUDEBOOST_HOME/workspace/"/*/; do
-  [ -d "$d" ] || continue
-  name=$(basename "$d")
+for d in "${CLAUDEBOOST_HOME}/workspace/"/*/; do
+  [ -d "${d}" ] || continue
+  name=$(basename "${d}")
   [ -f "${d}ticket.md" ] || [ -f "${d}context.md" ] || continue
-  echo "WORKSPACE:$name"
+  echo "WORKSPACE:${name}"
   [ -f "${d}ticket.md" ] && head -3 "${d}ticket.md"
   echo "---"
 done
