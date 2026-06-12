@@ -42,7 +42,7 @@ for d in "${CLAUDEBOOST_HOME}/workspace/"/*/; do
   fi
 done
 # Project-scoped workspaces from registry
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--list'])" 2>/dev/null
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" --list 2>/dev/null
 ```
 
 **Decision logic — attempt to resolve automatically before asking anything:**
@@ -124,7 +124,7 @@ Announce: "Created `$WORKSPACE_ABS` — starting fresh exploration."
 
 ```bash
 # Register in workspaces registry so /restore and /clear-safe can find it
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$TASK_ID','$WORKSPACE_ABS','$PROJECT_PATH']).returncode)"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$PROJECT_PATH"
 
 # Add workspace/ to project .gitignore if writing to a project dir (not ClaudeBoost itself)
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then

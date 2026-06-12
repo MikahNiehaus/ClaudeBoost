@@ -42,7 +42,7 @@ Announce: `ClaudeBoost home: <path>`
 Installs hooks, registers MCP server, seeds state files, installs Python deps. All steps are idempotent.
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/setup.py']).returncode)"
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/setup.py"
 ```
 
 (On macOS/Linux where only `python3` is on PATH, use `python3` instead.)
@@ -75,14 +75,14 @@ This ensures every subsequent check and all future sessions see the latest agent
 ### Check 1 — RAG Server Health
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; r=subprocess.run([sys.executable,h+'/scripts/check-rag-health.py']); print('EXIT='+str(r.returncode))"
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/check-rag-health.py"; echo "EXIT=$?"
 ```
 
 | Exit | Meaning | Repair |
 |------|---------|--------|
 | 0 | **PASS** | — |
-| 2 | Dependency drift (tokenizers/transformers mismatch) | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
-| 3 | Wrong install path | `python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/reinstall-rag.py']).returncode)"` then retry |
+| 2 | Dependency drift (tokenizers/transformers mismatch) | `"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/reinstall-rag.py"` then retry |
+| 3 | Wrong install path | `"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/reinstall-rag.py"` then retry |
 | 1 | Unknown error | Mark FAIL, include output — manual fix needed |
 
 ---
@@ -93,7 +93,7 @@ All seven hook types must be registered in `~/.claude/settings.json`:
 
 ```bash
 for hook in SessionStart SessionEnd PreToolUse PostToolUse PreCompact UserPromptSubmit Stop; do
-  python "${CLAUDEBOOST_HOME}/scripts/check-hooks.py" "${hook}"; echo "${hook} exit:$?"
+  "${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/check-hooks.py" "${hook}"; echo "${hook} exit:$?"
 done
 ```
 
@@ -116,7 +116,7 @@ If any are missing: re-run `setup.py` (it seeds missing files while preserving e
 Also verify that `claudeboost-mode.json` contains `"mode": "CONSULT"`:
 
 ```bash
-python -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import json,os; d=json.load(open(os.path.join(os.environ['CLAUDEBOOST_HOME'],'state','claudeboost-mode.json'))); print('mode =', d.get('mode','MISSING'))"
 ```
 
 If mode is not `CONSULT`: re-run `setup.py` — it now resets any non-CONSULT value back to CONSULT automatically.
@@ -126,7 +126,7 @@ If mode is not `CONSULT`: re-run `setup.py` — it now resets any non-CONSULT va
 ### Check 4 — edge-tts (for /speak)
 
 ```bash
-python -c "import edge_tts; print('ok')"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import edge_tts; print('ok')"
 ```
 
 If FAIL: repair → `pip install edge-tts`, then retry.
@@ -188,18 +188,10 @@ Mark as WARN (not FAIL) and continue. Do not retry — this requires manual user
 
 ### Check 6 — statusLine
 
-```bash
-python -c "
-import json, os
-p = os.path.expanduser('~/.claude/settings.json')
-s = json.load(open(p))
-sl = s.get('statusLine', {})
-cmd = sl.get('command', '')
-print('PRESENT' if 'rag-statusline' in cmd else 'MISSING')
-"
-```
-
-(The statusLine command is `\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-statusline.py\"` — match on the script name, not on 'ClaudeBoost', which never appears in that mixed case.)
+**Read** `~/.claude/settings.json` with the Read tool and check the
+`statusLine.command` value: PRESENT if it contains `rag-statusline`, MISSING
+otherwise. (Match on the script name, not on 'ClaudeBoost', which never appears
+in that mixed case. The full command is `"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"`.)
 
 If MISSING: re-run `setup.py` — it now creates the statusLine on fresh installs. Then run `/rag` to start the server.
 
@@ -235,29 +227,18 @@ If the command is not found: tell the user to install Ollama from https://ollama
 **8b. Is Ollama running?**
 
 ```bash
-python -c "
-import urllib.request, urllib.error
-try:
-    urllib.request.urlopen('http://localhost:11434/', timeout=3)
-    print('RUNNING')
-except urllib.error.URLError:
-    print('NOT_RUNNING')
-"
+curl -s --max-time 3 http://localhost:11434/
 ```
 
-If `NOT_RUNNING`: start it in the background:
+Non-empty output (Ollama answers `Ollama is running`) means RUNNING; an error or
+empty output means NOT_RUNNING.
+
+If `NOT_RUNNING`: start it in the background, then re-check:
 
 ```bash
 nohup ollama serve > /tmp/ollama.log 2>&1 &
 sleep 3
-python -c "
-import urllib.request, urllib.error
-try:
-    urllib.request.urlopen('http://localhost:11434/', timeout=3)
-    print('RUNNING')
-except urllib.error.URLError:
-    print('STILL_NOT_RUNNING')
-"
+curl -s --max-time 3 http://localhost:11434/
 ```
 
 If still not running after repair: mark as WARN — community summaries unavailable until Ollama starts. Continue.
@@ -291,14 +272,14 @@ Verify that `~/.claude/settings.json` has the correct ClaudeBoost permission pol
 Run a quick audit:
 
 ```bash
-python3 "C:/Users/mniehaus/AppData/Local/Temp/cb_perm_check.py"
+"${CLAUDEBOOST_PYTHON:-python3}" /tmp/cb_perm_check.py
 ```
 
 Where `cb_perm_check.py` contains:
 
 ```python
-import json, sys
-with open("C:/Users/mniehaus/.claude/settings.json", encoding="utf-8") as f:
+import json, os, sys
+with open(os.path.expanduser("~/.claude/settings.json"), encoding="utf-8") as f:
     s = json.load(f)
 allow = s["permissions"]["allow"]
 ask = s["permissions"]["ask"]
@@ -339,7 +320,7 @@ Playwright MCP provides `mcp__playwright_*` tools used by `browser-agent` and `/
 **10a. Is Node/npx available?**
 
 ```bash
-python -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
+"${CLAUDEBOOST_PYTHON:-python3}" -c "import shutil; print('OK' if shutil.which('npx') else 'MISSING')"
 ```
 
 If MISSING: mark WARN, skip 10b. Tell the user:

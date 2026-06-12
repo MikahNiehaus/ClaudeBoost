@@ -11,7 +11,7 @@ Run the ClaudeBoost hook test harness to verify all hook scripts behave correctl
 
 1. Run the test suite:
    ```bash
-   python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/test-hooks.py','-v']).returncode)"
+   "${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/scripts/test-hooks.py" -v
    ```
 
 2. Report results:

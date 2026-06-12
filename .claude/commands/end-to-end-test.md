@@ -77,7 +77,7 @@ If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
 
 First check the registry for a project-scoped workspace:
 ```bash
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--get','$TICKET_ID'])" 2>/dev/null
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" --get "$TICKET_ID" 2>/dev/null
 ```
 If it returns a path, use that as `WORKSPACE_ABS`. Set `TASK_ID = $TICKET_ID`. Skip Step 2. Proceed to resume-phase detection below.
 
@@ -150,7 +150,7 @@ What goes where:
 
 ```bash
 # Register so /restore and /clear-safe can find this workspace
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/register-workspace.py','$TASK_ID','$WORKSPACE_ABS','$WORKSPACE_ROOT']).returncode)"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$TASK_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
 
 # Add workspace/ to project .gitignore if writing to a project dir
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then

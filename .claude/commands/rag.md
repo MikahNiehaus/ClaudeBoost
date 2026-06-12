@@ -14,7 +14,7 @@ Use this skill to start the RAG server at the beginning of a session, or reconne
 ## Step 1: Start the RAG HTTP Server
 
 ```bash
-python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/rag-server-start.py']).returncode)"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-server-start.py"
 ```
 
 If the output is "already running" or "ready", proceed. If it fails or times out, stop and report the error — do not continue.
@@ -91,7 +91,7 @@ RAG starting — model loading (~60s). Run /rag again when ready. Status line sh
 
 **Failed:**
 ```
-RAG failed — [specific error]. Try: python -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; sys.exit(subprocess.run([sys.executable,h+'/scripts/rag-server-start.py']).returncode)" in the terminal.
+RAG failed — [specific error]. Try: "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-server-start.py" in the terminal.
 ```
 
 ---

@@ -32,7 +32,7 @@ for d in "${CLAUDEBOOST_HOME}/workspace/"/*/; do
   [ -f "${d}ticket.md" ] && head -3 "${d}ticket.md"
   echo "---"
 done
-python3 -c "import os,subprocess,sys; h=os.environ['CLAUDEBOOST_HOME']; subprocess.run([sys.executable,h+'/scripts/register-workspace.py','--list'])" 2>/dev/null
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" --list 2>/dev/null
 ```
 
 If exactly one active workspace: use it. If multiple: ask which one. If none: ask the user.
@@ -58,15 +58,10 @@ If it fails or the tool is unavailable:
 
 Stop. Do not proceed.
 
-If it returns successfully: check that the project is indexed.
+If it returns successfully: check that the project is indexed (substitute the
+resolved path for `$PROJECT_PATH`):
 ```bash
-python3 -c "
-import json, urllib.request
-body = json.dumps({'query': 'test', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'limit': 1}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=10) as r:
-    print(json.loads(r.read()))
-"
+curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"test","scope":"codebase","project_path":"$PROJECT_PATH","limit":1}'
 ```
 
 If this returns nothing:
@@ -110,25 +105,15 @@ For each entity, run BOTH calls. Never skip either.
 
 **Call 1 — Vector** (semantic similarity — finds code that does the same thing):
 ```bash
-python3 -c "
-import json, urllib.request
-body = json.dumps({'query': '[entity]', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'mode': 'vector', 'limit': 3}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=10) as r:
-    data = json.loads(r.read()); [print(h['score'], h['source']) for h in data.get('results', [])]
-"
+curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[entity]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"vector","limit":3}'
 ```
 
 **Call 2 — Graph** (structural neighbours — finds code that imports, inherits, or calls the seed):
 ```bash
-python3 -c "
-import json, urllib.request
-body = json.dumps({'query': '[entity]', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'mode': 'graph', 'limit': 3}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=10) as r:
-    data = json.loads(r.read()); [print(h['score'], h['source']) for h in data.get('results', [])]
-"
+curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[entity]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"graph","limit":3}'
 ```
+
+Read the `results` array from each response — each hit has a `score` and `source` (file path).
 
 Collect results from all searches. For each result record:
 - `file` — source file path (normalise to repo-relative)
@@ -201,23 +186,11 @@ For each source file in the scope table (skip `.md`, `.json`, `.yaml` — not so
 run one RAG vector search:
 
 ```bash
-python3 -c "
-import json, urllib.request
-body = json.dumps({
-    'query': 'class function definition',
-    'scope': 'codebase',
-    'project_path': '$PROJECT_PATH',
-    'mode': 'vector',
-    'limit': 10
-}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=10) as r:
-    data = json.loads(r.read())
-    for h in data.get('results', []):
-        if '[target_file]' in h['source']:
-            print(h.get('section',''), h.get('line_start',''))
-"
+curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"class function definition","scope":"codebase","project_path":"$PROJECT_PATH","mode":"vector","limit":10}'
 ```
+
+From the `results`, keep only hits whose `source` contains the target file, and read
+their `section` and `line_start` fields.
 
 Parse public symbols from the `section` field. Strip any trailing `[header]`, `[footer]`,
 or `[imports]` bracketed suffixes first, then apply these rules:
@@ -243,14 +216,10 @@ returns nothing, and batch all fallback greps into a single Bash call.
 
 **Step 1 — RAG graph search per symbol:**
 ```bash
-python3 -c "
-import json, urllib.request
-body = json.dumps({'query': '[symbol_name]', 'scope': 'codebase', 'project_path': '$PROJECT_PATH', 'mode': 'graph', 'limit': 3}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/search', data=body, headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=10) as r:
-    data = json.loads(r.read()); [print(h['score'], h['source']) for h in data.get('results', [])]
-"
+curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[symbol_name]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"graph","limit":3}'
 ```
+
+Read the `results` array — each hit has a `score` and `source`.
 
 A symbol has a consumer if the graph search returns any result where `source` is a file
 other than the defining file. Record it as confirmed.
@@ -261,18 +230,15 @@ After ALL graph searches complete, collect any symbols where graph returned 0 ex
 into a `needs_grep` list. Then run ONE Bash call:
 
 ```bash
-python3 -c "
-import subprocess
-symbols = ['SymbolA', 'SymbolB']  # replace with actual needs_grep list
-project = '$PROJECT_PATH'
-for sym in symbols:
-    r = subprocess.run(['grep', '-r', '-l', '--include=*.py', '--include=*.ts',
-                        '--include=*.cs', '--include=*.go', sym, project],
-                       capture_output=True, text=True)
-    hits = [f for f in r.stdout.strip().split('\n') if f and '[defining_file]' not in f]
-    print(sym, '|', hits)
-"
+for sym in SymbolA SymbolB; do   # replace with the actual needs_grep list
+  echo "=== $sym ==="
+  grep -rl --include='*.py' --include='*.ts' --include='*.cs' --include='*.go' "$sym" "$PROJECT_PATH"
+done
 ```
+
+`$sym` is a loop variable so bash-guard allows it; substitute the resolved path for
+`$PROJECT_PATH`. For each symbol, ignore the defining file in the hit list — any other
+file means the symbol has a consumer.
 
 Record `consumers` as the combined list of external files from both steps, or empty if
 both returned nothing.
