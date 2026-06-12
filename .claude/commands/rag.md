@@ -26,24 +26,18 @@ If the output is "already running" or "ready", proceed. If it fails or times out
 Poll until ready (up to 60s):
 
 ```bash
-python3 -c "
-import time, json, urllib.request, urllib.error, sys
-deadline = time.time() + 60
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen('http://127.0.0.1:8612/status', timeout=3) as r:
-            data = json.loads(r.read())
-            if data.get('status') == 'ready':
-                print(json.dumps(data, indent=2))
-                sys.exit(0)
-            print('status:', data.get('status', '?'), '-- waiting...')
-    except urllib.error.URLError:
-        print('waiting for server...')
-    time.sleep(3)
-print('ERROR: server did not become ready within 60s')
-sys.exit(1)
-"
+for attempt in $(seq 1 20); do
+  STATUS=$(curl -s --max-time 3 http://127.0.0.1:8612/status)
+  echo "$STATUS" | grep -q '"status": *"ready"' && break
+  echo "waiting for server... (attempt $attempt)"
+  sleep 3
+done
+echo "$STATUS"
 ```
+
+(`$attempt` is a loop variable and `$STATUS` is assigned in the same command, so
+bash-guard allows them; curl to 127.0.0.1 is fine. If the loop ends without
+`ready`, the last `echo` shows whatever the server returned.)
 
 If exit code is non-zero, stop and tell the user: "RAG server did not start. Check the terminal for errors or run `python $CLAUDEBOOST_HOME/scripts/rag-server-start.py` manually."
 
@@ -73,22 +67,11 @@ touch "${TEMP}/claudeboost_rag_ok"
 Call the context endpoint to load knowledge into the conversation:
 
 ```bash
-python3 -c "
-import json, urllib.request, urllib.error
-body = json.dumps({'agent': 'debug-agent', 'task_description': 'session start', 'max_tokens': 2000}).encode()
-req = urllib.request.Request('http://127.0.0.1:8612/context', data=body, headers={'Content-Type': 'application/json'})
-try:
-    with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.loads(r.read())
-        if 'error' in data:
-            print('context error:', data['error'])
-        else:
-            print('token_count:', data.get('token_count', '?'))
-            print('sources:', len(data.get('sources', [])))
-except Exception as e:
-    print('context call failed:', e)
-"
+curl -s --max-time 15 -X POST http://127.0.0.1:8612/context -H "Content-Type: application/json" -d '{"agent":"debug-agent","task_description":"session start","max_tokens":2000}'
 ```
+
+Read the JSON response: a `token_count` field means RAG is primed; an `error`
+field means it failed (note it in the report).
 
 If it returns a token_count, RAG is fully live. If it errors but `/status` was healthy, the model may still be warming up — note this in the report and the user can re-run `/rag` in 30s.
 

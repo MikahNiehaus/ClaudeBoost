@@ -47,18 +47,10 @@ User can override: `--self` forces self-map, `--project` forces project-map.
 Run the extractor — it reads all agents, knowledge files, hooks, and commands in one shot:
 
 ```bash
-python -c "
-import os,subprocess,sys,json
-h=os.environ['CLAUDEBOOST_HOME']
-t=os.environ.get('TEMP','/tmp')
-r=subprocess.run([sys.executable,h+'/scripts/visualize-extract.py',h,t+'/cb-graph.json'])
-if r.returncode==0:
-    print(open(t+'/cb-graph.json').read())
-sys.exit(r.returncode)
-"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/visualize-extract.py" "${CLAUDEBOOST_HOME}" /tmp/cb-graph.json
 ```
 
-Read the JSON output. Use the `layers`, `side_rails`, and card fields (`title`, `subtitle`, `detail`, `responsibilities`, `icon`, `accent`) as your content. Do not run any other data-gathering commands — everything is already in the JSON.
+Then **Read** `/tmp/cb-graph.json` with the Read tool. Use the `layers`, `side_rails`, and card fields (`title`, `subtitle`, `detail`, `responsibilities`, `icon`, `accent`) as your content. Do not run any other data-gathering commands — everything is already in the JSON.
 
 ---
 
