@@ -112,7 +112,10 @@ the session, and shows active workspaces. From there:
 ```
 /boost                   Start a session
 /index-project           Index your codebase for semantic search
+/research-project        Build the project knowledge base (persistent, cumulative)
 /workspace <task>        Create a workspace + implementation plan
+/research-task           Index task-specific docs into the workspace (incremental)
+/research-rag            Index external URLs/PDFs into a per-task research index (ephemeral)
 /code-review             15-pass code review (14 parallel + evaluator)
 /end-to-end-test         Browser E2E tests with screenshot evidence
 /security-review         OWASP-grounded security audit
@@ -165,6 +168,22 @@ exploration and research.
 **Parallel limits** — up to 3 agents in parallel below 50% context; 2 from 50–75%; 1
 above 75%.
 
+### Agent RAG Usage
+
+Every agent calls `POST /context` first — that's enforced by hook and blocks any spawn
+without it. Beyond that, each specialist agent is also wired with explicit search rules:
+
+**Vector search (`mode=vector`)** — called before writing any code to find existing
+patterns, utilities, or similar implementations. Prevents duplication.
+
+**Graph search (`mode=graph`)** — called before changing any file to map its callers
+and importers. Every agent that touches code knows the blast radius before touching
+anything.
+
+The `reviewer-agent` runs a mandatory Caller Impact pass: it graph-searches every
+changed file and checks each caller for silent breakage. A change that looks clean in
+isolation but breaks a caller is flagged as a BLOCKER.
+
 ### Code Review
 
 `/code-review` runs 14 parallel passes against your staged changes or branch:
@@ -175,8 +194,8 @@ above 75%.
 - Test coverage and missing assertions
 - Dead code, debug artifacts, banned patterns
 - Project pattern consistency
+- Caller impact (graph search on changed files — catches silent breakage in callers)
 - Ticket alignment
-- And more
 
 Passes run in parallel, batched in groups of 3. The evaluator-agent (Opus) runs last in
 a fresh context — no confirmation bias. Every finding needs a `file:line` citation or
@@ -260,6 +279,48 @@ Language and framework files load automatically when their name appears in a spa
 prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xml` and
 `fw-react.xml`.
 
+### Project Knowledge Base
+
+Every project can have a persistent, cumulative knowledge base that lives inside the
+project at `.claudeboost/knowledge/`. Unlike the general knowledge files above, this KB
+is built specifically for your project and grows over time.
+
+```
+your-project/
+└── .claudeboost/
+    └── knowledge/
+        ├── architecture.md    # how the project is structured
+        ├── patterns.md        # coding patterns this codebase uses
+        ├── decisions.md       # key architectural decisions and why
+        ├── stack.md           # lang/framework specifics for this project
+        └── gotchas.md         # things that tripped agents up before
+```
+
+Run `/research-project` to expand it. The command reads what's already in the KB,
+detects gaps relevant to your current task, fetches the right docs and patterns, and
+appends them to the right files — then reindexes. Every agent working on that project
+from then on benefits from what was learned.
+
+The three research commands serve different purposes:
+
+| Command | When to use | Source discovery | Approval gate |
+|---------|------------|-----------------|---------------|
+| `/research-project` | Build/expand the permanent project KB | Codebase + web | No |
+| `/research-task` | Auto-research before a specific task | Ticket entities → web | No |
+| `/research-rag` | Index specific docs you already have in mind | You provide URLs | Yes — you approve before indexing |
+
+All three write to indexed storage and surface in agent context automatically. The difference
+is scope (permanent vs. workspace) and how sources are discovered.
+
+KB files are indexed as part of the project codebase. When relevant to a query they
+surface in `POST /context` Tier 4 results alongside source code. Run `/index-project`
+first so they're in the index.
+
+**Enforcement:** The workspace dashboard (injected at the start of every session) shows
+whether a project KB exists. When it's missing, a `REQUIRED` directive appears before
+Claude begins any agent work. Agent spawns are nudged to include the project KB path
+when one is detected.
+
 ## Agents
 
 | Agent | Specialty | Model |
@@ -297,8 +358,8 @@ prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xm
 `/boost` `/rag` `/setup` `/index-project` `/index-boost` `/list-agents`
 
 **Planning & Workspace**
-`/workspace` `/create-prd` `/plan-task` `/explore` `/research-task` `/research-rag`
-`/graph` `/agent-status`
+`/workspace` `/create-prd` `/plan-task` `/explore` `/research-project` `/research-task`
+`/research-rag` `/graph` `/agent-status`
 
 **Code Quality**
 `/code-review` `/review` `/security-review` `/audit` `/gate` `/simplify`

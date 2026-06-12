@@ -97,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-agent-guard.py\""
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/agent-spawn-gate.py\""
           }
         ]
       },

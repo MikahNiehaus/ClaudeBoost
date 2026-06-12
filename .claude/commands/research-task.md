@@ -1,12 +1,20 @@
 ---
-description: Build a workspace-scoped research RAG from web searches seeded by ticket entities
+description: Auto-discover and index sources for a task based on ticket entities — fully automated, no approval pause. Use for routine pre-task research.
 ---
 
 # /research-task — Task Research Builder
 
 Arguments: `[workspace-id]`
 
-Finds relevant external sources for a task and indexes them into a workspace-scoped research RAG. Once indexed, every agent spawned with `workspace_path` automatically gets the research as Tier 3c context — up to 400 tokens of task-relevant documentation alongside the codebase and general knowledge.
+**When to use this vs `/research-rag`:**
+- `/research-task` — automatic. Reads the ticket, extracts technical entities, runs web
+  searches, indexes results. No approval gate. Run this before delegating to agents.
+- `/research-rag` — manual. You provide the URLs or topic, review a source list, then
+  approve before indexing. Use when you have specific docs in mind.
+
+Both write to the same Tier 3c workspace path. Once indexed, every agent spawned with
+`workspace_path` automatically gets the research as context — up to 400 tokens of
+task-relevant documentation alongside the codebase and general knowledge.
 
 Run this after creating a workspace but before delegating to implementation agents.
 
@@ -99,22 +107,11 @@ Wait for the result. Note any failed sources.
 
 Do a quick sanity check to confirm the index was populated:
 
-```python
-import json, urllib.request
-body = json.dumps({
-    "query": "<primary_pattern_from_phase_2>",
-    "scope": "research",
-    "workspace_path": "<WORKSPACE_ABS>",
-    "limit": 3
-}).encode()
-req = urllib.request.Request(
-    "http://127.0.0.1:8612/search",
-    data=body,
-    headers={"Content-Type": "application/json"}
-)
-with urllib.request.urlopen(req, timeout=15) as r:
-    results = json.loads(r.read())
-print(f"Research hits: {len(results.get('results', []))}")
+```bash
+curl -s -X POST http://127.0.0.1:8612/search \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"<primary_pattern_from_phase_2>\",\"scope\":\"research\",\"workspace_path\":\"<WORKSPACE_ABS>\",\"limit\":3}" \
+  | python -c "import sys,json; d=json.load(sys.stdin); print(f'Research hits: {len(d.get(\"results\",[])])')"
 ```
 
 If 0 results: report the failure. Don't pretend it worked.

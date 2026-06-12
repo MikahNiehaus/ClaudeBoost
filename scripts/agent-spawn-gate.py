@@ -35,7 +35,23 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _log_usage(boost_home: Path, description: str, prompt: str, blocked: bool) -> None:
+    try:
+        agent = description.strip() or "unknown"
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "agent": agent,
+            "blocked": blocked,
+        }
+        log_path = boost_home / "state" / "agent-usage.jsonl"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -161,9 +177,11 @@ def main() -> int:
     if nudges:
         for n in nudges:
             print(n, file=sys.stderr)
+        _log_usage(boost_home, description, prompt, blocked=True)
         # Block when RAG context call is absent from spawn prompt — hard requirement
         return 2
 
+    _log_usage(boost_home, description, prompt, blocked=False)
     return 0
 
 

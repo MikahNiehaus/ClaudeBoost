@@ -202,7 +202,22 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
     t3c_exists = (Path(ws_path) / '.rag-index' / 'research').exists()
     t3c_detail = 'READY' if t3c_exists else 'NOT BUILT'
 
-    # Required actions for missing indexes
+    # Project KB status — .claudeboost/knowledge/ inside the project
+    project_kb_exists = False
+    project_kb_detail = 'N/A (no project_path)'
+    if project_path:
+        kb_dir = Path(project_path) / '.claudeboost' / 'knowledge'
+        try:
+            kb_files = list(kb_dir.glob('*.md')) if kb_dir.exists() else []
+            if kb_files:
+                project_kb_detail = f'READY ({len(kb_files)} files)'
+                project_kb_exists = True
+            else:
+                project_kb_detail = 'NOT BUILT'
+        except PermissionError:
+            project_kb_detail = 'UNKNOWN (permission error)'
+
+    # Required actions for missing indexes — all appends must happen before lines is built
     required_actions = []
     if project_path and not codebase_ready and rag_status is not None:
         required_actions.append(
@@ -214,6 +229,12 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
         required_actions.append(
             f"  [{req_num}] RESEARCH NOT BUILT - run Skill(skill='research-task', args='{ws_id}')"
             f" as your FIRST action. Tier 5 task research is offline until built."
+        )
+    if project_path and not project_kb_exists:
+        req_num = len(required_actions) + 1
+        required_actions.append(
+            f"  [{req_num}] PROJECT KB NOT BUILT - run Skill(skill='research-project', args='{project_path}')"
+            f" to build the project knowledge base. Agents will lack project-specific context until it exists."
         )
 
     lines = []
@@ -247,6 +268,7 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
         'RAG TIER STATUS:',
         f'  Tiers 3+4 (codebase):  {codebase_detail}',
         f'  Tier 5  (research):    {t3c_detail}',
+        f'  Project KB:            {project_kb_detail}',
         '',
         'HOW TO USE THIS SESSION:',
     ]

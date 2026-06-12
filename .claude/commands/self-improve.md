@@ -1,18 +1,19 @@
 ---
-argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | xml | counts | rag | rules | memory | all]
-description: Self-improvement audit — ClaudeBoost internals (default), any workspace, or any project path
+argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | xml | counts | rag | rules | memory | all] — OR — hooks [enable|disable|status] [workspace-path]
+description: Self-improvement audit — ClaudeBoost internals (default), any workspace, or any project path. Also manages per-workspace protocol hooks.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
 
 # /self-improve — Dynamic Self-Improvement Audit
 
 Arguments: **$ARGUMENTS**
-Format: `[target] [focus]`
+Format: `[target] [focus]`  — OR — `hooks [enable|disable|status] [workspace-path]`
 
 - **target** (optional):
   - Omitted or `self` → **SELF mode**: ClaudeBoost internals audit (original behavior)
   - A workspace ID (e.g. `add-dark-mode-2026-05-14`) → **WORKSPACE mode**: audit that workspace's implementation
   - An absolute path (e.g. `/home/user/myapp` or `C:/Development/MyApp`) → **PROJECT mode**: audit any project codebase
+  - `hooks` → **HOOKS mode**: manage per-directory protocol enforcement hooks (see section below)
 - **focus** (optional, default: `all`):
   - SELF mode: `docs | enforcement | xml | counts | rag | rules | memory | all`
   - WORKSPACE mode: `code | security | tests | quality | docs | all`
@@ -26,6 +27,7 @@ Format: `[target] [focus]`
 
 Split `$ARGUMENTS` on whitespace. Examine the first token:
 
+- **`hooks`** → `MODE = HOOKS` — jump immediately to the **Hooks Mode** section at the bottom. Do NOT run any audit phases.
 - Empty or `self` → `MODE = SELF`
 - Contains `/` or `\` or starts with a drive letter (e.g. `C:`) → `MODE = PROJECT`, `PROJECT_PATH = first token`
 - Otherwise, check: does `$CLAUDEBOOST_HOME/workspace/<first-token>/` exist?
@@ -328,4 +330,118 @@ Source files modified only in Phase 5 (Fix), only for CONFIRMED findings, only w
 /self-improve /home/user/myapp             # Audit entire project (Linux/Mac)
 /self-improve C:/Development/MyApp         # Audit entire project (Windows)
 /self-improve C:/Development/MyApp quality # Quality-only audit of the project
+
+/self-improve hooks enable                 # Enable protocol gate for current session
+/self-improve hooks disable                # Disable protocol gate (allow edits freely)
+/self-improve hooks status                 # Show gate state and round progress
+/self-improve hooks enable C:/path/to/ws  # Enable gate for a specific workspace path
+```
+
+---
+
+## Hooks Mode
+
+**Trigger**: first argument is exactly `hooks`.
+
+### How the gate works
+
+A `PreToolUse` hook is permanently installed in `settings.local.json` for the current machine. It fires on every Edit/Write tool call but exits immediately (exit 0, no effect) unless:
+1. The file being edited is `run_swebench_eval.py` inside a `coir-submission` workspace
+2. A `.protocol_gate_enabled` flag file exists in that workspace
+
+This means: **other projects are completely unaffected** — the hook reads the file path and exits 0 in < 1ms for anything outside coir-submission.
+
+Enable/disable is just creating or deleting the flag file. There is no hook to install or uninstall per session.
+
+### Parse sub-command
+
+Second token: `enable` | `disable` | `status`. Default if omitted: `status`.
+
+Third token (optional): absolute path to the workspace. Default: `C:/Users/grayw/OneDrive/prj/ClaudeBoost/workspace/coir-submission`.
+
+Set `GATE_DIR` to the resolved workspace path.
+Set `FLAG_FILE = GATE_DIR/.protocol_gate_enabled`.
+Set `STATE_FILE = GATE_DIR/rounds/current_round.json`.
+
+### enable
+
+```bash
+# Create the flag file — gate becomes active immediately for this directory
+python -c "
+import pathlib
+f = pathlib.Path('$GATE_DIR/.protocol_gate_enabled')
+f.touch()
+print('Protocol gate ENABLED for', '$GATE_DIR')
+print('The gate will block edits to run_swebench_eval.py until P0+P1 are logged.')
+print('Disable anytime: /self-improve hooks disable')
+"
+```
+
+Then check if an active round exists:
+```bash
+python -c "
+import json, pathlib, sys
+sf = pathlib.Path('$STATE_FILE')
+if sf.exists():
+    s = json.loads(sf.read_text())
+    print(f'Active round: {s[\"round\"]}')
+    for p in [\"p0_research\",\"p1_hypothesis\"]:
+        print(f'  {\"✓\" if s.get(p) else \"✗\"}  {p}')
+else:
+    print('No active round. Run: python rounds/start_round.py <round-id>  (e.g. s06)')
+"
+```
+
+Report to user:
+```
+Protocol gate ENABLED — coir-submission only, this session.
+[round status or 'no active round' message]
+To start a round: python rounds/start_round.py s06
+To mark phases done: python rounds/advance_phase.py p0_research
+To disable: /self-improve hooks disable
+```
+
+### disable
+
+```bash
+python -c "
+import pathlib
+f = pathlib.Path('$GATE_DIR/.protocol_gate_enabled')
+if f.exists():
+    f.unlink()
+    print('Protocol gate DISABLED — edits to run_swebench_eval.py are unrestricted.')
+else:
+    print('Gate was already disabled.')
+"
+```
+
+### status
+
+```bash
+python -c "
+import json, pathlib, sys
+gate_dir = pathlib.Path('$GATE_DIR')
+flag = gate_dir / '.protocol_gate_enabled'
+state_file = gate_dir / 'rounds' / 'current_round.json'
+print('Gate:', 'ENABLED' if flag.exists() else 'DISABLED')
+print('Workspace:', gate_dir)
+if state_file.exists():
+    s = json.loads(state_file.read_text())
+    print(f'Round: {s[\"round\"]}')
+    phases = ['p0_research','p1_hypothesis','p2_implemented','p3_benchmarked','p4_audited','p5_observed','p6_logged']
+    for p in phases:
+        print(f'  {\"✓\" if s.get(p) else \"✗\"}  {p}')
+else:
+    print('Round: none active')
+"
+```
+
+### Round workflow (shown after enable)
+
+```
+Start a round:    python rounds/start_round.py s06
+Log P0 research:  write to rounds/s06/p0_research.md  →  python rounds/advance_phase.py p0_research
+Log P1 hypothesis: write to rounds/s06/p1_hypothesis.md → python rounds/advance_phase.py p1_hypothesis
+[gate now allows editing run_swebench_eval.py]
+After benchmark:  python rounds/advance_phase.py p3_benchmarked
 ```
