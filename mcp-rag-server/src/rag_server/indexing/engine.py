@@ -227,10 +227,14 @@ def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = No
 class IndexingEngine:
     """Indexes files into the vector store with incremental support."""
 
-    def __init__(self, embedder: EmbeddingPort, store: StorePort):
+    def __init__(self, embedder: EmbeddingPort, store: StorePort, lang_router=None):
         self._embedder = embedder
         self._store = store
         self._manifest = self._load_manifest()
+        # Optional ModelCache for per-project language routing.
+        # When set, _do_index_project picks the best model based on the
+        # dominant language detected in the project scan.
+        self._lang_router = lang_router
 
     def _load_manifest(self) -> dict:
         """Load file hash manifest for incremental indexing."""
@@ -658,12 +662,41 @@ class IndexingEngine:
         project_manifest_path = index_dir / "manifest.json"
         project_manifest = {}
         stored_version = MANIFEST_VERSION
+        _stored_embedding_model: str | None = None  # model used to build the existing index
         if not force and project_manifest_path.exists():
             raw = json.loads(project_manifest_path.read_text(encoding="utf-8"))
-            project_manifest = {k: v for k, v in raw.items() if k != "__schema_version__"}
+            project_manifest = {k: v for k, v in raw.items() if k not in ("__schema_version__", "__embedding_model__")}
             stored_version = raw.get("__schema_version__", 1)
+            _stored_embedding_model = raw.get("__embedding_model__")
 
         collection = "codebase"
+
+        # Scan project early — needed for language routing BEFORE health checks
+        # so the dimension check uses the routed model, not the default embedder.
+        from rag_server.core.scanner import scan_project
+        scan = scan_project(project_path, languages=languages)
+        file_paths = scan.files
+        lang_summary = ", ".join(f"{lang}:{n}" for lang, n in scan.files_by_language.items())
+        logger.info(
+            "Scan complete: %d files to index (%s). "
+            "Skipped: %d gitignore, %d too-large, %d generated.",
+            len(file_paths), lang_summary,
+            scan.skipped_gitignore, scan.skipped_too_large, scan.skipped_generated,
+        )
+
+        # Language routing: pick the best embedding model for this project's dominant language.
+        _project_embedder = self._embedder
+        _chosen_model: str | None = None
+        if self._lang_router is not None:
+            from rag_server.indexing.lang_router import get_model_for_project
+            _chosen_model = get_model_for_project(scan.files_by_language)
+            _project_embedder = self._lang_router.get(_chosen_model)
+            if _stored_embedding_model and _stored_embedding_model != _chosen_model:
+                logger.info(
+                    "Lang router: model changed %s → %s; triggering force reindex",
+                    _stored_embedding_model, _chosen_model,
+                )
+                force = True
 
         # When not forcing: open stores for health check and dimension detection.
         # When forcing: skip opening entirely so we can wipe on Windows without file-lock errors.
@@ -683,13 +716,14 @@ class IndexingEngine:
                     "suggestion": "Run rag_index_project with force=True to rebuild cleanly, or pass force=True to continue anyway.",
                 }
 
-            # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d).
+            # Auto-detect embedding dimension mismatch (e.g. model swap nomic 768d → MiniLM 384d,
+            # or lang router picked a different model with different dimensions).
             if project_store.collection_exists(collection) and project_store.count(collection) > 0:
                 sample_dim = project_store.sample_dimension(collection)
-                if sample_dim and sample_dim != self._embedder.dimensions():
+                if sample_dim and sample_dim != _project_embedder.dimensions():
                     logger.warning(
                         "Dimension mismatch in project codebase: index=%dd, model=%dd. Forcing re-index.",
-                        sample_dim, self._embedder.dimensions(),
+                        sample_dim, _project_embedder.dimensions(),
                     )
                     # Release file handles before wiping (critical on Windows)
                     del project_store
@@ -771,18 +805,6 @@ class IndexingEngine:
                 fts_store.clear()
         except Exception as _fts_init_err:
             logger.debug("FTS store init skipped (non-fatal): %s", _fts_init_err)
-
-        # Scan project — respects .gitignore, filters generated/large files
-        from rag_server.core.scanner import scan_project
-        scan = scan_project(project_path, languages=languages)
-        file_paths = scan.files
-        lang_summary = ", ".join(f"{lang}:{n}" for lang, n in scan.files_by_language.items())
-        logger.info(
-            "Scan complete: %d files to index (%s). "
-            "Skipped: %d gitignore, %d too-large, %d generated.",
-            len(file_paths), lang_summary,
-            scan.skipped_gitignore, scan.skipped_too_large, scan.skipped_generated,
-        )
 
         project_root = Path(project_path).resolve()
 
@@ -947,7 +969,8 @@ class IndexingEngine:
                     texts = [preprocess_chunk(c.content, _chunk_lang) for c in raw_chunks]
                 else:
                     texts = [c.content for c in raw_chunks]
-                embeddings = self._embedder.embed(texts)
+                    _chunk_lang = None
+                embeddings = _project_embedder.embed(texts, language=_chunk_lang)
 
                 store_chunks = []
                 for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
@@ -1178,9 +1201,12 @@ class IndexingEngine:
             except Exception:
                 logger.debug("PageRank computation failed (non-fatal)", exc_info=True)
 
-        # Save project manifest (C3: include schema version)
+        # Save project manifest (include schema version + chosen embedding model)
         try:
-            manifest_to_write = {"__schema_version__": MANIFEST_VERSION, **project_manifest}
+            manifest_to_write: dict = {"__schema_version__": MANIFEST_VERSION}
+            if _chosen_model is not None:
+                manifest_to_write["__embedding_model__"] = _chosen_model
+            manifest_to_write.update(project_manifest)
             project_manifest_path.write_text(
                 json.dumps(manifest_to_write, indent=2), encoding="utf-8",
             )
@@ -1247,6 +1273,8 @@ class IndexingEngine:
             },
             "index_path": str(index_dir),
         }
+        if _chosen_model is not None:
+            result["embedding_model"] = _chosen_model
         if file_errors:
             result["errors"] = file_errors
         return result

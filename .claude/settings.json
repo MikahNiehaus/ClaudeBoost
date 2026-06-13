@@ -45,15 +45,6 @@
             "timeout": 10
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\"",
-            "timeout": 10
-          }
-        ]
       }
     ],
     "UserPromptSubmit": [
@@ -62,17 +53,6 @@
           {
             "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-primer.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/context-nudge.py\"",
             "timeout": 10
           }
         ]
@@ -100,26 +80,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/agent-spawn-gate.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash(mkdir*workspace*)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/workspace-boost-gate.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "Grep",
         "hooks": [
           {
@@ -140,32 +100,12 @@
         ]
       }
     ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-clear-save.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/human-voice-guard.py\"",
             "timeout": 10
           }
         ]

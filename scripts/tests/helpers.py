@@ -14,6 +14,7 @@ from pathlib import Path
 
 # scripts/ is one level up from scripts/tests/
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+COVERAGERC = Path(__file__).resolve().parent.parent.parent / ".coveragerc"
 
 
 def run_hook(
@@ -24,11 +25,31 @@ def run_hook(
     """Run a hook script with a JSON fixture on stdin, return the result."""
     script = SCRIPTS_DIR / script_name
     env = {**os.environ, **(env_overrides or {})}
+    if COVERAGERC.exists():
+        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
     return subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps(fixture).encode(),
         capture_output=True,
         env=env,
+    )
+
+
+def run_script(
+    script_name: str,
+    args: list | None = None,
+    env_overrides: dict | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a CLI script with optional args (no stdin fixture), return the result."""
+    script = SCRIPTS_DIR / script_name
+    env = {**os.environ, **(env_overrides or {})}
+    if COVERAGERC.exists():
+        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    return subprocess.run(
+        [sys.executable, str(script)] + (args or []),
+        capture_output=True,
+        env=env,
+        input=b"",
     )
 
 

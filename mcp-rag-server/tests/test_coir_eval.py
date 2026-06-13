@@ -22,6 +22,7 @@ Pytest tests (R4 addition):
 import ast
 import json
 import re
+import tempfile
 import warnings
 from pathlib import Path
 from typing import List, Dict
@@ -1574,7 +1575,7 @@ if __name__ == "__main__":
     import coir
     from coir.evaluation import COIR
 
-    results_dir = Path("C:/Users/grayw/AppData/Local/Temp/coir_results_claudeboost")
+    results_dir = Path(tempfile.gettempdir()) / "coir_results_claudeboost"
     results_dir.mkdir(exist_ok=True)
 
     print("\n" + "="*60)

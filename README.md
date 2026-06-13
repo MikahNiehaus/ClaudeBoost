@@ -2,15 +2,18 @@
 
 **Created by Mikah Niehaus**
 
-Multi-agent orchestration layer for Claude Code. 24 specialist agents, 106 knowledge
-files, a local semantic RAG + GraphRAG server, and 27 slash commands — all wired
-together through hooks.
+Claude knows how to code. ClaudeBoost knows how to do it right.
+
+It loads security standards, testing methodology, and 107 domain guides into every
+session. When something's missing, it researches and indexes it on the fly. Whatever
+you're building, whatever stack you're on — ClaudeBoost makes sure Claude behaves like
+a senior engineer who already knows your domain.
 
 ## What It Does
 
 AI can write code fast. That's never been the bottleneck. The bottleneck is what the code looks like six months later — unapproved tables, inconsistent patterns, security gaps, zero tests. Most AI tools make this worse by making the same low-quality code arrive faster.
 
-ClaudeBoost takes a different approach. Instead of one general-purpose model handling everything, it routes work to 24 specialist agents — each focused on a single domain. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads the exact knowledge each agent needs before a single line is written. Every finding requires a `file:line` citation or it gets dropped. The goal isn't faster code — it's production-ready, thoroughly tested, maintainable code delivered correctly the first time.
+ClaudeBoost fixes that by making Claude an instant expert on whatever you're working on. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads exactly the right knowledge before a single line is written — security, testing, your stack, your project's own patterns. When domain knowledge is missing, it researches and indexes it. When code changes, it maps the blast radius first. Every finding requires a `file:line` citation or it gets dropped. The goal isn't faster code — it's production-ready, thoroughly tested, maintainable code delivered correctly the first time.
 
 The RAG server runs entirely locally. No external vector service. No API calls to embed
 your code. Your codebase stays on your machine. Microsoft's GraphRAG costs around

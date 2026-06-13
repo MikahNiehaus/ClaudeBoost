@@ -154,3 +154,43 @@ def test_defaults_to_consult_when_no_mode_file(boost_home):
     assert result.returncode == 0
     # Missing file → CONSULT mode → nudge fires
     assert b"CONSULT" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Bash write with redirection: nudge fires on the output path
+# ---------------------------------------------------------------------------
+
+def test_bash_write_redirect_nudges_in_consult_mode(boost_home):
+    mode_file = boost_home / "state" / "claudeboost-mode.json"
+    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
+
+    result = run_hook(
+        "consult-gate.py",
+        _bash_write("echo 'config' > /project/src/config.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    # Write redirect to a non-exempt path → nudge
+    assert b"CONSULT" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Invalid JSON on stdin: recovers gracefully, still exits 0
+# ---------------------------------------------------------------------------
+
+def test_invalid_json_input_exits_0(boost_home):
+    import subprocess
+    import sys
+    from helpers import SCRIPTS_DIR, COVERAGERC
+    import os
+    script = SCRIPTS_DIR / "consult-gate.py"
+    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
+    if COVERAGERC.exists():
+        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        input=b"not valid json {{{{",
+        capture_output=True,
+        env=env,
+    )
+    assert result.returncode == 0

@@ -45,7 +45,7 @@ RAG being offline means degraded context, not a security violation.
 ## Behavior Tracker: Machine-Agnostic Base File
 
 **Decision**: Guards read from `state/behavior-tracker.json` (no machine suffix).
-Machine-specific files (`behavior-tracker-MikahsGaminPC.json`) are for compaction
+Machine-specific files (`behavior-tracker-<hostname>.json`) are for compaction
 history, not live tracking.
 
 **Why**: Hooks run in-process and don't know the machine name. The base file is
@@ -53,7 +53,7 @@ the authoritative live state.
 
 **Impact**: The rag-read-guard, context-nudge, and evaluator-routing gate all read
 `state/behavior-tracker.json`. Resetting reads_since_rag in the machine-specific
-file has no effect on these guards.
+(`behavior-tracker-<hostname>.json`) file has no effect on these guards.
 
 ---
 

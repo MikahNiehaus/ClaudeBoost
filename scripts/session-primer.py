@@ -291,8 +291,8 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
     lines += [
         "  Always use the user's actual message as task_description - NOT 'session start'.",
         '  Every agent spawn: call POST /context as FIRST action in the spawn prompt.',
-        '  Code search: POST /search scope=codebase mode=vector (before reading any file).',
-        '  Import/dependency chains: POST /search scope=codebase mode=graph.',
+        '  Codebase search: ALWAYS run BOTH mode=vector AND mode=graph for every codebase query —',
+        '  vector finds semantic matches, graph finds structural neighbours; NEVER run only one.',
         '  New finding? Update workspace/context.md before moving on.',
     ]
 
@@ -450,7 +450,7 @@ def main() -> int:
         "The user must understand the change before you proceed, not just acknowledge it. "
         "This applies in CONSULT mode (default). In AUTO mode this check is skipped. "
         "(E) RAG usage — when RAG is available, always call POST http://127.0.0.1:8612/search before reading files or grepping. "
-        "Use mode=vector for semantic code search and mode=graph for import and dependency chains. "
+        "For scope=codebase queries, ALWAYS run BOTH mode=vector AND mode=graph — vector finds semantic matches, graph finds structural neighbours; NEVER run only one. "
         "Never substitute grep or Read for RAG when RAG is online. "
         "If RAG is erroring or unavailable, stop and fix it (run /rag to start the server). "
         "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
@@ -497,8 +497,8 @@ def main() -> int:
         "(4) Cite file:line — for every finding. "
         "(5) Evaluator — spawn evaluator-agent, never self-verify. "
         "(6) RAG context first — call POST http://127.0.0.1:8612/context as first step in every agent spawn prompt. "
-        "(7) RAG all modes — use /context for knowledge, /search?scope=codebase for semantic "
-        "code search, and /search?mode=graph for import and dependency chains. "
+        "(7) RAG dual-mode — for every scope=codebase query, run BOTH mode=vector (semantic) AND mode=graph (structural neighbours) — never run only one. "
+        "Use /context for knowledge; /search?scope=codebase with both modes for codebase work. "
         "When RAG errors mid-task, fix it (run /rag to start the server) — never skip RAG and "
         "substitute grep or file reads. "
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "

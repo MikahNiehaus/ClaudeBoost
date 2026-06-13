@@ -86,6 +86,28 @@ def test_nudge_when_active_workspace_no_research(boost_home, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Invalid JSON on stdin: recovers gracefully
+# ---------------------------------------------------------------------------
+
+def test_exits_0_on_invalid_json_input(boost_home):
+    import subprocess
+    import sys
+    from helpers import SCRIPTS_DIR, COVERAGERC
+    import os
+    script = SCRIPTS_DIR / "research-task-nudge.py"
+    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
+    if COVERAGERC.exists():
+        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        input=b"not valid json {{{{",
+        capture_output=True,
+        env=env,
+    )
+    assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
 # Active workspace WITH research index → silent
 # ---------------------------------------------------------------------------
 

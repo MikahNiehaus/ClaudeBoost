@@ -108,3 +108,93 @@ def test_passes_exempted_context_md(boost_home, rag_live):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home), **rag_live},
     )
     assert result.returncode == 0
+
+
+def test_passes_md_file_in_workspace_path(boost_home, rag_live):
+    """An .md file that lives inside workspace/ is exempted even without matching name fragments."""
+    _write_tracker(boost_home, 99)
+    result = run_hook(
+        "rag-read-guard.py",
+        _read_fixture("/project/workspace/task-123/notes.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), **rag_live},
+    )
+    assert result.returncode == 0
+
+
+def test_blocks_md_file_outside_workspace(boost_home, rag_live):
+    """.md file outside workspace/ is NOT exempted — goes through counter check."""
+    _write_tracker(boost_home, 99)
+    result = run_hook(
+        "rag-read-guard.py",
+        _read_fixture("/project/docs/design.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), **rag_live},
+    )
+    assert result.returncode == 2
+
+
+def test_passes_glob_with_workspace_pattern(boost_home, rag_live):
+    """Glob tool with workspace in pattern is exempted."""
+    _write_tracker(boost_home, 99)
+    fixture = {
+        **pretooluse("Glob", {"pattern": "workspace/**/*.md"}),
+    }
+    result = run_hook(
+        "rag-read-guard.py",
+        fixture,
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), **rag_live},
+    )
+    assert result.returncode == 0
+
+
+def test_passes_on_malformed_stdin(boost_home):
+    """Malformed JSON on stdin — treated as empty payload, exemption falls through."""
+    import subprocess, sys, os, json as _json
+    from pathlib import Path as P
+    SCRIPTS_DIR = P(__file__).resolve().parent.parent
+    script = SCRIPTS_DIR / "rag-read-guard.py"
+    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
+    # Send raw non-JSON bytes as stdin
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        input=b"THIS IS NOT JSON",
+        capture_output=True,
+        env=env,
+    )
+    assert result.returncode == 0
+
+
+def test_passes_with_malformed_tracker(boost_home, rag_live):
+    """Malformed behavior-tracker.json defaults to reads_since_rag=0 → allow."""
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text("not json", encoding="utf-8")
+    result = run_hook(
+        "rag-read-guard.py",
+        _read_fixture("/project/src/main.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), **rag_live},
+    )
+    assert result.returncode == 0
+
+
+def test_passes_plain_float_heartbeat(boost_home, tmp_path):
+    """Plain float heartbeat (legacy format) — treated as live if fresh."""
+    rag_index_dir = tmp_path / "rag-index"
+    rag_index_dir.mkdir()
+    import time
+    (rag_index_dir / ".heartbeat").write_text(str(time.time()), encoding="utf-8")
+    _write_tracker(boost_home, 0)
+    result = run_hook(
+        "rag-read-guard.py",
+        _read_fixture("/project/src/main.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), "RAG_INDEX_DIR": str(rag_index_dir)},
+    )
+    assert result.returncode == 0
+
+
+def test_passes_when_no_env_vars_set(boost_home):
+    """Neither RAG_INDEX_DIR nor LOCALAPPDATA — uses Linux fallback, no heartbeat → fail-open."""
+    result = run_hook(
+        "rag-read-guard.py",
+        _read_fixture("/project/src/main.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), "RAG_INDEX_DIR": "", "LOCALAPPDATA": ""},
+    )
+    assert result.returncode == 0

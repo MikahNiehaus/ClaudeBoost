@@ -12,10 +12,10 @@ non-boosted session — Bash bypasses the Read/Grep guard.
 
 ---
 
-## behavior-tracker.json vs behavior-tracker-MikahsGaminPC.json
+## behavior-tracker.json vs behavior-tracker-<hostname>.json
 
 Guards read `state/behavior-tracker.json` (no machine suffix). The machine-specific
-files (`behavior-tracker-MikahsGaminPC.json`) are for compaction history tracking.
+files (`behavior-tracker-<hostname>.json`) are for compaction history tracking.
 Resetting counts in the machine-specific file has no effect on the guards.
 
 ---
@@ -38,9 +38,9 @@ in the prompt exits 2. `PROPOSAL_ONLY` + fewer than 2 `file:line` patterns also 
 ## bash-guard blocks $CLAUDEBOOST_HOME and $TEMP in Bash commands
 
 `$CLAUDEBOOST_HOME` and `$TEMP` trigger Claude Code's simple_expansion scanner and
-cause permission prompts. Use absolute paths in all Bash commands:
-- `C:/Users/grayw/OneDrive/prj/ClaudeBoost/` instead of `$CLAUDEBOOST_HOME/`
-- `C:/Users/grayw/AppData/Local/Temp/` instead of `$TEMP/`
+cause permission prompts. Use the brace form instead — the scanner accepts it:
+- `${CLAUDEBOOST_HOME}/` instead of `$CLAUDEBOOST_HOME/`
+- `${TEMP}/` instead of `$TEMP/`
 
 These variables work fine in `settings.json` hook commands (Claude Code expands them
 there before passing to the shell).

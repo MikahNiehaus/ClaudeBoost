@@ -202,9 +202,10 @@ Store as `REVIEW_DIFF`. Do NOT truncate.
 Summarize what changed in one sentence. Then:
 ```
 POST http://127.0.0.1:8612/search scope="codebase", project_path=<cwd>, query="<summary>", limit=5
+POST http://127.0.0.1:8612/search scope="codebase", project_path=<cwd>, query="<summary>", mode="graph", limit=5
 ```
 
-If changes touch interconnected files, also run with `mode="graph"` to surface structural neighbours.
+Both calls are mandatory — vector finds semantic matches, graph finds structural neighbours.
 
 **1d — Ticket context:**
 
@@ -256,7 +257,8 @@ Each agent prompt:
 Your FIRST two actions:
 1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>"
 2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", limit=5
-   — If USE_GRAPH: yes, also call with mode="graph"
+3. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", mode="graph", limit=5
+   (Both calls are mandatory — vector and graph surface different files)
 
 Review ONLY the diff below for your assigned pass.
 

@@ -14,6 +14,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.skip(reason="git-guard.py was removed from the codebase")
+
 from helpers import run_hook, pretooluse
 
 

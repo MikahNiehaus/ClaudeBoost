@@ -19,6 +19,8 @@ A RAG server indexes all of them for semantic search.
 - `POST /search` with `scope=codebase` — semantic code search
 - `POST /search` with `scope=codebase&mode=graph` — dependency and import chains
 
+**Dual-mode mandate (MANDATORY):** Every `POST /search scope=codebase` call MUST be paired with a second call using `mode=graph` on the same query. Vector finds semantic matches; graph finds structural neighbours (imports, callers, inheritance). They surface different files — never run only one.
+
 **If RAG errors mid-task, fix it — never skip it.** Run `/rag` to restart the server. Do not proceed with degraded context or substitute grep/file reads.
 
 ## Decision Flow
@@ -37,7 +39,7 @@ Scope tiers:
 Steps:
 1. Create `workspace/[task-id]/` — announce with one line
 2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
-2b. Scope graph — after ticket analysis, POST /search with `mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Write the result to `context.md` as "Files in Scope". This is your starting navigation map for the task.
+2b. Scope graph — after ticket analysis, run BOTH `POST /search mode=vector` AND `POST /search mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Merge results and write to `context.md` as "Files in Scope". This is your starting navigation map for the task.
 3. Spawn the right agent(s)
 
 Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
@@ -290,9 +292,10 @@ When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
 When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.
 `POST /context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG (vector), tier 4b pulls structural graph neighbours when a graph index exists.
 
-**GraphRAG usage:**
-- `POST /search` with `scope=codebase mode=graph` — vector seed + structural neighbours (files that import/inherit from seed files)
-- `POST /search` with `scope=codebase mode=vector` — semantic only (default, backwards compatible)
+**GraphRAG usage (always run both):**
+- `POST /search` with `scope=codebase mode=vector` — semantic matches (required first call)
+- `POST /search` with `scope=codebase mode=graph` — structural neighbours: imports, callers, inheritance (required second call)
+- Run BOTH on every codebase query — vector and graph find different files; omitting either leaves a gap
 - Graph index is built automatically during project indexing (POST /index) — no extra step needed
 - Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
 
