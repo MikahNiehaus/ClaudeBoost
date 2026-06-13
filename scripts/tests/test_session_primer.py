@@ -706,6 +706,132 @@ class TestActiveWorkspaceReminderWithRagStatus:
         assert isinstance(result, str)
 
 
+class TestGetRagStatus:
+    """Tests for _get_rag_status() — covers the success path (line 52)."""
+
+    def test_returns_parsed_json_on_success(self):
+        """_get_rag_status returns the parsed JSON dict when the HTTP call succeeds."""
+        import unittest.mock as mock
+        import io
+
+        fake_payload = json.dumps({"status": "ready", "collections": {}}).encode()
+
+        class FakeResponse:
+            def read(self):
+                return fake_payload
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        mod = _load_session_primer()
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            result = mod._get_rag_status(timeout=1.0)
+
+        assert result == {"status": "ready", "collections": {}}
+
+    def test_returns_none_when_urlopen_raises(self):
+        """_get_rag_status returns None when the HTTP call throws (server down)."""
+        import unittest.mock as mock
+        import urllib.error
+
+        mod = _load_session_primer()
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("Connection refused")):
+            result = mod._get_rag_status(timeout=0.1)
+
+        assert result is None
+
+
+class TestActiveWorkspaceReminderPermissionError:
+    """Tests for the PermissionError branch in _active_workspace_reminder (lines 217-218)."""
+
+    def test_shows_unknown_when_kb_glob_raises_permission_error(self, boost_home, tmp_path):
+        """PermissionError on kb_dir.glob() → dashboard shows UNKNOWN (permission error)."""
+        import unittest.mock as mock
+
+        ws = tmp_path / "workspace" / "task-perm"
+        ws.mkdir(parents=True)
+        (ws / "context.md").write_text("# Perm task\nStatus: in progress", encoding="utf-8")
+
+        kb_dir = tmp_path / ".claudeboost" / "knowledge"
+        kb_dir.mkdir(parents=True)
+
+        reg = {
+            "task-perm": {
+                "workspace_path": str(ws),
+                "project_path": str(tmp_path),
+            }
+        }
+        (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+
+        mod = _load_session_primer()
+
+        # Patch Path.glob so that when called on the kb_dir path it raises PermissionError
+        real_glob = mod.Path.glob
+
+        def patched_glob(self, pattern):
+            if ".claudeboost" in str(self) and "knowledge" in str(self):
+                raise PermissionError("Access denied")
+            return real_glob(self, pattern)
+
+        with mock.patch.object(mod.Path, "glob", patched_glob):
+            result = mod._active_workspace_reminder(boost_home, None, "fix the perm task work")
+
+        assert "UNKNOWN (permission error)" in result
+
+
+class TestConsumeClearPendingUnlinkFails:
+    """Tests for the finally-except path in _consume_clear_pending (lines 352-353)."""
+
+    def test_no_crash_when_unlink_raises(self, boost_home):
+        """If flag_path.unlink() raises, the exception is swallowed and '' is returned."""
+        import unittest.mock as mock
+        import datetime
+
+        flag = boost_home / "state" / "clear-pending.json"
+        flag.write_text(json.dumps({
+            "pending": False,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }), encoding="utf-8")
+
+        mod = _load_session_primer()
+
+        # Patch Path.unlink so it raises when called on the flag path
+        real_unlink = mod.Path.unlink
+
+        def patched_unlink(self, missing_ok=False):
+            if "clear-pending" in str(self):
+                raise OSError("Locked by another process")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        with mock.patch.object(mod.Path, "unlink", patched_unlink):
+            result = mod._consume_clear_pending(boost_home)
+
+        # Should return '' (pending=False) and not raise
+        assert result == ""
+
+    def test_no_crash_when_unlink_raises_and_flag_is_corrupt(self, boost_home):
+        """Corrupt flag + unlink() raises: both errors swallowed, returns ''."""
+        import unittest.mock as mock
+
+        flag = boost_home / "state" / "clear-pending.json"
+        flag.write_text("NOT JSON", encoding="utf-8")
+
+        mod = _load_session_primer()
+
+        real_unlink = mod.Path.unlink
+
+        def patched_unlink(self, missing_ok=False):
+            if "clear-pending" in str(self):
+                raise PermissionError("Cannot delete")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        with mock.patch.object(mod.Path, "unlink", patched_unlink):
+            result = mod._consume_clear_pending(boost_home)
+
+        assert result == ""
+
+
 class TestMainMalformedStdin:
     def test_malformed_json_stdin_exits_0(self, boost_home, tmp_path):
         """Malformed JSON on stdin falls back to empty dict — no crash."""

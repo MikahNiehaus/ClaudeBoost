@@ -308,3 +308,61 @@ class TestMainDirectly:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == b""
+
+    def test_bad_json_stdin_treated_as_no_input(self, tmp_path):
+        """Lines 101-102: invalid JSON on stdin falls back to empty dict, exits 0."""
+        import subprocess
+        script = SCRIPTS_DIR / "compaction-restore.py"
+        env = {**__import__("os").environ, "CLAUDEBOOST_HOME": str(tmp_path)}
+        result = subprocess.run(
+            [__import__("sys").executable, str(script)],
+            input=b"NOT VALID JSON {{{",
+            capture_output=True,
+            env=env,
+        )
+        # Invalid JSON is caught; script falls back to no-op source="" and exits 0.
+        assert result.returncode == 0
+        assert result.stdout.strip() == b""
+
+    def test_compact_data_with_no_workspace_memo_exits_silently(self, tmp_path):
+        """Line 131: data loaded but workspace_memo is absent/empty — no output."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        # Write a handoff with no workspace_memo and no memo key
+        (state_dir / "handoff-latest.json").write_text(
+            json.dumps({"session_id": "s1", "cwd": str(tmp_path)}),
+            encoding="utf-8",
+        )
+        result = run_hook(
+            "compaction-restore.py",
+            _session("compact"),
+            env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == b""
+
+
+class TestInvalidJsonStdin:
+    """Lines 101-102: invalid JSON on stdin -> except Exception -> hook_input = {}."""
+
+    def _load_mod(self):
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location(
+            "compaction_restore",
+            Path(__file__).resolve().parent.parent / "compaction-restore.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_invalid_json_on_stdin_exits_cleanly(self, tmp_path, monkeypatch):
+        """Lines 101-102: json.loads(raw) raises -> except Exception: hook_input = {}."""
+        import io
+        mod = self._load_mod()
+        monkeypatch.setattr(mod.sys, "stdin", io.StringIO("NOT VALID JSON {{{"))
+        monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(tmp_path))
+        (tmp_path / "state").mkdir(parents=True)
+        result = mod.main()
+        assert result == 0

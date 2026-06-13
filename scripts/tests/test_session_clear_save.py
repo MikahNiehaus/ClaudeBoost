@@ -470,3 +470,334 @@ class TestMainMalformedStdin:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == b""
+
+
+# ---------------------------------------------------------------------------
+# Line 61 — extract_summary char_budget break
+# ---------------------------------------------------------------------------
+
+class TestExtractSummaryBreak:
+    def test_breaks_when_first_section_exceeds_budget(self):
+        """Line 61: break fires when the first section already fills the budget."""
+        mod = _load_session_clear_save()
+        # Preamble = "# Preamble\nX" (12 chars). Budget = 20.
+        # First section chunk = "# Section\n" + "A"*400 -> chunk[:400] = 400 chars.
+        # 12 + 400 > 20 -> break on first iteration.
+        content = "# Preamble\nX\n\n# Section\n" + "A" * 500
+        result = mod.extract_summary(content, char_budget=20)
+        # Only the preamble makes it in; the section is cut.
+        assert "Section" not in result
+        assert "Preamble" in result
+
+
+# ---------------------------------------------------------------------------
+# Lines 157-158 — detect_active_workspace mtime winner > 30 min newer
+# ---------------------------------------------------------------------------
+
+class TestDetectActiveWorkspaceMtimeWinner:
+    def test_mtime_winner_returned_when_newer_than_candidate(self, boost_home):
+        """Line 156: mtime winner is >30 min newer — wins directly."""
+        import time
+        import os
+
+        # Candidate workspace (set in active-workspace.json) — older by 2 hours
+        ws_old = boost_home / "workspace" / "task-stale"
+        ws_old.mkdir(parents=True)
+        old_ctx = ws_old / "context.md"
+        old_ctx.write_text("# Old\nStatus: done", encoding="utf-8")
+        old_time = time.time() - 7200
+        os.utime(str(old_ctx), (old_time, old_time))
+
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-stale"}), encoding="utf-8"
+        )
+
+        # Newer workspace — just written (current mtime)
+        ws_new = boost_home / "workspace" / "task-fresh"
+        ws_new.mkdir(parents=True)
+        (ws_new / "context.md").write_text("# Fresh\nStatus: in progress", encoding="utf-8")
+
+        mod = _load_session_clear_save()
+        result = mod.detect_active_workspace(boost_home)
+        # The fresh workspace is >30 min newer, so it wins
+        assert result == "task-fresh"
+
+    def test_returns_candidate_when_winner_not_significantly_newer(self, boost_home):
+        """Line 160: returns candidate when mtime winner is NOT >30 min newer."""
+        import time
+        import os
+
+        # Both workspaces have similar mtime (winner just barely newer)
+        ws_old = boost_home / "workspace" / "task-candidate"
+        ws_old.mkdir(parents=True)
+        old_ctx = ws_old / "context.md"
+        old_ctx.write_text("# Candidate Task\nStatus: active", encoding="utf-8")
+
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-candidate"}), encoding="utf-8"
+        )
+
+        # Another workspace — only 5 minutes newer (well under 30 min threshold)
+        ws_other = boost_home / "workspace" / "task-other"
+        ws_other.mkdir(parents=True)
+        other_ctx = ws_other / "context.md"
+        other_ctx.write_text("# Other Task\nStatus: pending", encoding="utf-8")
+        # Backdate other to only 5 minutes newer than candidate
+        # candidate was just written (now), other 5 min before now
+        other_time = time.time() + 300  # 5 min future — still less than 1800s diff
+        # Actually: candidate ~now, other ~now+5min won't trigger the >1800 check
+        # Both are "now", so diff < 1800 — candidate is returned
+        os.utime(str(other_ctx), (other_time, other_time))
+
+        mod = _load_session_clear_save()
+        result = mod.detect_active_workspace(boost_home)
+        # Candidate wins because winner is not >30 min newer
+        assert result == "task-candidate"
+
+    def test_stat_exception_in_mtime_comparison_returns_candidate(self, boost_home):
+        """Lines 157-158: stat().st_mtime raises in mtime comparison — except caught, returns candidate."""
+        from unittest.mock import patch, MagicMock
+
+        ws_cand = boost_home / "workspace" / "task-cand-exc"
+        ws_cand.mkdir(parents=True)
+        ctx_cand = ws_cand / "context.md"
+        ctx_cand.write_text("# Candidate\nStatus: active", encoding="utf-8")
+
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-cand-exc"}), encoding="utf-8"
+        )
+
+        mod = _load_session_clear_save()
+
+        # Patch _workspace_context_path to return a Path whose stat() raises
+        # so the mtime comparison block triggers the except
+        bad_ctx = MagicMock()
+        bad_ctx.__bool__ = MagicMock(return_value=True)
+        bad_stat = MagicMock()
+        bad_stat.st_mtime = property(lambda self: (_ for _ in ()).throw(OSError("stat failed")))
+        bad_ctx.stat.side_effect = OSError("stat failed")
+
+        with patch.object(mod, "_workspace_context_path", return_value=bad_ctx):
+            result = mod.detect_active_workspace(boost_home)
+
+        # Exception caught in try/except, falls through to return candidate
+        assert result == "task-cand-exc"
+
+
+# ---------------------------------------------------------------------------
+# Lines 204-205 — collect_workspace_memo unreadable context.md
+# ---------------------------------------------------------------------------
+
+class TestCollectWorkspaceMemoUnreadable:
+    def test_unreadable_context_md_appends_placeholder(self, boost_home):
+        """Lines 204-205: context.md that raises on read gets [unreadable] placeholder."""
+        from unittest.mock import patch, mock_open, MagicMock
+        import builtins
+
+        ws_dir = boost_home / "workspace" / "task-unreadable"
+        ws_dir.mkdir(parents=True)
+        ctx = ws_dir / "context.md"
+        ctx.write_text("# Unreadable Task", encoding="utf-8")
+
+        mod = _load_session_clear_save()
+
+        original_read_text = ctx.__class__.read_text
+
+        # Patch Path.read_text to raise for this specific file
+        def patched_read_text(self, **kwargs):
+            if self == ctx:
+                raise OSError("permission denied")
+            return original_read_text(self, **kwargs)
+
+        with patch.object(type(ctx), "read_text", patched_read_text):
+            result = mod.collect_workspace_memo(boost_home, "test-sess", "CONSULT")
+
+        assert "task-unreadable" in result
+        assert "[unreadable]" in result
+
+
+# ---------------------------------------------------------------------------
+# Lines 267-268 — handoff_core import + extract_conversation call
+# ---------------------------------------------------------------------------
+
+class TestHandoffCoreExtraction:
+    def test_extract_conversation_called_with_valid_transcript(self, boost_home, tmp_path):
+        """Lines 267-268: when handoff_core imports OK, extract_conversation is called."""
+        import sys
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": "Hello"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        mod = _load_session_clear_save()
+
+        # Ensure scripts/ is in path so handoff_core import succeeds
+        scripts_dir = str(SCRIPTS_DIR)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+        # Call main() with a mock stdin providing transcript_path
+        import io
+        import sys as _sys
+        from unittest.mock import patch
+
+        hook_input = {
+            "hook_event_name": "SessionEnd",
+            "session_id": "test-handoff-core",
+            "source": "clear",
+            "cwd": "/test",
+            "transcript_path": str(transcript),
+        }
+
+        captured_output = io.StringIO()
+        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(hook_input).encode()))):
+            with patch("sys.stdout", captured_output):
+                with patch.dict("os.environ", {"CLAUDEBOOST_HOME": str(boost_home)}):
+                    result_code = mod.main()
+
+        assert result_code == 0
+        handoff_path = boost_home / "state" / "handoff-latest.json"
+        assert handoff_path.exists()
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        # conversation key should be populated (lines 267-268 ran)
+        assert "conversation" in handoff
+
+    def test_extract_conversation_exception_caught(self, boost_home, tmp_path):
+        """Lines 267-268 exception path: ImportError from handoff_core is silently caught."""
+        import sys
+        import io
+        from unittest.mock import patch, MagicMock
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+
+        mod = _load_session_clear_save()
+
+        hook_input = {
+            "hook_event_name": "SessionEnd",
+            "session_id": "test-import-error",
+            "source": "clear",
+            "cwd": "/test",
+            "transcript_path": str(transcript),
+        }
+
+        captured_output = io.StringIO()
+
+        # Make handoff_core raise on import so the except block runs
+        broken_module = MagicMock()
+        broken_module.extract_conversation = MagicMock(side_effect=RuntimeError("broken"))
+
+        with patch.dict("sys.modules", {"handoff_core": broken_module}):
+            with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(hook_input).encode()))):
+                with patch("sys.stdout", captured_output):
+                    with patch.dict("os.environ", {"CLAUDEBOOST_HOME": str(boost_home)}):
+                        result_code = mod.main()
+
+        # Still exits 0 — exception is swallowed
+        assert result_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Lines 284-285, 299-300, 309-310 — write failure except blocks
+# ---------------------------------------------------------------------------
+
+class TestWriteFailureExceptBlocks:
+    def test_handoff_write_failure_is_silenced(self, boost_home):
+        """Lines 284-285: write failure on handoff-latest.json is caught silently."""
+        import io
+        from unittest.mock import patch, MagicMock
+
+        mod = _load_session_clear_save()
+
+        hook_input = {
+            "hook_event_name": "SessionEnd",
+            "session_id": "test-write-fail",
+            "source": "clear",
+            "cwd": "/test",
+            "transcript_path": "",
+        }
+
+        captured_output = io.StringIO()
+
+        def failing_write_text(self, *a, **kw):
+            if self.name == "handoff-latest.json":
+                raise OSError("disk full")
+            # Let other writes through
+            return original_write_text(self, *a, **kw)
+
+        original_write_text = type(boost_home / "state" / "handoff-latest.json").write_text
+
+        with patch.object(type(boost_home), "write_text", failing_write_text):
+            with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(hook_input).encode()))):
+                with patch("sys.stdout", captured_output):
+                    with patch.dict("os.environ", {"CLAUDEBOOST_HOME": str(boost_home)}):
+                        result_code = mod.main()
+
+        # Must still exit 0 — write failure is silent
+        assert result_code == 0
+
+    def test_compaction_memo_write_failure_is_silenced(self, boost_home):
+        """Lines 299-300: write failure on compaction-memo.json is caught silently."""
+        import io
+        from unittest.mock import patch
+
+        mod = _load_session_clear_save()
+
+        hook_input = {
+            "hook_event_name": "SessionEnd",
+            "session_id": "test-compact-write-fail",
+            "source": "clear",
+            "cwd": "/test",
+            "transcript_path": "",
+        }
+
+        original_write_text = type(boost_home / "state" / "handoff-latest.json").write_text
+
+        def failing_write_text(self, *a, **kw):
+            if self.name == "compaction-memo.json":
+                raise OSError("disk full")
+            return original_write_text(self, *a, **kw)
+
+        captured_output = io.StringIO()
+
+        with patch.object(type(boost_home), "write_text", failing_write_text):
+            with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(hook_input).encode()))):
+                with patch("sys.stdout", captured_output):
+                    with patch.dict("os.environ", {"CLAUDEBOOST_HOME": str(boost_home)}):
+                        result_code = mod.main()
+
+        assert result_code == 0
+
+    def test_tracker_write_failure_is_silenced(self, boost_home):
+        """Lines 309-310: write failure on tracker json is caught silently."""
+        import io
+        from unittest.mock import patch
+
+        mod = _load_session_clear_save()
+
+        hook_input = {
+            "hook_event_name": "SessionEnd",
+            "session_id": "test-tracker-write-fail",
+            "source": "clear",
+            "cwd": "/test",
+            "transcript_path": "",
+        }
+
+        original_write_text = type(boost_home / "state" / "handoff-latest.json").write_text
+
+        def failing_write_text(self, *a, **kw):
+            if self.name in ("compaction-tracker.json", "behavior-tracker.json"):
+                raise OSError("read only filesystem")
+            return original_write_text(self, *a, **kw)
+
+        captured_output = io.StringIO()
+
+        with patch.object(type(boost_home), "write_text", failing_write_text):
+            with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(hook_input).encode()))):
+                with patch("sys.stdout", captured_output):
+                    with patch.dict("os.environ", {"CLAUDEBOOST_HOME": str(boost_home)}):
+                        result_code = mod.main()
+
+        assert result_code == 0

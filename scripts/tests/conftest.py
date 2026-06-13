@@ -42,7 +42,7 @@ def rag_live(tmp_path: Path) -> dict:
     rag_index_dir = tmp_path / "rag-index"
     rag_index_dir.mkdir()
     heartbeat = rag_index_dir / ".heartbeat"
-    heartbeat.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+    heartbeat.write_text(json.dumps({"ts": time.time(), "model_loaded": True, "index_ok": True}), encoding="utf-8")
     return {"RAG_INDEX_DIR": str(rag_index_dir)}
 
 

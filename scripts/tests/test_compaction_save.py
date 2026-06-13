@@ -314,3 +314,108 @@ class TestMainExceptionPaths:
             env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
         )
         assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Targeted tests for previously uncovered lines
+# ---------------------------------------------------------------------------
+
+class TestUncoveredBranches:
+    """Tests that hit the specific uncovered lines: 79-80, 147-148, 180-181, 186-189."""
+
+    def test_invalid_json_stdin_hits_except_block(self, boost_home, monkeypatch):
+        """Lines 79-80: json.loads raises when stdin has non-JSON text."""
+        import io
+
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        # Patch stdin to return invalid JSON (not a tty, has content)
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(
+            io.BytesIO(b"NOT VALID JSON AT ALL"), encoding="utf-8"
+        ))
+        # isatty() returns False on BytesIO-backed TextIOWrapper, so raw gets read
+        result = _cs_mod.main()
+        assert result == 0
+
+    def test_handoff_core_import_error_sets_conversation_none(self, boost_home, monkeypatch, tmp_path):
+        """Lines 147-148: ImportError during 'from handoff_core import ...' sets conversation=None."""
+        import io
+        import builtins
+
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        stdin_data = json.dumps(_precompact()).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(
+            io.BytesIO(stdin_data), encoding="utf-8"
+        ))
+
+        original_import = builtins.__import__
+
+        def blocking_import(name, *args, **kwargs):
+            if name == "handoff_core":
+                raise ImportError("handoff_core not available")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", blocking_import)
+        result = _cs_mod.main()
+        assert result == 0
+
+    def test_tracker_write_failure_is_silently_ignored(self, boost_home, monkeypatch):
+        """Lines 180-181: write_text fails for tracker file; script continues and exits 0."""
+        import io
+        from unittest.mock import MagicMock
+
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        stdin_data = json.dumps(_precompact()).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(
+            io.BytesIO(stdin_data), encoding="utf-8"
+        ))
+
+        # Make the tracker file's parent exist but make write_text raise for
+        # the specific tracker path by monkeypatching Path.write_text.
+        original_write_text = Path.write_text
+
+        def failing_write_text(self, data, encoding=None, errors=None):
+            if self.name == "compaction-tracker.json":
+                raise OSError("disk full")
+            return original_write_text(self, data, encoding=encoding)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+        result = _cs_mod.main()
+        assert result == 0
+
+    def test_format_conversation_md_exception_is_silently_ignored(self, boost_home, monkeypatch):
+        """Lines 186-189: format_conversation_md raises; the except: pass swallows it."""
+        import io
+        import types
+
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+
+        payload = _precompact()
+        payload["transcript_path"] = "dummy-path.jsonl"
+        stdin_data = json.dumps(payload).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(
+            io.BytesIO(stdin_data), encoding="utf-8"
+        ))
+
+        # Inject a fake handoff_core that returns a non-empty conversation but
+        # whose format_conversation_md always raises.
+        fake_conv = {"user_messages": ["hello"], "files_touched": []}
+
+        def fake_extract(path):
+            return fake_conv
+
+        def fake_format(conv):
+            raise RuntimeError("format failed")
+
+        fake_mod = types.ModuleType("handoff_core")
+        fake_mod.extract_conversation = fake_extract
+        fake_mod.format_conversation_md = fake_format
+
+        # Insert into sys.modules so the import inside main() picks it up.
+        import sys as _sys
+        _sys.modules["handoff_core"] = fake_mod
+        try:
+            result = _cs_mod.main()
+        finally:
+            _sys.modules.pop("handoff_core", None)
+
+        assert result == 0

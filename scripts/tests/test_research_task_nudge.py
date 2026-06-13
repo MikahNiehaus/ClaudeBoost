@@ -108,6 +108,43 @@ def test_exits_0_on_invalid_json_input(boost_home):
 
 
 # ---------------------------------------------------------------------------
+# stdin.read() raises → falls back to raw="" (covers lines 57-58)
+# ---------------------------------------------------------------------------
+
+def test_stdin_read_raises_falls_back_gracefully(boost_home, monkeypatch):
+    """Cover lines 57-58: except Exception: raw = "" when sys.stdin.read() raises."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "research_task_nudge",
+        SCRIPTS_DIR / "research-task-nudge.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    spec.loader.exec_module(mod)
+
+    # Patch BOOST_HOME to the test boost_home so _active_workspace() returns {}
+    monkeypatch.setattr(mod, "BOOST_HOME", boost_home)
+
+    # Patch sys.stdin so .read() raises OSError — triggers lines 57-58
+    class _RaisingSstdin:
+        def isatty(self):
+            return False
+
+        def read(self):
+            raise OSError("simulated stdin error")
+
+    monkeypatch.setattr(sys, "stdin", _RaisingSstdin())
+
+    # Should not raise; always returns 0
+    result = mod.main()
+    assert result == 0
+
+
+# ---------------------------------------------------------------------------
 # Active workspace WITH research index → silent
 # ---------------------------------------------------------------------------
 

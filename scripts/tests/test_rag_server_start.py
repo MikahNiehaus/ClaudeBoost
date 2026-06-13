@@ -204,3 +204,81 @@ class TestMainStaleServerRestart:
             or "already running" in output.lower()
             or "starting" in output.lower()
         )
+
+
+class TestIsPidAliveNonWindows:
+    """Cover lines 71-75: the non-Windows branch that uses os.kill(pid, 0)."""
+
+    def test_alive_pid_returns_true_on_linux(self):
+        """On a non-Windows platform, os.kill(pid, 0) succeeding means the pid is alive."""
+        mod = _load_rag_server_start()
+        # Patch sys.platform inside the module to non-win32 so the else branch runs.
+        with patch.object(mod.sys, "platform", "linux"):
+            # os.kill with our own pid should not raise on any OS.
+            result = mod._is_pid_alive(os.getpid())
+        assert result is True
+
+    def test_dead_pid_oserror_returns_false_on_linux(self):
+        """On a non-Windows platform, os.kill raising OSError means the pid is dead."""
+        mod = _load_rag_server_start()
+        with patch.object(mod.sys, "platform", "linux"):
+            with patch.object(mod.os, "kill", side_effect=OSError("no such process")):
+                result = mod._is_pid_alive(99999999)
+        assert result is False
+
+    def test_alive_pid_confirmed_via_os_kill_mock(self):
+        """os.kill returning None (no exception) means the process is alive."""
+        mod = _load_rag_server_start()
+        with patch.object(mod.sys, "platform", "linux"):
+            with patch.object(mod.os, "kill", return_value=None):
+                result = mod._is_pid_alive(12345)
+        assert result is True
+
+
+class TestMainTimeoutPath:
+    """Cover lines 149-153: the wait-loop dot-printing and timeout error path."""
+
+    def test_server_never_starts_returns_1(self, tmp_path):
+        """main() returns 1 after timeout when the server never responds."""
+        mod = _load_rag_server_start()
+
+        # Monotonic values: first call (deadline = 0 + 60); loop check returns 999
+        # so the while exits immediately after one iteration hitting print(".") once.
+        monotonic_values = iter([0.0, 999.0])
+
+        with patch.object(mod, "start_server", return_value=None), \
+             patch.object(mod, "_server_info", return_value=None), \
+             patch.object(mod, "_is_server_alive", return_value=False), \
+             patch.object(mod.time, "sleep", return_value=None), \
+             patch.object(mod.time, "monotonic", side_effect=monotonic_values), \
+             patch.object(mod, "RAG_INDEX_DIR", tmp_path):
+            import sys as _sys
+            with patch.object(_sys, "argv", ["rag-server-start.py", "--port", "19999"]):
+                rc = mod.main()
+
+        assert rc == 1
+
+    def test_timeout_prints_dot_then_error_message(self, tmp_path, capsys):
+        """The timeout path prints a dot for the first failed check, then the error."""
+        mod = _load_rag_server_start()
+
+        # Three monotonic calls:
+        #   1st: deadline = 0 + 60  (set by "deadline = time.monotonic() + 60")
+        #   2nd: while time.monotonic() < deadline -> 0.0 < 60 -> True (enter loop)
+        #   3rd: while time.monotonic() < deadline -> 999 -> False (exit loop)
+        monotonic_values = iter([0.0, 0.0, 999.0])
+
+        with patch.object(mod, "start_server", return_value=None), \
+             patch.object(mod, "_server_info", return_value=None), \
+             patch.object(mod, "_is_server_alive", return_value=False), \
+             patch.object(mod.time, "sleep", return_value=None), \
+             patch.object(mod.time, "monotonic", side_effect=monotonic_values), \
+             patch.object(mod, "RAG_INDEX_DIR", tmp_path):
+            import sys as _sys
+            with patch.object(_sys, "argv", ["rag-server-start.py", "--port", "19999"]):
+                rc = mod.main()
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "ERROR" in combined or "did not start" in combined.lower()

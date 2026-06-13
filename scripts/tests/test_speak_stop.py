@@ -115,3 +115,41 @@ def test_no_stdout_output(tmp_path):
     )
     assert result.returncode == 0
     assert result.stdout.strip() == b""
+
+
+# ---------------------------------------------------------------------------
+# Lines 27-28: stop_file.write_text raises (except Exception: pass)
+# ---------------------------------------------------------------------------
+
+def test_write_stop_file_exception_is_swallowed(tmp_path):
+    # Make claudeboost_tts.stop a directory so write_text raises PermissionError.
+    # The except block on lines 27-28 must swallow it and still exit 0.
+    stop_dir = tmp_path / "claudeboost_tts.stop"
+    stop_dir.mkdir()
+
+    result = run_hook(
+        "speak-stop.py",
+        _prompt(),
+        env_overrides={"TEMP": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    assert b"Traceback" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Lines 39-40: pid_file.unlink raises (except Exception: pass)
+# ---------------------------------------------------------------------------
+
+def test_unlink_pid_file_exception_is_swallowed(tmp_path):
+    # Make claudeboost_tts.pid a directory so unlink raises PermissionError.
+    # The except block on lines 39-40 must swallow it and still exit 0.
+    pid_dir = tmp_path / "claudeboost_tts.pid"
+    pid_dir.mkdir()
+
+    result = run_hook(
+        "speak-stop.py",
+        _prompt(),
+        env_overrides={"TEMP": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    assert b"Traceback" not in result.stderr

@@ -338,3 +338,50 @@ class TestMainExceptionPaths:
         )
         assert result.returncode == 0
 
+    def test_audit_in_progress_suppresses_via_direct_call(self, tmp_path):
+        """Line 75: audit-in-progress.json exists -> return 0 immediately (direct import path)."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        audit_flag = state_dir / "audit-in-progress.json"
+        audit_flag.write_text('{"active":true}', encoding="utf-8")
+
+        payload = json.dumps({
+            "tool_input": {"description": "normal agent task"},
+            "tool_response": '"severity": "blocker" \u2014 critical bug',
+        })
+        fake_stdin = MagicMock()
+        fake_stdin.isatty.return_value = False
+        fake_stdin.read.return_value = payload
+
+        with patch.object(_vg_mod, "BOOST_HOME", tmp_path), \
+             patch.object(_vg_mod, "_FLAG", tmp_path / "state" / "needs-verification.json"), \
+             patch("sys.stdin", fake_stdin):
+            rc = _vg_mod.main()
+
+        assert rc == 0
+        assert not (tmp_path / "state" / "needs-verification.json").exists()
+
+    def test_evaluator_unlink_raises_exception_is_swallowed(self, tmp_path):
+        """Lines 87-88: _FLAG.unlink() raises inside evaluator branch -> except swallows it -> returns 0."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        payload = json.dumps({
+            "tool_input": {"description": "evaluator-agent verification pass"},
+            "tool_response": '"severity": "high" \u2014 some finding',
+        })
+        fake_stdin = MagicMock()
+        fake_stdin.isatty.return_value = False
+        fake_stdin.read.return_value = payload
+
+        flag_mock = MagicMock()
+        flag_mock.unlink.side_effect = OSError("permission denied on unlink")
+
+        with patch.object(_vg_mod, "BOOST_HOME", tmp_path), \
+             patch.object(_vg_mod, "_FLAG", flag_mock), \
+             patch("sys.stdin", fake_stdin):
+            rc = _vg_mod.main()
+
+        assert rc == 0
+        flag_mock.unlink.assert_called_once_with(missing_ok=True)
+

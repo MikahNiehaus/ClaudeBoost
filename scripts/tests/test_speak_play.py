@@ -389,3 +389,66 @@ class TestMainFunction:
             capture_output=True,
         )
         assert result.returncode == 1
+
+
+class TestSpeedPlayRemainingLines:
+    """Covers lines 97 (Windows sleep loop) and 117-118 (macOS unlink exception)."""
+
+    def _make_win_mocks(self):
+        from unittest.mock import MagicMock
+        import ctypes as _ctypes
+        mock_windll = MagicMock()
+        mock_windll.winmm.mciSendStringW.return_value = 0
+        mock_windll.user32.GetAsyncKeyState.return_value = 0
+        mock_buf = MagicMock()
+        return mock_windll, mock_buf
+
+    def test_windows_loop_sleeps_when_still_playing(self, tmp_path):
+        """Line 97: buf.value == 'playing' on first iteration -> time.sleep called."""
+        import ctypes as _ctypes
+        from unittest.mock import patch, MagicMock, call
+        import sys
+
+        mod_spec = __import__("importlib").util.spec_from_file_location(
+            "speak_play", Path(__file__).resolve().parent.parent / "speak-play.py"
+        )
+        _mod = __import__("importlib").util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(_mod)
+
+        mock_windll = MagicMock()
+        mock_windll.winmm.mciSendStringW.return_value = 0
+        mock_windll.user32.GetAsyncKeyState.return_value = 0
+
+        # Make buf.value return "playing" first, then "stopped"
+        mock_buf = MagicMock()
+        values = iter(["playing", "stopped"])
+        type(mock_buf).value = property(lambda self: next(values, "stopped"))
+
+        sleep_calls = []
+        with patch.object(_ctypes, "windll", mock_windll),              patch.object(_ctypes, "create_unicode_buffer", return_value=mock_buf),              patch("time.sleep", side_effect=lambda t: sleep_calls.append(t)):
+            _mod.play_mp3_windows(str(tmp_path / "audio.mp3"), str(tmp_path / "stop"))
+
+        assert len(sleep_calls) >= 1
+
+    def test_macos_stale_stop_unlink_raises_silently_ignored(self, tmp_path):
+        """Lines 117-118: os.unlink(stop_file) raises -> except Exception: pass."""
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path as _P
+        import sys
+
+        mod_spec = __import__("importlib").util.spec_from_file_location(
+            "speak_play2", _P(__file__).resolve().parent.parent / "speak-play.py"
+        )
+        _mod = __import__("importlib").util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(_mod)
+
+        stop_file = tmp_path / "stop"
+        stop_file.mkdir()  # directory: os.unlink raises IsADirectoryError
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.poll.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_proc),              patch("time.sleep"):
+            _mod.play_mp3_macos(str(tmp_path / "audio.mp3"), str(stop_file))
+        # Should not raise; exception on unlink is swallowed

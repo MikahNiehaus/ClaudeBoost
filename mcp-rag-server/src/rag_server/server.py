@@ -373,7 +373,9 @@ def _background_startup() -> None:
     asyncio coroutine.
     """
     # Start heartbeat thread immediately — ticks independently of model load time.
-    _write_heartbeat(model_loaded=False, index_ok=False)
+    # Reflect actual model load state here: sync_init() runs warmup before this
+    # background thread starts, so the model may already be loaded.
+    _write_heartbeat(model_loaded=embedder.is_loaded if embedder else False, index_ok=False)
     _start_heartbeat_thread()
 
     try:

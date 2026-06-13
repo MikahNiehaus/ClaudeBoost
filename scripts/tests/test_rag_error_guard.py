@@ -7,10 +7,26 @@ Exit codes:
 """
 from __future__ import annotations
 
+import importlib.util
+import io
 import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
-from helpers import run_hook, posttooluse
+from helpers import run_hook, posttooluse, SCRIPTS_DIR
+
+
+def _load_module():
+    """Load rag-error-guard.py as a module (hyphenated name needs importlib)."""
+    spec = importlib.util.spec_from_file_location(
+        "rag_error_guard", SCRIPTS_DIR / "rag-error-guard.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _rag_response(text: str) -> dict:
@@ -212,3 +228,28 @@ class TestMainEdgePaths:
         """No success signals, no error signals — ambiguous → line 170 return 0."""
         result = run_hook("rag-error-guard.py", _rag_response("processing complete"))
         assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# In-process tests for lines 118-119 (json.loads exception branch in main())
+# ---------------------------------------------------------------------------
+
+class TestMainInProcess:
+    """Call main() directly so coverage can trace lines 118-119 in-process."""
+
+    def test_invalid_json_stdin_falls_back_to_empty_payload(self):
+        """Lines 118-119: json.loads raises → except sets payload={} → return 0."""
+        mod = _load_module()
+        fake_stdin = io.StringIO("NOT VALID JSON {{{{")
+        with patch.object(sys, "stdin", fake_stdin):
+            # isatty() on StringIO returns False, so the read branch is taken
+            result = mod.main()
+        assert result == 0
+
+    def test_malformed_unicode_json_falls_back_to_empty_payload(self):
+        """Lines 118-119: another malformed payload confirming except path → 0."""
+        mod = _load_module()
+        fake_stdin = io.StringIO("{key: missing quotes}")
+        with patch.object(sys, "stdin", fake_stdin):
+            result = mod.main()
+        assert result == 0

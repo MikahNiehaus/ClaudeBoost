@@ -120,5 +120,5 @@ def main() -> None:
     print("[chat-watcher] 15-minute window elapsed — exiting", flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

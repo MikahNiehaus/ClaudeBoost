@@ -16,11 +16,15 @@ from helpers import SCRIPTS_DIR, run_hook, posttooluse
 
 def _load_module():
     """Load comment-humanness-check.py as a Python module."""
+    mod_name = "comment_humanness_check"
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
     spec = importlib.util.spec_from_file_location(
-        "comment_humanness_check",
+        mod_name,
         SCRIPTS_DIR / "comment-humanness-check.py",
     )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod  # register so coverage can track it
     sys.path.insert(0, str(SCRIPTS_DIR))
     spec.loader.exec_module(mod)
     return mod
@@ -201,6 +205,20 @@ def test_spacing_uniformity_exactly_4(mod):
     assert result is None
 
 
+# Line 109 — check_spacing_uniformity returns None when >= 5 comments but spacing varies
+def test_spacing_uniformity_no_trigger_when_spacing_varies(mod):
+    # Mix of single-space and no-space comments — not uniform, should not flag
+    comments = [
+        "// single space",
+        "//no space",
+        "// single space",
+        "//no space",
+        "// single space",
+    ]
+    result = mod.check_spacing_uniformity(comments)
+    assert result is None
+
+
 # Line 121 — check_structural_uniformity returns a Finding when 4 consecutive
 # comments are within 5 chars of each other in length
 def test_structural_uniformity_triggers(mod):
@@ -235,6 +253,16 @@ def test_main_returns_0_on_invalid_json():
         env=env,
     )
     assert result.returncode == 0
+
+
+# Lines 174-175 — test main() directly by patching sys.stdin (in-process coverage)
+def test_main_returns_0_on_invalid_json_in_process(mod):
+    import io
+    import unittest.mock as mock
+    fake_stdin = io.StringIO("{{not valid json}}")
+    with mock.patch.object(mod.sys, "stdin", fake_stdin):
+        result = mod.main()
+    assert result == 0
 
 
 # Line 200 — main() returns 0 when no findings (clean code with 3+ comments)

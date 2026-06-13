@@ -237,6 +237,16 @@ class TestMainExceptionPaths:
         )
         assert result.returncode == 0
 
+    def test_invalid_json_stdin_in_process_returns_0(self, boost_home):
+        """Calls main() directly with invalid JSON stdin — covers lines 157-158 for in-process coverage."""
+        mod = _load_hvg()
+        with patch("sys.stdin") as mock_stdin, \
+             patch.dict(os.environ, {"CLAUDEBOOST_HOME": str(boost_home)}):
+            mock_stdin.isatty.return_value = False
+            mock_stdin.read.return_value = "THIS IS NOT VALID JSON {{{broken"
+            result = mod.main()
+        assert result == 0
+
     def test_loop_prevention_state_write_fails_silently(self, boost_home, tmp_path):
         """State write fails during loop prevention (lines 183-184); still returns 0."""
         mod = _load_hvg()

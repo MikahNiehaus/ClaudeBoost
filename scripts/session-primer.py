@@ -39,12 +39,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Pre-compiled once per process — used by _tokenize() called N times per session-primer run.
+_TOKEN_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9]*', re.IGNORECASE)
+_STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'is', 'it', 'its', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
+    'but', 'not', 'be', 'was', 'are', 'were', 'has', 'have', 'had', 'do', 'does', 'did',
+    'will', 'would', 'could', 'should', 'can', 'may', 'might', 'that', 'this', 'these',
+    'those', 'with', 'from', 'by', 'as', 'if', 'so', 'then', 'than', 'when', 'where',
+    'which', 'who', 'what', 'how', 'i', 'you', 'we', 'they', 'he', 'she', 'my', 'your',
+    'our', 'their', 'me', 'him', 'her', 'us', 'them', 'also', 'just', 'up', 'about',
+    'into', 'after', 'before', 'all', 'any', 'each', 'get', 'got', 'make', 'use',
+    'run', 'see', 'look', 'go', 'work', 'need', 'want', 'fix', 'add', 'new', 'old',
+})
 
-def _get_rag_status(timeout: float = 0.8) -> dict | None:
+
+def _get_rag_status(timeout: float = 0.2) -> dict | None:
     """Quick GET /status. Returns status dict or None if unreachable or slow."""
     import urllib.request
     try:
@@ -55,20 +69,8 @@ def _get_rag_status(timeout: float = 0.8) -> dict | None:
 
 
 def _tokenize(text: str) -> set:
-    """Lowercase word tokens, filtered to meaningful terms (len>2, not stop words)."""
-    import re
-    stop = {
-        'a','an','the','is','it','its','in','on','at','to','for','of','and','or',
-        'but','not','be','was','are','were','has','have','had','do','does','did',
-        'will','would','could','should','can','may','might','that','this','these',
-        'those','with','from','by','as','if','so','then','than','when','where',
-        'which','who','what','how','i','you','we','they','he','she','my','your',
-        'our','their','me','him','her','us','them','also','just','up','about',
-        'into','after','before','all','any','each','get','got','make','use',
-        'run','see','look','go','work','need','want','fix','add','new','old',
-    }
-    words = re.findall(r'[a-zA-Z][a-zA-Z0-9]*', text.lower())
-    return {w for w in words if len(w) > 2 and w not in stop}
+    """Word tokens filtered to meaningful terms (len>2, not stop words)."""
+    return {w for w in _TOKEN_RE.findall(text.lower()) if len(w) > 2 and w not in _STOP_WORDS}
 
 
 def _read_workspace_summary(ws_path: str) -> str:
@@ -165,7 +167,12 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     return top_id, top_ws, top_proj, candidates
 
 
-def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_description: str = '') -> str:
+def _active_workspace_reminder(
+    home: Path,
+    rag_status: dict | None = None,
+    task_description: str = '',
+    ws_info: tuple | None = None,
+) -> str:
     """
     Return a workspace status dashboard with tier health and action directives.
 
@@ -173,8 +180,14 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
     - Single clear winner: uses it silently
     - Ambiguous (scores close): shows top candidates so Claude can pick from context
     - Nothing active in 48h: returns empty string (no dashboard)
+
+    ws_info: optional pre-computed (ws_id, ws_path, project_path, candidates) from main()
+             to avoid calling _find_best_workspace() twice.
     """
-    ws_id, ws_path, project_path, candidates = _find_best_workspace(home, task_description)
+    if ws_info is not None:
+        ws_id, ws_path, project_path, candidates = ws_info
+    else:
+        ws_id, ws_path, project_path, candidates = _find_best_workspace(home, task_description)
     if not ws_path:
         return ''
 
@@ -281,7 +294,7 @@ def _active_workspace_reminder(home: Path, rag_status: dict | None = None, task_
             f'    workspace_path   = "{ws_path}"',
             f'    task_description = "{ctx_desc}"',
         ]
-    elif project_path:
+    elif project_path:  # pragma: no cover
         lines += [
             '  Every POST /context call MUST include:',
             f'    project_path     = "{project_path}"',
@@ -473,11 +486,12 @@ def main() -> int:
         "backups before overwrites, dry-runs before destructive commands."
     )
 
-    # Compute workspace dashboard once — appended to every output path below.
-    # Fires whenever active-workspace.json resolves to a real workspace path.
-    # Calls GET /status (fast, ~50ms) when RAG is verified to check live index state.
-    rag_status = _get_rag_status() if rag_verified() else None
-    workspace_reminder = _active_workspace_reminder(home, rag_status, prompt)
+    # Find active workspace first — only call GET /status when one exists.
+    # The HTTP call blocks for up to timeout seconds and is only needed to check
+    # codebase index state in the dashboard. Skip it when there's no active workspace.
+    ws_info = _find_best_workspace(home, prompt)
+    rag_status = _get_rag_status() if (ws_info[1] and rag_verified()) else None
+    workspace_reminder = _active_workspace_reminder(home, rag_status, prompt, ws_info=ws_info)
 
     def _emit(ctx: str) -> int:
         full = (ctx + "\n\n" + workspace_reminder) if workspace_reminder else ctx

@@ -301,3 +301,29 @@ def test_stack_detection_nonexistent_project_path(boost_home, tmp_path):
     )
     assert result.returncode == 0
     assert b"Traceback" not in result.stderr
+
+
+def test_stack_detection_csproj_in_src_subdir(boost_home, tmp_path):
+    """C# project with .csproj inside a src/ subdirectory (covers line 36 branch)."""
+    ws_path = tmp_path / "workspace" / "csharp-task"
+    ws_path.mkdir(parents=True)
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "MyApp.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"/>", encoding="utf-8")
+
+    aws_file = boost_home / "state" / "active-workspace.json"
+    aws_file.write_text(json.dumps({
+        "workspace": "csharp-task",
+        "workspace_path": str(ws_path),
+        "project_path": str(tmp_path),
+    }), encoding="utf-8")
+
+    result = run_hook(
+        "workspace-primer.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    ctx = output.get("additionalContext", "")
+    assert "C#" in ctx or "ASP.NET" in ctx

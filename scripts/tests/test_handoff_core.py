@@ -355,3 +355,62 @@ class TestFormatConversationMd:
         result = handoff_core.format_conversation_md(conv)
         assert "1." in result
         assert "2." in result
+
+
+# ---------------------------------------------------------------------------
+# Coverage for previously missing lines
+# ---------------------------------------------------------------------------
+
+class TestMissingLineCoverage:
+    def test_read_text_exception_returns_none(self, tmp_path, monkeypatch):
+        """Lines 100-101: except Exception branch when read_text raises."""
+        f = tmp_path / "unreadable.jsonl"
+        f.write_text("dummy", encoding="utf-8")
+
+        # Patch Path.read_text to raise so we actually hit the except block
+        import builtins
+
+        original_open = builtins.open
+
+        def boom_read_text(self_path, *args, **kwargs):
+            raise OSError("simulated permission denied")
+
+        monkeypatch.setattr(Path, "read_text", boom_read_text)
+        result = handoff_core.extract_conversation(str(f))
+        assert result is None
+
+    def test_user_content_non_str_non_list_gives_empty_text(self, tmp_path):
+        """Line 131: else branch when user message content is neither str nor list."""
+        f = tmp_path / "transcript.jsonl"
+        # content is an integer — neither str nor list
+        entry = {"type": "user", "message": {"content": 42}}
+        # Add a second entry with a real message so the result is not None
+        real_entry = {"type": "user", "message": {"content": "real message to keep result non-null"}}
+        f.write_text(json.dumps(entry) + "\n" + json.dumps(real_entry) + "\n", encoding="utf-8")
+        result = handoff_core.extract_conversation(str(f))
+        # The integer-content entry should produce no user message text
+        assert result is not None
+        assert not any(msg == "" for msg in result["user_messages"])
+
+    def test_assistant_non_dict_block_is_skipped(self, tmp_path):
+        """Line 142: continue when a block in assistant content is not a dict."""
+        f = tmp_path / "transcript.jsonl"
+        user_entry = {"type": "user", "message": {"content": "help me with this task"}}
+        # Mix a non-dict item (string) with a valid dict block
+        assistant_entry = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    "this is a plain string not a dict",
+                    {"type": "text", "text": "Here is the real assistant response"},
+                ]
+            },
+        }
+        f.write_text(
+            json.dumps(user_entry) + "\n" + json.dumps(assistant_entry) + "\n",
+            encoding="utf-8",
+        )
+        result = handoff_core.extract_conversation(str(f))
+        assert result is not None
+        # The valid dict block should still be captured
+        assert any("real assistant response" in s for s in result["assistant_snippets"])

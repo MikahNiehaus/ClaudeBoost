@@ -12,6 +12,10 @@ Groups:
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+
 import pytest
 
 from helpers import run_hook, pretooluse
@@ -396,3 +400,196 @@ class TestOffSwitch:
         for value in ("", "on", "1", "true"):
             r = self._run("cd /repo && git status", value)
             assert r.returncode == 2, f"CLAUDEBOOST_BASH_GUARD={value!r} should keep the guard on"
+
+
+# ===========================================================================
+# UNIT — _strip_quoted unbalanced-quote branches (lines 201-202, 208-209)
+# These are covered by importing the module directly and calling _strip_quoted.
+# ===========================================================================
+
+class TestStripQuotedUnbalanced:
+    """Direct unit tests for the unbalanced-quote tail-preservation branches."""
+
+    @classmethod
+    def _load(cls):
+        import importlib.util, sys
+        from pathlib import Path as _Path
+        SCRIPTS_DIR = _Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location("bash_guard", SCRIPTS_DIR / "bash-guard.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_unbalanced_double_quote_appends_tail_and_breaks(self):
+        """Line 201-202: unclosed " means j >= n, so the tail is appended verbatim."""
+        mod = self._load()
+        # 'before "unclosed tail' — double-quote opens at index 7, never closes
+        result = mod._strip_quoted('before "unclosed tail')
+        # The chars before the quote are kept, then the tail from the open-quote
+        # position is appended and we break — so the whole tail is preserved.
+        assert "unclosed tail" in result
+
+    def test_unbalanced_double_quote_with_single_only_flag(self):
+        """Line 201-202 is also reached when single_only=True and a " is unclosed."""
+        mod = self._load()
+        result = mod._strip_quoted('foo "unclosed bar', single_only=True)
+        assert "unclosed bar" in result
+
+    def test_unbalanced_single_quote_appends_tail_and_breaks(self):
+        """Line 208-209: unclosed single-quote means j == -1, tail appended verbatim."""
+        mod = self._load()
+        result = mod._strip_quoted("before 'unclosed tail")
+        assert "unclosed tail" in result
+
+    def test_unbalanced_single_quote_inside_env_check(self):
+        """Unbalanced ' in a real command — env check sees it safely."""
+        mod = self._load()
+        # No $VAR after the unclosed quote, so check_env_var_expansion returns None
+        result = mod.check_env_var_expansion("grep 'pattern")
+        assert result is None
+
+
+# ===========================================================================
+# NETCAT PORT-ONLY — line 259 (host.isdigit() -> continue)
+# nc -l 8080 matches the regex but the captured group is "8080" — pure digit,
+# so it is skipped (it is a port, not a host). Must be allowed.
+# ===========================================================================
+
+class TestNetcatPortOnly:
+
+    def test_nc_listen_with_port_number_allowed(self):
+        """nc -l 8080 — the only captured group is a port number, so nc is allowed."""
+        allow("nc -l 8080")
+
+    def test_ncat_listen_with_port_number_allowed(self):
+        """ncat -l 4444 — same pattern, port captured, allowed."""
+        allow("ncat -l 4444")
+
+    def test_netcat_listen_with_port_allowed(self):
+        """netcat -l 9001 — port-only, allowed."""
+        allow("netcat -l 9001")
+
+
+# ===========================================================================
+# CURL NO URL — line 279 (if not urls: return None)
+# curl invoked without any http:// URL in the command — nothing to block.
+# ===========================================================================
+
+class TestCurlNoUrl:
+
+    def test_curl_help_flag_allowed(self):
+        """curl --help has no URL — the urls list is empty, so it is allowed."""
+        allow("curl --help")
+
+    def test_curl_version_flag_allowed(self):
+        """curl --version has no URL either."""
+        allow("curl --version")
+
+    def test_curl_with_only_data_flag_no_url_allowed(self):
+        """curl -d value with no URL argument — no URL extracted, allowed."""
+        allow("curl -d payload_only")
+
+
+# ===========================================================================
+# MAIN — stdin parsing edge cases (lines 313-319)
+# These exercise the fallback paths in main(): invalid JSON and empty command.
+# ===========================================================================
+
+class TestMainStdinParsing:
+    """
+    Tests that exercise main() parsing branches via raw subprocess stdin.
+    run_hook always sends valid JSON, so these cases need direct subprocess calls.
+    """
+
+    @staticmethod
+    def _run_raw(stdin_bytes: bytes) -> subprocess.CompletedProcess:
+        from pathlib import Path as _Path
+        import sys as _sys
+        scripts_dir = _Path(__file__).resolve().parent.parent
+        script = scripts_dir / "bash-guard.py"
+        env = {**os.environ}
+        # Re-use PYTHONPATH from the test env so sitecustomize picks up coverage
+        return subprocess.run(
+            [_sys.executable, str(script)],
+            input=stdin_bytes,
+            capture_output=True,
+            env=env,
+        )
+
+    def test_invalid_json_on_stdin_returns_0(self):
+        """Lines 314-315: json.loads raises -> except -> return 0 (allow)."""
+        r = self._run_raw(b"not valid json{{{{")
+        assert r.returncode == 0, f"Expected 0 for invalid JSON, got {r.returncode}"
+
+    def test_truncated_json_on_stdin_returns_0(self):
+        """Another malformed payload — still returns 0 without crashing."""
+        r = self._run_raw(b'{"tool_input": {')
+        assert r.returncode == 0
+
+    def test_empty_command_string_returns_0(self):
+        """Line 319: command == "" -> return 0 (allow)."""
+        payload = {"tool_input": {"command": ""}}
+        r = self._run_raw(json.dumps(payload).encode())
+        assert r.returncode == 0, f"Empty command should return 0, got {r.returncode}"
+
+    def test_missing_command_key_returns_0(self):
+        """Line 319: .get('command', '') returns '' when key absent -> return 0."""
+        payload = {"tool_input": {}}
+        r = self._run_raw(json.dumps(payload).encode())
+        assert r.returncode == 0
+
+    def test_missing_tool_input_key_returns_0(self):
+        """Line 319: .get('tool_input', {}) returns {} -> command '' -> return 0."""
+        payload = {}
+        r = self._run_raw(json.dumps(payload).encode())
+        assert r.returncode == 0
+
+    def test_whitespace_only_stdin_returns_0(self):
+        """Line 313: raw.strip() is falsy -> payload = {} -> command '' -> return 0."""
+        r = self._run_raw(b"   \n   ")
+        assert r.returncode == 0
+
+
+class TestMainDirectImport:
+    """Direct-import tests for lines 314-315 and 319 that subprocess coverage misses."""
+
+    def _load_mod(self):
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location(
+            "bash_guard",
+            Path(__file__).resolve().parent.parent / "bash-guard.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_invalid_json_hits_except_branch(self, monkeypatch):
+        """Lines 314-315: json.loads raises -> except Exception: return 0."""
+        import io
+        mod = self._load_mod()
+        monkeypatch.setattr(mod.sys, "stdin", io.StringIO("NOT VALID {{{"))
+        monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+        result = mod.main()
+        assert result == 0
+
+    def test_empty_command_returns_0(self, monkeypatch):
+        """Line 319: command == '' -> return 0."""
+        import io, json
+        mod = self._load_mod()
+        payload = json.dumps({"tool_input": {"command": ""}})
+        monkeypatch.setattr(mod.sys, "stdin", io.StringIO(payload))
+        monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+        result = mod.main()
+        assert result == 0
+
+    def test_missing_command_key_returns_0(self, monkeypatch):
+        """Line 319: no command key -> command = '' -> return 0."""
+        import io, json
+        mod = self._load_mod()
+        payload = json.dumps({"tool_input": {}})
+        monkeypatch.setattr(mod.sys, "stdin", io.StringIO(payload))
+        monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+        result = mod.main()
+        assert result == 0

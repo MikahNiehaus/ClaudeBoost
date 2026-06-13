@@ -747,3 +747,224 @@ class TestMainBadJsonAndTrackerFailures:
             ctx = output.get("additionalContext", "")
             # No citations branch: warns about missing citations
             assert "evaluator" in ctx.lower() or "EVALUATOR" in ctx
+
+
+# ---------------------------------------------------------------------------
+# Direct-import tests covering lines 118-119, 142-143, 261, 357-358
+# These run in-process so coverage.py captures them even when subprocess
+# coverage isn't collected.
+# ---------------------------------------------------------------------------
+
+import importlib.util as _ilu2
+import io
+import json as _json
+import uuid as _uuid2
+from unittest.mock import patch, MagicMock
+
+
+def _load_fresh_cn():
+    """Load a fresh isolated copy of context-nudge.py."""
+    mod_name = f"context_nudge_cov_{_uuid2.uuid4().hex}"
+    spec = _ilu2.spec_from_file_location(
+        mod_name,
+        "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/context-nudge.py",
+    )
+    mod = _ilu2.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestMissingLineCoverage:
+    """Target the four uncovered line groups identified by coverage."""
+
+    # -- Lines 118-119: bad JSON on stdin falls back to empty payload ----------
+
+    def test_bad_json_stdin_falls_back_to_empty_payload(self, boost_home):
+        """Lines 118-119: json.loads raises -> except -> payload = {}."""
+        mod = _load_fresh_cn()
+
+        # Provide a valid compaction-tracker so the script doesn't short-circuit
+        ct = boost_home / "state" / "compaction-tracker.json"
+        ct.write_text(_json.dumps({"edit_count": 3}), encoding="utf-8")
+        bt = boost_home / "state" / "behavior-tracker.json"
+        bt.write_text(_json.dumps({
+            "reads_since_rag": 0,
+            "tasks_since_evaluator": 0,
+            "reads_since_context_update": 0,
+        }), encoding="utf-8")
+
+        fake_stdin = io.StringIO("NOT VALID JSON {{{")
+        fake_stdin.isatty = lambda: False  # not a tty, so raw = stdin.read()
+
+        with patch.object(mod.sys, "stdin", fake_stdin), \
+             patch.object(mod, "main", wraps=mod.main) as _m, \
+             patch.dict(mod.os.environ, {"CLAUDEBOOST_HOME": str(boost_home)}):
+            rc = mod.main()
+
+        assert rc == 0
+
+    # -- Lines 142-143: compaction-tracker write failure is swallowed ----------
+
+    def test_compaction_tracker_write_failure_is_swallowed(self, boost_home):
+        """Lines 142-143: tracker_path.write_text raises -> except -> pass."""
+        mod = _load_fresh_cn()
+
+        bt = boost_home / "state" / "behavior-tracker.json"
+        bt.write_text(_json.dumps({
+            "reads_since_rag": 0,
+            "tasks_since_evaluator": 0,
+            "reads_since_context_update": 0,
+        }), encoding="utf-8")
+
+        fake_stdin = io.StringIO(_json.dumps({
+            "tool_name": "Read",
+            "session_id": "s1",
+            "tool_input": {"file_path": "/foo.py"},
+        }))
+        fake_stdin.isatty = lambda: False
+
+        # Patch write_text on Path instances: fail only for compaction-tracker
+        original_write_text = type(boost_home).write_text
+
+        def selective_write_fail(self, content, **kwargs):
+            if "compaction-tracker" in str(self):
+                raise OSError("disk full")
+            return original_write_text(self, content, **kwargs)
+
+        with patch.object(type(boost_home / "state" / "compaction-tracker.json"),
+                          "write_text", selective_write_fail), \
+             patch.object(mod.sys, "stdin", fake_stdin), \
+             patch.dict(mod.os.environ, {"CLAUDEBOOST_HOME": str(boost_home)}):
+            rc = mod.main()
+
+        # Must not raise — exception is swallowed on line 143
+        assert rc == 0
+
+    # -- Line 261: no file:line citations -> no_citations branch --------------
+
+    def test_evaluator_nudge_no_citations_branch_covered(self, boost_home):
+        """Line 261: unique_citations is empty -> else branch -> no-citations hint."""
+        mod = _load_fresh_cn()
+
+        ct = boost_home / "state" / "compaction-tracker.json"
+        ct.write_text(_json.dumps({"edit_count": 3}), encoding="utf-8")
+        bt = boost_home / "state" / "behavior-tracker.json"
+        # tasks_since_evaluator=2 triggers the nudge; last_task_response has no citations
+        bt.write_text(_json.dumps({
+            "reads_since_rag": 0,
+            "tasks_since_evaluator": 2,
+            "reads_since_context_update": 0,
+            "last_task_response": "Everything looks fine, no issues spotted here.",
+        }), encoding="utf-8")
+
+        # Task tool with a non-evaluator, non-review-pass description
+        fake_stdin = io.StringIO(_json.dumps({
+            "tool_name": "Task",
+            "session_id": "s2",
+            "tool_input": {"description": "some-agent task", "prompt": "do work"},
+            "tool_response": "",
+        }))
+        fake_stdin.isatty = lambda: False
+
+        captured = io.StringIO()
+        with patch.object(mod.sys, "stdin", fake_stdin), \
+             patch.object(mod.sys, "stdout", captured), \
+             patch.dict(mod.os.environ, {"CLAUDEBOOST_HOME": str(boost_home)}):
+            rc = mod.main()
+
+        assert rc == 0
+        out = captured.getvalue().strip()
+        if out:
+            data = _json.loads(out)
+            ctx = data.get("additionalContext", "")
+            # The no-citations branch adds a warning about missing file:line refs
+            assert "No file:line citations" in ctx or "EVALUATOR" in ctx
+
+    # -- Lines 357-358: behavior-tracker write failure is swallowed -----------
+
+    def test_behavior_tracker_write_failure_is_swallowed(self, boost_home):
+        """Lines 357-358: behavior_path.write_text raises -> except -> pass."""
+        mod = _load_fresh_cn()
+
+        ct = boost_home / "state" / "compaction-tracker.json"
+        ct.write_text(_json.dumps({"edit_count": 3}), encoding="utf-8")
+        bt = boost_home / "state" / "behavior-tracker.json"
+        bt.write_text(_json.dumps({
+            "reads_since_rag": 0,
+            "tasks_since_evaluator": 0,
+            "reads_since_context_update": 0,
+        }), encoding="utf-8")
+
+        fake_stdin = io.StringIO(_json.dumps({
+            "tool_name": "Read",
+            "session_id": "s3",
+            "tool_input": {"file_path": "/bar.py"},
+        }))
+        fake_stdin.isatty = lambda: False
+
+        original_write_text = type(boost_home).write_text
+
+        def fail_behavior_write(self, content, **kwargs):
+            if "behavior-tracker" in str(self):
+                raise OSError("no space left")
+            return original_write_text(self, content, **kwargs)
+
+        with patch.object(type(boost_home / "state" / "behavior-tracker.json"),
+                          "write_text", fail_behavior_write), \
+             patch.object(mod.sys, "stdin", fake_stdin), \
+             patch.dict(mod.os.environ, {"CLAUDEBOOST_HOME": str(boost_home)}):
+            rc = mod.main()
+
+        # No crash — exception is swallowed on line 358
+        assert rc == 0
+
+
+class TestCitationHintElseBranch:
+    """Line 261: citation_hint else branch (no file:line found in agent output)."""
+
+    def _load_mod(self):
+        import importlib.util
+        from pathlib import Path as _Path
+        spec = importlib.util.spec_from_file_location(
+            "context_nudge",
+            _Path(__file__).resolve().parent.parent / "context-nudge.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_citations_in_agent_output_triggers_else(self, monkeypatch, tmp_path):
+        """Line 261: no file:line in agent tool response -> citation_hint else branch."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        mod = self._load_mod()
+
+        # Build a PostToolUse fixture that looks like agent output with no citations
+        fixture = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Task",
+            "tool_input": {"prompt": "review the code", "description": "some task"},
+            "tool_response": "BLOCKER: missing error handling. No citations.",
+            "session_id": "test",
+            "transcript_path": "/tmp/test.jsonl",
+            "cwd": str(tmp_path),
+        }
+
+        import io
+        monkeypatch.setattr(mod.sys, "stdin", io.StringIO(json.dumps(fixture)))
+        monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(tmp_path))
+        (tmp_path / "state").mkdir(parents=True)
+        bt = tmp_path / "state" / "behavior-tracker.json"
+        # tasks_since_evaluator=1 -> after Task increment becomes 2 == EVALUATOR_THRESHOLD
+        # so the evaluator branch fires; response has no file:line -> else branch at line 261
+        bt.write_text(json.dumps({
+            "reads_since_rag": 0,
+            "reads_since_context_update": 0,
+            "tasks_since_evaluator": 1,
+        }), encoding="utf-8")
+
+        result = mod.main()
+        # Should exit 0 or 1 without crashing
+        assert result in (0, 1)

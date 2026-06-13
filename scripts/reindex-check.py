@@ -34,18 +34,15 @@ def main() -> int:
     if not state_file.exists():
         return 0
 
-    # Get current git HEAD and branch
+    # Get current git HEAD and branch in one subprocess call instead of two.
     try:
-        current_head = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
+        git_out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
             stderr=subprocess.DEVNULL,
             cwd=str(home),
-        ).decode().strip()
-        current_branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            cwd=str(home),
-        ).decode().strip()
+        ).decode().strip().splitlines()
+        current_head = git_out[0] if len(git_out) > 0 else ""
+        current_branch = git_out[1] if len(git_out) > 1 else ""
     except (subprocess.CalledProcessError, FileNotFoundError):
         return 0   # Not a git repo or git unavailable
 

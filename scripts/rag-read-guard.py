@@ -21,7 +21,9 @@ import sys
 import time
 from pathlib import Path
 
-RAG_THRESHOLD = 2  # block after this many consecutive file searches without RAG
+# Block after this many consecutive file searches without RAG.
+# Set above context-nudge.py's RAG_THRESHOLD (5) so the soft reminder fires first.
+RAG_THRESHOLD = 6
 
 # Always allow reads of these paths -- no RAG needed for config/workspace files
 EXEMPTED_SUFFIXES = {".json", ".lock", ".env", ".gitignore", ".toml", ".yaml", ".yml"}
@@ -49,40 +51,44 @@ def is_exempted(tool_input: dict) -> bool:
     return False
 
 
-def _rag_is_live() -> bool:
-    """Return True only if the RAG server heartbeat is fresh.
-
-    Reads the JSON heartbeat written by the server every 30s.
-    If stale (>90s) or missing, the server is down — allow reads so debugging isn't blocked.
-    The old session sentinel is no longer required (HTTP transport handles reconnect automatically).
-    """
-    import time as _time
-
+def _resolve_heartbeat_path() -> Path:
+    """Resolve heartbeat file path from env vars. Called once at module load."""
     _rag_index_dir = os.environ.get("RAG_INDEX_DIR", "")
     if not _rag_index_dir:
         _local_appdata = os.environ.get("LOCALAPPDATA", "")
         if _local_appdata:
             _rag_index_dir = str(Path(_local_appdata) / "rag-server-index")
         else:
-            # macOS / Linux: server writes to BOOST_HOME/mcp-rag-server/.rag-index
             _rag_index_dir = str(Path(__file__).resolve().parent.parent / "mcp-rag-server" / ".rag-index")
-    if not _rag_index_dir:
-        return False
+    return Path(_rag_index_dir) / ".heartbeat" if _rag_index_dir else Path()
 
-    _heartbeat = Path(_rag_index_dir) / ".heartbeat"
-    if not _heartbeat.exists():
+
+# Resolve once per process — env vars don't change between hook invocations.
+_HEARTBEAT = _resolve_heartbeat_path()
+
+
+def _rag_is_live() -> bool:
+    """Return True only if the RAG server heartbeat is fresh and the model is loaded.
+
+    Reads the JSON heartbeat written by the server every 30s.
+    If stale (>90s), missing, or model_loaded=False: disengages the guard so reads
+    aren't blocked while the embedding model is still warming up.
+    """
+    if not _HEARTBEAT.name or not _HEARTBEAT.exists():
         return False
 
     try:
-        raw = _heartbeat.read_text(encoding="utf-8").strip()
-        # Support both old plain-float format and new JSON format
+        raw = _HEARTBEAT.read_text(encoding="utf-8").strip()
         try:
             data = json.loads(raw)
             ts = float(data.get("ts", 0))
+            # Allow reads while the embedding model is still loading — searches fail
+            # during this window anyway, so enforcing the guard is counterproductive.
+            if not data.get("model_loaded", True):
+                return False
         except (ValueError, KeyError):
             ts = float(raw)
-        _age = _time.time() - ts
-        return _age <= 90
+        return time.time() - ts <= 90
     except Exception:
         return False
 
@@ -99,12 +105,10 @@ def main() -> int:
     if is_exempted(tool_input):
         return 0
 
-    if not _rag_is_live():
-        return 0
-
+    # Read counter first (cheap disk read) before the heartbeat check.
+    # Most calls are below threshold — skip the heartbeat read in those cases.
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
     tracker_path = home / "state" / "behavior-tracker.json"
-
     try:
         behavior = json.loads(tracker_path.read_text(encoding="utf-8"))
     except Exception:
@@ -113,6 +117,10 @@ def main() -> int:
     reads_since_rag = behavior.get("reads_since_rag", 0)
 
     if reads_since_rag < RAG_THRESHOLD:
+        return 0
+
+    # Counter at threshold — now check heartbeat (second disk read, skipped above).
+    if not _rag_is_live():
         return 0
 
     print(

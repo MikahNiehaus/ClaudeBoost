@@ -199,6 +199,180 @@ def test_warns_with_branch_switch_in_git_home(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Lines 57-58: except Exception in json.loads block (needs real git repo home)
+# ---------------------------------------------------------------------------
+
+def test_silent_when_state_file_invalid_json_in_git_home(tmp_path):
+    """State file is corrupt JSON but home IS a git repo, so git commands succeed.
+    This forces execution past line 49-50 and into the json.loads try/except
+    at lines 53-58, hitting the except branch (lines 57-58)."""
+    try:
+        subprocess.check_output(["git", "init", str(tmp_path)], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "init",
+             "--author", "Test <test@test.com>"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pytest.skip("git not available or failed to init")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    state_file = state_dir / "last-indexed-head.json"
+    # Invalid JSON triggers the except Exception block at lines 57-58
+    state_file.write_text("{not valid json", encoding="utf-8")
+
+    result = run_hook(
+        "reindex-check.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == b""
+
+
+# ---------------------------------------------------------------------------
+# Line 61: return 0 when last_head is empty/falsy (index current branch = "")
+# ---------------------------------------------------------------------------
+
+def test_silent_when_last_head_is_empty_string(tmp_path):
+    """State file exists with head = '' (empty string).
+    Line 60: `not last_head` is True, so line 61 returns 0 silently.
+    Requires a real git repo so git commands succeed and we reach line 60."""
+    try:
+        subprocess.check_output(["git", "init", str(tmp_path)], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "init",
+             "--author", "Test <test@test.com>"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pytest.skip("git not available or failed to init")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    state_file = state_dir / "last-indexed-head.json"
+    # head is empty string — triggers `not last_head` at line 60 -> line 61
+    state_file.write_text(json.dumps({"head": "", "branch": "main"}), encoding="utf-8")
+
+    result = run_hook(
+        "reindex-check.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == b""
+
+
+def test_silent_when_head_key_missing_from_state(tmp_path):
+    """State file has no 'head' key — data.get('head', '') returns empty string.
+    Line 60: `not last_head` is True -> line 61 returns 0.
+    Requires a real git repo so git commands succeed."""
+    try:
+        subprocess.check_output(["git", "init", str(tmp_path)], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "init",
+             "--author", "Test <test@test.com>"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pytest.skip("git not available or failed to init")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    state_file = state_dir / "last-indexed-head.json"
+    # No 'head' key — data.get("head", "") returns "" -> line 61
+    state_file.write_text(json.dumps({"branch": "main"}), encoding="utf-8")
+
+    result = run_hook(
+        "reindex-check.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == b""
+
+
+# ---------------------------------------------------------------------------
+# Line 67: change_note = " (new commits since last index)" when same branch
+# ---------------------------------------------------------------------------
+
+def test_warns_with_new_commits_note_when_same_branch(tmp_path):
+    """HEAD has changed but last_branch matches current branch.
+    Line 64: `last_branch and last_branch != current_branch` is False (same branch).
+    Line 67 executes: change_note = ' (new commits since last index)'."""
+    try:
+        subprocess.check_output(["git", "init", str(tmp_path)], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "init",
+             "--author", "Test <test@test.com>"],
+            stderr=subprocess.DEVNULL,
+        )
+        # Get current branch name
+        current_branch = subprocess.check_output(
+            ["git", "-C", str(tmp_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        pytest.skip("git not available or failed to init")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    state_file = state_dir / "last-indexed-head.json"
+    # Same branch, different HEAD -> line 67: "new commits since last index"
+    state_file.write_text(json.dumps({
+        "head": "0000000000000000000000000000000000000000",
+        "branch": current_branch,
+    }), encoding="utf-8")
+
+    result = run_hook(
+        "reindex-check.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    ctx = output.get("additionalContext", "")
+    assert "STALE" in ctx
+    assert "new commits" in ctx
+
+
+def test_warns_with_new_commits_note_when_last_branch_empty(tmp_path):
+    """HEAD changed and last_branch is empty string.
+    Line 64: `last_branch and ...` short-circuits to False (empty string is falsy).
+    Line 67 executes: change_note = ' (new commits since last index)'."""
+    try:
+        subprocess.check_output(["git", "init", str(tmp_path)], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "init",
+             "--author", "Test <test@test.com>"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pytest.skip("git not available or failed to init")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    state_file = state_dir / "last-indexed-head.json"
+    # Empty branch -> line 64 short-circuits -> line 67
+    state_file.write_text(json.dumps({
+        "head": "0000000000000000000000000000000000000000",
+        "branch": "",
+    }), encoding="utf-8")
+
+    result = run_hook(
+        "reindex-check.py",
+        _session_start(),
+        env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    ctx = output.get("additionalContext", "")
+    assert "STALE" in ctx
+    assert "new commits" in ctx
+
+
+# ---------------------------------------------------------------------------
 # Corrupt state file: treated as no baseline (silent)
 # ---------------------------------------------------------------------------
 

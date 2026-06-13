@@ -113,6 +113,51 @@ class TestList:
         assert result.returncode == 0
         assert b"task-42" in result.stdout
 
+    def test_list_prints_ticket_preview_when_ticket_md_exists(self, tmp_path):
+        # Exercises lines 72-73: tkt.exists() branch reads ticket.md and prints first 5 lines
+        ws_path = tmp_path / "workspace" / "task-55"
+        ws_path.mkdir(parents=True)
+        ticket_content = "# Ticket Title\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6 should not appear"
+        (ws_path / "ticket.md").write_text(ticket_content, encoding="utf-8")
+        (ws_path / "context.md").write_text("# context", encoding="utf-8")
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        reg = {"task-55": {"workspace_path": str(ws_path), "project_path": "/proj"}}
+        (state_dir / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+
+        result = run_script(
+            "register-workspace.py",
+            args=["--list"],
+            env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert b"task-55" in result.stdout
+        assert b"# Ticket Title" in result.stdout
+        assert b"Line 5" in result.stdout
+        assert b"Line 6 should not appear" not in result.stdout
+
+    def test_list_ticket_only_no_context_still_shows(self, tmp_path):
+        # ticket.md alone (no context.md) satisfies the ctx.exists() or tkt.exists() condition
+        ws_path = tmp_path / "workspace" / "task-66"
+        ws_path.mkdir(parents=True)
+        (ws_path / "ticket.md").write_text("Title only\nSecond line", encoding="utf-8")
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        reg = {"task-66": {"workspace_path": str(ws_path), "project_path": ""}}
+        (state_dir / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+
+        result = run_script(
+            "register-workspace.py",
+            args=["--list"],
+            env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert b"task-66" in result.stdout
+        assert b"Title only" in result.stdout
+        assert b"Second line" in result.stdout
+
 
 class TestGet:
     def test_get_existing_workspace_returns_path(self, tmp_path):

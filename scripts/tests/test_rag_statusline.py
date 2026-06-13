@@ -141,3 +141,26 @@ class TestMcpRegistered:
             env_overrides={"RAG_INDEX_DIR": str(tmp_path), "USERPROFILE": str(tmp_path), "HOME": str(tmp_path)},
         )
         assert result.returncode == 0
+
+
+class TestHeartbeatInvalidJsonValidFloat:
+    def test_non_json_float_heartbeat_hits_inner_except(self, tmp_path):
+        """Heartbeat content is 'nan': json.loads raises ValueError (caught by inner except),
+        then float('nan') succeeds -- covering lines 56-57 (ts=float(raw), model_loaded=True).
+        age = now - nan = nan, and nan > 90 is False, so status is 'live' and RAG indicator shown.
+        """
+        rag_index_dir = tmp_path / "rag-index"
+        rag_index_dir.mkdir()
+        heartbeat = rag_index_dir / ".heartbeat"
+        # "nan" is not valid JSON but is a valid Python float -- triggers inner except branch
+        heartbeat.write_text("nan", encoding="utf-8")
+
+        result = run_script(
+            "rag-statusline.py",
+            env_overrides={"RAG_INDEX_DIR": str(rag_index_dir)},
+        )
+        assert result.returncode == 0
+        output = result.stdout.decode(errors="replace")
+        # Inner except sets model_loaded=True; age=nan which is not > 90 so status='live'
+        assert "RAG" in output
+        assert "\u25cf" in output

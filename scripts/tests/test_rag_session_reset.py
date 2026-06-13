@@ -101,3 +101,32 @@ def test_silent_when_sentinel_was_not_set(tmp_path):
     assert result.returncode == 0
     # Should produce no output (silent startup)
     assert result.stdout.strip() == b""
+
+
+# ---------------------------------------------------------------------------
+# Exception branch in unlink (lines 34-35): best-effort clear swallows errors
+# ---------------------------------------------------------------------------
+
+def test_unlink_exception_is_swallowed(tmp_path, monkeypatch):
+    """If sentinel.unlink() raises, the hook still exits 0 (best-effort clear)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from unittest.mock import patch
+
+    scripts_dir = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "rag_session_reset", scripts_dir / "rag-session-reset.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(scripts_dir))
+    spec.loader.exec_module(mod)
+
+    sentinel_path = tmp_path / "claudeboost_rag_ok"
+    sentinel_path.touch()  # exists so was_set=True, then unlink raises
+
+    with patch("pathlib.Path.unlink", side_effect=OSError("permission denied")):
+        with patch.dict("os.environ", {"TEMP": str(tmp_path)}):
+            rc = mod.main()
+
+    assert rc == 0

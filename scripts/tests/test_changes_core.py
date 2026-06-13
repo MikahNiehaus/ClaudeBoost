@@ -582,3 +582,154 @@ class TestChatPanel:
             panel._check_for_answer()
         assert panel._waiting_for_answer is False
         mock_show.assert_called_once_with("the answer text")
+
+    def test_mark_waiting_sets_flag_and_calls_show_response(self):
+        """mark_waiting sets _waiting_for_answer=True and calls show_response('') (lines 454-455)."""
+        panel = changes_core.ChatPanel()
+        panel._waiting_for_answer = False
+        with patch.object(panel, "show_response") as mock_show:
+            panel.mark_waiting()
+        assert panel._waiting_for_answer is True
+        mock_show.assert_called_once_with("")
+
+
+# ---------------------------------------------------------------------------
+# BaseChangesViewer — action methods (guard-path and logic-only tests)
+# ---------------------------------------------------------------------------
+
+class TestBaseChangesViewerActions:
+    def _make_viewer(self, files=None):
+        data = {
+            "project": "Proj",
+            "files": files or [
+                {"path": "a/b.py", "status": "modified", "hunks": [], "agent": "", "summary": ""},
+            ],
+        }
+        return changes_core.BaseChangesViewer(data)
+
+    # on_tree_select (lines 662-668)
+
+    def test_on_tree_select_node_data_none(self):
+        """Guard: when node.data is None, returns early without calling _show_file (line 663-664)."""
+        viewer = self._make_viewer()
+
+        class FakeNode:
+            data = None
+
+        class FakeEvent:
+            node = FakeNode()
+
+        with patch.object(viewer, "_show_file") as mock_show:
+            viewer.on_tree_select(FakeEvent())
+        mock_show.assert_not_called()
+
+    def test_on_tree_select_file_data_none(self):
+        """Guard: when path not in lookup, returns early without calling _show_file (lines 665-667)."""
+        viewer = self._make_viewer()
+
+        class FakeNode:
+            data = "unknown/path.py"
+
+        class FakeEvent:
+            node = FakeNode()
+
+        with patch.object(viewer, "_show_file") as mock_show:
+            viewer.on_tree_select(FakeEvent())
+        mock_show.assert_not_called()
+
+    def test_on_tree_select_calls_show_file(self):
+        """When path is in lookup, calls _show_file with the file dict (line 668)."""
+        viewer = self._make_viewer()
+        file_data = viewer.data["files"][0]
+
+        class FakeNode:
+            data = "a/b.py"
+
+        class FakeEvent:
+            node = FakeNode()
+
+        with patch.object(viewer, "_show_file") as mock_show:
+            viewer.on_tree_select(FakeEvent())
+        mock_show.assert_called_once_with(file_data)
+
+    # action_toggle_explanations (lines 723-727)
+
+    def test_action_toggle_explanations_no_file(self):
+        """Early return when _current_file is None (lines 723-724)."""
+        viewer = self._make_viewer()
+        viewer._current_file = None
+        original = viewer.show_explanations
+        with patch.object(viewer, "_render_diff") as mock_render:
+            viewer.action_toggle_explanations()
+        mock_render.assert_not_called()
+        assert viewer.show_explanations == original
+
+    def test_action_toggle_explanations_with_file(self):
+        """Toggles show_explanations and calls _render_diff when a file is loaded (lines 725-727)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        original = viewer.show_explanations
+        with patch.object(viewer, "_render_diff"):
+            viewer.action_toggle_explanations()
+        assert viewer.show_explanations != original
+
+    def test_action_toggle_explanations_sets_subtitle(self):
+        """sub_title is updated after toggling (line 727)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        viewer.show_explanations = True
+        with patch.object(viewer, "_render_diff"):
+            viewer.action_toggle_explanations()
+        assert "OFF" in viewer.sub_title
+
+    # action_toggle_collapse (lines 730-737)
+
+    def test_action_toggle_collapse_no_file(self):
+        """Early return when _current_file is None (lines 730-731)."""
+        viewer = self._make_viewer()
+        viewer._current_file = None
+        viewer._total_hunks = 0
+        with patch.object(viewer, "_render_diff") as mock_render:
+            viewer.action_toggle_collapse()
+        mock_render.assert_not_called()
+
+    def test_action_toggle_collapse_no_hunks(self):
+        """Early return when _total_hunks is 0 (lines 730-731)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        viewer._total_hunks = 0
+        with patch.object(viewer, "_render_diff") as mock_render:
+            viewer.action_toggle_collapse()
+        mock_render.assert_not_called()
+
+    def test_action_toggle_collapse_adds_to_set(self):
+        """When hunk index is not collapsed, adds it to _collapsed_hunks (lines 732-736)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        viewer._total_hunks = 3
+        viewer._current_hunk_index = 1
+        viewer._collapsed_hunks = set()
+        with patch.object(viewer, "_render_diff"):
+            viewer.action_toggle_collapse()
+        assert 1 in viewer._collapsed_hunks
+
+    def test_action_toggle_collapse_removes_from_set(self):
+        """When hunk index is already collapsed, discards it from _collapsed_hunks (lines 733-734)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        viewer._total_hunks = 3
+        viewer._current_hunk_index = 2
+        viewer._collapsed_hunks = {2}
+        with patch.object(viewer, "_render_diff"):
+            viewer.action_toggle_collapse()
+        assert 2 not in viewer._collapsed_hunks
+
+    def test_action_toggle_collapse_calls_render_diff(self):
+        """After updating collapsed set, _render_diff is called (line 737)."""
+        viewer = self._make_viewer()
+        viewer._current_file = viewer.data["files"][0]
+        viewer._total_hunks = 1
+        viewer._current_hunk_index = 0
+        with patch.object(viewer, "_render_diff") as mock_render:
+            viewer.action_toggle_collapse()
+        mock_render.assert_called_once()

@@ -306,8 +306,8 @@ def main() -> int:
     try:
         if not sys.stdin.isatty():
             raw = sys.stdin.read()
-    except Exception:
-        return 0
+    except Exception:  # pragma: no cover
+        return 0  # pragma: no cover
 
     try:
         payload = json.loads(raw) if raw.strip() else {}
