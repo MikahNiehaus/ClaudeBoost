@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
-**Generated:** 2026-05-08 (counts updated 2026-06-05)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 106 knowledge XMLs (52 domain + 21 lang + 33 framework), 44 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Generated:** 2026-05-08 (counts updated 2026-06-12)
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 106 knowledge XMLs (52 domain + 21 lang + 33 framework), 27 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1461,32 +1461,23 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.7 /spawn-agent <agent-name> <task-id>
-**File:** `.claude/commands/spawn-agent.md`  
-**Description:** Spawn an agent with RAG knowledge loading  
-**Tools:** Read, Glob, Task  
-**Steps:**
-1. Validate agent file exists at `agents/$1-agent.xml`
-2. Run `pwd` for project_path (literal string for Tier 4 RAG)
-3. Build spawn prompt with: agent name, task description, rag_context Step 1, project_path, context path, output format
-4. Route weight: lightweight/standard/full by agent type
-5. PreToolUse agent-spawn-gate.py fires before spawn
-
----
-
-### 5.8 /review [--staged | --branch | --pr <url>]
+### 5.7 /review [--deep] [--staged | --branch | --pr <url>]
 **File:** `.claude/commands/review.md`  
-**Description:** Structured A-F grade code review  
-**Tools:** Bash(git diff, gh pr diff)  
-**Steps:**
+**Description:** Quick A-F grade code review by default; add `--deep` for the full 15-pass parallel review  
+**Tools:** Bash(git diff, gh pr diff), Task (--deep mode)  
+**Steps (default):**
 1. Resolve diff source (uncommitted+staged / staged only / branch diff / PR diff)
 2. Review for CRITICAL (security, data loss, correctness), MAJOR (logic errors, missing error handling), MINOR (style, naming)
 3. Grade: A=no issues, B=MINOR only, C=MAJOR present, D=CRITICAL present, F=unreviewable
 4. Output structured review with file:line for each issue
 
+**Steps (--deep):**
+1-4 as above, then additionally: 13 parallel passes batched 3-at-a-time covering logic, security, performance, tests, dead code, debug artifacts, banned patterns, pattern consistency, caller impact (graph search), and ticket alignment; Evaluator Opus agent (pass 14) classifies every finding (BLOCKER/WARNING/NIT/FALSE POSITIVE)  
+**Output:** Grade (A-F), BLOCKERS, WARNINGS, NITS, FALSE POSITIVES
+
 ---
 
-### 5.9 /index-project [path or name] [languages] [force]
+### 5.8 /index-project [path or name] [languages] [force]
 **File:** `.claude/commands/index-project.md`  
 **Description:** Index a project's codebase for semantic search (Project RAG)  
 **Steps:**
@@ -1500,110 +1491,21 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.10 /plan-task <task-id> <description>
-**File:** `.claude/commands/plan-task.md`  
-**Description:** Execute planning phase only (no execution)  
-**Steps:**
-1. Create `workspace/$1/` and init context.md with PLANNING state
-2. Run 9-domain planning checklist (Testing/Docs/Security/Architecture/Performance/Review/Clarity/Browser Testing/Observability)
-3. Generate subtasks (Solvability + Completeness + Non-Redundancy principles)
-4. Determine execution strategy (Sequential/Parallel/Hybrid)
-5. Update context.md with full plan
-6. Present plan and ask for approval
-
----
-
-### 5.11 /gate
-**File:** `.claude/commands/gate.md`  
-**Description:** Compliance gate check (5 gates)  
-**Gates:**
-1. Task Classification: read-only → skip; action → continue
-2. Workspace Verification: context.md exists → read it; missing → create
-3. Planning Verification: Plan section populated → continue; missing → run checklist
-4. TodoWrite Verification: 2+ steps → verify TodoWrite exists
-5. Pre-Action Validation: agent type, model assignment, READ pattern, context.md update plan
-**When to run:** Every new task, before spawning any agent, before code modification, after compaction
-
----
-
-### 5.12 /agent-status <task-id>
-**File:** `.claude/commands/agent-status.md`  
-**Description:** Display task status, agent contributions, and next steps  
-**Output:** Task, Status, Last Agent, Next Steps, Blockers, Artifacts count  
-**References:** `@workspace/$1/context.md`
-
----
-
-### 5.13 /check-task <task-id>
-**File:** `.claude/commands/check-task.md`  
-**Description:** Validate task folder structure and completeness  
-**Checks:** Structure, context.md required sections, agent output compliance, content validation (not just headers), context health (<30 KB, <10 contributions)  
-**Output:** VALID/INVALID with list of issues
-
----
-
-### 5.14 /check-completion [task-id]
-**File:** `.claude/commands/check-completion.md`  
-**Description:** Verify completion criteria status  
-**Steps:** Find task context → read criteria → run verification commands → update status → report  
-**Output:** Criteria table with Expected vs Actual vs Status, COMPLETE/IN PROGRESS/BLOCKED
-
----
-
-### 5.15 /set-mode <normal|persistent> [task-id]
-**File:** `.claude/commands/set-mode.md`  
-**Description:** Set execution mode for a task  
-**PERSISTENT mode:** Requires completion criteria definition; prompts user if missing  
-**Updates:** context.md Execution Mode section
-
----
-
-### 5.16 /compact-review
-**File:** `.claude/commands/compact-review.md`  
-**Description:** Preview critical state before context compaction  
-**Output:** Active tasks table, task context summaries (last agent, findings, next steps), pending user decisions, Compaction Summary Template
-
----
-
-### 5.17 /done
+### 5.9 /done
 **File:** `.claude/commands/done.md`  
 **Description:** Verify work is clean and push to remote  
 **Steps:** Pre-flight (git status clean, at least 1 commit) → `git push` (or `git push -u origin HEAD` if no upstream)
 
 ---
 
-### 5.18 /handoff [message]
+### 5.10 /handoff [message]
 **File:** `.claude/commands/handoff.md`  
 **Description:** Save session state and prepare for a fresh context  
-**Steps:** Runs `session-clear-save.py` to snapshot active workspace → optionally stores message in handoff-latest.json → instructs user to `/clear` then `/boost` or `/restore` in next session
+**Steps:** Runs `session-clear-save.py` to snapshot active workspace → optionally stores message in handoff-latest.json → instructs user to `/clear` then `/boost` in next session (SessionStart hook restores context automatically)
 
 ---
 
-### 5.19 /list-agents
-**File:** `.claude/commands/list-agents.md`  
-**Description:** List all available agents with expertise domains  
-**Output:** Agent summary table (25 agents), quick decision guide
-
----
-
-### 5.20 /update-docs
-**File:** `.claude/commands/update-docs.md`  
-**Description:** Generate project documentation in `docs/` folder  
-**Note:** docs/ is gitignored; run after completing features  
-**Output:** README.md, architecture.md, api.md (as applicable to the project)
-
----
-
-### 5.21 /code-review [scope]
-**File:** `.claude/commands/code-review.md`  
-**Description:** 14-pass parallel code review — simplicity, patterns, ticket alignment, evaluator  
-**Scope:** staged, last N commits, branch name, file path, PR #  
-**Phases:** RAG context + project index (0) → understand diff (1) → pass selection (2) → 13 parallel passes batched 3-at-a-time (3) → Evaluator Opus agent (pass 14, always last) (4) → report with grade A-F (5)  
-**Output:** Grade (A-F), BLOCKERS, WARNINGS, NITS, FALSE POSITIVES
-
----
-
-### 5.22 /setup
+### 5.11 /setup
 **File:** `.claude/commands/setup.md`  
 **Description:** Full ClaudeBoost setup and verification — idempotent, safe after any git pull  
 **Phases:** Locate home (0) → run setup.ps1 (1) → verify 6 checks in loop with auto-repair (2) → status table (3)  
@@ -1613,7 +1515,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.23 /end-to-end-test <target-url> [scope]
+### 5.12 /end-to-end-test <target-url> [scope]
 **File:** `.claude/commands/end-to-end-test.md`  
 **Description:** End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with annotated screenshot evidence  
 **Argument:** `<target-url>` (localhost only) + optional `scope` (auth|crud|nav|errors|responsive|all; default: all)  
@@ -1632,7 +1534,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.24 /clear-safe
+### 5.13 /clear-safe
 
 **File:** `.claude/commands/clear-safe.md`  
 **Description:** Pre-flight verified context clear — verifies workspace state is captured before you type /clear  
@@ -1652,7 +1554,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.25 /research-rag <task-id> [topic] [url1 url2 ...]
+### 5.14 /research-rag <task-id> [topic] [url1 url2 ...]
 **File:** `.claude/commands/research-rag.md`  
 **Description:** Build a per-task workspace-scoped research RAG from external sources (web pages, PDFs, docs)  
 **Agent:** `research-rag-agent` (weight: lightweight)  

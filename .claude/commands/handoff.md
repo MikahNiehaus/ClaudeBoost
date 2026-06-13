@@ -14,7 +14,7 @@ Arguments: $ARGUMENTS
 
 Saves your active workspace context and conversation highlights to
 `state/handoff-latest.json`. When you start a fresh session and run `/boost` or
-`/restore`, ClaudeBoost reads that file and restores where you left off.
+`/boost`, ClaudeBoost reads that file and restores where you left off.
 
 Use this when your context is getting long and you want a clean start without
 losing your place in a task.
@@ -45,7 +45,7 @@ shell python — bash-guard blocks multiline `python -c`):
 Tell the user:
 - Which workspace was active (task ID and status from the saved state)
 - That they can run `/clear` now to reset context
-- That running `/boost` or `/restore` in the next session will pick up where this one left off
+- That running `/boost` in the next session will pick up where this one left off
 
 ---
 

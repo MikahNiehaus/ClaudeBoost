@@ -346,21 +346,18 @@ Use this catalog to map work types to tools. Select only what the work actually 
 |-------|---------------|
 | `/boost` | Start of session — loads RAG; use if session isn't already boosted |
 | `/explore <ticket-or-description>` | Full ticket deep-dive: ticket analysis → project indexing → code exploration → plan |
-| `/plan-task <id> <desc>` | Planning phase only (no execution) — produces checklist + subtasks + agent list |
 | `/audit <input>` | Parallel audit of code, config, URL, claim, or document with Opus verdict |
-| `/code-review` | 15-pass parallel code review of the current branch changes |
+| `/review` | Code review — quick A-F grade by default; add `--deep` for full 15-pass parallel review |
 | `/security-review` | Security-focused review of pending branch changes |
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
 | `/research-rag <topic>` | Build a research RAG from URLs/PDFs/docs, then query it during implementation |
 | `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8612/search with scope="codebase"` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
-| `/spawn-agent <agent>` | Spawn a specific agent with RAG knowledge loaded |
 | `/self-improve` | ClaudeBoost self-improvement audit cycle (meta-work only) |
 | `/done` | Submit completed work to merge queue |
 | `/handoff` | Hand off to a fresh session when context is getting full |
 | `/clear-safe` | Pre-flight save before /clear — preserves active workspace state |
-| `/gate` | Compliance gate check |
 | `/changes` | Interactive change explorer — review everything changed on this branch |
 
 #### Knowledge Bases (always accessed via RAG — never read directly)
@@ -542,7 +539,7 @@ Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ### Step 1: [Step Name]
 **What**: [what this step accomplishes]
-**Command**: `[exact skill or agent action — e.g., /explore my-workspace-id or /spawn-agent security-agent]`
+**Command**: `[exact skill or agent action — e.g., /explore my-workspace-id or "spawn security-agent"]`
 **Agent**: [agent-name (Model)]
 **Knowledge loaded via RAG**: [list knowledge files]
 **Output artifact**: [e.g., workspace/$WORKSPACE_ID/plan.md, tests/feature.spec.ts]

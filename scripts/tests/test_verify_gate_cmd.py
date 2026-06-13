@@ -5,7 +5,7 @@ Phase A — base behavior:
   - No findings in response               -> exit 0, no stderr
   - Response has "severity": "blocker"    -> exit 0, stderr has nudge
   - Response has bare "blocker:" keyword  -> exit 0, stderr has nudge
-  - Description is a code-review pass     -> exit 0, silent (suppressed)
+  - Description is a /review --deep pass  -> exit 0, silent (suppressed)
   - Description contains "evaluator"      -> exit 0, silent (suppressed)
   - audit-in-progress.json active         -> exit 0, silent (suppressed, no flag written)
 

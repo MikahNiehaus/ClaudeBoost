@@ -74,7 +74,7 @@ def main() -> int:
     if (BOOST_HOME / "state" / "audit-in-progress.json").exists():
         return 0
 
-    # Suppress during code-review batch runs — they have their own evaluator (Pass 15)
+    # Suppress during /review --deep batch runs — they have their own evaluator (Pass 15)
     if any(marker in desc for marker in REVIEW_PASS_MARKERS):
         return 0
 

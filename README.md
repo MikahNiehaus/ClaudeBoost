@@ -3,14 +3,14 @@
 **Created by Mikah Niehaus**
 
 Multi-agent orchestration layer for Claude Code. 24 specialist agents, 106 knowledge
-files, a local semantic RAG + GraphRAG server, and 44 slash commands — all wired
+files, a local semantic RAG + GraphRAG server, and 27 slash commands — all wired
 together through hooks.
 
 ## What It Does
 
 AI can write code fast. That's never been the bottleneck. The bottleneck is what the code looks like six months later — unapproved tables, inconsistent patterns, security gaps, zero tests. Most AI tools make this worse by making the same low-quality code arrive faster.
 
-ClaudeBoost takes a different approach. Instead of one general-purpose model handling everything, it routes work to 24 specialist agents — each focused on a single domain. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads the exact knowledge each agent needs before a single line is written. Every finding requires a `file:line` citation or it gets dropped. The goal is not faster code. It's production-ready, highly tested, maintainable code — delivered correctly the first time.
+ClaudeBoost takes a different approach. Instead of one general-purpose model handling everything, it routes work to 24 specialist agents — each focused on a single domain. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads the exact knowledge each agent needs before a single line is written. Every finding requires a `file:line` citation or it gets dropped. The goal isn't faster code — it's production-ready, thoroughly tested, maintainable code delivered correctly the first time.
 
 The RAG server runs entirely locally. No external vector service. No API calls to embed
 your code. Your codebase stays on your machine. Microsoft's GraphRAG costs around
@@ -77,7 +77,7 @@ ClaudeBoost/
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    44 slash commands
+├── .claude/commands/    27 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── CLAUDE.md            Orchestration rules (loaded globally)
 └── docs/                Reference documentation
@@ -116,7 +116,7 @@ the session, and shows active workspaces. From there:
 /workspace <task>        Create a workspace + implementation plan
 /research-task           Index task-specific docs into the workspace (incremental)
 /research-rag            Index external URLs/PDFs into a per-task research index (ephemeral)
-/code-review             15-pass code review (14 parallel + evaluator)
+/review                  Quick A-F grade by default; add --deep for full 15-pass parallel review
 /end-to-end-test         Browser E2E tests with screenshot evidence
 /security-review         OWASP-grounded security audit
 ```
@@ -186,24 +186,16 @@ isolation but breaks a caller is flagged as a BLOCKER.
 
 ### Code Review
 
-`/code-review` runs 14 parallel passes against your staged changes or branch:
+`/review` gives you a quick A–F grade by default. Add `--deep` for the full 15-pass
+parallel review: 14 passes run in parallel (logic, security, performance, test coverage,
+dead code, debug artifacts, banned patterns, project pattern consistency, caller impact,
+and ticket alignment), then the evaluator-agent (Opus) runs last in a fresh context.
+Every finding needs a `file:line` citation or it gets dropped.
 
-- Logic, edge cases, off-by-one errors
-- Security (OWASP top 10, injection, auth bypass)
-- Performance (N+1 queries, missing indexes, blocking I/O)
-- Test coverage and missing assertions
-- Dead code, debug artifacts, banned patterns
-- Project pattern consistency
-- Caller impact (graph search on changed files — catches silent breakage in callers)
-- Ticket alignment
+Scope flags: `--staged`, `--branch`, `--pr <url>`.
 
-Passes run in parallel, batched in groups of 3. The evaluator-agent (Opus) runs last in
-a fresh context — no confirmation bias. Every finding needs a `file:line` citation or
-it gets dropped. Output is a letter grade (A–F) with BLOCKERS, WARNINGS, and NITS.
-
-`/review` gives a structured review of any code. `/security-review` focuses the full
-depth of the security pass on just security findings, with `--full` for a whole-project
-audit.
+`/security-review` focuses the full depth of the security pass on just security findings,
+with `--full` for a whole-project audit.
 
 ### E2E Testing
 
@@ -352,35 +344,29 @@ when one is detected.
 
 ## Slash Commands
 
-44 commands organized by workflow:
+27 commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/setup` `/index-project` `/index-boost` `/list-agents`
+`/boost` `/rag` `/setup` `/index-project` `/index-boost`
 
 **Planning & Workspace**
-`/workspace` `/create-prd` `/plan-task` `/explore` `/research-project` `/research-task`
-`/research-rag` `/graph` `/agent-status`
+`/workspace` `/create-prd` `/explore` `/research-project` `/research-task`
+`/research-rag` `/graph`
 
 **Code Quality**
-`/code-review` `/review` `/security-review` `/audit` `/gate` `/simplify`
+`/review` `/security-review` `/audit` `/self-improve` `/simplify`
 
 **Testing**
 `/end-to-end-test` `/test-hooks`
 
 **Git & Workflow**
-`/done` `/pr-description` `/commit-message` `/changes` `/handoff` `/clear-safe`
-`/restore` `/compact-review`
+`/done` `/pr-description` `/changes` `/handoff` `/clear-safe`
 
 **Configuration**
-`/auto` `/consult` `/set-mode` `/set-permissions` `/set-global-permissions`
-`/speak` `/statusline`
+`/auto` `/consult` `/speak`
 
-**Debugging & Maintenance**
-`/self-improve` `/dependency-update` `/visualize` `/check-task` `/check-completion`
-`/spawn-agent` `/mcp-builder`
-
-**Documentation**
-`/update-docs` `/init` `/generate-agents-md`
+**Documentation & Visualization**
+`/visualize` `/init`
 
 ## Benchmarks
 

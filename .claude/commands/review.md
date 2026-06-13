@@ -1,50 +1,63 @@
 ---
-description: Review code changes with structured grading (A-F)
-allowed-tools: Bash(git diff:*), Bash(git rev-parse:*), Bash(gh pr diff:*)
-argument-hint: [--staged | --branch | --pr <url>]
+description: Code review — quick A-F grade by default; add --deep for full 15-pass parallel review with test execution and Opus evaluator
+allowed-tools: Read, Write, Bash, Glob, Grep, Agent
+argument-hint: [--staged | --branch | --pr <url>] [--deep]
 ---
 
-Review code and provide a structured assessment with grading.
+# /review — Code Review
 
 Arguments: $ARGUMENTS
 
-## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+## Depth Detection
 
-**0a — Detect project path (before loading context):**
+Scan `$ARGUMENTS` for any of: `--deep`, `--full`, `deep`, `full`, `in depth`, `in-depth`, `thorough`, `detailed`
 
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
+- **Match found** → `DEEP_MODE = true` — full 15-pass parallel review with test execution and Opus evaluator
+- **No match** → `DEEP_MODE = false` — quick single-agent A-F grade
 
-Set `PROJECT_PATH` to the detected value.
-
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="code change review and grading", project_path="<PROJECT_PATH>", max_tokens=3000`.
-
-This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
-
-**0b — Verify project is indexed** (required for codebase search to work):
-
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `PROJECT_PATH`.
-
-- **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+Strip the depth keyword from scope args before proceeding. Remaining tokens are the scope.
 
 ---
 
+## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
+
+**0a — Detect project path:**
+
+1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
+2. Fall back to current working directory
+
+Set `PROJECT_PATH` to the detected value.
+
+Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code review $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000`.
+
+If it fails: stop — "RAG is not connected. Run `/rag` first."
+
+**0b — Verify project is indexed:**
+
+Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `PROJECT_PATH`.
+
+- **Indexed**: continue
+- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` first
+- **RAG offline**: stop, tell user to run `/rag`
+
+---
+
+# QUICK REVIEW (DEEP_MODE = false)
+
 ## Diff Source Resolution
 
-Determine the diff to review based on arguments:
+| Argument | Diff command |
+|----------|-------------|
+| (none) | `git diff` + `git diff --staged` |
+| `--staged` | `git diff --staged` |
+| `--branch` | `git diff origin/<base>...HEAD` |
+| `--pr <url>` | `gh pr diff <url>` |
 
-| Argument | Diff command | Use case |
-|----------|-------------|----------|
-| (none) | `git diff` + `git diff --staged` | Review uncommitted + staged changes |
-| `--staged` | `git diff --staged` | Review only staged changes |
-| `--branch` | `git diff origin/<base>...HEAD` | Review branch diff vs base branch |
-| `--pr <url>` | `gh pr diff <url>` | Review a GitHub PR |
+Run the appropriate diff command. If diff is empty: "No changes to review" and stop.
 
-### Step 1: Get the diff
+## Review
 
-Based on the arguments, run the appropriate diff command:
+Review the diff systematically. Classify every issue:
 
 ```bash
 # Default (no args): uncommitted + staged
@@ -72,83 +85,360 @@ Review the diff systematically. For each issue found, classify by severity:
 - Data loss risks (missing transactions, unsafe deletes)
 - Correctness bugs (race conditions, nil dereference, logic errors)
 
-**MAJOR** - Should fix before merge:
+**MAJOR** — should fix before merge:
 - Logic errors that may not crash but produce wrong results
 - Missing error handling on external calls
 - API contract violations
 - Missing tests for critical paths
 
-**MINOR** - Nice to fix:
+**MINOR** — nice to fix:
 - Style inconsistencies with surrounding code
-- Naming issues (unclear or misleading names)
+- Unclear naming
 - Missing comments on non-obvious logic
 - Minor code smells
 
-For each issue, note:
-- File and line number
-- Severity (CRITICAL, MAJOR, MINOR)
-- Description of the issue
-- Suggested fix (specific, actionable)
+For each issue: file:line, severity, description, suggested fix.
 
-### Step 3: Assign grade
-
-Grade is determined by the highest severity issue found:
+## Grade
 
 | Grade | Criteria | Verdict |
 |-------|----------|---------|
-| **A** | No CRITICAL, MAJOR, or MINOR issues | PASS |
-| **B** | MINOR issues only (no CRITICAL or MAJOR) | PASS |
-| **C** | MAJOR issues present (no CRITICAL) | FAIL |
+| **A** | No issues at all | PASS |
+| **B** | MINOR issues only | PASS |
+| **C** | MAJOR issues, no CRITICAL | FAIL |
 | **D** | CRITICAL issues present | FAIL |
-| **F** | Unreviewable (empty diff, binary files, generated code only) | SKIP |
+| **F** | Unreviewable | SKIP |
 
-### Step 4: Output structured review
-
-Output the review in this exact format:
+## Output
 
 ```
 Grade: <A|B|C|D|F>
 
-CRITICAL (<count> issues)
+CRITICAL (<count>)
   <file>:<line> — <description>
-    Suggested fix: <actionable fix>
+    Fix: <actionable fix>
 
-MAJOR (<count> issues)
+MAJOR (<count>)
   <file>:<line> — <description>
-    Suggested fix: <actionable fix>
+    Fix: <actionable fix>
 
-MINOR (<count> issues)
+MINOR (<count>)
   <file>:<line> — <description>
-    Suggested fix: <actionable fix>
+    Fix: <actionable fix>
 
-Summary: <N> CRITICAL, <N> MAJOR, <N> MINOR
-Verdict: <PASS|FAIL|SKIP>
+Summary: N CRITICAL, N MAJOR, N MINOR
+Verdict: PASS | FAIL | SKIP
 ```
 
-Omit empty severity sections (e.g., if no CRITICAL issues, don't print the CRITICAL section).
-
-If Grade is A, output:
+Omit empty severity sections. If Grade A:
 ```
 Grade: A
-
 No issues found.
-
-Summary: 0 CRITICAL, 0 MAJOR, 0 MINOR
 Verdict: PASS
 ```
 
-## Final Step: Evidence Verification
+## Evidence Verification
 
-Before presenting to the user, spawn a single `evaluator-agent` with this prompt:
+Spawn a single `evaluator-agent`:
 
-"Read the review output above (Grade, issue list, Summary, Verdict). Verify that:
-1. Every CRITICAL and MAJOR issue cites a specific file:line.
-2. The Grade is consistent with the issue counts (e.g., a D grade requires at least one CRITICAL issue; a C grade requires at least one MAJOR and no CRITICAL).
-3. The Verdict (PASS/FAIL) is consistent with the Grade (A/B = PASS, C/D = FAIL).
+"Verify the review output: (1) every CRITICAL and MAJOR cites a specific file:line, (2) Grade is consistent with issue counts, (3) Verdict matches Grade. Output a table: Claim | Evidence? | CONFIRMED/NEEDS_EVIDENCE. Under 500 tokens."
 
-Output a simple table:
-| Claim | Evidence present? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+Surface any NEEDS_EVIDENCE items alongside the grade.
 
-Flag any NEEDS_EVIDENCE items. Under 500 tokens."
+## Escalation Offer
 
-Surface any NEEDS_EVIDENCE items alongside the review output so the user sees them before acting on the grade.
+After delivering the grade, always end with:
+
+> "Quick review done. Reply **deep** to run the full 15-pass parallel review with test execution and Opus evaluator."
+
+## Post-Review: Escalation Handling
+
+If the user replies with any of: `deep`, `in depth`, `full`, `go deep`, `more detail`, `thorough`, `--deep` — and a quick review was just completed — immediately run the **DEEP REVIEW** section below using the same scope.
+
+---
+
+# DEEP REVIEW (DEEP_MODE = true)
+
+## Phase 1: Understand the Diff
+
+**1a — Parse arguments into FEATURE_BRANCH, BASE_BRANCH, REPO_PATH.**
+
+**Sprint normalization:** `sprint 45`, `Sprint45`, `sprint-45` → `Sprint-45`
+
+**Two-branch syntax:**
+- `<feature> diff <base>` / `<feature> from <base>` / `<base> diff <feature>` → obvious pairing
+- `<branch> sprint <N>` → feature=branch, base=Sprint-N
+
+**Single branch:** use as FEATURE_BRANCH, BASE_BRANCH = current HEAD
+
+**Standard scopes:** `staged`, `last N commits`, `HEAD~N`, file paths — handle as-is
+
+**No scope / vague scope:** gather state and ask:
+
+```bash
+git -C "<REPO_PATH>" status --short
+git -C "<REPO_PATH>" diff --stat HEAD
+git -C "<REPO_PATH>" diff --staged --stat
+git -C "<REPO_PATH>" log --oneline -10
+```
+
+Present summary and ask what to review. Wait for answer before proceeding.
+
+**1b — Find the repo containing the branch.**
+
+Start with `pwd`. If branch not found, scan sibling repos under the parent of the git root. If still not found: tell user and stop.
+
+**1c — Get stat and full diff:**
+
+```bash
+git -C "<REPO_PATH>" diff <DIFF_SPEC> --stat
+git -C "<REPO_PATH>" diff <DIFF_SPEC>
+```
+
+Store as `REVIEW_DIFF`. Do NOT truncate.
+
+**RAG pattern search:**
+
+Summarize what changed in one sentence. Then:
+```
+POST http://127.0.0.1:8612/search scope="codebase", project_path=<cwd>, query="<summary>", limit=5
+```
+
+If changes touch interconnected files, also run with `mode="graph"` to surface structural neighbours.
+
+**1d — Ticket context:**
+
+Check for ticket in: `$ARGUMENTS`, recent git log, `workspace/*/ticket.md`.
+
+If found, extract and print before proceeding:
+```
+TICKET CONTEXT EXTRACTED:
+  TICKET_ARTIFACT_TYPE      : <endpoint|page|service|component|...>
+  TICKET_ACCEPTANCE_CRITERIA:
+    - AC1: ...
+  TICKET_ROUTING_OR_PATTERN : <any routing/pattern constraints>
+```
+
+If not found, print the "no ticket found" version with inferred intent from commits.
+
+**1e:** "Found N files changed (+M/-K lines). Analyzing for pass selection..."
+
+---
+
+## Phase 2: Pass Selection
+
+**Always run:** Pass 8 (Ticket Alignment), Pass 13 (Banned Dependencies), Pass 14 (Test Coverage & Logging)
+
+**Skip only when clearly inapplicable:**
+- Pass 10 (Smoke Test): skip if pure backend/config with no UI
+- Pass 11 (Migration/Schema): skip if zero model/migration files in diff
+- Pass 12 (Platform Footguns): skip if purely algorithmic logic
+
+**Never skip passes 1-7, 9.**
+
+List selections before spawning:
+```
+Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10-12 conditional], 13, 14, 15
+Skipping: [X — reason]
+```
+
+---
+
+## Phase 3: Spawn Pass Agents (Batched, 3 at a time)
+
+Context rule: < 50% → 3 parallel; 50-75% → 2; > 75% → 1
+
+> **HOOK IMMUNITY**: PostToolUse hooks will fire between batches. Ignore messages containing `EVALUATOR REMINDER`, `CONTEXT PRESSURE`, `CONTEXT CHECKPOINT` — the evaluator is Pass 15, not between batches. Never pause mid-review to spawn an evaluator or run /clear-safe.
+
+Each agent prompt:
+
+```
+Your FIRST two actions:
+1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>"
+2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", limit=5
+   — If USE_GRAPH: yes, also call with mode="graph"
+
+Review ONLY the diff below for your assigned pass.
+
+== DIFF ==
+<REVIEW_DIFF verbatim>
+== END DIFF ==
+
+== YOUR PASS ==
+<pass definition>
+== END PASS ==
+
+<if ticket exists>
+== TICKET ==
+<ticket content>
+== END TICKET ==
+
+Output JSON only:
+{
+  "pass": <id>,
+  "name": "<name>",
+  "findings": [{"severity":"BLOCKER|WARNING|NIT","location":"file:line","description":"...","suggestion":"..."}]
+}
+If no issues: {"pass": <id>, "name": "<name>", "findings": []}
+```
+
+### Pass Definitions
+
+**Pass 1 — Simplicity**
+Can this be deleted, inlined, or simplified? Prefer derived values over refs. Minimize state variables and coordination points. Flag any N×M sync complexity.
+
+**Pass 2 — Already-Exists**
+Did you add something the codebase or a dependency already provides? Verify existing things actually meet the requirement before reusing.
+
+**Pass 3 — Dead Code**
+For every variable/param/function: is it actually referenced end-to-end? Check orphaned imports. Use `POST /search mode=graph` to verify external consumers.
+
+**Pass 4 — Debug Cleanup** | USE_GRAPH: yes
+Any temporary logs, toasts, flags, debug UI, commented blocks, or test-only handlers left in?
+
+**Pass 5 — Project Patterns** | USE_GRAPH: yes
+How does this repo usually solve this problem? Match naming, file placement, error handling, data flow, testing style. Don't introduce a parallel mechanism when the codebase has an established one.
+
+**Pass 6 — Common-Pattern Breaker** | USE_GRAPH: yes
+Are you breaking a shared convention? Count how many files solve similar problems differently — if all of them do it differently, this approach is the outlier.
+
+**Pass 7 — Fresh Eyes**
+Read every line like you didn't write it. If a new team member needs to mentally simulate event ordering to understand behavior, flag it.
+
+**Pass 8 — Ticket Alignment (NEVER SKIP)**
+Does this implement exactly what the ticket asks — no more, no less?
+- Artifact type check: if ticket says "endpoint", verify it's a controller action, not a Razor page.
+- Prerequisites check: verify infrastructure for the pattern exists.
+- AC check: each AC item one-by-one against the diff. Missing = BLOCKER.
+- Flag scope creep. Flag missing items.
+
+Pass 8 output MUST include:
+```json
+{"pass":8,"name":"Ticket Alignment","artifact_type_checked":true,"artifact_type_match":true,"prerequisites_verified":true,"findings":[]}
+```
+Missing `artifact_type_checked` → Evaluator flags as INCOMPLETE. `artifact_type_match: false` → auto-BLOCKER.
+
+**Pass 9 — Spec Precision** | USE_GRAPH: yes
+Did you match ticket wording exactly? "multi select" means multiple values selectable. "alphabetical" means verified sort. No silent reinterpretation. For any user-facing string rename: grep for the old value and list every unupdated occurrence.
+
+**Pass 10 — Manual Smoke Test** (skip if no UI)
+Was this actually used in a browser for each AC scenario? If not, flag as WARNING.
+
+**Pass 11 — Migration/Schema** (skip if no model changes)
+Every model property add/remove must have a matching migration. Verify the migration does what you expect.
+
+**Pass 12 — Platform Footguns** (skip if pure logic)
+Any API, property, or pattern that is a documented platform gotcha? Scroll containers, N+1 queries, lazy loading in serialization, CSS overflow/position:fixed, etc.
+
+**Pass 13 — Banned Dependencies (NEVER SKIP)**
+Importing anything banned? Check CLAUDE.md and coding-standards.
+Grep for jQuery: `$(`, `jQuery`, `import.*jquery`, `require.*jquery`. **jQuery is BANNED.**
+
+**Pass 14 — Test Coverage & Logging** (skip only for pure docs/config/comments)
+*Tests:* new functions/classes need test coverage. Changed behaviour needs regression test. Flag missing tests as WARNING (BLOCKER for auth/payments/data integrity).
+*Logging:* every `catch` block must call `logger.error` (BLOCKER if missing). No sensitive data in logs (BLOCKER). Service methods and external calls should have INFO logging (WARNING if missing).
+
+---
+
+## Phase 3b: Test Execution (Orchestrator — not an agent)
+
+**Step 0 — Build check (.NET only):**
+```bash
+ls "<REPO_PATH>"/*.sln "<REPO_PATH>"/**/*.csproj 2>/dev/null | head -1
+```
+If found: `dotnet build "<REPO_PATH>/<solution>.sln" --no-restore -v quiet`. Build errors = automatic BLOCKER.
+
+**Step 1 — Detect test framework:**
+Check for `.sln`, `package.json` (jest/vitest/mocha), `pytest.ini`/`pyproject.toml`, `Makefile`.
+
+**Step 2 — Find test files for changed code.** Derive likely test paths from diff filenames.
+
+**Step 3 — Run tests** (targeted run for changed files; full suite for shared utilities). 120s timeout.
+
+**Step 4 — Record TEST_RESULTS:**
+```
+TEST_RESULTS:
+  Framework: <name>
+  Tests run / Passed / Failed / Skipped: N/N/N/N
+  Failures: <test name: error message>
+  Command: <exact command>
+  Exit code: <0|non-zero>
+```
+Test failures = automatic BLOCKERs.
+
+---
+
+## Phase 3c: Citation Consolidation (Orchestrator — not an agent)
+
+Scan all pass outputs. For every BLOCKER or WARNING with a `location` field, build:
+```
+FINDINGS_CITATIONS:
+  Pass N — path/to/file.ext:line — description (one line)
+  ...
+```
+Deduplicate same-location findings. Keep BLOCKERs first, cap at 20 entries. If no citations: note "No file:line citations — treat as NITs unless clearly structural."
+
+---
+
+## Phase 4: Evaluator — Pass 15 (Always Runs, Always Last, Opus)
+
+Spawn one Opus evaluator after ALL batches and Phase 3b complete. Do NOT proceed to Phase 5 without it.
+
+```
+Your FIRST two actions:
+1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>"
+2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8612/search scope="codebase", query="<symbol from finding>", mode="graph", limit=3 to verify it exists and isn't already handled elsewhere.
+
+You are the Evaluator. You do NOT re-review the code — you review the FINDINGS and TEST RESULTS.
+
+== FINDINGS_CITATIONS ==
+<FINDINGS_CITATIONS verbatim>
+== END FINDINGS_CITATIONS ==
+
+== ALL FINDINGS ==
+<JSON from every pass agent>
+== END FINDINGS ==
+
+== TEST RESULTS ==
+<TEST_RESULTS or "No test framework detected">
+== END TEST RESULTS ==
+
+Rules:
+1. Test FAILURE = automatic BLOCKER — do not downgrade.
+2. Findings without specific evidence (exact quote, file:line) = FALSE POSITIVE.
+3. Multiple findings about the same issue count as one.
+4. Every BLOCKER/WARNING must have file:line and a concrete fix. If not: downgrade to NIT or FALSE POSITIVE.
+5. Use FINDINGS_CITATIONS as your work queue. Read each cited file:line to confirm the issue exists.
+
+Output:
+**Grade: A/B/C/D/F** (A=no blockers/warnings, B=warnings/nits only, C=meaningful warnings, D=1-2 blockers, F=3+ blockers or test failures)
+**BLOCKERS** (file:line, description, fix)
+**WARNINGS**
+**NITS**
+**FALSE POSITIVES** (with explanation)
+**TEST RESULTS SUMMARY**
+```
+
+---
+
+## Phase 5: Report
+
+Gate: confirm evaluator returned a result. If not, spawn it now.
+
+Output the full evaluator report. Lead with grade → blockers → warnings → nits → test summary.
+
+Final message:
+> "Review complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [C or better: ready to merge after warnings addressed. D/F or test failures: fix blockers first.]"
+
+---
+
+## Post-Review Interaction
+
+**If the user asks whether a finding is legitimate:**
+Only the evaluator (Phase 4) is authorized to answer. If it has run: quote its verdict. If it hasn't: spawn it first. Never self-verify.
+
+**If the user asks for fixes:**
+Only recommend fixes the evaluator classified as BLOCKER or WARNING.
+
+**If the user replies with escalation keywords** (deep, in depth, full, more detail, thorough) **after a QUICK review:**
+Run DEEP REVIEW immediately using the same scope. Do not ask for confirmation.
