@@ -87,6 +87,11 @@ MIN_CHUNK_TOKENS = 50
 DEFAULT_SEARCH_LIMIT = 5
 DEFAULT_MIN_SCORE = 0.5
 
+# Dynamic language routing: detect dominant language at index time and select the
+# best embedding model for that language family.
+# Set RAG_LANG_ROUTING=0 to disable and always use CODE_EMBEDDING_MODEL.
+LANG_ROUTING_ENABLED: bool = os.environ.get("RAG_LANG_ROUTING", "1").strip().lower() not in ("0", "false", "off")
+
 # Cross-encoder reranker — re-scores top-k codebase candidates jointly with the query.
 # Fixes near-duplicate confusions (get_content vs post_content, two "wrapper" functions).
 # CPU-compatible: ms-marco-MiniLM-L6-v2 is 22M params, ~100ms for 10 candidates on CPU.

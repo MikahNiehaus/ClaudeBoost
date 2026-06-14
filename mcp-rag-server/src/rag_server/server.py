@@ -290,7 +290,22 @@ def sync_init() -> FileWatcher:
         )
 
     store = ChromaStore(persist_dir=str(CHROMA_DIR))
-    engine = IndexingEngine(embedder=code_embedder, store=store)
+
+    # Language routing: wrap the project indexing engine with a ModelCache so
+    # each project gets the best embedding model for its dominant language.
+    from rag_server.config import LANG_ROUTING_ENABLED
+    _lang_router = None
+    if LANG_ROUTING_ENABLED:
+        from rag_server.indexing.lang_router import ModelCache
+        _lang_router = ModelCache()
+        # Seed the cache with the default code embedder so it's reused for
+        # CSN-family projects without an extra model load.
+        _lang_router._cache[CODE_EMBEDDING_MODEL] = code_embedder
+        logger.info("Language routing enabled (RAG_LANG_ROUTING=1)")
+    else:
+        logger.info("Language routing disabled (RAG_LANG_ROUTING=0)")
+
+    engine = IndexingEngine(embedder=code_embedder, store=store, lang_router=_lang_router)
     kb_engine = IndexingEngine(embedder=embedder, store=store)
 
     # Start file watcher for auto-indexing on changes
@@ -335,7 +350,7 @@ def sync_init() -> FileWatcher:
                 importlib.reload(_engine_mod)
                 importlib.reload(_search_mod)
                 importlib.reload(_ctx_mod)
-                engine = _engine_mod.IndexingEngine(embedder=code_embedder, store=store)
+                engine = _engine_mod.IndexingEngine(embedder=code_embedder, store=store, lang_router=_lang_router)
                 kb_engine = _engine_mod.IndexingEngine(embedder=embedder, store=store)
                 rag_search = _search_mod.rag_search
                 _context_mod = _ctx_mod
@@ -358,7 +373,9 @@ def _background_startup() -> None:
     asyncio coroutine.
     """
     # Start heartbeat thread immediately — ticks independently of model load time.
-    _write_heartbeat(model_loaded=False, index_ok=False)
+    # Reflect actual model load state here: sync_init() runs warmup before this
+    # background thread starts, so the model may already be loaded.
+    _write_heartbeat(model_loaded=embedder.is_loaded if embedder else False, index_ok=False)
     _start_heartbeat_thread()
 
     try:

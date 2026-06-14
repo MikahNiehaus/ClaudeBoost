@@ -156,7 +156,9 @@ Use POST http://127.0.0.1:8612/search to locate files before reading them. Never
 
 First, determine the **workspace scope** (what files the workspace touched):
 1. Read `$WORKSPACE_ABS/plan.md` — extract all `**Output artifact**:` lines to build a file list.
-2. `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10` — find related files.
+2. Run both searches to find related files (both calls are mandatory):
+   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10`
+   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, mode="graph", limit=10`
 3. Only audit files in scope. Do not audit the entire project.
 
 | FOCUS | Lenses to run |
@@ -170,14 +172,14 @@ First, determine the **workspace scope** (what files the workspace touched):
 
 ### PROJECT mode lenses
 
-Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, ...` to locate files. Never guess.
+Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, ...` to locate files. Run both `mode=vector` and `mode=graph` on each query — never guess, never run only one mode.
 
 | FOCUS | Lenses to run |
 |-------|--------------|
-| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use POST http://127.0.0.1:8612/search to find largest/most-referenced files and spot-check them. Cite file:line. |
+| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use POST http://127.0.0.1:8612/search (both mode=vector and mode=graph) to find largest/most-referenced files and spot-check them. Cite file:line. |
 | `security` | OWASP top 10 scan across project entry points and data flows. Grep for raw SQL string concatenation, eval() on user input, secrets in source. |
 | `tests` | Find source files with no corresponding test file. Report ratio of tested vs untested modules. |
-| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via POST http://127.0.0.1:8612/search. |
+| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via POST http://127.0.0.1:8612/search (both mode=vector and mode=graph). |
 | `docs` | README present and complete? Public API surface documented? Undocumented exports? |
 | `all` | All of the above |
 

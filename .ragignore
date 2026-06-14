@@ -8,5 +8,8 @@ gastown/
 # Playwright MCP page captures — not source code
 .playwright-mcp/
 
+# Benchmark datasets in mcp-rag-server/tests/data/ — 21k+ files, not source code
+data/
+
 # Scripts that are generated or vendored (add more as needed)
 # example: vendor/

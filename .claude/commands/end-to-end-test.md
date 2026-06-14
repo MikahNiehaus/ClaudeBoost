@@ -885,7 +885,9 @@ Legitimate uses: async background jobs, webhooks to external services, audit log
 NOT legitimate: UI shows a success toast or list update — use the UI instead.
 
 Protocol:
-1. `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service")` to find the server-side function handling the operation. Add `mode="graph"` if you need to trace which module calls this function (i.e., finding the caller chain, not just the function itself.
+1. Run both searches to find the server-side function handling the operation:
+   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service"` — semantic match
+   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service", mode="graph"` — caller chain and module wiring
 2. `Read` the target file
 3. Insert: `console.log('[E2E-TEMP] TC-NNN: [description]');` after the operation
 4. Perform the browser action

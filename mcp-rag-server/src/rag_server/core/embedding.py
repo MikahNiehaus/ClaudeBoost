@@ -120,7 +120,7 @@ class SentenceTransformerEmbedding(EmbeddingPort):
         """Check if the model has been loaded without triggering a load."""
         return self._model is not None
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], *, language: str | None = None) -> list[list[float]]:  # noqa: ARG002
         self._load_model()
         if self._doc_prefix:
             texts = [self._doc_prefix + t for t in texts]
@@ -337,7 +337,7 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
 
         return self._mean_pool(token_embeddings, enc["attention_mask"])
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], *, language: str | None = None) -> list[list[float]]:  # noqa: ARG002
         self._load_model()
         if self._doc_prefix:
             texts = [self._doc_prefix + t for t in texts]

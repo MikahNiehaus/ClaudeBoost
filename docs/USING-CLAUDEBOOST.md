@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 106 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 44 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 106 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 27 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -14,7 +14,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 ## 2. Getting started
 
-Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 44 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
+Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 27 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
 Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 
@@ -31,7 +31,7 @@ A typical session looks like this:
 3. **Review and approve** — in CONSULT mode, Claude pauses before adding new endpoints, tables, modules, or dependencies. It presents you with 2–3 options and their trade-offs. You pick one, add constraints if needed, then it proceeds. Approvals are logged so Claude won't re-ask about the same decision in the same session.
 4. **Wrap up** — run `/done` when the work is ready to merge.
 
-**If context fills up mid-task:** run `/clear-safe` before `/clear`. `/clear-safe` saves your workspace state so the next session can pick up exactly where you left off. In the new session, run `/boost` then `/restore`.
+**If context fills up mid-task:** run `/clear-safe` before `/clear`. `/clear-safe` saves your workspace state so the next session can pick up exactly where you left off. In the new session, run `/boost` — the SessionStart hook restores your workspace context automatically.
 
 **Complexity tiers matter.** There are three thresholds:
 - **5–10 files changed (FEATURE)**: workspace + agent delegation
@@ -40,7 +40,7 @@ A typical session looks like this:
 
 For a one-line fix or a doc update, none of that applies. The system doesn't add ceremony unless the task warrants it.
 
-**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, use `/spawn-agent` or just say "have security-agent look at this." The agents always call `POST /context` as their first action — that's how they know what domain knowledge applies to the task. You'll see it in the output; it's expected behavior, not overhead.
+**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, just tell Claude — for example, "have security-agent look at this." The agents always call `POST /context` as their first action — that's how they know what domain knowledge applies to the task. You'll see it in the output; it's expected behavior, not overhead.
 
 ---
 
@@ -52,7 +52,7 @@ Most slash commands are used internally by agents — you rarely call them direc
 |---------|---------------|
 | `/boost` | Start of every session |
 | `/workspace` | Any complex task, multi-file feature, or ticket |
-| `/code-review` | Before merging — full 15-pass review with grade |
+| `/review` | Quick A-F grade; add `--deep` for the full 15-pass parallel review |
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
 | `/end-to-end-test` | Browser-level verification of a running local app |
@@ -66,11 +66,9 @@ Everything else in the tables below is available, but most of it runs automatica
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/boost` | Connects RAG, primes the session. Run this first every time. | `/boost` |
-| `/restore` | Reloads workspace state saved by your last `/clear-safe`. Use in a fresh session after `/clear`. | `/restore` |
+| `/boost` | Connects RAG, primes the session, and restores workspace context automatically if you ran `/clear-safe` in the last session. Run this first every time. | `/boost` |
 | `/clear-safe` | Saves current workspace context before you clear. Prevents losing mid-task state. | `/clear-safe` |
 | `/handoff` | Saves session state and prepares for a fresh context. Good for long-running tasks that need a clean start. | `/handoff` |
-| `/compact-review` | Shows the critical state Claude will preserve during compaction. Run before compaction to verify nothing important gets lost. | `/compact-review` |
 
 ### Planning & Workspace
 
@@ -78,28 +76,17 @@ Everything else in the tables below is available, but most of it runs automatica
 |---------|-------------|---------|
 | `/workspace` | Creates a `workspace/[task-id]/` folder and produces a step-by-step implementation plan with agent routing. | `/workspace add OAuth login to the API` |
 | `/explore` | Full ticket deep-dive: reads the ticket, explores the codebase, and builds an implementation plan. | `/explore` (paste ticket first) |
-| `/plan-task` | Runs the planning phase without executing anything. Good when you want to review the plan before committing. | `/plan-task refactor the payment module` |
 | `/create-prd` | Generates a PRD and task checklist for large features or new subsystems (>15 source files or a new subsystem). | `/create-prd new notifications system` |
-| `/set-mode` | Sets the execution mode for a task to NORMAL or PERSISTENT. | `/set-mode PERSISTENT` |
 
-### Agent Operations
-
-| Command | What it does | Example |
-|---------|-------------|---------|
-| `/spawn-agent` | Spawns a named agent with RAG knowledge pre-loaded. | `/spawn-agent security-agent` |
-| `/list-agents` | Lists all 25 agents with their expertise domains. | `/list-agents` |
-| `/agent-status` | Shows current task status and what each agent has contributed. | `/agent-status` |
 
 ### Code Quality
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/code-review` | 15-pass parallel review of the current branch: logic, security, performance, tests, patterns, and more. | `/code-review` |
-| `/review` | Structured code review with a letter grade (A–F) and specific findings. | `/review` |
+| `/review` | Quick A-F grade by default. Add `--deep` for the full 15-pass parallel review: logic, security, performance, tests, patterns, and more. Supports `--staged`, `--branch`, `--pr <url>`. | `/review --deep` |
 | `/security-review` | Security-focused review of pending branch changes, or a full project audit with `--full`. | `/security-review --full` |
 | `/audit` | Breaks input into dimensions, spawns parallel auditors, synthesizes a verdict. Good for reviewing docs, architecture, or requirements. | `/audit` |
 | `/self-improve` | Runs ClaudeBoost's own self-improvement audit — finds gaps in the config, agents, or knowledge files. | `/self-improve` |
-| `/gate` | Compliance check before a task starts. Verifies standards, security rules, and required patterns are in place. | `/gate` |
 | `/simplify` | Reviews recent code changes for reuse opportunities, quality issues, and efficiency. | `/simplify` |
 
 ### Testing
@@ -120,53 +107,31 @@ Everything else in the tables below is available, but most of it runs automatica
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/update-docs` | Generates or refreshes project documentation in the `docs/` folder. | `/update-docs` |
 | `/init` | Creates a `CLAUDE.md` with codebase documentation for the current project. | `/init` |
-| `/generate-agents-md` | Generates an `AGENTS.md` from `CLAUDE.md` for cross-tool AI compatibility (Cursor, Copilot, etc.). | `/generate-agents-md` |
 | `/visualize` | Generates an interactive architecture board and opens it in the browser. | `/visualize` |
 
 ### Git & Workflow
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/commit-message` | Generates a conventional commit message from staged changes. | `/commit-message` |
 | `/done` | Submits completed work to the merge queue. | `/done` |
-| `/dependency-update` | Safe one-at-a-time dependency update with audit, license check, and rollback plan. | `/dependency-update` |
+| `/pr-description` | Generates a PR title and description following project conventions. | `/pr-description` |
 | `/changes` | Opens an interactive explorer showing what changed and why. | `/changes` |
 
 ### Configuration
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/update-config` | Configures Claude Code settings, hooks, and permissions in `settings.json`. | `/update-config allow npm commands` |
-| `/set-permissions` | Manages project-level Claude Code permissions. | `/set-permissions` |
-| `/set-global-permissions` | Manages global Claude Code permissions in `~/.claude/settings.json`. | `/set-global-permissions` |
-| `/keybindings-help` | Customizes keyboard shortcuts in `~/.claude/keybindings.json`. | `/keybindings-help` |
-| `/statusline` | Configures the Claude Code status line display. | `/statusline` |
-| `/speak` | Toggles text-to-speech on or off. | `/speak on` |
-
-### Collaboration Modes
-
-| Command | What it does | Example |
-|---------|-------------|---------|
 | `/auto` | Switches to AUTO mode — Claude acts without consulting on architectural decisions. | `/auto prototyping a new feature` |
 | `/consult` | Returns to CONSULT mode (the default). Claude will propose before acting on architectural changes. | `/consult` |
+| `/speak` | Toggles text-to-speech on or off. | `/speak on` |
 
-### Utilities
-
-| Command | What it does | Example |
-|---------|-------------|---------|
-| `/check-task` | Validates a task folder's structure and completeness. | `/check-task` |
-| `/check-completion` | Verifies whether a task's completion criteria are met. | `/check-completion` |
-| `/mcp-builder` | Step-by-step guide for building a high-quality MCP server in TypeScript or Python. | `/mcp-builder` |
-| `/insights` | Generates a report analyzing your Claude Code session patterns and usage. | `/insights` |
-| `/team-onboarding` | Creates an onboarding guide for teammates ramping up on Claude Code. | `/team-onboarding` |
 
 ---
 
 ## 5. Agents
 
-All 25 agents are spawned automatically based on task type, or you can call them directly with `/spawn-agent`. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
+All 25 agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
 
 | Agent | What it does | Best for | Model |
 |-------|-------------|----------|-------|
@@ -195,7 +160,7 @@ All 25 agents are spawned automatically based on task type, or you can call them
 | evaluator-agent | Verify-gate — validates findings from other agents | Confirming a security or bug finding is real before it reaches you | Sonnet |
 | rag-indexing-agent | RAG index management, re-indexing advice | Diagnosing stale or broken index state | Sonnet |
 
-The `_orchestrator` meta-agent is internal — it coordinates agent spawning and doesn't appear in `/list-agents`.
+The `_orchestrator` meta-agent is internal — it coordinates agent spawning and isn't listed as a specialist agent.
 
 ### How agents are routed
 
@@ -339,7 +304,7 @@ workspace/
 
 `context.md` is the living record of everything that's happened on the task. It's updated after every significant finding — not on a schedule, but whenever something worth capturing happens: a RAG search that turns up a relevant file, a root cause identified, an architectural decision made. The sections Claude maintains are: current status, what was found and why it matters, next step, and open questions.
 
-`context.md` is what keeps tasks resumable across sessions. It's designed to survive a `/clear` — everything that would otherwise live only in context gets written here. When you run `/restore` in a new session, Claude reads `context.md` and picks up exactly where you left off, without you re-explaining the task history.
+`context.md` is what keeps tasks resumable across sessions. It's designed to survive a `/clear` — everything that would otherwise live only in context gets written here. When you run `/boost` in a new session after a `/clear-safe`, Claude reads `context.md` and picks up exactly where you left off, without you re-explaining the task history.
 
 For tasks involving UI work, `snapshots/` is where before/after screenshots go. For tasks that produce files (a generated config, a migration, a report), those land in `outputs/`. The folder structure is consistent across all tasks, so it's easy to navigate even if you haven't touched a workspace in weeks.
 
@@ -356,15 +321,14 @@ For simple bugs where the cause is obvious, Claude handles it directly without s
 ### 2. Review code or a PR
 
 ```
-/code-review
-/code-review last 3 commits
-/code-review feature-branch
-/code-review feature-branch diff main
+/review
+/review --deep
+/review --staged
+/review --branch feature-branch
+/review --pr https://github.com/org/repo/pull/42
 ```
 
-14 agents run in parallel batches, each covering a specific dimension: simplicity, dead code, debug leftovers, project patterns, common-pattern violations, fresh eyes, ticket alignment, spec precision, manual smoke test, schema migrations, platform footguns, banned dependencies, and test coverage/logging. A 15th evaluator agent (Opus) then classifies every finding — BLOCKER, WARNING, NIT, or FALSE POSITIVE.
-
-It also runs your test suite automatically against the changed files. Test failures are automatic BLOCKERs, no matter what the other passes say.
+`/review` gives you a quick A-F grade by default. Add `--deep` for the full 15-pass parallel review: 14 agents run in parallel batches, each covering a specific dimension — simplicity, dead code, debug leftovers, project patterns, common-pattern violations, fresh eyes, ticket alignment, spec precision, schema migrations, platform footguns, banned dependencies, and test coverage/logging. A 15th evaluator agent (Opus) classifies every finding: BLOCKER, WARNING, NIT, or FALSE POSITIVE.
 
 **Grade scale:**
 - A: no blockers, no warnings
@@ -375,7 +339,7 @@ It also runs your test suite automatically against the changed files. Test failu
 
 Every BLOCKER and WARNING needs a specific `file:line` citation before it reaches you. The evaluator discards anything without one — so "no issues found" is a valid and clean result.
 
-For a lighter pass with a letter grade but no parallel batches, use `/review`. For a security-only pass, use `/security-review`.
+For a security-only pass, use `/security-review`.
 
 ### 3. Start a complex task or feature
 
@@ -397,7 +361,7 @@ The planner searches your project's codebase via RAG to build the plan — it kn
 
 In CONSULT mode, any new endpoints, tables, dependencies, modules, or auth strategies trigger a proposal before code is written. You get options with trade-offs, pick one, and implementation proceeds.
 
-`context.md` is updated after every significant finding. It's how tasks survive `/clear` — run `/clear-safe` before clearing, then `/restore` in the new session to pick up exactly where you left off.
+`context.md` is updated after every significant finding. It's how tasks survive `/clear` — run `/clear-safe` before clearing, then `/boost` in the new session to pick up exactly where you left off.
 
 For large features (15+ source files or a new subsystem), use `/create-prd` first to generate a requirements document and task breakdown.
 
@@ -539,12 +503,12 @@ This happens on long sessions. The fix is:
 ```
 /clear-safe
 ```
-Then `/clear` to clear the context. In the new session:
-```
-/boost
-/restore
-```
-`/clear-safe` saves your workspace state: what task you were on, what was found, what's next, which files are relevant. `/restore` reads that state in the new session and resumes from where you left off. You don't re-explain the task.
+Then `/clear` to clear the context. In the new session, run `/boost`. The SessionStart
+hook reads the saved state automatically and resumes from where you left off — you don't
+re-explain the task.
+
+`/clear-safe` saves your workspace state: what task you were on, what was found, what's
+next, which files are relevant. Run it *before* `/clear`, not after.
 
 The key is running `/clear-safe` *before* `/clear`, not after. Once you clear the context, that information is gone if you didn't save it.
 

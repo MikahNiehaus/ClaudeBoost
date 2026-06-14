@@ -574,9 +574,9 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- PostToolUse: verify gate (command-type, non-blocking) ---
     # Replaces the old prompt-type hook which blocked batched agent flows
-    # (code-review passes ground to a halt waiting for Claude to respond).
+    # (/review --deep passes ground to a halt waiting for Claude to respond).
     # verify-gate-cmd.py emits a stderr nudge only when findings are present,
-    # and suppresses during code-review pass runs where Pass 15 handles it.
+    # and suppresses during /review --deep pass runs where Pass 15 handles it.
     _install_hook(settings, "PostToolUse", {
         "matcher": "Task",
         "hooks": [{"type": "command", "command": _py_cmd("verify-gate-cmd.py"),

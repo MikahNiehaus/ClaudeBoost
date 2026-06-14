@@ -1,7 +1,7 @@
 # ClaudeBoost — How It Works
 
 ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 25 specialist
-agents, 106 knowledge files, a local semantic RAG + GraphRAG server, and 44 slash
+agents, 106 knowledge files, a local semantic RAG + GraphRAG server, and 27 slash
 commands — all wired together through hooks.
 
 ## Directory Layout
@@ -13,7 +13,7 @@ ClaudeBoost/
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    44 slash commands
+├── .claude/commands/    27 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── docs/                Reference documentation
 └── CLAUDE.md            Orchestration rules loaded globally
@@ -103,24 +103,23 @@ reading, not reading blindly.
 
 ## Slash Commands
 
-44 commands in `.claude/commands/`. Key ones:
+27 commands in `.claude/commands/`. Key ones:
 
 | Command | Purpose |
 |---------|---------|
-| `/boost` | Start a session — RAG up, hooks verified, mode set, workspaces discovered |
+| `/boost` | Start a session — RAG up, hooks verified, mode set, workspaces restored |
 | `/rag` | Start or reconnect the RAG server |
 | `/index-project <path>` | Index a project's codebase for vector + graph search |
 | `/index-boost` | Reindex ClaudeBoost agents and knowledge |
 | `/graph <task>` | Build a Files in Scope map using vector + graph RAG |
 | `/workspace <task>` | Create a workspace and implementation plan |
-| `/code-review` | 14-pass parallel code review with evaluator verification |
+| `/review` | Quick A-F grade by default; add `--deep` for full 15-pass parallel review |
 | `/end-to-end-test <url>` | Browser E2E tests with screenshot evidence |
 | `/security-review` | OWASP-grounded security audit |
 | `/self-improve` | ClaudeBoost self-audit — finds config, agent, and knowledge gaps |
 | `/done` | Push completed work to remote |
 | `/handoff` | Save session state for a fresh context |
-| `/clear-safe` | Save state before clearing context |
-| `/restore` | Restore state from last clear-safe |
+| `/clear-safe` | Save state before clearing context (restored automatically on next `/boost`) |
 
 ## Session Flow
 

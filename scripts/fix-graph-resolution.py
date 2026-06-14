@@ -36,8 +36,8 @@ for p in root.rglob("*"):
             stem = rel.rsplit(".", 1)[0] if "." in rel else rel
             file_map[rel] = rel
             file_map[stem] = rel
-        except Exception:
-            pass
+        except Exception:  # pragma: no cover
+            pass  # pragma: no cover
 print(f"File map: {len(file_map)} entries")
 
 go_prefixes = _find_go_modules(PROJECT)

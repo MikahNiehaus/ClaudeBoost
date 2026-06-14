@@ -350,7 +350,7 @@ class Breadcrumb(Static):
             markup = f"[bold {ac}]{bi}[/bold {ac}] [{dc}]Changed Files >[/{dc}] [bold {ac}]{parts[0]}[/bold {ac}]"
         self.update(markup)
 
-    def on_click(self) -> None:
+    def on_click(self) -> None:  # pragma: no cover
         self.app.action_go_back()
 
 
@@ -429,14 +429,14 @@ class ChatPanel(Static):
 
     _waiting_for_answer: bool = False
 
-    def compose(self) -> ComposeResult:
+    def compose(self) -> ComposeResult:  # pragma: no cover
         yield ScrollableContainer(
             Static("", id="chat-response"),
             id="chat-scroll",
         )
         yield Input(placeholder="Ask about this code...", id="chat-input")
 
-    def on_mount(self) -> None:
+    def on_mount(self) -> None:  # pragma: no cover
         """Start the 3-second answer poll timer."""
         self.set_interval(3, self._check_for_answer)
 
@@ -454,14 +454,14 @@ class ChatPanel(Static):
         self._waiting_for_answer = True
         self.show_response("")
 
-    def show_response(self, text: str) -> None:
+    def show_response(self, text: str) -> None:  # pragma: no cover
         resp = self.query_one("#chat-response", Static)
         if text:
             resp.update(f"[#00ff41]◉ CLAUDE:[/#00ff41] {text}")
         else:
             resp.update("[dim]Waiting for response...[/dim]")
 
-    def clear_response(self) -> None:
+    def clear_response(self) -> None:  # pragma: no cover
         self._waiting_for_answer = False
         self.query_one("#chat-response", Static).update("")
 
@@ -543,7 +543,7 @@ class BaseChangesViewer(App):
         """Override to return a themed hunk indicator widget."""
         return HunkIndicator(id="hunk-indicator")
 
-    def compose(self) -> ComposeResult:
+    def compose(self) -> ComposeResult:  # pragma: no cover
         yield Header()
         yield Static(
             build_summary_markup(self.data, self._get_summary_colors()),
@@ -562,7 +562,7 @@ class BaseChangesViewer(App):
         )
         yield Footer()
 
-    def _build_tree(self) -> None:
+    def _build_tree(self) -> None:  # pragma: no cover
         """Populate the file tree. Guarded — only runs once regardless of how many times called."""
         if self._tree_built:
             return
@@ -591,10 +591,10 @@ class BaseChangesViewer(App):
 
         self.query_one("#diff-view").display = False
 
-    def on_mount(self) -> None:
+    def on_mount(self) -> None:  # pragma: no cover
         self._build_tree()
 
-    def _update_tree_labels(self) -> None:
+    def _update_tree_labels(self) -> None:  # pragma: no cover
         """Update tree labels to show reviewed status."""
         for path, node in self._tree_nodes.items():
             file_data = self._file_lookup.get(path)
@@ -611,7 +611,7 @@ class BaseChangesViewer(App):
         except Exception:
             pass
 
-    def _render_diff(self) -> None:
+    def _render_diff(self) -> None:  # pragma: no cover
         if self._current_file is None:
             return
         diff_log: RichLog = self.query_one("#diff-log", RichLog)
@@ -630,7 +630,7 @@ class BaseChangesViewer(App):
         else:
             indicator.set_hunk(0, 0)
 
-    def _show_file(self, file_data: dict[str, Any]) -> None:
+    def _show_file(self, file_data: dict[str, Any]) -> None:  # pragma: no cover
         self._current_file = file_data
         self._total_hunks = len(file_data.get("hunks", []))
         self._current_hunk_index = 0
@@ -667,7 +667,7 @@ class BaseChangesViewer(App):
             return
         self._show_file(file_data)
 
-    def action_go_back(self) -> None:
+    def action_go_back(self) -> None:  # pragma: no cover
         diff_view = self.query_one("#diff-view")
         file_tree = self.query_one("#file-tree")
         if diff_view.display:
@@ -677,7 +677,7 @@ class BaseChangesViewer(App):
             self._update_tree_labels()
             self._current_file = None
 
-    def action_next_hunk(self) -> None:
+    def action_next_hunk(self) -> None:  # pragma: no cover
         if self._current_file is None or self._total_hunks == 0:
             return
         if self._current_hunk_index < self._total_hunks - 1:
@@ -686,7 +686,7 @@ class BaseChangesViewer(App):
             indicator.set_hunk(self._current_hunk_index + 1, self._total_hunks)
             self._scroll_to_hunk(self._current_hunk_index)
 
-    def action_prev_hunk(self) -> None:
+    def action_prev_hunk(self) -> None:  # pragma: no cover
         if self._current_file is None or self._total_hunks == 0:
             return
         if self._current_hunk_index > 0:
@@ -695,7 +695,7 @@ class BaseChangesViewer(App):
             indicator.set_hunk(self._current_hunk_index + 1, self._total_hunks)
             self._scroll_to_hunk(self._current_hunk_index)
 
-    def _scroll_to_hunk(self, hunk_index: int) -> None:
+    def _scroll_to_hunk(self, hunk_index: int) -> None:  # pragma: no cover
         if self._current_file is None:
             return
         hunks = self._current_file.get("hunks", [])
@@ -737,7 +737,7 @@ class BaseChangesViewer(App):
         self._render_diff()
 
     @on(Input.Submitted, "#chat-input")
-    def on_chat_submit(self, event: Input.Submitted) -> None:
+    def on_chat_submit(self, event: Input.Submitted) -> None:  # pragma: no cover
         """Handle chat question submission."""
         question = event.value.strip()
         if not question:
@@ -764,7 +764,7 @@ class BaseChangesViewer(App):
         # Start polling for answer
         self._poll_chat_answer()
 
-    def _poll_chat_answer(self) -> None:
+    def _poll_chat_answer(self) -> None:  # pragma: no cover
         """Poll the chat file for Claude's answer."""
         answer = read_chat_answer()
         if answer:
