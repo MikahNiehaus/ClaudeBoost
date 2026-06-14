@@ -80,7 +80,7 @@ ClaudeBoost/
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    27 slash commands
+├── .claude/commands/    29 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── CLAUDE.md            Orchestration rules (loaded globally)
 └── docs/                Reference documentation
@@ -106,6 +106,35 @@ cd <path-to-ClaudeBoost>
 
 `scripts/setup.py` handles the rest — registers hooks globally, sets CLAUDEBOOST_HOME,
 starts the RAG server, and links all slash commands.
+
+### Uninstall
+
+`uninstall.sh` / `uninstall.bat` (or the `/uninstall` slash command) reverse `setup.py`.
+Preview first, it changes nothing:
+
+```bash
+./uninstall.sh --dry-run        # macOS / Linux  (.\uninstall.bat --dry-run on Windows)
+```
+
+Then remove. The default scope touches only ClaudeBoost's own footprint and is fully
+reversible by re-running `install.sh`:
+
+```bash
+./uninstall.sh                  # removes CB hooks, env, statusLine, permission entries,
+                                # the ~/.claude symlinks/helpers, the rag-server MCP
+                                # entry; stops the RAG server. Asks before applying.
+```
+
+Add `--purge` to also pip-uninstall `rag-server`, delete the RAG index, strip the
+netcoredbg PATH line, and deregister the shared MCP servers (mcp-debugger, playwright):
+
+```bash
+./uninstall.sh --purge
+```
+
+It never deletes the repo folder, a `~/.claude/CLAUDE.md` you wrote, slash commands you
+added yourself, or shared ML deps. Restart open Claude Code sessions afterward so they
+drop the removed hooks and commands.
 
 ### 2. Use It
 
@@ -346,10 +375,10 @@ when one is detected.
 
 ## Slash Commands
 
-27 commands organized by workflow:
+29 commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/setup` `/index-project` `/index-boost`
+`/boost` `/rag` `/setup` `/uninstall` `/index-project` `/index-boost`
 
 **Planning & Workspace**
 `/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
@@ -364,7 +393,7 @@ when one is detected.
 `/done` `/pr-description` `/changes` `/handoff` `/clear-safe`
 
 **Configuration**
-`/auto` `/consult` `/speak`
+`/auto` `/consult` `/bash-guard` `/speak`
 
 **Documentation & Visualization**
 `/visualize` `/init`
