@@ -87,6 +87,137 @@ This ensures every subsequent check and all future sessions see the latest agent
 
 ---
 
+### Check 1b — ONNX Model Export (onnx-dml device only)
+
+Only runs when `DEVICE=onnx-dml` is set in the RAG server config. Skip this check if the device is anything else (`cpu`, `cuda`, `dml`).
+
+**1b-i. Detect the configured device:**
+
+Write `${CLAUDEBOOST_HOME}/state/cb_detect_device.py` (resolve `${CLAUDEBOOST_HOME}` by running `echo "${CLAUDEBOOST_HOME}"` first if needed):
+```python
+import os
+cfg = os.path.join(os.environ.get('CLAUDEBOOST_HOME', ''), 'mcp-rag-server', '.env')
+device = 'cpu'
+try:
+    for line in open(cfg):
+        if line.startswith('DEVICE='):
+            device = line.split('=', 1)[1].strip()
+except FileNotFoundError:
+    pass
+print(device)
+```
+
+Then run:
+```bash
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/state/cb_detect_device.py"
+```
+
+If the output is NOT `onnx-dml`: print `SKIP (device=<device>, onnx-dml not required)` and move to Check 2.
+
+**1b-ii. Check if the ONNX model file exists:**
+
+Write `${CLAUDEBOOST_HOME}/state/cb_onnx_check.py`:
+```python
+import pathlib
+p = pathlib.Path.home() / '.cache' / 'rag-onnx' / 'BAAI--bge-base-en-v1.5' / 'model.onnx'
+print('EXISTS' if p.exists() else 'MISSING')
+print(str(p))
+```
+
+Then run:
+```bash
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/state/cb_onnx_check.py"
+```
+
+| Result | Meaning | Action |
+|--------|---------|--------|
+| EXISTS | **PASS** | — |
+| MISSING | ONNX model was never exported | Run auto-export below |
+
+**Auto-export (if MISSING):**
+
+Write the export script to a temp file and run it (avoids multiline python -c which is blocked by bash-guard):
+
+Write `${CLAUDEBOOST_HOME}/state/cb_onnx_export.py`:
+```python
+"""Auto-export BAAI/bge-base-en-v1.5 to ONNX for OnnxDirectMLEmbedding."""
+import sys, pathlib, warnings
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+MODEL_NAME = "BAAI/bge-base-en-v1.5"
+ONNX_DIR = pathlib.Path.home() / ".cache" / "rag-onnx" / "BAAI--bge-base-en-v1.5"
+ONNX_PATH = ONNX_DIR / "model.onnx"
+
+ONNX_DIR.mkdir(parents=True, exist_ok=True)
+print(f"Exporting {MODEL_NAME} -> {ONNX_PATH}")
+
+import torch, torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+
+class _OnnxWrapper(nn.Module):
+    def __init__(self, bert):
+        super().__init__()
+        self.bert = bert
+    def forward(self, input_ids, attention_mask, token_type_ids):
+        out = self.bert(input_ids=input_ids, attention_mask=attention_mask,
+                        token_type_ids=token_type_ids, return_dict=False)
+        return out[0], out[1]
+
+print("Loading model...")
+bert = AutoModel.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+bert.eval()
+wrapper = _OnnxWrapper(bert)
+wrapper.eval()
+
+enc = tokenizer(["export test"], return_tensors="pt", padding=True, truncation=True, max_length=64)
+dummy = (enc["input_ids"], enc["attention_mask"],
+         enc.get("token_type_ids", torch.zeros_like(enc["input_ids"])))
+dynamic_axes = {
+    "input_ids": {0:"batch",1:"seq"}, "attention_mask": {0:"batch",1:"seq"},
+    "token_type_ids": {0:"batch",1:"seq"}, "last_hidden_state": {0:"batch",1:"seq"},
+    "pooler_output": {0:"batch"},
+}
+print("Exporting (opset 14, TorchScript path)...")
+with torch.no_grad(), warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    torch.onnx.export(wrapper, dummy, str(ONNX_PATH),
+        input_names=["input_ids","attention_mask","token_type_ids"],
+        output_names=["last_hidden_state","pooler_output"],
+        dynamic_axes=dynamic_axes, opset_version=14,
+        do_constant_folding=True, dynamo=False)
+
+size_mb = ONNX_PATH.stat().st_size / 1024 / 1024
+print(f"Exported: {ONNX_PATH} ({size_mb:.0f} MB)")
+
+import onnxruntime as ort
+sess = ort.InferenceSession(str(ONNX_PATH), providers=["CPUExecutionProvider"])
+enc_np = tokenizer(["smoke test"], return_tensors="np", padding=True, truncation=True, max_length=32)
+inp_names = {i.name for i in sess.get_inputs()}
+out = sess.run(["last_hidden_state"], {k:v for k,v in enc_np.items() if k in inp_names})
+print(f"Smoke test OK - shape: {out[0].shape}")
+print("DONE")
+```
+
+Then run:
+```bash
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/state/cb_onnx_export.py"
+```
+
+This takes **1-2 minutes** on first run (model download + ONNX tracing). The 418 MB output file is permanent — subsequent `/setup` runs skip this step.
+
+After export, verify (reuse the temp file from 1b-ii):
+```bash
+"${CLAUDEBOOST_PYTHON:-python3}" "${CLAUDEBOOST_HOME}/state/cb_onnx_check.py"
+```
+
+If still MISSING after export: mark FAIL, report the error output. Do not retry — this is a torch/transformers version issue requiring manual diagnosis.
+
+---
+
 ### Check 2 — Required Hooks
 
 All seven hook types must be registered in `~/.claude/settings.json`:
@@ -363,6 +494,7 @@ Step/Check               Result
 ─────────────────────────────────────────
 Re-index ClaudeBoost RAG : OK (N files, M chunks)
 RAG server health        : OK / FAIL (<reason>)
+ONNX model (onnx-dml)    : OK / SKIP (device=cpu) / EXPORTED (N MB) / FAIL
 Required hooks           : OK (7/7) / MISSING: <list>
 State files              : OK (3/3) / MISSING: <list>
 edge-tts                 : OK / FAIL

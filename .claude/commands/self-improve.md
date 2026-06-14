@@ -359,7 +359,7 @@ Enable/disable is just creating or deleting the flag file. There is no hook to i
 
 Second token: `enable` | `disable` | `status`. Default if omitted: `status`.
 
-Third token (optional): absolute path to the workspace. Default: `C:/Users/grayw/OneDrive/prj/ClaudeBoost/workspace/coir-submission`.
+Third token (optional): absolute path to the workspace. Default: `${CLAUDEBOOST_HOME}/workspace/coir-submission` (resolve `CLAUDEBOOST_HOME` via `echo "${CLAUDEBOOST_HOME}"` if needed).
 
 Set `GATE_DIR` to the resolved workspace path.
 Set `FLAG_FILE = GATE_DIR/.protocol_gate_enabled`.

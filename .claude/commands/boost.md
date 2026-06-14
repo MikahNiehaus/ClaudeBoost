@@ -52,8 +52,24 @@ never `$ARGUMENTS`, so the guard stays happy). The script writes
 - If `active_workspaces` has **exactly one** entry, read
   `<project_cwd>/workspace/<that-id>/context.md` and summarize where it left off
   ("Resuming task [id] — last status was [X]").
-- If `rag_ready` is `false`: tell the user "RAG did not come up. Run `/rag`, then
-  re-run `/boost`." Do not proceed with degraded context.
+- If `rag_ready` is `false`: **Auto-repair** — do not just tell the user to run
+  `/rag`. Instead, immediately run `setup.py` (which fixes deps, hooks, and state,
+  then starts the server), then re-run `boost-run.py verify` once. Only if RAG is
+  still not ready after that repair attempt, tell the user:
+  "Setup ran but RAG could not start. Check the terminal output above and run
+  `/setup` for a detailed diagnosis."
+  ```bash
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/setup.py"
+  ```
+  then re-run:
+  ```bash
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/boost-run.py" verify
+  ```
+- If `missing_hooks` is non-empty: **Auto-repair** — run `setup.py` to re-register
+  missing hooks (additive, never duplicates), then report what was fixed.
+  ```bash
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/setup.py"
+  ```
 - If `healed_scopes` is non-empty: note that those collections were rebuilt to
   match the embedding model (a model swap had left them unqueryable).
 

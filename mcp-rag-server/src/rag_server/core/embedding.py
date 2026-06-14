@@ -177,12 +177,84 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         )
         onnx_path = cache_dir / "model.onnx"
         if not onnx_path.exists():
-            raise FileNotFoundError(
-                f"ONNX model not found at {onnx_path}. "
-                f"Export it with: python -m optimum.exporters.onnx "
-                f"--model {self._model_name} {cache_dir}"
+            logger.info(
+                "ONNX model not found at %s — exporting now (one-time, ~1-2 min)…",
+                onnx_path,
             )
+            self._export_onnx(cache_dir, onnx_path)
         return str(onnx_path)
+
+    def _export_onnx(self, cache_dir, onnx_path) -> None:
+        """Export the HuggingFace model to ONNX format.
+
+        Uses a wrapper module so torch.onnx.export receives explicit positional args
+        instead of **kwargs, which avoids the 'multiple values for argument' TorchScript
+        tracing error that occurs with newer transformers BertModel signatures.
+        """
+        import torch
+        import torch.nn as nn
+        from transformers import AutoModel, AutoTokenizer
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        class _OnnxWrapper(nn.Module):
+            def __init__(self, bert):
+                super().__init__()
+                self.bert = bert
+
+            def forward(self, input_ids, attention_mask, token_type_ids):
+                out = self.bert(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    return_dict=False,
+                )
+                return out[0], out[1]  # last_hidden_state, pooler_output
+
+        logger.info("Loading base model for ONNX export: %s", self._model_name)
+        bert = AutoModel.from_pretrained(self._model_name)
+        tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+        bert.eval()
+        wrapper = _OnnxWrapper(bert)
+        wrapper.eval()
+
+        enc = tokenizer(
+            ["export calibration"],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=64,
+        )
+        dummy = (
+            enc["input_ids"],
+            enc["attention_mask"],
+            enc.get("token_type_ids", torch.zeros_like(enc["input_ids"])),
+        )
+        dynamic_axes = {
+            "input_ids":         {0: "batch", 1: "seq"},
+            "attention_mask":    {0: "batch", 1: "seq"},
+            "token_type_ids":    {0: "batch", 1: "seq"},
+            "last_hidden_state": {0: "batch", 1: "seq"},
+            "pooler_output":     {0: "batch"},
+        }
+
+        import warnings
+        with torch.no_grad(), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            torch.onnx.export(
+                wrapper,
+                dummy,
+                str(onnx_path),
+                input_names=["input_ids", "attention_mask", "token_type_ids"],
+                output_names=["last_hidden_state", "pooler_output"],
+                dynamic_axes=dynamic_axes,
+                opset_version=14,
+                do_constant_folding=True,
+                dynamo=False,
+            )
+
+        size_mb = onnx_path.stat().st_size / 1024 / 1024
+        logger.info("ONNX export complete: %s (%.0f MB)", onnx_path, size_mb)
 
     def _load_model(self):
         if self._ort_model is not None:
@@ -233,8 +305,13 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
             self._input_names = {inp.name for inp in self._ort_model.get_inputs()}
 
             # Resolve hidden dimension via a minimal test inference.
+            import numpy as _np
             test_enc = self._tokenizer(["d"], return_tensors="np", max_length=4)
             test_in = {k: v for k, v in dict(test_enc).items() if k in self._input_names}
+            # RoBERTa tokenizers don't produce token_type_ids; the ONNX export wrapper
+            # always includes it as a required input — fill with zeros when absent.
+            if "token_type_ids" in self._input_names and "token_type_ids" not in test_in:
+                test_in["token_type_ids"] = _np.zeros_like(test_in["input_ids"])
             out = self._ort_model.run(["last_hidden_state"], test_in)
             self._dim = out[0].shape[2]
             logger.info("ONNX model ready. Dimensions: %d", self._dim)
@@ -254,11 +331,14 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         - GPU barely faster than CPU → ~50% GPU
         """
         import time
+        import numpy as _np_cal
         bench_enc = self._tokenizer(
             ["Calibration sentence for throughput measurement."] * 4,
             padding=True, truncation=True, return_tensors="np", max_length=64,
         )
         bench = {k: v for k, v in dict(bench_enc).items() if k in self._input_names}
+        if "token_type_ids" in self._input_names and "token_type_ids" not in bench:
+            bench["token_type_ids"] = _np_cal.zeros_like(bench["input_ids"])
 
         def _tps(session) -> float:
             session.run(["last_hidden_state"], bench)  # warm-up (first DML call has JIT overhead)
@@ -315,6 +395,9 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         enc = self._tokenizer(texts, padding=True, truncation=True,
                               return_tensors="np", max_length=512)
         inputs = {k: v for k, v in dict(enc).items() if k in self._input_names}
+        # RoBERTa tokenizers omit token_type_ids; pad with zeros when ONNX model needs them.
+        if "token_type_ids" in self._input_names and "token_type_ids" not in inputs:
+            inputs["token_type_ids"] = np.zeros_like(inputs["input_ids"])
 
         if self._cpu_model is not None and len(texts) >= _CPU_GPU_SPLIT_THRESHOLD:
             # Split batch: GPU gets _gpu_fraction (calibrated to relative throughput),

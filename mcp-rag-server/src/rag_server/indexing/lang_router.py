@@ -158,14 +158,41 @@ class ModelCache:
         The first call for a given model_id triggers a download + load from
         HuggingFace (cached on disk after the first run). Subsequent calls
         return the cached instance immediately.
+
+        If the requested model fails to load (e.g. transformers version
+        incompatibility), logs a warning and falls back to CODE_EMBEDDING_MODEL
+        so indexing continues rather than failing every file.
         """
         if model_id in self._cache:
             return self._cache[model_id]
         with self._slot_lock(model_id):
             if model_id not in self._cache:
                 from rag_server.core.embedding import SentenceTransformerEmbedding
+                from rag_server import config
                 logger.info("ModelCache: loading %s", model_id)
-                self._cache[model_id] = SentenceTransformerEmbedding(model_name=model_id)
+                try:
+                    emb = SentenceTransformerEmbedding(model_name=model_id)
+                    # Force the lazy _load_model() now so any incompatibility
+                    # (e.g. transformers version kwarg mismatch) surfaces here
+                    # where we can catch it, rather than later inside embed().
+                    emb.embed(["warmup"])
+                    self._cache[model_id] = emb
+                except Exception as exc:
+                    fallback = config.CODE_EMBEDDING_MODEL
+                    if model_id != fallback:
+                        logger.warning(
+                            "ModelCache: %s failed to load (%s) — falling back to %s",
+                            model_id, exc, fallback,
+                        )
+                        # Load or reuse the fallback, then cache under both names
+                        # so we never retry the failing model.
+                        if fallback not in self._cache:
+                            fb_emb = SentenceTransformerEmbedding(model_name=fallback)
+                            fb_emb.embed(["warmup"])
+                            self._cache[fallback] = fb_emb
+                        self._cache[model_id] = self._cache[fallback]
+                    else:
+                        raise
         return self._cache[model_id]
 
     def loaded_models(self) -> list[str]:
