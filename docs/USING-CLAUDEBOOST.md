@@ -56,7 +56,7 @@ Most slash commands are used internally by agents — you rarely call them direc
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
 | `/end-to-end-test` | Browser-level verification of a running local app |
-| `/research-rag` | Before implementing against an external API or unfamiliar library |
+| `/research-task` | Before implementing against an external API or unfamiliar library — pass URLs for manual curation or `--approve` for the approval gate |
 
 Everything else in the tables below is available, but most of it runs automatically — you won't need to invoke it by name unless you have a specific reason.
 
@@ -101,7 +101,7 @@ Everything else in the tables below is available, but most of it runs automatica
 |---------|-------------|---------|
 | `/index-project` | Indexes your project's source code for semantic search. Run once per project, then again after major structural changes. | `/index-project /path/to/myapp` |
 | `/index-boost` | Reindexes ClaudeBoost's own agents and knowledge bases. Run after pulling a ClaudeBoost update. | `/index-boost` |
-| `/research-rag` | Builds a workspace-scoped research index from URLs and PDFs, then queries it during implementation. | `/research-rag Stripe webhook integration` |
+| `/research-task` | Auto-discovers and indexes sources for a task from ticket entities. Pass URLs to curate sources manually; add `--approve` for the approval gate. | `/research-task my-workspace https://docs.stripe.com/webhooks` |
 
 ### Documentation
 
@@ -422,27 +422,25 @@ For a dedicated security pass on your current branch changes, use `/security-rev
 ### 6. Research an external API or library before implementing
 
 ```
-/research-rag my-feature-workspace Stripe Connect integration
-/research-rag my-feature-workspace https://docs.stripe.com/connect https://docs.stripe.com/api
+/research-task my-feature-workspace
+/research-task my-feature-workspace https://docs.stripe.com/connect https://docs.stripe.com/api
+/research-task my-feature-workspace --approve
 ```
 
 Builds a per-task research index from external sources and makes it searchable during implementation.
 
-**Build phase:**
-1. Searches for relevant docs if you don't provide URLs directly (prioritizes official docs, GitHub, MDN, OWASP)
-2. Shows you a source table with tier ratings (A = official docs/arxiv; B = Stack Overflow, vendor blogs; C = personal blogs — flagged for your approval)
-3. Waits for you to approve the source list before indexing anything
-4. Indexes approved sources into `workspace/[task-id]/.rag-index/research/`
-5. Runs an evaluator to verify the index is non-empty and search-ready
+**Automatic mode** (no URLs, no `--approve`): reads the ticket, extracts entities from the ticket, your project's dependency manifest, and the codebase graph, then runs multi-angle web searches across up to 6 dimensions per entity (official docs, security, performance, migration, integration, pitfalls). Indexes without pausing. Good for routine pre-task research.
 
-**During implementation:**
+**Manual mode** (pass URLs or `--approve`): discovers sources the same way, then shows a source table with tier ratings (A = official docs/arxiv; B = Stack Overflow, vendor blogs; C = personal blogs). Waits for you to approve the list before indexing. You can also paste extra URLs to add to the list.
+
+**After indexing:**
 Both of these searches are mandatory on every query — the skill enforces it:
 - `POST /search scope=research` — finds content from the indexed external docs
 - `POST /search scope=codebase mode=graph` — finds structural neighbors in your own project
 
 Research finds external context the codebase doesn't have. Graph search finds what imports or inherits from the code you're about to touch. They're complementary.
 
-The index is scoped to the task — it doesn't pollute the global ClaudeBoost RAG or other task workspaces. Re-running the same task-id is safe; unchanged sources are skipped.
+The index is scoped to the task — it doesn't pollute the global ClaudeBoost RAG or other task workspaces. Re-running the same task-id is incremental; unchanged sources are skipped.
 
 PDF support is automatic — pass a PDF URL directly and it gets chunked. If it's a scanned image PDF (0 chunks), you'll need an OCR'd version.
 

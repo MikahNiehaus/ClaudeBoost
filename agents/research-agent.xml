@@ -100,6 +100,15 @@
   </tier>
 </source-credibility>
 
+<domain-tier-system>
+  <!-- Quick classification for web sources during source-discovery -->
+  <tier name="A" action="auto-include">arxiv, github.com, official vendor/project docs</tier>
+  <tier name="B" action="include-by-default">stackoverflow, MDN, vendor engineering blogs, readthedocs</tier>
+  <tier name="C" action="flag-for-review">medium.com, personal blogs, community forums without citations</tier>
+  <tier name="Skip" action="exclude-silently">paywalled content, social media, SEO/marketing landing pages</tier>
+  <source-cap>Never index more than 20 URLs in a single research pass without explicit user consent</source-cap>
+</domain-tier-system>
+
 <anti-hallucination-checklist>
   <check>Every factual claim has a cited source</check>
   <check>Sources were actually accessed, not assumed</check>
@@ -110,6 +119,14 @@
   <check>No speculation presented as fact</check>
   <check>Information recency noted</check>
 </anti-hallucination-checklist>
+
+<quality-checks>
+  <check>At least one Tier A or Tier B source included in findings</check>
+  <check>Every key claim cross-referenced across 2+ sources</check>
+  <check>Confidence level assigned to each finding</check>
+  <check>Source table populated with authority and recency</check>
+  <check>Uncertainties and gaps explicitly called out</check>
+</quality-checks>
 
 <output-format><![CDATA[
 ## Research Report

@@ -60,6 +60,26 @@
         Sites requiring login to read content
       </signals>
     </tier>
+
+    <acceptance-criteria>
+      <description>Standard thresholds for rating research coverage confidence. Use these in research-brief.md Coverage Summary.</description>
+      <level name="High">
+        <threshold>3 or more Tier A sources covering this angle, published within 2 years</threshold>
+        <or>2 Tier A sources + explicit consensus (no contradictions found)</or>
+      </level>
+      <level name="Medium">
+        <threshold>1-2 Tier A sources, OR 2+ Tier B sources with no contradictions</threshold>
+        <note>Sufficient for most implementation decisions. Flag if topic is security-critical.</note>
+      </level>
+      <level name="Low">
+        <threshold>Fewer than 2 reputable sources, OR sources with significant contradictions</threshold>
+        <action>Note this explicitly in research-brief.md Gaps section. Do not suppress low-confidence findings — surface them so implementers can decide.</action>
+      </level>
+      <level name="None">
+        <threshold>Zero Tier A/B sources found after 1 retry</threshold>
+        <action>Mark angle as "No authoritative source found" in brief. Do not fabricate or infer coverage from Tier C sources alone.</action>
+      </level>
+    </acceptance-criteria>
   </source-quality-tiers>
 
   <pdf-vs-url>
@@ -95,6 +115,17 @@
       (a) blocked/paywalled, (b) image-only PDF, (c) a redirect page with no content.
       Investigate before trusting that source.
     </quality-signal>
+
+    <url-retry-strategy>
+      <trigger>URL returns fewer than 5 chunks AND domain is Tier A or B</trigger>
+      <actions>
+        <action>Check if URL redirects — follow the final URL and re-index that instead</action>
+        <action>Try the root domain docs page instead of the deep-linked page</action>
+        <action>If PDF: check for an HTML version of the same document</action>
+        <action>Hard cap: 1 retry per URL. If still under 5 chunks, mark as "sparse" in brief and continue</action>
+      </actions>
+      <note>A sparse Tier A source is still worth keeping — even 2-3 chunks from official docs beats 20 chunks from a blog post.</note>
+    </url-retry-strategy>
   </chunking-guidelines>
 
   <query-strategies>
@@ -126,6 +157,33 @@
       Agents MUST NOT cite a file:line or claim a source says something based solely on a
       result with score below 0.6. Read and confirm the content before citing.
     </score-threshold>
+
+    <query-refinement-playbook>
+      <description>When initial search returns fewer than 3 Tier A/B sources for an angle, escalate specificity in one retry. Hard cap: 1 retry per angle.</description>
+      <escalation-pattern>
+        <level name="broad">Start specific but not version-pinned — e.g. "React useEffect cleanup"</level>
+        <level name="narrower">Add qualifier or context — e.g. "React useEffect cleanup async subscriptions"</level>
+        <level name="version-pinned">Add version + specific API — e.g. "React 18 useEffect cleanup AbortController pattern"</level>
+      </escalation-pattern>
+      <examples>
+        <example topic="authentication">
+          <attempt-1>authentication best practices OWASP</attempt-1>
+          <attempt-2>OAuth2 PKCE authorization code flow security</attempt-2>
+          <attempt-3>OAuth2 PKCE SHA-256 code_verifier JavaScript implementation</attempt-3>
+        </example>
+        <example topic="database migration">
+          <attempt-1>database migration patterns zero downtime</attempt-1>
+          <attempt-2>PostgreSQL migration zero downtime blue-green deployment</attempt-2>
+          <attempt-3>PostgreSQL 15 schema migration backward compatible add column nullable</attempt-3>
+        </example>
+        <example topic="framework library">
+          <attempt-1>FastAPI dependency injection tutorial</attempt-1>
+          <attempt-2>FastAPI dependency injection testing mock override</attempt-2>
+          <attempt-3>FastAPI 0.100 Depends override pytest integration test pattern</attempt-3>
+        </example>
+      </examples>
+      <rule>Never retry more than once. If the refined query still returns no Tier A/B sources, note the gap in the research brief and continue. "No authoritative source found" is a valid finding.</rule>
+    </query-refinement-playbook>
   </query-strategies>
 
   <workspace-scoping>

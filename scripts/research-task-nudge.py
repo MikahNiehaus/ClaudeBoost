@@ -22,10 +22,27 @@ from pathlib import Path
 
 BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
 
-TASK_KEYWORDS = (
-    "workspace", "/workspace", "ticket", "implement", "build", "fix",
+# HIGH urgency: these topics almost always need external research before implementation
+HIGH_URGENCY_KEYWORDS = (
+    "integration", "api", "migrate", "migration", "upgrade", "authentication",
+    "authorization", "oauth", "jwt", "database schema", "third-party",
+    "webhook", "payment", "stripe", "twilio", "sendgrid", "external service",
+    "compliance", "gdpr", "hipaa", "security audit", "vulnerability",
+)
+
+# LOW urgency: research may help but isn't critical
+LOW_URGENCY_KEYWORDS = (
+    "workspace", "/workspace", "ticket", "implement", "build",
     "feature", "task", "research", "investigate", "pihole", "pi-hole",
     "set up", "setup", "install", "configure",
+    "endpoint", "component", "page", "model", "service", "handler",
+    "controller", "workflow", "add", "create",
+)
+
+# These never need external research — skip the nudge entirely
+SKIP_KEYWORDS = (
+    "fix typo", "rename", "refactor", "cleanup", "format", "lint",
+    "update comment", "fix test", "bump version",
 )
 
 
@@ -46,9 +63,20 @@ def _research_indexed(workspace_path: str) -> bool:
     return any(research_dir.iterdir())
 
 
-def _prompt_suggests_task(prompt: str) -> bool:
+def _prompt_suggests_task(prompt: str) -> str:
+    """Return 'high', 'low', or '' based on keyword tier match.
+
+    Checks skip keywords first — if matched, returns '' so the nudge is suppressed.
+    Then checks high urgency, then low urgency.
+    """
     lower = prompt.lower()
-    return any(kw in lower for kw in TASK_KEYWORDS)
+    if any(kw in lower for kw in SKIP_KEYWORDS):
+        return ""
+    if any(kw in lower for kw in HIGH_URGENCY_KEYWORDS):
+        return "high"
+    if any(kw in lower for kw in LOW_URGENCY_KEYWORDS):
+        return "low"
+    return ""
 
 
 def main() -> int:
@@ -79,14 +107,25 @@ def main() -> int:
         }))
         return 0
 
-    if not ws_path and _prompt_suggests_task(user_prompt):
-        # No workspace yet, but prompt looks like task work — one-time hint
-        print(json.dumps({
-            "additionalContext": (
-                "RESEARCH REMINDER: If this is a new task, run /workspace first to create a "
-                "workspace, then /research-task to index relevant docs before agents start work."
-            )
-        }))
+    if not ws_path:
+        tier = _prompt_suggests_task(user_prompt)
+        if tier == "high":
+            print(json.dumps({
+                "additionalContext": (
+                    "⚡ research-task recommended: This task involves external integrations or "
+                    "security-sensitive work — external docs are almost always needed. Run "
+                    "/workspace first, then `/research-task [workspace-id]` before delegating "
+                    "to implementation agents."
+                )
+            }))
+        elif tier == "low":
+            print(json.dumps({
+                "additionalContext": (
+                    "💡 Consider running /workspace first, then `/research-task [workspace-id]` "
+                    "— it'll automatically find relevant docs for this task and give agents "
+                    "better context."
+                )
+            }))
         return 0
 
     return 0

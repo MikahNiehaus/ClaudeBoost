@@ -116,7 +116,7 @@ def main() -> int:
                     nudges.append(
                         "[agent-spawn nudge] Active workspace detected but workspace_path is not in the spawn prompt. "
                         f"Include workspace_path=\"{ws_path}\" in the context call so the agent "
-                        "receives Tier 3c workspace research (task-specific docs indexed by /research-rag)."
+                        "receives Tier 3c workspace research (task-specific docs indexed by /research-task)."
                     )
             except Exception:
                 pass

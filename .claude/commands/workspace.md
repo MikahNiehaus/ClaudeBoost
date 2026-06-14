@@ -350,7 +350,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/review` | Code review — quick A-F grade by default; add `--deep` for full 15-pass parallel review |
 | `/security-review` | Security-focused review of pending branch changes |
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
-| `/research-rag <topic>` | Build a research RAG from URLs/PDFs/docs, then query it during implementation |
+| `/research-task [workspace-id] [url1 url2 ...]` | Auto-discover and index sources for a task — pass URLs to curate manually, add `--approve` for the approval gate |
 | `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8612/search with scope="codebase"` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
@@ -486,11 +486,11 @@ If no entities are found in the ticket, or the project is not indexed: skip sile
 
 ## Phase 4.5: Research Primer
 
-For any ticket-based task (Feature, Bug Fix, Architecture, or Research work type), suggest running `/research-rag` to build Tier 3c before handing off to implementation agents.
+For any ticket-based task (Feature, Bug Fix, Architecture, or Research work type), suggest running `/research-task` to build Tier 3c before handing off to implementation agents.
 
 Tell the user:
 
-> "Before I spawn implementation agents, run `/research-rag $WORKSPACE_ID` to build a task-specific research index (Tier 3c). Agents get those docs automatically via `/context`. Skip this if the task is a simple config change or typo fix with no external dependencies."
+> "Before I spawn implementation agents, run `/research-task $WORKSPACE_ID` to build a task-specific research index (Tier 3c). Agents get those docs automatically via `/context`. Add URLs as arguments to curate sources manually (`/research-task $WORKSPACE_ID https://...`). Skip this if the task is a simple config change or typo fix with no external dependencies."
 
 Do NOT block on this — if the user wants to skip it, proceed to Phase 5.
 

@@ -207,7 +207,7 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 |---------|--------|
 | Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
 | Complex feature | Workspace + sweep-then-verify + agents |
-| Before delegating agents | Run `/research-rag [task-id]` to build Tier 3c workspace research — agents get task-specific docs auto-loaded via `/context` |
+| Before delegating agents | Run `/research-task [task-id]` to build Tier 3c workspace research — agents get task-specific docs auto-loaded via `/context`. Add URLs as arguments to curate sources manually; add `--approve` for the approval gate. |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
 | New architecture | Spawn architect-agent (Opus) with SOLID review |
 | Visualize architecture | `/visualize` — interactive board in browser (self-map for ClaudeBoost, project-map for others) |

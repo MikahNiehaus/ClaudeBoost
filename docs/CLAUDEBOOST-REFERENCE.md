@@ -1378,7 +1378,7 @@ Agent reads and internalizes before taking any action
 **Content:** E2E philosophy (verify user's experience, not developer's intent; every test reproducible by human at browser; honest FAIL > fabricated PASS); anti-cheat patterns (catalog of shortcuts that produce false results); intelligent test generation via equivalence partitioning and boundary value analysis; evidence collection requirements (snapshot-first, screenshot with red annotation overlay); used exclusively by e2e-agent
 
 ### 4.45 research-rag.xml
-**Triggers:** research RAG, workspace RAG, external source indexing, per-task research, /research-rag, index external docs, research-rag-agent  
+**Triggers:** research RAG, workspace RAG, external source indexing, per-task research, /research-task, index external docs, research-rag-agent  
 **Domain:** Per-task workspace-scoped research RAG guidelines  
 **Content:** When to use (unfamiliar libraries/frameworks, security patterns, architecture decisions, compliance requirements, algorithm research, third-party API integration) vs not-for (project code — use codebase RAG; debugging errors; questions covered by ClaudeBoost knowledge bases); 4 source quality tiers (A=auto-trust: arxiv/github/official vendor docs/MDN/IETF/NIST/OWASP; B=include-by-default: stackoverflow/dev.to/vendor engineering blogs; C=show-ask: medium/substack/personal blogs; skip=exclude: paywalls/social media/SEO spam); PDF vs URL decision rules (`.pdf` extension or Content-Type → PDF path; GitHub blob → HTML path; arxiv.org/abs → HTML, /pdf → PDF); chunking guidelines (512 tokens/chunk ≈400 words, split on H2/H3 headings, min 40 tokens, code blocks preserved intact); query strategies (specific concept-level queries, 2-3 narrow queries for complex topics, combine with codebase RAG); workspace scoping (per-task ChromaDB at `workspace/[task-id]/.rag-index/research/`, does not share with global ClaudeBoost RAG or other tasks); 6 anti-patterns (index-without-reading, over-indexing >20 URLs, single-domain-bias, skip-chunk-quality-check <5 chunks signals failed fetch, research-instead-of-code, stale-research across tasks)
 
@@ -1554,17 +1554,21 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.14 /research-rag <task-id> [topic] [url1 url2 ...]
-**File:** `.claude/commands/research-rag.md`  
-**Description:** Build a per-task workspace-scoped research RAG from external sources (web pages, PDFs, docs)  
-**Agent:** `research-rag-agent` (weight: lightweight)  
+### 5.14 /research-task [workspace-id] [--approve] [url1 url2 ...]
+**File:** `.claude/commands/research-task.md`  
+**Description:** Auto-discover and index sources for a task based on ticket entities. Runs fully automated by default; add `--approve` or pass URLs for the manual approval gate (formerly `/research-rag`).  
 **Knowledge:** `knowledge/research-rag.xml`  
 **Phases:**
-- Phase 0: Parse args (task-id, topic, seed URLs), create workspace, read context.md for topic if empty
-- Phase 1: Source discovery — 2-3 WebSearch queries, score by domain tier (A: auto-include, B: include, C: flag, Skip: exclude silently)
-- Phase 2: User approval gate — show source table, wait for "all" / "skip N,M" / additional URLs before indexing
-- Phase 3: Index — call `rag_index_research` with approved sources + workspace_path; report chunks per source
-- Phase 4: Verify — `rag_search scope=research` with representative query; show top 3 results  
+- Phase 0: Resolve workspace, extract entities from ticket + dependency manifests + codebase graph; collect any seed URLs from arguments
+- Phase 1: RAG health check
+- Phase 2: Simplicity guard — skip if task has no external dependencies
+- Phase 3: Multi-angle search — up to 6 angles per entity (official docs, security, performance, migration, integration, pitfalls)
+- Phase 3b: Gap detection retry — one retry per angle if no Tier A/B source found
+- Phase 3c: Manual URL mode — if `SEED_URLS` non-empty or `--approve` passed, show source table and wait for user approval before indexing
+- Phase 4: Index via `POST /index_research`; collect per-source chunk counts
+- Phase 5: Write `research-brief.md`; update `context.md` with research sources
+- Phase 6: Evaluator pass — verify source chunks > 0, coverage confidence
+- Phase 7: Final report  
 - Phase 5: Update context.md with "Research Sources" section (URLs, format, chunk counts)  
 **Domain tiers:** A = arxiv, github, official docs, MDN, OWASP, NIST; B = stackoverflow, vendor engineering blogs; C = medium, personal blogs; Skip = paywalled, social media  
 **Index location:** `workspace/[task-id]/.rag-index/research/` (per-task, not shared with ClaudeBoost RAG or codebase index)  

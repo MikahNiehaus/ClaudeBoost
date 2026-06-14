@@ -7,7 +7,7 @@ breakdown with token budgets, and Tier 3c status (EXISTS vs NOT BUILT).
 
 This gives Claude a clear picture of what context is available before it
 calls POST /context or spawns agents. When Tier 3c is missing, it nudges
-to run /research-rag before delegating to implementation agents.
+to run /research-task before delegating to implementation agents.
 
 Silent when no workspace is active.
 """
@@ -103,8 +103,8 @@ def main() -> int:
         t3c_line = f"  Tier 3c  Task research           ~400 tok  [EXISTS - {t3c_files} index files]\n"
         t3c_action = "Tier 3c is ready. Task research auto-loads when workspace_path is in /context.\n"
     else:
-        t3c_line = f"  Tier 3c  Task research           ~400 tok  [NOT BUILT - run /research-rag {workspace_id}]\n"
-        t3c_action = f"Tier 3c is NOT BUILT. Run /research-rag {workspace_id} before delegating to implementation agents.\n"
+        t3c_line = f"  Tier 3c  Task research           ~400 tok  [NOT BUILT - run /research-task {workspace_id}]\n"
+        t3c_action = f"Tier 3c is NOT BUILT. Run /research-task {workspace_id} before delegating to implementation agents.\n"
 
     project_info = ""
     if project_path:

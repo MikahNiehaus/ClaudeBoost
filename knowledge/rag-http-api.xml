@@ -223,10 +223,10 @@ print(f"{ctx['total_tokens_approx']} tokens | tiers: {ctx['tier_summary']}")
       </example-python>
       <note>
         workspace_path enables Tier 3c only when a research index exists at
-        workspace_path/.rag-index/research/. Build it with /research-rag (primary —
-        interactive, user-approved sources, evaluator-verified) or /research-task
-        (auto-seeded shortcut). Then pass workspace_path to /context and the
-        research loads automatically.
+        workspace_path/.rag-index/research/. Build it with /research-task
+        (auto-seeded from ticket entities, or pass URLs for manual curation — add
+        --approve for the interactive approval gate). Then pass workspace_path to
+        /context and the research loads automatically.
       </note>
     </endpoint>
 

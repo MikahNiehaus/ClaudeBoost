@@ -62,12 +62,13 @@ endpoint returns `"status": "ready"` before the model is fully warmed.
 
 ---
 
-## research-rag vs research-task: same Tier 3c path, different workflows
+## /research-rag is retired — use /research-task instead
 
-Both `/research-rag` and `/research-task` write to `workspace/[task-id]/.rag-index/research/`.
-The difference: `/research-rag` pauses for user approval of a source list (manual curation),
-`/research-task` auto-discovers sources from ticket entities (no approval pause).
-Neither is "ephemeral" — both accumulate across re-runs.
+`/research-rag` was removed. Its functionality is now in `/research-task`:
+- Default (no URLs, no `--approve`): auto-discovers sources from ticket entities, no approval pause
+- With URLs or `--approve`: shows a source table and waits for approval before indexing — same gate as the old `/research-rag`
+
+Both modes write to `workspace/[task-id]/.rag-index/research/` and accumulate across re-runs.
 
 ---
 

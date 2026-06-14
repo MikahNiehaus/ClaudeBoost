@@ -472,7 +472,7 @@ def main() -> int:
         "Do not let findings accumulate in context only. "
         "(G) Dynamic RAG tiers — POST /context loads knowledge in layers. "
         "project_path enables Tier 3 stack-boosted knowledge + Tier 4 codebase search. "
-        "workspace_path enables Tier 3c task research (built by /research-rag). "
+        "workspace_path enables Tier 3c task research (built by /research-task). "
         "Omit a param and that tier is skipped. "
         "Always pass both when you have them. "
         "If no workspace exists yet, pass project_path alone to get Tier 3 + Tier 4. "
