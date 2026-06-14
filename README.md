@@ -104,6 +104,35 @@ cd <path-to-ClaudeBoost>
 `scripts/setup.py` handles the rest — registers hooks globally, sets CLAUDEBOOST_HOME,
 starts the RAG server, and links all slash commands.
 
+### Uninstall
+
+`uninstall.sh` / `uninstall.bat` (or the `/uninstall` slash command) reverse `setup.py`.
+Preview first, it changes nothing:
+
+```bash
+./uninstall.sh --dry-run        # macOS / Linux  (.\uninstall.bat --dry-run on Windows)
+```
+
+Then remove. The default scope touches only ClaudeBoost's own footprint and is fully
+reversible by re-running `install.sh`:
+
+```bash
+./uninstall.sh                  # removes CB hooks, env, statusLine, permission entries,
+                                # the ~/.claude symlinks/helpers, the rag-server MCP
+                                # entry; stops the RAG server. Asks before applying.
+```
+
+Add `--purge` to also pip-uninstall `rag-server`, delete the RAG index, strip the
+netcoredbg PATH line, and deregister the shared MCP servers (mcp-debugger, playwright):
+
+```bash
+./uninstall.sh --purge
+```
+
+It never deletes the repo folder, a `~/.claude/CLAUDE.md` you wrote, slash commands you
+added yourself, or shared ML deps. Restart open Claude Code sessions afterward so they
+drop the removed hooks and commands.
+
 ### 2. Use It
 
 Open any project in Claude Code and run `/boost`. That starts the RAG server, primes
@@ -352,10 +381,10 @@ when one is detected.
 
 ## Slash Commands
 
-44 commands organized by workflow:
+46 commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/setup` `/index-project` `/index-boost` `/list-agents`
+`/boost` `/rag` `/setup` `/uninstall` `/index-project` `/index-boost` `/list-agents`
 
 **Planning & Workspace**
 `/workspace` `/create-prd` `/plan-task` `/explore` `/research-project` `/research-task`
@@ -373,7 +402,7 @@ when one is detected.
 
 **Configuration**
 `/auto` `/consult` `/set-mode` `/set-permissions` `/set-global-permissions`
-`/speak` `/statusline`
+`/bash-guard` `/speak` `/statusline`
 
 **Debugging & Maintenance**
 `/self-improve` `/dependency-update` `/visualize` `/check-task` `/check-completion`
