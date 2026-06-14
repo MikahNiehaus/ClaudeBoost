@@ -371,6 +371,47 @@ def _remove_superseded_hooks(settings: dict) -> None:
         _ok(f"Removed {removed} superseded prompt hook(s)")
 
 
+# Command-type hooks whose target script was removed upstream. A hook pointing at
+# a missing .py exits non-zero and BLOCKS every matching tool call, so these must
+# be stripped from old installs. git-guard.py was dropped (the static git ask-list
+# in permissions covers the same ground); its leftover hook broke every Bash git
+# command until removed. _clean_stale_hooks can't catch these because it skips
+# env-var paths ($CLAUDEBOOST_HOME/...), so we match by basename instead.
+_REMOVED_HOOK_SCRIPTS = (
+    "git-guard.py",
+)
+
+
+def _remove_deleted_script_hooks(settings: dict) -> None:
+    hooks = settings.get("hooks") or {}
+    removed = 0
+    for hook_type in list(hooks.keys()):
+        new_entries = []
+        for entry in hooks[hook_type] or []:
+            inner = entry.get("hooks") if isinstance(entry, dict) else None
+            if not inner:
+                new_entries.append(entry)
+                continue
+            healthy = []
+            for h in inner:
+                cmd = (h.get("command", "") or "") if isinstance(h, dict) else ""
+                if cmd and any(name in cmd for name in _REMOVED_HOOK_SCRIPTS):
+                    _warn(f"[CLEAN] hooks.{hook_type} - removing hook for deleted script: {cmd[:70]}...")
+                    removed += 1
+                else:
+                    healthy.append(h)
+            if healthy:
+                entry["hooks"] = healthy
+                new_entries.append(entry)
+        if new_entries:
+            hooks[hook_type] = new_entries
+        else:
+            del hooks[hook_type]
+    settings["hooks"] = hooks
+    if removed:
+        _ok(f"Removed {removed} hook(s) for deleted scripts")
+
+
 def _install_hook(settings: dict, hook_type: str, entry: dict,
                   sentinel: str, label: str) -> None:
     """Append a hook entry once. Sentinel substring identifies an existing
@@ -412,6 +453,7 @@ def _install_all_hooks(settings: dict) -> None:
     _info("\nCleaning up stale hooks...")
     _clean_stale_hooks(settings)
     _remove_superseded_hooks(settings)
+    _remove_deleted_script_hooks(settings)
 
     # --- SessionStart: workflow routing ---
     _install_hook(settings, "SessionStart", {
@@ -543,12 +585,6 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": _py_cmd("bash-guard.py")}],
     }, sentinel="bash-guard.py", label="Bash guard (command-type)")
-
-    # --- PreToolUse: git guard (asks before state-changing git commands) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash",
-        "hooks": [{"type": "command", "command": _py_cmd("git-guard.py")}],
-    }, sentinel="git-guard.py", label="git guard (command-type)")
 
     # --- PreToolUse: process-kill safety ---
     _install_hook(settings, "PreToolUse", {
