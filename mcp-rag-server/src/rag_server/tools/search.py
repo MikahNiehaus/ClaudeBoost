@@ -85,6 +85,26 @@ def rag_search(
     if scope not in VALID_SCOPES:
         return {"error": f"Invalid scope: {scope}. Valid: {VALID_SCOPES}"}
 
+    # mode=both: run vector + graph concurrently and return both result sets in one call.
+    # ONNX InferenceSession.run() is thread-safe per ONNX Runtime docs.
+    # ChromaDB opens per-call ChromaStore instances; WAL mode supports concurrent readers.
+    if mode == "both":
+        if scope != "codebase":
+            return {"error": "mode='both' requires scope='codebase'"}
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            v_fut = pool.submit(
+                rag_search, embedder, store, query, scope,
+                project_path, workspace_path, limit, min_score, "vector",
+            )
+            g_fut = pool.submit(
+                rag_search, embedder, store, query, scope,
+                project_path, workspace_path, limit, min_score, "graph",
+            )
+            v = v_fut.result()
+            g = g_fut.result()
+        return {"vector": v, "graph": g}
+
     VALID_MODES = {"vector", "graph"}
     if mode not in VALID_MODES:
         return {"error": f"Invalid mode: {mode!r}. Valid: {sorted(VALID_MODES)}"}

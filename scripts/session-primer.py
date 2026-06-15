@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,27 @@ def _get_rag_status(timeout: float = 0.2) -> dict | None:
             return json.loads(r.read())
     except Exception:
         return None
+
+
+def _get_cached_rag_status(timeout: float = 0.2) -> dict | None:
+    """GET /status with a 60s per-process cache. Skips the round-trip on every prompt."""
+    import time
+    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
+    cache_path = Path(temp) / f"claudeboost_status_cache_{os.getpid()}.json"
+    _CACHE_TTL = 60.0
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        if time.time() - float(raw.get("_ts", 0)) < _CACHE_TTL:
+            return raw.get("status")
+    except Exception:
+        pass
+    status = _get_rag_status(timeout)
+    if status is not None:
+        try:
+            cache_path.write_text(json.dumps({"_ts": time.time(), "status": status}), encoding="utf-8")
+        except Exception:
+            pass
+    return status
 
 
 def _tokenize(text: str) -> set:
@@ -333,9 +355,58 @@ def consult_mode_active(home: Path) -> bool:
         return True  # default to CONSULT on read error
 
 
-def rag_verified() -> bool:
+def _sentinel_path() -> Path:
     temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    return (Path(temp) / "claudeboost_rag_ok").exists()
+    return Path(temp) / "claudeboost_rag_ok"
+
+
+def rag_verified() -> bool:
+    return _sentinel_path().exists()
+
+
+def _try_auto_recover_rag(home: Path) -> bool:
+    """
+    Auto-recover when sentinel is missing.
+
+    First checks if the server is already up (common: sentinel deleted at SessionStart
+    but the long-running server daemon is still healthy). If it responds, writes the
+    sentinel and returns True.
+
+    If the server is down, launches rag-server-start.py in the background and writes
+    the sentinel optimistically — the server will be ready within a few seconds.
+    Returns True on launch, False only if the start script itself can't be found.
+    """
+    # Fast path: server already running — just write the sentinel
+    if _get_rag_status(timeout=1.0) is not None:
+        try:
+            _sentinel_path().touch()
+        except Exception:
+            pass
+        return True
+
+    # Slow path: server is down — launch it as a detached background process
+    start_script = home / "scripts" / "rag-server-start.py"
+    if not start_script.exists():
+        return False
+
+    python = os.environ.get("CLAUDEBOOST_PYTHON") or sys.executable
+    try:
+        kwargs: dict = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        subprocess.Popen([python, str(start_script)], **kwargs)
+        # Write sentinel optimistically — server will be up within ~5s
+        try:
+            _sentinel_path().touch()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
 
 
 def _get_home() -> Path:
@@ -490,7 +561,7 @@ def main() -> int:
     # The HTTP call blocks for up to timeout seconds and is only needed to check
     # codebase index state in the dashboard. Skip it when there's no active workspace.
     ws_info = _find_best_workspace(home, prompt)
-    rag_status = _get_rag_status() if (ws_info[1] and rag_verified()) else None
+    rag_status = _get_cached_rag_status() if (ws_info[1] and rag_verified()) else None
     workspace_reminder = _active_workspace_reminder(home, rag_status, prompt, ws_info=ws_info)
 
     def _emit(ctx: str) -> int:
@@ -540,24 +611,20 @@ def main() -> int:
     # so rag_verified() is always false on the first post-clear message. Blocking on
     # RAG here means auto-restore can never work. Inject context directly with a soft nudge.
     if clear_context and not rag_verified():
-        context = (
-            clear_context
-            + "\n\nNOTE: RAG not yet verified. Run /rag before spawning agents "
-            "or starting any investigation."
-            + "\n\n" + always_inject + "\n\n" + standing_orders
-        )
-        return _emit(context)
+        _try_auto_recover_rag(home)
+        # Fall through whether recovery succeeded or not — restore context is more important
+        # than a RAG warning on a post-clear message.
 
     if not rag_verified():
-        # RAG not verified — inject all rules plus a warning. Standing orders still fire
-        # so the user gets the full workflow brief without needing to run /rag first.
-        context = (
-            "NOTE: RAG not yet verified this session. Run /rag before spawning agents, "
-            "calling /search, or starting any multi-step investigation. "
-            "Do not self-recover by grepping or reading files — run /rag first."
-            "\n\n" + always_inject + "\n\n" + standing_orders
-        )
-        return _emit(context)
+        recovered = _try_auto_recover_rag(home)
+        if not recovered:
+            context = (
+                "NOTE: RAG could not be started automatically. Run /rag manually before spawning agents "
+                "or starting any multi-step investigation."
+                "\n\n" + always_inject + "\n\n" + standing_orders
+            )
+            return _emit(context)
+        # Auto-recovered — fall through to normal path below
 
     # RAG verified — full context, no warning needed
     base = (clear_context + "\n\n") if clear_context else ""

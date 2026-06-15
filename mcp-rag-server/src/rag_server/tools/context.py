@@ -453,6 +453,7 @@ def build_context(
             "No knowledge chunks were loaded. Increase max_tokens to at least "
             f"{agent_tokens + 500} to include guardrails and declared knowledge."
         )
+        result["truncated"] = True
     elif not agent_def:
         result["warning"] = f"Agent definition not found for {agent!r} (checked .md and .xml)."
         logger.error("Tier 0: no agent definition found for %r under %s", agent, project_root)

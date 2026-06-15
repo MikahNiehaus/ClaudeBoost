@@ -88,6 +88,51 @@ blocking pattern before assuming it's a permission issue.
 
 ---
 
+## chromadb unpatched RCE — bind to 127.0.0.1 only
+
+CVE-2026-45829 is an unauthenticated RCE affecting all chromadb >= 1.0.0. Built-in auth was
+removed in v1.0.0 and was never re-added. Any chromadb process bound to `0.0.0.0` (all
+interfaces) is exploitable by anyone on the same network with no credentials.
+
+The RAG server startup code in `mcp-rag-server/` must bind uvicorn to `127.0.0.1`, not
+`0.0.0.0`. Verify the `host=` argument in `uvicorn.run()`. If the host is `0.0.0.0` or
+missing, this is a critical misconfiguration.
+
+---
+
+## chromadb dimensionality lock — can't swap embedding models in-place
+
+Once any vector is stored in a chromadb collection, the embedding dimension is permanently
+locked. Switching embedding models (e.g. upgrading BGE or adding a new code model) requires
+deleting all affected collections and rebuilding from scratch. There is no migration path.
+
+The RAG server should store `model_name` and `model_revision` as collection metadata and
+refuse queries if they don't match the currently loaded model.
+
+---
+
+## sentence-transformers 512-token silent truncation
+
+`BAAI/bge-base-en-v1.5` silently truncates inputs beyond 512 tokens with no warning. Knowledge
+XML files in ClaudeBoost can easily exceed this. If a chunk is truncated, the stored embedding
+represents only the first 512 tokens — semantic retrieval for content in the tail fails silently.
+
+Always chunk input text to stay under `model.max_seq_length` (check at runtime) before encoding.
+
+---
+
+## normalize_embeddings=False is the wrong default for BGE + cosine collections
+
+Both the chromadb `SentenceTransformerEmbeddingFunction` wrapper and the raw
+`SentenceTransformer.encode()` call default to `normalize_embeddings=False`. BGE models
+require L2-normalized embeddings for correct cosine similarity. Without normalization, short
+documents (low magnitude) rank poorly against long documents regardless of semantic similarity.
+
+Fix: always pass `normalize_embeddings=True` to `encode()` AND create the chromadb collection
+with `metadata={"hnsw:space": "cosine"}`.
+
+---
+
 ## Workspace files are gitignored, .claudeboost/ is not
 
 `workspace/` is added to `.gitignore` by the workspace skill. `.claudeboost/knowledge/`

@@ -19,7 +19,7 @@ A RAG server indexes all of them for semantic search.
 - `POST /search` with `scope=codebase` — semantic code search
 - `POST /search` with `scope=codebase&mode=graph` — dependency and import chains
 
-**Dual-mode mandate (MANDATORY):** Every `POST /search scope=codebase` call MUST be paired with a second call using `mode=graph` on the same query. Vector finds semantic matches; graph finds structural neighbours (imports, callers, inheritance). They surface different files — never run only one.
+**Dual-mode mandate (MANDATORY):** Every codebase search MUST cover BOTH modes. Use `mode=both` in a single `POST /search scope=codebase` call — it runs vector and graph concurrently server-side and returns `{"vector": {...}, "graph": {...}}`. If mode=both is unavailable, fall back to two sequential calls (`mode=vector` then `mode=graph`). They surface different files — never run only one.
 
 **If RAG errors mid-task, fix it — never skip it.** Run `/rag` to restart the server. Do not proceed with degraded context or substitute grep/file reads.
 
