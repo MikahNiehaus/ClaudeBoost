@@ -149,8 +149,8 @@ def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = No
                     module_name = go_modules[best_mod_dir]
                     # Package import path = module_name + "/" + path-within-module
                     if best_mod_dir:
-                        # e.g. rel_path = "gastown/internal/cmd/server.go"
-                        #      best_mod_dir = "gastown", parent_slash = "gastown/internal/cmd"
+                        # e.g. rel_path = "myapp/internal/cmd/server.go"
+                        #      best_mod_dir = "myapp", parent_slash = "myapp/internal/cmd"
                         within_module = parent_slash[len(best_mod_dir):].lstrip("/")
                     else:
                         within_module = parent_slash

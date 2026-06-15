@@ -74,7 +74,7 @@ def load_ragignore(project_path: str) -> set[str]:
 
     Syntax (same philosophy as .gitignore, but directory-names only for now):
       - Lines starting with # are comments
-      - Trailing slash is optional and ignored (e.g. "gastown/" == "gastown")
+      - Trailing slash is optional and ignored (e.g. "myproject/" == "myproject")
       - Blank lines are ignored
       - Each entry is matched against directory *names* during os.walk (not full paths)
     """
