@@ -116,6 +116,13 @@ Use the Write tool to create the file, then run it:
 
 bash-guard.py enforces both — multiline `-c` strings and cat heredocs are blocked at the hook level.
 
+### Branch Creation (Non-Negotiable)
+Before creating any new git branch — including during workspace creation — STOP and ask the user for permission using AskUserQuestion. State the proposed branch name and purpose. Do not create the branch until the user confirms.
+
+After creating a workspace, explicitly tell the user: "I created branch `[branch-name]` for this workspace."
+
+This applies in every context — workspace setup, agent spawns, scripts, and direct git commands.
+
 ### Irreversible Actions (Non-Negotiable)
 Before doing ANYTHING that cannot be undone — deleting files, dropping tables, force-pushing, overwriting data, sending messages, publishing to external services, running destructive shell commands — STOP.
 
