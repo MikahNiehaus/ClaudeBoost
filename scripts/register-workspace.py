@@ -5,7 +5,7 @@ Maintains $CLAUDEBOOST_HOME/state/workspaces.json so skills like /restore
 and /clear-safe can locate project-scoped workspaces regardless of CWD.
 
 Usage:
-  python register-workspace.py <task_id> <workspace_path> [project_path]
+  python register-workspace.py <task_id> <workspace_path> [project_path] [--activate]
   python register-workspace.py --list
   python register-workspace.py --get <task_id>
 """
@@ -48,6 +48,19 @@ def register(task_id: str, workspace_path: str, project_path: str = "") -> None:
     print(f"Registered: {task_id} -> {workspace_path}")
 
 
+def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
+    p = _home() / "state" / "active-workspace.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(
+            {"workspace": task_id, "workspace_path": workspace_path, "project_path": project_path},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"Activated: {task_id}")
+
+
 def get_workspace_path(task_id: str) -> str | None:
     reg = load_registry()
     entry = reg.get(task_id)
@@ -84,7 +97,10 @@ def main() -> int:
         list_workspaces()
         return 0
 
-    if args[0] == "--get" and len(args) >= 2:
+    if args[0] == "--get":
+        if len(args) < 2:
+            print("Usage: register-workspace.py --get <task_id>", file=sys.stderr)
+            return 1
         result = get_workspace_path(args[1])
         if result:
             print(result)
@@ -92,10 +108,19 @@ def main() -> int:
         return 1
 
     if len(args) < 2:
-        print("Usage: register-workspace.py <task_id> <workspace_path> [project_path]", file=sys.stderr)
+        print("Usage: register-workspace.py <task_id> <workspace_path> [project_path] [--activate]", file=sys.stderr)
         return 1
 
-    register(args[0], args[1], args[2] if len(args) > 2 else "")
+    positional = [a for a in args if not a.startswith("--")]
+    do_activate = "--activate" in args
+
+    task_id = positional[0]
+    workspace_path = positional[1]
+    project_path = positional[2] if len(positional) > 2 else ""
+
+    register(task_id, workspace_path, project_path)
+    if do_activate:
+        activate(task_id, workspace_path, project_path)
     return 0
 
 

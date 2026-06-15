@@ -260,16 +260,11 @@ def rag_search(
                 # Graph neighbours join the wide candidate pool so the cross-encoder
                 # can score them alongside vector and BM25 hits.
                 if mode == "graph":
-                    if results:
-                        results, _graph_augmented, graph_warning = _augment_with_graph(
-                            results, idx_dir, project_store, _fetch_limit,
-                        )
-                        if graph_warning:
-                            warnings.append(graph_warning)
-                    else:
-                        warnings.append(
-                            "graph mode: skipping graph expansion because vector search returned 0 results"
-                        )
+                    results, _graph_augmented, graph_warning = _augment_with_graph(
+                        results, idx_dir, project_store, _fetch_limit,
+                    )
+                    if graph_warning:
+                        warnings.append(graph_warning)
 
                 # Cross-encoder reranking on the widened tri-modal pool, then trim to limit.
                 # Fixes near-duplicate confusions where vector scores are nearly identical.
@@ -563,9 +558,16 @@ def _augment_with_graph(
         seen_sources = {r.metadata.get("source_file", "").replace("\\", "/") for r in seed_results}
         extra: list[SearchResult] = []
 
-        # Expand top-5 seeds; depth=2 catches transitive dependencies
-        for seed in seed_results[:5]:
-            seed_file = seed.metadata.get("source_file", "").replace("\\", "/")
+        # When vector search found nothing, fall back to PageRank top-5 as seeds so
+        # graph traversal always runs when mode=graph is requested on an indexed project.
+        if seed_results:
+            graph_seeds = [(s, s.metadata.get("source_file", "").replace("\\", "/")) for s in seed_results[:5]]
+        else:
+            top_pr = sorted(raw_pr.items(), key=lambda kv: kv[1], reverse=True)[:5]
+            graph_seeds = [(None, f) for f, _ in top_pr]
+            seen_sources.update(f for _, f in graph_seeds if f)
+
+        for seed, seed_file in graph_seeds:
             if not seed_file:
                 continue
             neighbours = graph_store.get_neighbours(seed_file, depth=2)
@@ -578,7 +580,7 @@ def _augment_with_graph(
                     continue
                 chunks = project_store.get_by_source("codebase", neighbour_file)
                 pr_factor = pr_factors.get(neighbour_file, 1.0)
-                base_score = max(0.1, seed.score - 0.15)
+                base_score = max(0.1, seed.score - 0.15) if seed is not None else 0.5
                 for chunk in chunks[:3]:  # at most 3 chunks per neighbour file
                     extra.append(SearchResult(
                         content=chunk.content,

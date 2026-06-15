@@ -341,8 +341,11 @@ def build_context(
                         tier4_tokens += chunk_tokens
 
                     # --- Tier 4b: Graph structural neighbours ---
+                    # Always runs when graph.db exists — no dependency on vector results.
+                    # When vector found nothing, seeds come from PageRank top-N (most
+                    # imported files in the project) so structural context is never skipped.
                     graph_db = idx_dir / "graph.db"
-                    if graph_db.exists() and tier4_chunks:
+                    if graph_db.exists():
                         try:
                             from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore
                             graph_store = SQLiteGraphStore(graph_db)
@@ -351,8 +354,18 @@ def build_context(
                                 graph_budget = max(0, (remaining_budget - tier4_tokens) // 2)
                                 graph_tokens = 0
 
-                                for seed_chunk in tier4_chunks[:3]:
-                                    seed_file = seed_chunk["source"]
+                                if tier4_chunks:
+                                    seeds = [
+                                        {"source": c["source"], "score": c["score"]}
+                                        for c in tier4_chunks[:3]
+                                    ]
+                                else:
+                                    raw_pr = graph_store.get_all_pagerank()
+                                    top_pr = sorted(raw_pr.items(), key=lambda kv: kv[1], reverse=True)[:5]
+                                    seeds = [{"source": f, "score": 0.5} for f, _ in top_pr]
+
+                                for seed in seeds:
+                                    seed_file = seed["source"]
                                     neighbours = graph_store.get_neighbours(seed_file, depth=1)
                                     for edge in neighbours:
                                         nb_file = (
@@ -373,7 +386,7 @@ def build_context(
                                                 "source": nb_file,
                                                 "section": nb.metadata.get("section", ""),
                                                 "content": nb.content,
-                                                "score": max(0.0, seed_chunk["score"] - 0.15),
+                                                "score": max(0.0, seed["score"] - 0.15),
                                                 "tier": "codebase_graph",
                                             })
                                             graph_tokens += nb_tokens
@@ -385,7 +398,7 @@ def build_context(
 
                     # --- Tier 4c: Community summaries for files in scope ---
                     _graph_db_4c = idx_dir / "graph.db"
-                    if _graph_db_4c.exists() and tier4_chunks:
+                    if _graph_db_4c.exists() and tier4_chunks:  # tier4_chunks populated by 4b when graph.db exists AND has_graph() is True
                         try:
                             from rag_server.adapters.sqlite_graph_store import SQLiteGraphStore as _SGS4c
                             _gs4c = _SGS4c(_graph_db_4c)
