@@ -87,7 +87,7 @@ def _build_file_map(rel_paths: list[str], go_modules: dict[str, str] | None = No
     - Python __init__: "foo/bar/__init__.py" → keys "foo/bar", "foo.bar"
     - JS/TS: "foo/bar.ts" → keys "foo/bar", "foo.bar"
     - JS/TS index: "foo/index.ts" → keys "foo", "foo/index"
-    - Go: "gastown/internal/cmd/server.go" → keys "internal/cmd", "github.com/x/gastown/internal/cmd"
+    - Go: "myapp/internal/cmd/server.go" → keys "internal/cmd", "github.com/x/myapp/internal/cmd"
 
     **Suffix keys for src-layout projects**: for Python and JS/TS files, we also
     generate keys for every trailing sub-path, so that a file at

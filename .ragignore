@@ -2,9 +2,6 @@
 # Same syntax as .gitignore: one entry per line, # for comments, trailing / optional.
 # Entries match directory *names* (not full paths) during file discovery.
 
-# Gas Town runtime — ~1000 Go files unrelated to ClaudeBoost's own source
-gastown/
-
 # Playwright MCP page captures — not source code
 .playwright-mcp/
 
