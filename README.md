@@ -139,11 +139,10 @@ drop the removed hooks and commands.
 ### 2. Use It
 
 Open any project in Claude Code and run `/boost`. That starts the RAG server, primes
-the session, and shows recent workspaces. From there:
+the session, and shows active workspaces. From there:
 
 ```
 /boost                   Start a session
-/ws                      Show all workspaces for this project — description + last edited
 /index-project           Index your codebase for semantic search
 /research-project        Become an expert in the full project stack (reads deps, researches each tech deeply)
 /workspace <task>        Create a workspace + implementation plan
@@ -378,13 +377,13 @@ when one is detected.
 
 ## Slash Commands
 
-30 commands organized by workflow:
+29 commands organized by workflow:
 
 **Session & Setup**
 `/boost` `/rag` `/setup` `/uninstall` `/index-project` `/index-boost`
 
 **Planning & Workspace**
-`/ws` `/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
+`/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
 
 **Code Quality**
 `/review` `/security-review` `/audit` `/self-improve` `/simplify`
