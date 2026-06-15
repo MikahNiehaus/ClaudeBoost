@@ -548,6 +548,17 @@ def _install_all_hooks(settings: dict) -> None:
         }],
     }, sentinel="workspace-primer.py", label="workspace tier primer (command-type)")
 
+    # --- SessionStart: RAG session reset (clears sentinel for fresh session verification) ---
+    _install_hook(settings, "SessionStart", {
+        "matcher": "Always",
+        "hooks": [{
+            "type": "command",
+            "command": _py_cmd("rag-session-reset.py"),
+            "timeout": 3000,
+            "statusMessage": "Resetting RAG sentinel for fresh session verification...",
+        }],
+    }, sentinel="rag-session-reset.py", label="RAG session reset (command-type)")
+
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Task",
@@ -677,6 +688,11 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
 
+    # --- UserPromptSubmit: session primer (RAG sentinel enforcement) ---
+    _install_hook(settings, "UserPromptSubmit", {
+        "hooks": [{"type": "command", "command": _py_cmd("session-primer.py"), "timeout": 10000}],
+    }, sentinel="session-primer.py", label="RAG session primer (command-type)")
+
     # --- UserPromptSubmit: research-task nudge ---
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": _py_cmd("research-task-nudge.py"), "timeout": 5000}],
@@ -686,6 +702,11 @@ def _install_all_hooks(settings: dict) -> None:
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
     }, sentinel="speak-stop.py", label="TTS interrupt (command-type)")
+
+    # --- Stop: human voice guard (enforces human voice standard on responses) ---
+    _install_hook(settings, "Stop", {
+        "hooks": [{"type": "command", "command": _py_cmd("human-voice-guard.py")}],
+    }, sentinel="human-voice-guard.py", label="human voice guard (command-type)")
 
     # --- Stop: auto-clear (fires /clear after /clear-safe sets the pending flag) ---
     _install_hook(settings, "Stop", {
