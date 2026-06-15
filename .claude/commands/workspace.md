@@ -119,7 +119,7 @@ mkdir -p "$WORKSPACE_ABS"
 
 **Register, protect, and mark active:**
 ```bash
-"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT" --activate
 
 if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   if ! grep -qxF 'workspace/' "$WORKSPACE_ROOT/.gitignore" 2>/dev/null; then
@@ -127,15 +127,6 @@ if [ "$WORKSPACE_ROOT" != "$CLAUDEBOOST_HOME" ]; then
   fi
 fi
 
-```
-
-Then write `state/active-workspace.json` (under CLAUDEBOOST_HOME) directly with the **Write tool** (Read it first if it exists):
-```json
-{
-  "workspace": "$WORKSPACE_ID",
-  "workspace_path": "$WORKSPACE_ABS",
-  "project_path": "$WORKSPACE_ROOT"
-}
 ```
 
 Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
