@@ -144,7 +144,7 @@ the session, and shows active workspaces. From there:
 ```
 /boost                   Start a session
 /index-project           Index your codebase for semantic search
-/research-project        Build the project knowledge base (persistent, cumulative)
+/research-project        Become an expert in the full project stack (reads deps, researches each tech deeply)
 /workspace <task>        Create a workspace + implementation plan
 /research-task           Index task-specific docs into the workspace (auto or manual URL mode)
 /review                  Quick A-F grade by default; add --deep for full 15-pass parallel review
@@ -319,21 +319,23 @@ your-project/
         └── gotchas.md         # things that tripped agents up before
 ```
 
-Run `/research-project` to expand it. The command reads what's already in the KB,
-detects gaps relevant to your current task, fetches the right docs and patterns, and
-appends them to the right files — then reindexes. Every agent working on that project
-from then on benefits from what was learned.
+Run `/research-project` to build it. The command reads your dependency files
+(`package.json`, `requirements.txt`, `go.mod`, etc.), extracts the full tech stack,
+then runs deep multi-angle web research on each technology — official docs, security
+advisories, performance guides, common pitfalls. Six angles per library, expert-level
+content written to KB files and reindexed permanently.
 
-The three research commands serve different purposes:
+The two research commands serve different purposes:
 
 | Command | When to use | Source discovery | Approval gate |
 |---------|------------|-----------------|---------------|
-| `/research-project` | Build/expand the permanent project KB | Codebase + web | No |
-| `/research-task` | Auto-research before a specific task | Ticket entities → web | No (add `--approve` or pass URLs to enable it) |
+| `/research-project` | Become an expert in everything the project uses | Dependency manifests → web | No (add URLs to enable) |
+| `/research-task` | Deep research for a specific ticket | Ticket entities → web | No (add `--approve` or pass URLs to enable) |
 
 Both write to indexed storage and surface in agent context automatically. The difference
-is scope (permanent project KB vs. per-task workspace) and how sources are discovered.
-Pass URLs directly to `/research-task` for manual curation: `/research-task my-workspace https://docs.example.com`.
+is scope and lifetime: `/research-project` builds permanent expertise for the full stack;
+`/research-task` builds per-ticket expertise that lives in the workspace only.
+Pass URLs directly to either: `/research-project /path/to/project https://docs.example.com`.
 
 KB files are indexed as part of the project codebase. When relevant to a query they
 surface in `POST /context` Tier 4 results alongside source code. Run `/index-project`

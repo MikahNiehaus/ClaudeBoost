@@ -1,24 +1,27 @@
 ---
-argument-hint: [project-path] [topic] [url1 url2 ...]
-description: Expand the project knowledge base — detects gaps, researches missing pieces, and indexes results permanently into .claudeboost/knowledge/
+argument-hint: [project-path] [url1 url2 ...]
+description: Build expert-level knowledge for everything the project uses — reads dependency files, researches each technology deeply from external sources, indexes permanently into .claudeboost/knowledge/
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch
 ---
 
-# /research-project — Project Knowledge Base Builder
+# /research-project — Project Stack Expert Builder
 
-Arguments: `[project-path] [topic] [url1 url2 ...]`
+Arguments: `[project-path] [url1 url2 ...]`
 
-Builds and expands the persistent knowledge base at `<project>/.claudeboost/knowledge/`.
-Unlike `/research-task` (per-workspace, ephemeral), this KB accumulates across every
-session and workspace. Every agent working on the project benefits from it permanently.
+Reads the project's dependency files to discover the full tech stack, then does
+deep multi-angle web research on each technology — official docs, security advisories,
+performance guides, common pitfalls. The result is a permanent expert knowledge base
+that every agent on every future task loads automatically.
 
-Run this when:
-- Starting work on a project for the first time
-- Adding a new dependency, API, or technology to the project
-- An agent produced a finding that revealed a gap in project knowledge
-- You want to capture an architectural decision for future agents
+Think of it as: "I'm new to this project — what do I need to know to become an expert
+in everything it uses?" Not a gap-filler. An expertise builder.
 
-To add specific external docs directly to the KB, pass the URLs inline:
+Run this:
+- When starting work on a project for the first time
+- After adding a major new dependency or technology
+- When an agent needs deeper knowledge of a specific library
+
+To add specific external docs manually:
 `/research-project /path/to/project https://docs.example.com`
 
 ---
@@ -27,24 +30,27 @@ To add specific external docs directly to the KB, pass the URLs inline:
 
 Parse `$ARGUMENTS`:
 - First token: if it looks like an absolute path or `./relative/path`, treat it as
-  `PROJECT_PATH`. Otherwise use the current working directory.
-- Remaining non-URL tokens: treat as `TOPIC` (joined as a phrase; may be empty).
+  `PROJECT_PATH`. Otherwise use current working directory.
 - Any `http://` or `https://` tokens: collect as `SEED_URLS`.
 
 Set:
 - `PROJECT_PATH` = resolved absolute path
 - `KB_DIR` = `$PROJECT_PATH/.claudeboost/knowledge/`
-- `KB_INDEX` = `$PROJECT_PATH/.claudeboost/.rag-index/`
-- `TOPIC` = optional topic phrase (may be empty)
-- `SEED_URLS` = any http/https tokens found in arguments (may be empty)
 
 Check if `$KB_DIR` exists:
-- **Yes** → announce "Expanding existing project KB at `$KB_DIR`"
-- **No** → announce "Initializing new project KB at `$KB_DIR`" then `mkdir -p "$KB_DIR"`
+- **Yes** → announce "Expanding project KB at `$KB_DIR`"
+- **No** → announce "Initializing project KB at `$KB_DIR`", then `mkdir -p "$KB_DIR"`
 
-### Seed source gate (Phase 0b) — only if SEED_URLS is non-empty
+Create any missing standard KB files as empty stubs:
+- `stack.md` — primary output: expert knowledge per technology
+- `patterns.md` — coding patterns the codebase uses
+- `decisions.md` — key architectural decisions
+- `gotchas.md` — edge cases, bugs, and quirks
+- `architecture.md` — project structure, main modules
 
-Before proceeding, show the seed source table and ask for confirmation:
+### Seed URL gate (Phase 0b) — only if SEED_URLS is non-empty
+
+Before proceeding, show the seed source table:
 
 ```
 # Seed Sources
@@ -55,178 +61,172 @@ Before proceeding, show the seed source table and ask for confirmation:
 ...
 ```
 
-Guess the target KB file from the URL content — e.g. a framework docs URL → `stack.md`,
-a security advisory URL → `gotchas.md`, a migration guide → `decisions.md`, an
-architecture or design doc → `architecture.md`. When in doubt, default to `stack.md`.
+Guess target KB file from URL content — framework/library docs → `stack.md`,
+security advisory → `gotchas.md`, migration guide → `decisions.md`,
+architecture doc → `architecture.md`. When in doubt: `stack.md`.
 
-Assign tier using the same scoring as Phase 3:
+Assign tier:
 - **A** — official docs, GitHub, MDN, OWASP, arxiv, ietf.org
 - **B** — Stack Overflow, vendor engineering blogs, dev.to
-- **C** — Medium, personal blogs, aggregators (flag in table)
+- **C** — Medium, personal blogs (flag in table)
 
-Ask: "Type **all** to add all seed sources, **skip N,M** to exclude some, or type a
-KB filename to reassign a source (e.g. `3 → decisions.md`). Reply to continue."
-
-Wait for response. On `all`, proceed with the full list. On `skip N,M`, remove those
-rows. On a reassign instruction, update that row's "To KB File" column. On `cancel`,
-abort and report nothing was changed.
-
-SEED_URLS (approved ones) join the research pool for their assigned KB file in Phase 3.
+Ask: "Type **all** to add all, **skip N,M** to exclude, or `N → filename.md` to reassign."
+Wait for response. On `cancel`: abort. Approved SEED_URLS join the research pool in Phase 3.
 
 ---
 
-## Phase 1 — Read Existing KB
+## Phase 1 — Extract Full Tech Stack from Dependency Files
 
-Read all `.md` files in `$KB_DIR`. For each, note:
-- File name and line count
-- Topics already covered (first 200 chars of each H2 heading)
+**This is the PRIMARY input. Not gap analysis. Not KB inspection.**
 
-If KB is empty or missing files: all standard topics are gaps.
-If KB has content: extract what's already covered so we don't duplicate it.
+Read dependency manifests in the project root (check each file; collect from all that exist):
 
-Standard KB files (create missing ones as empty stubs):
-- `architecture.md` — project structure, main modules, entry points
-- `patterns.md` — coding patterns this codebase actually uses
-- `decisions.md` — key architectural decisions and the reasons behind them
-- `stack.md` — language/framework specifics for this project (not generic guides)
-- `gotchas.md` — edge cases, bugs, and quirks found in past sessions
+**JavaScript/TypeScript** — read `package.json`:
+- Extract all keys from `dependencies` and `devDependencies`
+- Note version numbers (strip `^~>=` prefix)
+- Exclude tooling noise: jest, vitest, eslint, prettier, husky, typescript, @types/*
+- Include: the framework (React, Vue, Next.js, Express, etc.), major libraries
+  (zustand, axios, prisma, etc.), auth libs (passport, next-auth), API clients (stripe, twilio)
 
----
+**Python** — read `requirements.txt` or `pyproject.toml`:
+- Extract package names and versions
+- Exclude: black, flake8, mypy, isort, pytest, ruff
+- Include: web framework (FastAPI, Django, Flask), ORM (SQLAlchemy, Tortoise), key libraries
 
-## Phase 2 — Detect Gaps
+**Go** — read `go.mod`:
+- Extract module paths from `require` block
+- Exclude: testify
+- Include: web framework (gin, echo, fiber), DB drivers, key libraries
 
-### 2a — KB-based gap detection
+**Ruby** — read `Gemfile`:
+- Extract gem names
+- Exclude: rubocop, rspec
+- Include: rails/sinatra, major gems
 
-Given:
-- What's already in the KB
-- The optional `topic` argument
-- The project's actual stack (check for `package.json`, `tsconfig.json`, `*.csproj`,
-  `go.mod`, `pyproject.toml`, `requirements.txt`, `pom.xml`)
+**.NET** — read `*.csproj`:
+- Extract `<PackageReference Include="..." />` names
+- Include: Entity Framework, ASP.NET packages, major NuGet packages
 
-Identify what's missing or thin. Examples:
-- `stack.md` exists but is empty → need stack-specific research
-- New topic was provided → find and index docs for it
-- `architecture.md` is thin → summarize project structure from the codebase
-- No `gotchas.md` content → skip (this one fills in from experience, not research)
+**Java/Kotlin** — read `pom.xml` or `build.gradle`:
+- Extract dependency declarations
+- Include: Spring, Hibernate, major libraries
 
-List gaps explicitly before proceeding to Phase 2b.
+After reading all manifests: deduplicate, group by role:
+- **Framework** (React, Django, Spring, Next.js) — highest priority
+- **Database/ORM** (Prisma, SQLAlchemy, GORM) — high priority
+- **Auth/Security** (passport, next-auth, JWT libs) — high priority
+- **External API clients** (stripe, twilio, aws-sdk, openai) — high priority
+- **Utilities** (lodash, axios, zod, pydantic) — medium priority
+- **Build tooling** (webpack, vite, babel) — skip
 
-### 2b — Codebase graph gap detection
+Log: "Extracted N technologies from dependency manifests: [list grouped by role]"
 
-Call `POST http://127.0.0.1:8612/search` with:
-```json
-{
-  "query": "imports dependencies modules",
-  "scope": "codebase",
-  "mode": "graph",
-  "project_path": "<PROJECT_PATH>",
-  "limit": 8
-}
-```
-
-Extract library and module names from the results — things appearing in import
-statements, require() calls, use statements, or go.mod/pyproject.toml entries.
-
-Cross-reference with what's already documented in `stack.md`. Any library that:
-- Appears in the codebase graph AND
-- Is not already documented in `stack.md`
-
-...is a new gap. Add it to the gap list with source "codebase import".
-
-Log: "Codebase graph found N libraries not yet in KB: [list]"
-
-If RAG is not available or the project is not indexed: skip Phase 2b, note it in the
-final report, continue with KB-based gap detection only.
+Cap at **6 technologies per run**, prioritising by role order above. If the project has
+more, note which will be covered in subsequent runs.
 
 ---
 
-## Phase 3 — Research Missing Pieces
+## Phase 2 — Duplicate Heading Check
 
-For each gap that benefits from external docs (stack specifics, APIs, frameworks):
+Read all existing `.md` files in `$KB_DIR`. For each technology in the research list:
+- Check if a matching H2 heading already exists (case-insensitive, partial match is fine)
+- **Heading exists, same version** → skip, log "Skipped [tech]: already in KB at [version]"
+- **Heading exists, different version** → keep in list, note "Updating [tech]: KB has [old], now [new]"
+- **No heading** → keep in list
 
-Cap at **4 gaps** per run to avoid runaway searches. If more gaps exist, note them and
-suggest re-running `/research-project` after this batch is indexed.
+This is the ONLY role of the existing KB in this skill — preventing duplicate effort.
+We do not scan the KB for gaps. We start from what the project actually uses.
 
-Run up to 6 search angles per gap:
+---
 
-1. **Official docs** — `[gap topic] official documentation`
-2. **Security** — `[gap topic] security vulnerabilities common mistakes`
-3. **Performance** — `[gap topic] performance optimization best practices`
-4. **Migration** — `[gap topic] migration upgrade breaking changes`
-5. **Integration patterns** — `[gap topic] integration patterns examples`
-6. **Pitfalls** — `[gap topic] gotchas pitfalls common errors`
+## Phase 3 — Multi-Angle External Research
+
+For each technology in the final research list:
+
+Run up to 6 search angles:
+
+1. **Official docs** — `[tech] [version] official documentation reference`
+2. **Security** — `[tech] security vulnerabilities CVE common attacks OWASP`
+3. **Performance** — `[tech] performance optimization best practices scaling`
+4. **Migration/upgrade** — `[tech] [version] migration guide upgrade breaking changes`
+5. **Integration patterns** — `[tech] integration patterns examples production usage`
+6. **Pitfalls/gotchas** — `[tech] common mistakes gotchas pitfalls troubleshooting`
 
 Source tier scoring:
-- **Tier A** (official docs, GitHub, arxiv, MDN, OWASP, NIST, ietf.org): auto-include
-- **Tier B** (Stack Overflow, vendor engineering blogs, dev.to, freecodecamp): include if highly relevant
-- **Tier C** (Medium, personal blogs, hashnode): include only if no Tier A/B source exists for this angle
+- **Tier A** (official docs, github.com, arxiv.org, MDN, OWASP, NIST, ietf.org): auto-include
+- **Tier B** (stackoverflow.com, vendor engineering blogs, dev.to, freecodecamp): include if clearly relevant
+- **Tier C** (medium.com, hashnode, personal blogs): only if no Tier A/B found for this angle
 - **Skip** (paywalled, social media, SEO aggregators): exclude silently
 
-Collect 1-2 URLs per angle. Deduplicate across angles. Cap total URL list at 20.
+Collect 1-2 URLs per angle. Deduplicate across all angles for this technology.
+Add approved SEED_URLS to the pool for their assigned KB file.
 
-Add approved SEED_URLS (from Phase 0b) to the pool for their assigned KB file.
+### Phase 3b — Low-source angle retry
 
-For gaps that come from the codebase itself (architecture, patterns):
-- Read the relevant source files directly — don't search the web
-- Summarize what you find into the appropriate KB file
-
-### Phase 3b — Gap detection retry
-
-If an angle returns 0 Tier A or B sources:
-1. Refine the query (add version number, add language context, try alternate phrasing)
-2. Retry once — hard cap, one retry per angle
-3. Log: "Retried angle [name] for [gap topic] — [found N sources | still no sources]"
-
-If retry still returns nothing: note "No authoritative source found for [angle] — [gap topic]"
-in the discovery log. Proceed.
+If an angle returns 0 Tier A/B sources:
+1. Refine the query: add version number, add primary language, try alternate phrasing
+2. Run one retry — hard cap, one retry per angle
+3. Log: "Retried [angle] for [tech] with: '[refined query]' → N sources found"
+4. If still no Tier A/B: log "No authoritative source for [angle] — [tech]", continue
 
 ---
 
-## Phase 4 — Update KB Files
+## Phase 4 — Fetch and Write Expert Content
 
-For each gap found:
-1. Fetch the relevant URLs (use `WebFetch` to pull page content)
-2. Summarize the key findings relevant to this project's use of the library
-3. Append findings to the correct KB file (never overwrite existing content)
-4. Add a source comment above each new content block:
-   `<!-- Source: [URL] | Tier: A | Date: YYYY-MM-DD -->`
-5. Use clear H2 headings so future additions don't duplicate topics
+For each technology: fetch all collected URLs with `WebFetch`. Extract the information
+that makes an agent an expert in this technology for this project's context.
 
-Before appending: check if a heading with the same name already exists in the file.
-If it does: skip that entry and log "Skipped: [heading] already exists in [file]".
+Focus on:
+- What this library does and why the project likely uses it
+- Security properties and known vulnerabilities
+- Performance characteristics and known bottlenecks
+- Version-specific behavior, especially breaking changes from prior versions
+- Integration patterns relevant to the project's other dependencies
+- Common mistakes and how to avoid them
 
-Keep entries concrete — actual patterns from this project, not generic advice.
-
-Example format for `stack.md`:
+Append to `stack.md` (security/pitfalls content may also go to `gotchas.md`). Format:
 
 ```markdown
-<!-- Source: https://react.dev/reference/react | Tier: A | Date: 2026-06-14 -->
-## React (v18) — hooks pattern
-This project uses custom hooks in `src/hooks/`. State lives in hooks, not components.
-Never use class components — the codebase has none and tests assume functional components.
+<!-- Source: [URL] | Tier: A | Date: YYYY-MM-DD -->
+## [Technology] ([version]) — [role in project]
 
-<!-- Source: https://example.com/api-docs | Tier: A | Date: 2026-06-14 -->
-## API calls
-All API calls go through `src/services/api.ts`. Direct `fetch()` in components is banned.
+### What It Does
+[2-3 sentences on what this library provides and why the project uses it]
+
+### Security
+[Key security properties, known CVEs, what to watch for in code]
+
+### Performance
+[Key characteristics, what's fast, what's slow, configuration that matters]
+
+### Pitfalls
+[3-5 common mistakes specific to this version]
+
+### Integration in This Project
+[How it connects to the other libraries in this stack]
 ```
+
+Before appending each block: check if a heading `## [Technology]` already exists.
+If it does and the version matches: skip. (Safety net — Phase 2 removes same-version
+items from the research list, but this guard catches partial-run cases where stack.md
+was manually edited after Phase 2 ran.) If version differs: append a new versioned
+block below the old one.
 
 ### Discovery log
 
-Append a new entry to `$KB_DIR/discovery-log.md` for each gap researched on this run.
-Never overwrite existing entries — this file is a permanent audit trail.
+Append to `$KB_DIR/discovery-log.md` for each technology researched this run:
 
 ```markdown
-## [YYYY-MM-DD] — [gap topic]
-- Researched: [gap topic]
+## [YYYY-MM-DD] — [technology] [version]
+- Role: [framework|database|auth|API client|utility]
 - Angles run: official docs, security, performance, migration, integration, pitfalls
 - Sources found: N (Tier A: N, Tier B: N)
-- Retried angles: [any retried angles, or "none"]
-- No source found for: [any angles that returned nothing, or "none"]
-- KB file updated: [file name]
+- Retried angles: [list or "none"]
+- No source found for: [list or "none"]
+- KB file updated: stack.md
 ```
 
-Create `discovery-log.md` if it doesn't exist. Note: this file is **not indexed** —
-it's an audit trail, not knowledge for agents.
+`discovery-log.md` is NOT indexed — audit trail only.
 
 ---
 
@@ -240,95 +240,120 @@ Call `POST http://127.0.0.1:8612/index` with:
 }
 ```
 
-This indexes the full project including `.claudeboost/knowledge/`. Check the response:
+Check response:
 - `files_indexed` > 0: success
 - `files_failed` > 0: check `errors[]`, retry once; if still failing report the specific files
-- HTTP error or connection refused: run `/rag` to verify the server is up, then retry
+- HTTP error: tell the user to run `/rag`, then retry
 
-Note: `research-brief.md` is indexed alongside the project and surfaces as structured
-coverage context via `POST /context` Tier 4 results. `discovery-log.md` is not indexed —
-to exclude it, add it to the project's `.ragignore` or note that the indexer skips
-files named `discovery-log.md` by convention (the brief is the useful artifact; the
-log is an audit trail).
+### Phase 5b — Synthesis layer
 
-Report: `N files indexed, M chunks total`.
-
----
-
-## Phase 5b — Synthesis layer
-
-After updating KB files, write or update `$KB_DIR/research-brief.md`:
+Write or update `$KB_DIR/research-brief.md`:
 
 ```markdown
 # Project Research Brief
 
 Last updated: [YYYY-MM-DD]
+Project: [PROJECT_PATH]
 
-## Coverage by Gap
+## Technologies Researched
 
-### [Gap topic]
-| # | Source | Tier | Angle | Key Takeaway |
-|---|--------|------|-------|--------------|
-| 1 | [title](url) | A | Official docs | [one sentence] |
-| 2 | [title](url) | B | Security | [one sentence] |
+| Technology | Version | Role | Sources | Confidence |
+|------------|---------|------|---------|------------|
+| [name] | [ver] | Framework | N (Tier A: N, B: N) | High/Medium/Low |
 ...
-Confidence: High / Medium / Low
 
-### [Next gap]
+## Coverage by Technology
+
+### [Technology]
+| Angle | Sources | Key Takeaway |
+|-------|---------|--------------|
+| Official docs | N | [one sentence] |
+| Security | N | [one sentence] |
+| Performance | N | [one sentence] |
+| Migration | N | [one sentence] |
+| Integration | N | [one sentence] |
+| Pitfalls | N | [one sentence] |
+
+### [Next technology]
 ...
 
 ## Uncovered Areas
-- [any gap/angle with no authoritative source found]
+- [any technology/angle where no authoritative source was found]
+
+## Deferred (run /research-project again)
+- [technologies beyond the cap-6 limit, with their roles]
 ```
 
-Confidence rating:
-- **High** — 3+ Tier A/B sources agree, no significant gaps in coverage
-- **Medium** — 1-2 reputable sources, or a gap angle returned nothing
-- **Low** — only Tier C sources, or multiple angles returned nothing
+Confidence:
+- **High** — 3+ Tier A/B sources, all 6 angles covered
+- **Medium** — 2-3 sources, or 1-2 angles uncovered
+- **Low** — only Tier C sources, or 3+ angles uncovered
 
-This file IS indexed — it helps agents understand what the KB contains and how well
-a topic is covered when they call `POST /context`.
+`research-brief.md` IS indexed — agents see coverage confidence when they call `POST /context`.
 
 ---
 
-## Phase 6 — Report
+## Phase 6 — Evaluator Pass
+
+Spawn a single `evaluator-agent` with this prompt:
+
+"First action: call POST http://127.0.0.1:8612/context with:
+{\"agent\":\"evaluator-agent\",\"task_description\":\"verify research-brief.md coverage for project stack research\",\"project_path\":\"<PROJECT_PATH>\"}
+
+Then read `[KB_DIR]/research-brief.md`. Verify:
+1. Every technology in the Technologies Researched table has at least one Tier A or Tier B source
+2. The Coverage by Technology section has an entry for each technology in the table
+3. No technology that appears in `[KB_DIR]/discovery-log.md` under today's date is missing
+   from research-brief.md
+
+Output a simple table:
+| Technology | Tier A/B sources? | In brief? | Verdict (CONFIRMED/NEEDS_EVIDENCE) |
+
+Flag NEEDS_EVIDENCE items. End your response with ## Summary (≤300 words) only."
+
+Surface any NEEDS_EVIDENCE items before printing the final report.
+
+---
+
+## Phase 7 — Report
 
 ```
 Project KB updated at <PROJECT_PATH>/.claudeboost/knowledge/
 
-Files:
-  architecture.md   — N lines  [updated|unchanged|new]
-  patterns.md       — N lines  [updated|unchanged|new]
-  decisions.md      — N lines  [updated|unchanged|new]
-  stack.md          — N lines  [updated|unchanged|new]
-  gotchas.md        — N lines  [updated|unchanged|new]
+Technologies researched this run:
+  ✓ [tech 1] ([version]) — [role]   — N sources (Tier A: N, Tier B: N)
+  ✓ [tech 2] ([version]) — [role]   — N sources (Tier A: N, Tier B: N)
+  ⚠ [tech 3] ([version]) — [role]   — security angle: no authoritative source found
+
+Deferred for next run:
+  - [tech 4] ([version]) — [role]
+  - [tech 5] ([version]) — [role]
+
+KB files:
+  stack.md          — N lines  [updated|new]
+  gotchas.md        — N lines  [updated|unchanged]
   discovery-log.md  — N entries [updated|new]
   research-brief.md — [updated|new]
 
-Coverage:
-  ✓ [gap 1]   — N sources (Tier A: N, Tier B: N)
-  ⚠ [gap 2]   — no authoritative source found for: [angle name]
+Indexed: N files, M chunks
 
-Indexed: M chunks total
-
-KB files are indexed alongside the project codebase. research-brief.md is indexed
-as structured coverage context for agents. discovery-log.md is not indexed.
-Run /research-project again any time you add a new dependency or technology.
+research-brief.md is indexed — agents get stack expertise via POST /context automatically.
+Run /research-project again to cover deferred technologies or after adding new dependencies.
 ```
 
 ---
 
 ## Notes
 
-- This KB is per-project and persistent — it survives across workspaces and sessions.
-- `/research-task` is still useful for ticket-specific research. Think of it as:
-  `/research-project` for what the project always needs to know;
-  `/research-task` for what this ticket specifically needs.
-- Passing URLs to `/research-project` adds them directly to the project KB. For
-  per-ticket research, use `/research-task` instead.
+- This skill reads **dependency manifests first**, not the existing KB. The KB is only
+  checked to avoid writing duplicate headings.
+- Cap of 6 technologies per run is intentional — quality beats breadth. Deep coverage
+  of 6 is more useful than shallow coverage of 20.
+- Run `/research-project` again after the first batch completes to cover deferred technologies.
+- For ticket-specific research (ephemeral, task-scoped): use `/research-task` instead.
 - `research-brief.md` is indexed and surfaces as structured context for agents via
-  `POST /context` Tier 4. Agents see what's covered and how confident the coverage is.
-- `discovery-log.md` is an audit trail only — not indexed, not surfaced to agents.
-- The `.claudeboost/` folder can be committed to git — agents on other machines or in
-  CI get the same accumulated knowledge.
-- Never store secrets or credentials in KB files — they are indexed and surfaced to agents.
+  `POST /context` Tier 4.
+- `discovery-log.md` is audit trail only — not indexed, not surfaced to agents.
+- The `.claudeboost/` folder should be committed to git — other machines and CI
+  get the same accumulated expertise.
+- Never store secrets or credentials in KB files.
