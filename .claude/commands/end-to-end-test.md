@@ -1,10 +1,10 @@
 ---
-argument-hint: <target-url> [scope — auth | crud | nav | errors | responsive | all]
-description: End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with screenshot evidence
+argument-hint: [target-url] [scope — auth | crud | nav | errors | responsive | all | quick] [--no-debug] [--fresh]
+description: Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes with screenshot evidence, and reports what was tested AND what was not
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
 ---
 
-# /end-to-end-test — Browser-Only E2E Test Suite
+# /qa — QA Session
 
 Arguments: **$ARGUMENTS**
 (Format: `<url>` or `<url> <scope>` — e.g., `http://localhost:3000 auth`)
@@ -31,11 +31,52 @@ Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the det
 
 ---
 
-## Phase 1: Initialize
+## Initialize
 
 **0a — Parse arguments.**
 
-Split `$ARGUMENTS` on whitespace. First token = `TARGET_URL`. Second token = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default to `all` if omitted).
+Strip flags from `$ARGUMENTS` before parsing positional tokens:
+- `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3)
+- `--fresh` present → force a new workspace (already handled in 0c)
+- Remaining tokens: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
+
+**0a-i — Auto-detect TARGET_URL if not provided.**
+
+If `TARGET_URL` is empty after parsing, do NOT ask the user yet. Work through these steps in order and stop at the first hit:
+
+**Step A — Check active workspace context.md for a `Dev URL:` field:**
+Read `$WORKSPACE_ABS/context.md` (if it exists) and look for a line matching `Dev URL: <url>`. If found, set `TARGET_URL` to that value. Skip steps B–D.
+
+**Step B — Check if a dev server is already running on a common port:**
+```bash
+for PORT in 3000 5000 5173 7000 8080 4200 8000; do
+  curl -s --max-time 1 -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/" 2>/dev/null | grep -qE "^[23]" && echo "http://localhost:${PORT}" && break
+done
+```
+If a port responds with a 2xx or 3xx: set `TARGET_URL = http://localhost:<PORT>`. Print: "Auto-detected running server at `$TARGET_URL`." Skip steps C–D.
+
+**Step C — Read project config for a start command:**
+
+Check in this order (stop at first file found):
+1. `$WORKSPACE_ROOT/package.json` → read `scripts.dev`, `scripts.start`, `scripts.serve` — pick first defined
+2. `$WORKSPACE_ROOT/Properties/launchSettings.json` → read `profiles[*].applicationUrl` (ASP.NET)
+3. `$WORKSPACE_ROOT/.env` or `.env.local` → look for `PORT=` or `VITE_PORT=`
+
+If a start command is found, run it in the background:
+```bash
+cd "$WORKSPACE_ROOT" && <start-command> &
+SERVER_PID=$!
+```
+Then poll for up to 15 seconds (check every 2s) for any of the standard ports to respond. When one responds, set `TARGET_URL` to that URL. Print: "Started dev server (`<start-command>`) → `$TARGET_URL`."
+
+If the command is found but no port responds within 15 seconds: print "Dev server started but did not respond on any standard port. Check the terminal for errors." Set `TARGET_URL = ""` and fall through to Step D.
+
+**Step D — Ask the user (only if all auto-detect paths failed):**
+```
+No running dev server detected and no start command found in the project.
+Please provide the URL (e.g. http://localhost:3000) or start the server first.
+```
+Wait for the user's response and set `TARGET_URL` to what they provide.
 
 **0a-ii — Ticket tracing (ask if not provided).**
 
@@ -89,19 +130,22 @@ If the folder exists → set `TASK_ID = $TICKET_ID`, `WORKSPACE_ABS = $WORKSPACE
 
 **Step 2 — URL-based workspace check (runs only if no ticket workspace found):**
 
+Parse `HOSTNAME_SLUG` and `PORT_SLUG` from `TARGET_URL` (e.g. `http://localhost:3000` → `localhost`, `3000`). Also derive `PROJECT_SLUG`: take the last two path components of `WORKSPACE_ROOT`, lowercase, replace non-alphanumeric with `-` (e.g. `C:/Development/MyApp` → `development-myapp`).
+
+Use a Bash glob loop — do NOT use `ls | grep` (banned):
 ```bash
-ls "$WORKSPACE_ROOT/workspace/" 2>/dev/null | grep "^e2e-[HOSTNAME]-[PORT]-"
+MATCH=""
+for d in "$WORKSPACE_ROOT/workspace/e2e-${HOSTNAME_SLUG}-${PORT_SLUG}-"*/; do
+  [ -d "$d" ] && MATCH="$d" && break
+done
 ```
 
-(Replace `[HOSTNAME]` and `[PORT]` with the values parsed from `TARGET_URL`.)
+If `MATCH` is non-empty (and `--fresh` was NOT passed):
+- Set `TASK_ID` to the matched folder name (strip trailing slash), `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`.
 
-If one or more matching workspaces exist:
-- Find the most recent (sort by date suffix descending).
-- Set `TASK_ID` to that folder name, `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`.
-
-If no matching workspace exists OR `$ARGUMENTS` contains `--fresh`:
-- Derive: `TASK_ID = e2e-[hostname]-[port]-[YYYY-MM-DD]`
-- Example: `e2e-localhost-3000-2026-05-10`
+If no match exists OR `$ARGUMENTS` contains `--fresh`:
+- Derive: `TASK_ID = e2e-[hostname]-[port]-[project-slug]-[YYYY-MM-DD]`
+- Example: `e2e-localhost-3000-myapp-2026-05-10` (project slug prevents same-day collisions across projects on the same port)
 - Set `WORKSPACE_ABS = $WORKSPACE_ROOT/workspace/$TASK_ID`
 - Proceed to Phase 0d (no resume check needed for a new workspace).
 
@@ -169,51 +213,105 @@ This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test ge
 
 **0f — Index project codebase.**
 
-```bash
-pwd
-```
+Call `POST http://127.0.0.1:8612/index with project_path=<WORKSPACE_ROOT>`. Report: "X files indexed."
 
-Call `POST http://127.0.0.1:8612/index with project_path=<cwd output>`. Report: "X files indexed."
+Use the WORKSPACE_ROOT detected in step 0c — not raw CWD. CWD may be the ClaudeBoost directory even when the project under test is elsewhere.
 
 This enables RAG search over the app's routes, components, and entities during discovery.
 
-**0g — UI Scope Graph (runs when TICKET_ID is set and project is indexed).**
+**0g — Comprehensive App Inventory (always runs after project is indexed).**
 
-Skip if `TICKET_ID` was not provided or project indexing failed.
+This is how a QA person learns the project BEFORE opening the browser. Run all six searches in parallel. Use both vector and graph — they surface different things. Never skip this step regardless of whether a ticket was provided.
 
-Extract UI-relevant entities from the ticket workspace in this order:
-
-1. Read `$WORKSPACE_ABS/analysis.md` — look for the `### Code Entities` section (written by ticket-analyst-agent). Extract names from Files/paths, Services/classes, and Endpoints.
-2. If analysis.md is absent or Code Entities is empty: read `$WORKSPACE_ABS/ticket.md` and extract PascalCase names, `/api/` paths, component names, and page/route references from the ticket text.
-
-For each entity found, run **both** calls — never just one:
-
+**Search 1 — Routes and pages:**
 ```
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="[entity]", mode="vector", limit=3
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=<cwd>, query="[entity]", mode="graph", limit=3
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=vector limit=20
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=graph limit=20
 ```
 
-Vector finds files that do the same thing as the entity. Graph finds files that import, render, or call the entity — route files, page components, API handlers, and form validators that are structurally connected to it.
+**Search 2 — Forms and mutations:**
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=vector limit=15
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=graph limit=15
+```
 
-From the combined results, identify:
-- **Route / page files** that render or navigate to the entity (e.g., `OrdersPage.tsx`, `OrdersController.cs`)
-- **Form / action files** that submit or mutate the entity
-- **API handler files** the ticket changes
+**Search 3 — Authentication and authorization:**
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=vector limit=12
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=graph limit=12
+```
 
-Map each file to its most likely URL route using filename and path conventions (e.g., `src/pages/orders/index.tsx` → `/orders`, `controllers/OrdersController.cs` → `/orders`).
+**Search 4 — Data models and entities:**
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=vector limit=15
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=graph limit=15
+```
 
-Append a **UI Pages in Scope** section to `$WORKSPACE_ABS/context.md` (create context.md if it doesn't exist yet):
+**Search 5 — Background jobs and async processing:**
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=vector limit=8
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=graph limit=8
+```
+
+**Search 6 — External integrations:**
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=vector limit=8
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=graph limit=8
+```
+
+**If ticket was provided — also search ticket entities:**
+If `TICKET_ID` was captured (not 'none'):
+1. Read `$WORKSPACE_ABS/analysis.md` → `### Code Entities` section (if exists)
+2. Fallback: read `$WORKSPACE_ABS/ticket.md` → extract PascalCase names, `/api/` paths, component names
+3. For each entity: run vector + graph search (limit=3 each)
+
+**Synthesize results into `$WORKSPACE_ABS/app-inventory.md`:**
+
+From all search results combined, extract and deduplicate:
 
 ```markdown
-## UI Pages in Scope (Graph Map)
-Seeded from ticket entities — vector + graph RAG. Prioritize these in browser crawl and test plan.
+# App Inventory — [WORKSPACE_ROOT]
+Built from RAG vector + graph traversal — covers full codebase, not just nav-visible pages.
+
+## Routes / Pages
+| Route | Source File | Type (page/api/action) | Auth Required? |
+|-------|-------------|------------------------|----------------|
+| /login | Controllers/AuthController.cs | page | no |
+| /orders | Controllers/OrdersController.cs | page | yes |
+| /api/orders | Controllers/OrdersController.cs | api | yes |
+
+(List all routes found — aim for completeness. If source file + path conventions suggest a route exists, include it even if not 100% confirmed.)
+
+## Entities with CRUD
+| Entity | Create | Read | Update | Delete | Source File |
+|--------|--------|------|--------|--------|-------------|
+| Order  | yes    | yes  | yes    | yes    | OrdersController.cs |
+
+## Auth System
+- Type: [cookie/JWT/session/OAuth/basic/unknown]
+- Login route: [path]
+- Protected routes: [list or "most routes"]
+- Role system: [yes/no — role names if found]
+
+## Background Jobs
+| Job / Worker | Trigger | What it writes | Source File |
+|--------------|---------|---------------|-------------|
+| (none found / list if found) | | | |
+
+## External Integrations
+| Service | What it does | Source File |
+|---------|-------------|-------------|
+| (none found / list if found) | | |
+
+## UI Pages in Scope (Ticket-Specific)
+(Only present if TICKET_ID was provided)
 | URL / Route | File | Seed Entity | How Connected |
 |-------------|------|-------------|---------------|
-| /orders | src/pages/orders/index.tsx | OrderService | imports |
-| /orders/:id | src/pages/orders/detail.tsx | OrderService | imports |
 ```
 
-If no entities are found or graph returns no results: skip silently — Phase 1b's general searches cover the case.
+**This inventory is the QA person's knowledge of the app. Every route in this table gets either tested or explicitly justified as out-of-scope in the final report. There are no silent gaps.**
+
+If RAG returns no results at all (project not indexed or search errors): note this in app-inventory.md and print a warning. Phase 1 browser crawl becomes the primary discovery method, but this is a degraded mode.
 
 ---
 
@@ -236,6 +334,21 @@ Display environment confirmation:
 Call `browser_navigate(url=$TARGET_URL)`.
 Call `browser_take_screenshot` → save to `$SNAPSHOTS_DIR/discovery-home.png`. (Discovery shot — stays in base screenshots/ folder, not in proof subfolder.)
 Call `browser_console_messages` — note any startup errors.
+
+**Auth state detection (runs after first navigation, before discovery):**
+
+Call `browser_snapshot`. Scan the accessibility tree for auth indicators:
+- Logged-in signals: user avatar, display name, profile link, "Sign out", "Log out", "My account", or any element with `role=navigation` containing the user's name
+- Logged-out signals: login form fields, "Sign in" / "Log in" button, username/email + password fields
+
+Set `AUTH_STATE`:
+- `AUTHENTICATED` — at least one logged-in signal is present
+- `UNAUTHENTICATED` — login form or sign-in button is the primary UI
+- `UNKNOWN` — neither signal is clear (proceed as unknown, don't block)
+
+Record `AUTH_STATE` in `context.md` under `## App State`. This is used in Phase 2 (test plan) to:
+- Skip `TC-AUTH-LOGIN-*` cases when `AUTH_STATE = AUTHENTICATED` (already logged in — test plan notes this and includes a logout-then-relogin flow instead)
+- Prioritize auth TCs when `AUTH_STATE = UNAUTHENTICATED`
 
 **Live environment probe (runs immediately after first navigation — catches OAuth redirects):**
 
@@ -267,11 +380,11 @@ Only continue past this probe if ALL checks pass.
 Do not wait for codebase analysis before starting the browser crawl. Dispatch both at the same time.
 
 **Spawn `workflow-agent` (background) for codebase analysis.** The spawn prompt must include:
-1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for E2E discovery"`, `project_path=<cwd>`
+1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for E2E discovery"`, `project_path=<WORKSPACE_ROOT>`
 2. Run all three RAG searches in parallel:
-   - `POST /search scope=codebase project_path=<cwd> query="routes pages navigation URL paths" mode=graph limit=6`
-   - `POST /search scope=codebase project_path=<cwd> query="authentication login session user roles" mode=graph limit=5`
-   - `POST /search scope=codebase project_path=<cwd> query="form submit create update delete entity model" mode=graph limit=5`
+   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="routes pages navigation URL paths" mode=graph limit=6`
+   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication login session user roles" mode=graph limit=5`
+   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update delete entity model" mode=graph limit=5`
 3. Also search for server-side handlers: `POST /search scope=codebase query="controller handler action endpoint API" mode=graph limit=6`
 4. Return: a deduplicated list of (route path → source file → method/function name) mappings, plus auth mechanism and form structures found.
 5. End with `## Summary` (≤200 words): route list, auth type, entity names, top controller files.
@@ -298,6 +411,32 @@ Then crawl remaining top-level nav links found in the snapshot:
 - Do NOT go deeper than one level from here
 
 Return to `$TARGET_URL` after crawling each branch.
+
+**Inventory cross-reference (runs after nav crawl — finds hidden pages):**
+
+Read `$WORKSPACE_ABS/app-inventory.md` → Routes/Pages table. Compare against the set of pages already visited during the nav crawl (keep a running `VISITED_ROUTES` set).
+
+For each route in the inventory that was NOT visited:
+1. `browser_navigate` to `$TARGET_URL + [route]`
+2. `browser_snapshot` — record the page title and HTTP result
+3. Classify:
+   - **2xx/accessible**: page loaded — record in VISITED_ROUTES, note content
+   - **Redirect to login**: auth-required route — note as "auth-blocked" (not a bug — expected)
+   - **404 / error page**: route exists in code but not accessible — note as "code-discovered but broken"
+   - **Redirect to unknown**: inspect where it redirected; re-run Phase 0b blocklist check
+4. Do NOT navigate deeper on inventory routes — record the top-level response only
+
+This step finds admin pages, API pages, and routes that aren't linked in the nav but exist in the codebase. A real QA person checks these. Routes that are auth-blocked are still added to the test plan as auth-check TCs.
+
+Append a `## Inventory Cross-Reference` section to `context.md`:
+```markdown
+## Inventory Cross-Reference
+Routes found in code but not in nav — verified during crawl.
+| Route | Status | Notes |
+|-------|--------|-------|
+| /admin | auth-blocked | redirects to /login |
+| /api/debug | 404 | code reference found but route not registered |
+```
 
 **1d — Build component registry.**
 
@@ -371,9 +510,12 @@ The most common source of bad E2E tests is generating them from what the browser
 **What is a user journey?** A journey is a goal a real user wants to accomplish — "register an account", "submit an order", "edit a saved address". It spans multiple pages and involves a sequence of actions. A page is not a journey. A form field is not a journey.
 
 **Step 1 — Derive journeys from available sources (in priority order):**
-1. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
-2. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
-3. **RAG codebase search**: query `POST http://127.0.0.1:8612/search scope=codebase query="route controller action" mode=graph limit=5`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+1. **App Inventory** (from `$WORKSPACE_ABS/app-inventory.md` Phase 0g — HIGHEST PRIORITY): every entity in the Entities with CRUD table is a journey candidate. For each entity with create/update/delete operations: generate the corresponding journey (create → verify → delete). For each route in the Routes/Pages table: verify it is represented in at least one journey. This is the completeness guarantee — the inventory was built from the actual code, not from what was clickable.
+2. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
+3. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
+4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8612/search scope=codebase query="route controller action" mode=graph limit=5`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+
+**Completeness gate — after deriving journeys:** Count the routes in app-inventory.md. Count the journeys derived. Every route that has no covering journey must either (a) be covered by an existing journey, or (b) have an explicit reason in a `## Uncovered Routes` section of `flow-map.md` explaining why it's not covered (e.g., "admin-only, no test account", "API route only — not browser-testable"). Routes cannot be silently omitted.
 
 **Step 2 — Score each journey by risk:**
 
@@ -448,6 +590,7 @@ TCs come from journeys, not from components. For each journey in flow-map.md:
 
 | Scope | Categories to generate |
 |---|---|
+| `quick` | TC-SMOKE-01, TC-SMOKE-02, plus the top 3 highest-risk journeys from flow-map.md only |
 | `auth` | Login happy path, login bad credentials, logout, protected route without auth |
 | `crud` | Create / read list / read detail / update / delete / empty state — per entity |
 | `nav` | Each nav link resolves, back-button, breadcrumb accuracy |
@@ -560,7 +703,9 @@ If `plan.md` already contains result entries from a previous run (lines starting
 
 **Phase 3 Pre-flight: Attach Debugger (runs once, before any TC executes).**
 
-Code-level step-through is always part of every E2E session. This block runs after the prior-session check and before the first TC.
+**`--no-debug` skip gate:** If `NO_DEBUG = true` (flag was passed in arguments), skip this entire pre-flight block. Set `DEBUG_ENABLED = false` and print: "Debugger skipped (`--no-debug`). Tests will run UI-only." Jump directly to the TC loop.
+
+Otherwise, code-level step-through runs as part of every E2E session. This block runs after the prior-session check and before the first TC.
 
 **Step A — Production guard (re-checked here — never skip).**
 
@@ -570,16 +715,34 @@ Only attach to processes running on the LOCAL machine. Never use `mcp__mcp-debug
 
 **Step B — Detect the running server process.**
 
-Run on Windows:
+Detect OS first:
 ```bash
-tasklist /FI "IMAGENAME eq dotnet.exe" /FO CSV 2>nul && tasklist /FI "IMAGENAME eq node.exe" /FO CSV 2>nul
+uname -s 2>/dev/null
 ```
+- Output starts with `MINGW`, `MSYS`, `CYGWIN`, or the command errors → Windows
+- Output is `Darwin` → macOS
+- Output is `Linux` → Linux
+
+Run the OS-appropriate detection:
+
+**Windows:**
+```bash
+tasklist /FI "IMAGENAME eq dotnet.exe" /FO CSV 2>nul
+tasklist /FI "IMAGENAME eq node.exe" /FO CSV 2>nul
+```
+
+**macOS / Linux:**
+```bash
+pgrep -la dotnet 2>/dev/null
+pgrep -la node 2>/dev/null
+```
+If `pgrep` is unavailable: `ps aux 2>/dev/null | grep -E " dotnet| node" | grep -v grep`
 
 Parse the output into a table:
 ```
 Detected server processes:
-  [PID]  dotnet.exe
-  [PID]  node.exe
+  [PID]  dotnet / dotnet.exe
+  [PID]  node / node.exe
 ```
 
 **Step C — Determine language and attach.**
@@ -700,6 +863,24 @@ Skip BEFORE screenshot for smoke/nav tests.
 Perform every numbered Step from the test case using ONLY `mcp__playwright__*` tools.
 No Bash, no direct API calls, no database reads.
 
+**Credential pre-check (applies when a step fills a password or username field):**
+
+Before calling `browser_fill` or `browser_type` on any auth field, first call `browser_evaluate` to read the field's current value:
+```javascript
+document.querySelector('[type="password"]')?.value || ''
+```
+- If the value is non-empty: the browser's password manager has already filled it. Do NOT overwrite. Move directly to the submit step.
+- If the value is empty: fill it normally.
+
+Apply the same check to any field labeled "email", "username", or "login" adjacent to a password field.
+
+**Already-authenticated check (applies when a TC requires login as a precondition):**
+
+If `AUTH_STATE = AUTHENTICATED` (set in Phase 1a) and the TC's first step navigates to a login page:
+1. Call `browser_snapshot` to confirm whether the login form is actually visible or if the app redirected away.
+2. If no login form is visible: the app already has a valid session. Skip the fill/submit steps. Record in plan.md: `PASS | already authenticated — skipped credential fill`.
+3. If the login form IS visible despite `AUTH_STATE = AUTHENTICATED` (session expired mid-test): fill normally and continue.
+
 **Step 3 — Verify state in text FIRST.**
 Call `browser_snapshot`. Scan the accessibility tree text for the Expected state.
 - Does the expected text, element, or state appear in the snapshot?
@@ -768,7 +949,7 @@ Skip if `DEBUG_ENABLED = false`.
 
    **Tier 3 — RAG graph search (fallback):**
    ```
-   POST http://127.0.0.1:8612/search scope=codebase project_path=<cwd> query="[TC primary action — e.g. 'create order controller handler']" mode=graph limit=3
+   POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="[TC primary action — e.g. 'create order controller handler']" mode=graph limit=3
    ```
    Use the top result's `source` and `line_start`.
 
@@ -961,7 +1142,60 @@ If a retake is not possible (page state cannot be reproduced without side-effect
 
 Print after the pass: "Screenshot audit complete. Evaluator flagged N / M screenshots for retake. [N] retaken, [K] skipped."
 
-**Close debug session (runs after all TCs and evaluator pass complete).**
+**Coverage Gap Analysis (runs after screenshot audit, before closing debug session).**
+
+This step answers: "what did I NOT test, and why?" A QA report that only lists what was tested is incomplete. Run this before the report phase.
+
+1. Read `$WORKSPACE_ABS/app-inventory.md` — Routes/Pages table and Entities with CRUD table.
+2. Read `$WORKSPACE_ABS/plan.md` — collect the route/page reference from every TC (from the `Code path:` field or TC description).
+3. Read `$WORKSPACE_ABS/flow-map.md` — `## Uncovered Routes` section (if it exists).
+
+For each route in the inventory:
+- Find at least one TC in plan.md that visits or exercises that route
+- If found: mark as `covered`
+- If not found: check if it's in flow-map.md `## Uncovered Routes` with a reason
+- If neither: mark as `gap — no TC and no justification`
+
+For each entity in Entities with CRUD:
+- Find TCs for each operation (create/read/update/delete) — mark each operation as `covered` or `gap`
+
+Write `$WORKSPACE_ABS/coverage-gaps.md`:
+
+```markdown
+# Coverage Gap Analysis
+
+**Session**: [TASK_ID]
+**Date**: [date]
+**Inventory source**: app-inventory.md (built from RAG codebase traversal)
+
+## Route Coverage
+
+| Route | Covered by | Status |
+|-------|-----------|--------|
+| /login | TC-AUTH-01, TC-AUTH-02 | covered |
+| /admin/users | — | **GAP** — no TC found, no justification in flow-map.md |
+| /api/export | — | out-of-scope — API-only route, not browser-testable |
+
+## Entity Coverage
+
+| Entity | Create | Read | Update | Delete |
+|--------|--------|------|--------|--------|
+| Order  | TC-003 | TC-004 | TC-005 | **GAP** |
+| User   | TC-AUTH-01 | — | **GAP** | — |
+
+## What Was Not Tested (Honest Summary)
+
+List every gap with a classification:
+- **Explicit gap**: route or entity operation with no TC and no justification — needs attention
+- **Justified gap**: route excluded with a stated reason (admin-only, no test account, API-only, out of scope for this session)
+- **Structural gap**: feature exists in code but was unreachable during testing (404, auth-blocked without test credentials)
+
+This section is the QA equivalent of a risk residual — what remains after this session ends.
+```
+
+If ALL routes and entity operations are covered: write coverage-gaps.md with "Full coverage achieved — all N routes and M entity operations have corresponding test cases."
+
+**Close debug session (runs after coverage gap analysis and all TCs and evaluator pass complete).**
 
 If `DEBUG_ENABLED = true`:
 Call `mcp__mcp-debugger__close_debug_session` with `sessionId=DEBUG_SESSION_ID`.
@@ -990,11 +1224,13 @@ Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`, NEEDS-RERUN `[S]`.
 Write `$WORKSPACE_ABS/report.md`:
 
 ```markdown
-# E2E Test Report
+# QA Session Report
 
 **URL**: [TARGET_URL]
 **Date**: [date]
 **Scope**: [SCOPE]
+**App Inventory**: $WORKSPACE_ABS/app-inventory.md
+**Coverage Gaps**: $WORKSPACE_ABS/coverage-gaps.md
 **Plan**: $WORKSPACE_ABS/plan.md
 **Screenshots**: $SNAPSHOTS_DIR/
 **Proof**: $PROOF_DIR/
@@ -1029,6 +1265,34 @@ Write `$WORKSPACE_ABS/report.md`:
 |-------|-------------|--------|--------|-------|
 | TC-001 | ... | PASS | — | TC-001-after.png |
 
+## What Was NOT Tested
+
+Copy from `coverage-gaps.md` — the honest summary of gaps.
+
+This section is mandatory. If it is absent from a report, the report is incomplete. A report
+that claims "all features were tested" without this section is not credible.
+
+| Route / Feature | Status | Reason |
+|-----------------|--------|--------|
+| [route] | **GAP** | [no TC, no justification found] |
+| [route] | justified | [admin-only — no test credentials provisioned] |
+
+If no gaps: write "No gaps. All N routes and M entity operations in app-inventory.md have covering TCs."
+
+## QA Observations (Non-TC Findings)
+
+These are findings noticed during testing that aren't formal PASS/FAIL test cases — the kind
+of thing a real QA person writes in their session notes.
+
+- **UX issues**: confusing flows, misleading labels, unclear feedback
+- **Inconsistencies**: same feature behaves differently in different contexts
+- **Performance observations**: pages that were noticeably slow to load
+- **Accessibility concerns**: missing labels, non-keyboard-navigable controls
+- **Data edge cases noticed**: unusual behavior with specific data values
+- **Code smells visible in UI**: error messages leaking stack traces, debug UI visible in prod build
+
+If no observations: write "No notable observations this session."
+
 ## UI Inconsistencies Found
 
 [List any structural inconsistencies detected by UI consistency TCs]
@@ -1046,7 +1310,15 @@ Write `$WORKSPACE_ABS/report.md`:
 
 Print the Summary table. List all failures with their observed state. List blocked tests with reasons.
 
-End with: "Full report → `$WORKSPACE_ABS/report.md`. Proof screenshots → `$PROOF_DIR/`. All screenshots → `$SNAPSHOTS_DIR/`."
+End with:
+```
+Full report        → $WORKSPACE_ABS/report.md
+App inventory      → $WORKSPACE_ABS/app-inventory.md
+Coverage gaps      → $WORKSPACE_ABS/coverage-gaps.md
+Proof screenshots  → $PROOF_DIR/
+All screenshots    → $SNAPSHOTS_DIR/
+```
+If coverage-gaps.md has explicit gaps: call them out here by name — don't bury them in the file.
 
 Call `browser_close`.
 

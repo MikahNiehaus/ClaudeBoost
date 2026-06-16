@@ -1,16 +1,16 @@
 ---
-description: Interactive Architecture Board — generate a visual project architecture map that opens in the browser
+description: Interactive Visual Board — generate a visual diagram of any concept, system, flow, or architecture and open it in the browser
 ---
 
-# Interactive Architecture Board
+# Interactive Visual Board
 
-Generate a professional interactive architecture diagram as a self-contained HTML file and open it in the browser. Claude writes the HTML directly using **CSS flexbox layout** — no SVG pixel coordinates, no coordinate math, no overlaps.
+Generate a professional interactive diagram as a self-contained HTML file and open it in the browser. This skill visualizes anything — system architecture, data flows, auth sequences, pipelines, how a feature works, and more. Claude writes the HTML directly using **CSS flexbox layout** — no SVG pixel coordinates, no coordinate math, no overlaps.
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
 Call `POST http://127.0.0.1:8612/context` with:
 ```json
-{"agent":"workflow-agent","task_description":"architecture visualization of current project","project_path":"<cwd>"}
+{"agent":"workflow-agent","task_description":"visual diagram: $ARGUMENTS — current project","project_path":"<cwd>"}
 ```
 
 If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
@@ -29,16 +29,59 @@ Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the det
 
 ---
 
+## Phase 0c: Determine What to Visualize
+
+Read `$ARGUMENTS` (the text the user typed after `/visualize`).
+
+Derive three things you'll use throughout:
+- **TOPIC** — a human-readable title for what's being visualized (e.g. "Auth Flow", "RAG Pipeline", "CI/CD Pipeline", "Architecture")
+- **SLUG** — a lowercase, hyphenated filename stem (e.g. `auth-flow`, `rag-pipeline`, `ci-cd-pipeline`, `architecture`)
+- **MODE** — one of: `concept`, `self-map`, `project-map`
+
+Rules:
+- `$ARGUMENTS` is empty or `--project` → **project-map** mode, TOPIC = "Architecture", SLUG = `architecture`
+- `$ARGUMENTS` is `--self` → **self-map** mode, TOPIC = "How ClaudeBoost Works", SLUG = `claudeboost`
+- `$ARGUMENTS` describes a concept, flow, or question (e.g. "auth flow", "how the RAG system works", "data pipeline") → **concept** mode; derive TOPIC and SLUG from the argument text
+
+For concept mode: TOPIC = title-cased version of the argument, SLUG = lowercase hyphenated (strip "how", "the", "a" if they'd make the slug awkward). Example: `how the RAG system works` → TOPIC `RAG System`, SLUG `rag-system`.
+
+Carry TOPIC, SLUG, and MODE forward. Use TOPIC in the HTML title and toolbar. Use SLUG for the output filename.
+
+---
+
+## Phase 0d: Audience Calibration (concept mode only)
+
+**Only run when MODE = concept.**
+
+Before designing layers, decide who this diagram is for. Look at the TOPIC and any phrasing in `$ARGUMENTS` for signals:
+
+| Signal | Audience tier |
+|--------|--------------|
+| "how does X work", "explain X", "what is X" | **Novice** — explain from scratch |
+| "X flow", "X pipeline", "X architecture" (no "how") | **Technical** — assume familiarity, skip basics |
+| "X deep dive", "X internals", "X implementation" | **Expert** — full detail, jargon fine |
+
+**Default for concept mode: Novice-first.**
+
+Novice-first rules (apply unless TOPIC signals technical/expert audience):
+- Open each layer label and card subtitle with plain language, not jargon. Add the technical term after: `"Stores results (vector database)"`
+- Use one real-world analogy per card detail panel before any technical explanation. Example: "Think of this as a card catalog — it lets the system find relevant documents by meaning, not just keywords."
+- Define acronyms on first use in the audio tour: "RAG — short for Retrieval-Augmented Generation — works like..."
+- Put dense technical detail (config values, code paths, API contracts) in the collapsible `<details>` section of each detail panel, not in the main body
+- The board should answer "what does this do for me?" before "how does it work?"
+
+---
+
 ## Step 1: Detect Mode
 
 ```bash
 ls agents/ knowledge/ 2>/dev/null | head -5
 ```
 
-- Both `agents/` and `knowledge/` exist → **self-map mode** (ClaudeBoost itself)
-- Otherwise → **project-map mode**
+- `MODE` is already set from Phase 0c — skip detection only if the user passed an explicit flag (`--self`, `--project`) or a concept argument.
+- If no argument was given, use the directory check: both `agents/` and `knowledge/` exist → set MODE to **self-map**; otherwise **project-map**.
 
-User can override: `--self` forces self-map, `--project` forces project-map.
+User can always override: `--self` forces self-map, `--project` forces project-map.
 
 ---
 
@@ -113,6 +156,44 @@ From the workspace detected in Phase 0b, look for (in order):
    - A **Code path** reference (file:line) for the key logic
 
 If no workspace ticket is found: skip this step silently and proceed to Step 3.
+
+---
+
+## Step 2d: Concept Mode — Gather Data
+
+**Only run this step when MODE = concept.**
+
+The goal is to understand the topic well enough to explain it visually as a layered flow. Gather from whichever sources apply:
+
+1. **RAG knowledge search**: `POST http://127.0.0.1:8612/search` with `{"scope":"all","query":"<TOPIC>","limit":6}` — pull relevant knowledge files.
+2. **Codebase search (both modes)**: `POST http://127.0.0.1:8612/search` with `{"scope":"codebase","mode":"both","query":"<TOPIC>","project_path":"<cwd>","limit":8}` — find the files that implement or relate to the concept.
+3. **Read key files** identified above (no more than 5) to understand the actual implementation.
+
+From those sources, identify:
+- **4–8 key concepts, steps, or components** that make up this topic
+- A **natural ordering** — left-to-right flow, top-to-bottom pipeline, or layered hierarchy
+- **What happens at each step**: inputs, outputs, decisions, side effects
+
+Use this to design the layers.
+
+**Layer naming rules:**
+- Use verb phrases, not nouns. Name layers after what they DO, not what they ARE. This tells the viewer what the stage accomplishes at a glance.
+  - Good: "RECEIVES QUERY", "FINDS RELEVANT DOCS", "BUILDS CONTEXT", "GENERATES ANSWER"
+  - Bad: "INPUT", "RETRIEVAL", "CONTEXT", "OUTPUT"
+- Examples by topic:
+  - Auth flow → "RECEIVES REQUEST", "VERIFIES IDENTITY", "ISSUES TOKEN", "GRANTS ACCESS"
+  - RAG pipeline → "RECEIVES QUERY", "FINDS RELEVANT DOCS", "ASSEMBLES CONTEXT", "GENERATES ANSWER"
+  - CI/CD → "PUSHES CODE", "BUILDS ARTIFACT", "RUNS TESTS", "DEPLOYS", "MONITORS"
+
+**One message per layer:**
+Each layer communicates a single concept. Ask: "What is the one thing a viewer should understand about this stage?" Write a layer subtitle (used in the audio tour intro for that segment) that completes the sentence: "This stage exists because..."
+
+If a stage has more than one distinct purpose, split it into two layers.
+
+**Max 5 cards per layer:**
+Never put more than 5 cards in a single layer. If a concept has more than 5 components at one stage, group them into sub-themes using `col-group` columns inside the layer, or move detail into the panel rather than adding more cards. More than 5 cards per row overwhelms working memory (cognitive load research finding).
+
+Cap at 8 layers total. The diagram is a teaching tool — clarity beats completeness.
 
 ---
 
@@ -205,7 +286,7 @@ Write a fully self-contained HTML file. No external CDN, no fonts, no network re
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>[Project] · Architecture</title>
+<title>[Project] · [TOPIC]</title>
 <style>
 /* === RESET + BASE === */
 *, *::before, *::after { box-sizing: border-box; }
@@ -282,7 +363,7 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
 <body>
 
 <div class="toolbar">
-  <h1>[Project Name] · Architecture</h1>
+  <h1>[Project Name] · [TOPIC]</h1>
   <div>
     <button onclick="downloadSVG()">SVG</button>
     <button onclick="window.print()">PDF</button>
@@ -418,7 +499,7 @@ function downloadSVG() {
   </svg>`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([svg], {type: 'image/svg+xml'}));
-  a.download = 'architecture.svg';
+  a.download = '[SLUG].svg';
   a.click();
 }
 </script>
@@ -459,6 +540,43 @@ The full system includes:
 - Chapters panel (click ☰ to jump to any segment)
 - Transcript panel (click T to slide in full text, clickable to jump)
 - `body { padding-bottom: 110px; }` to leave room for the bar
+
+### Detail panel structure — progressive reveal (concept mode)
+
+Every detail panel should reveal information in three layers, from simple to dense. Never open with technical jargon or a wall of prose.
+
+```javascript
+html: `
+<!-- Layer 1: Plain English summary (always visible) -->
+<div style="font-size:12px;color:#e2e8f0;line-height:1.6;margin-bottom:12px">
+  One sentence that a non-technical person could read. What does this do in plain terms?
+  Optional: one-sentence analogy. "Think of it like a card catalog — finds documents by meaning, not keywords."
+</div>
+
+<!-- Layer 2: Key facts (always visible) -->
+${SECTION('How it works', '')}
+${FLOW_ROW('#0ea5e9','Fact 1 — what goes in','')}
+${ARROW()}
+${FLOW_ROW('#a855f7','Fact 2 — what happens inside','')}
+${ARROW()}
+${FLOW_ROW('#22c55e','Fact 3 — what comes out','')}
+
+<!-- Layer 3: Technical detail (collapsed, opt-in) -->
+<details style="margin-top:12px">
+  <summary style="font-size:10px;color:#475569;cursor:pointer;user-select:none;letter-spacing:0.5px">TECHNICAL DETAIL</summary>
+  <div style="margin-top:8px;font-size:10px;color:#64748b;line-height:1.7">
+    Config values, code paths, API contracts, edge cases. Dense is fine here — this is opt-in.
+  </div>
+</details>`
+```
+
+Rules:
+- Layer 1 and Layer 2 must always be understandable without Layer 3
+- Layer 3 is for people who want to go deeper — keep it collapsed by default
+- Never move content from Layer 1/2 into Layer 3 to "save space" — the summary must stand alone
+- For ticket-context panels: Before/After blocks go in Layer 2, code paths in Layer 3
+
+---
 
 ### COMPONENTS pattern — ALWAYS use `html:` not `desc:`/`items:`
 
@@ -504,10 +622,41 @@ const TOUR_SEGMENTS = [
 ];
 ```
 
+### Image lightbox pattern (use whenever images appear in detail panels or cards)
+
+When any card or detail panel includes an image (screenshot, diagram, chart), render it with the `viz-img` class so clicking it opens a fullscreen lightbox overlay.
+
+**Image in a detail panel** (`html:` field):
+```javascript
+html: `<img class="viz-img" src="data:image/png;base64,..." alt="Description" style="width:100%;border-radius:6px;margin-top:8px;cursor:zoom-in;">`
+// or for a relative path when the HTML and image are in the same folder:
+html: `<img class="viz-img" src="screenshot.png" alt="Description" style="width:100%;border-radius:6px;margin-top:8px;cursor:zoom-in;">`
+```
+
+**Image embedded in a card** (inside the board layout):
+```html
+<div class="card" ...>
+  <img class="viz-img" src="..." alt="..." style="width:100%;border-radius:4px;margin-top:6px;cursor:zoom-in;">
+  <div class="card-title">Card Title</div>
+</div>
+```
+
+The lightbox CSS, HTML, and JS are included in the sections below — they are always emitted, even if no images are present on first load, because images may be added to detail panels dynamically.
+
+---
+
 ### CSS additions (add to `<style>` block)
 
 ```css
 body { padding-bottom: 110px; } /* room for audio bar */
+
+/* === IMAGE LIGHTBOX (native <dialog>) ===
+   showModal() gives us focus trap, Escape key, and ::backdrop for free — no custom JS needed for those. */
+dialog.viz-lightbox { border: none; padding: 0; background: transparent; width: 100dvw; height: 100dvh; max-width: 100dvw; max-height: 100dvh; margin: 0; display: flex; align-items: center; justify-content: center; cursor: zoom-out; overflow: hidden; }
+dialog.viz-lightbox::backdrop { background: rgba(2,6,23,0.92); cursor: zoom-out; }
+dialog.viz-lightbox img { max-width: 92vw; max-height: 90vh; object-fit: contain; border-radius: 8px; box-shadow: 0 24px 80px rgba(0,0,0,0.8); pointer-events: none; cursor: default; }
+.viz-lightbox-close { position: absolute; top: 16px; right: 20px; background: rgba(15,23,42,0.8); border: 1px solid #334155; color: #f1f5f9; font-size: 22px; line-height: 1; width: 38px; height: 38px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.viz-lightbox-close:hover { background: #1e293b; }
 
 /* === AUDIO TOUR BAR (two-row) === */
 .audio-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #334155; padding: 10px 20px 8px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
@@ -623,6 +772,12 @@ body { padding-bottom: 110px; } /* room for audio bar */
   </div>
   <div id="chaptersList"></div>
 </div>
+
+<!-- IMAGE LIGHTBOX (native <dialog> — focus trap + Escape + ::backdrop built-in) -->
+<dialog class="viz-lightbox" id="vizLightbox" aria-label="Image viewer" onclick="handleLightboxClick(event)">
+  <button class="viz-lightbox-close" onclick="closeLightbox()" aria-label="Close image viewer" autofocus>✕</button>
+  <img id="vizLightboxImg" src="" alt="">
+</dialog>
 ```
 
 ### JS additions (full audio engine — paste into `<script>`)
@@ -636,13 +791,20 @@ function loadVoices() {
   const sel = document.getElementById('voiceSelect');
   if (!voices.length) return;
   sel.innerHTML = '';
+  // Score voices: Microsoft Online/Natural voices win; any Microsoft voice beats Google/generic.
   const scored = voices.filter(v => v.lang.startsWith('en')).map(v => {
     let s=0, n=v.name.toLowerCase();
-    if(n.includes('andrew')&&n.includes('natural'))s+=100; if(n.includes('andrew')&&n.includes('online'))s+=98;
-    if(n.includes('andrew'))s+=80; if(n.includes('mark')&&n.includes('natural'))s+=60;
-    if(n.includes('guy')&&n.includes('natural'))s+=55; if(n.includes('mark')&&n.includes('online'))s+=50;
-    if(n.includes('david')&&n.includes('desktop'))s+=40;
-    if(n.includes('google')&&n.includes('us')&&n.includes('male'))s+=50;
+    if(n.includes('microsoft')&&n.includes('andrew')&&n.includes('natural'))s+=200;
+    if(n.includes('microsoft')&&n.includes('andrew')&&n.includes('online'))s+=198;
+    if(n.includes('microsoft')&&n.includes('andrew'))s+=180;
+    if(n.includes('microsoft')&&n.includes('mark')&&n.includes('natural'))s+=160;
+    if(n.includes('microsoft')&&n.includes('guy')&&n.includes('natural'))s+=155;
+    if(n.includes('microsoft')&&n.includes('mark')&&n.includes('online'))s+=150;
+    if(n.includes('microsoft')&&n.includes('david')&&n.includes('desktop'))s+=140;
+    if(n.includes('microsoft')&&n.includes('natural'))s+=120;  // any MS Natural voice
+    if(n.includes('microsoft')&&n.includes('online'))s+=110;   // any MS Online voice
+    if(n.includes('microsoft'))s+=80;                          // any MS voice beats Google/generic
+    if(n.includes('google')&&n.includes('us')&&n.includes('male'))s+=30;
     if(v.lang==='en-US')s+=10; return {v,s};
   }).sort((a,b)=>b.s-a.s);
   scored.forEach(({v},i) => {
@@ -653,7 +815,14 @@ function loadVoices() {
 }
 if(typeof speechSynthesis!=='undefined'){speechSynthesis.onvoiceschanged=loadVoices;loadVoices();}
 
-function getSelectedVoice(){const n=document.getElementById('voiceSelect').value;return voices.find(v=>v.name===n)||voices.find(v=>v.lang.startsWith('en'))||null;}
+function getSelectedVoice() {
+  const n = document.getElementById('voiceSelect').value;
+  // Prefer the user's selection, then fall back to any Microsoft English voice, then any English voice.
+  return voices.find(v => v.name === n)
+    || voices.find(v => v.name.includes('Microsoft') && v.lang.startsWith('en'))
+    || voices.find(v => v.lang.startsWith('en'))
+    || null;
+}
 function getSelectedRate(){return parseFloat(document.getElementById('speedSelect').value);}
 
 function setNarratingCards(ids){
@@ -677,16 +846,36 @@ function updateUI(i){
   syncChapterHighlight(i);syncTranscriptHighlight(i);
 }
 
-function speakSegment(index){
-  if(index>=TOUR_SEGMENTS.length){finishTour();return;}
-  tourIndex=index;const seg=TOUR_SEGMENTS[index];
-  updateUI(index);setNarratingCards(seg.highlights||[]);
-  if(seg.highlights&&seg.highlights.length>0)showDetail(seg.highlights[0]);else closeDetail();
-  const utt=new SpeechSynthesisUtterance(seg.text);
-  utt.voice=getSelectedVoice();utt.rate=getSelectedRate();utt.pitch=1.0;utt.volume=1.0;
-  utt.onend=()=>{if(isPlaying)speakSegment(index+1);};
-  utt.onerror=(e)=>{if(e.error!=='interrupted'&&e.error!=='canceled')speakSegment(index+1);};
-  currentUtterance=utt;speechSynthesis.speak(utt);
+// Chrome silently stops SpeechSynthesis on utterances longer than ~15 seconds (Chromium bug #679437).
+// Fix: split each segment at sentence boundaries into ~140-char chunks and speak them sequentially.
+function chunkText(text) {
+  const sentences = text.match(/[^.!?]+[.!?]+\s*/g) || [text];
+  const chunks = []; let buf = '';
+  for (const s of sentences) {
+    if (buf && (buf + s).length > 140) { chunks.push(buf.trim()); buf = s; }
+    else buf += s;
+  }
+  if (buf.trim()) chunks.push(buf.trim());
+  return chunks.length ? chunks : [text];
+}
+
+function speakSegment(index) {
+  if (index >= TOUR_SEGMENTS.length) { finishTour(); return; }
+  tourIndex = index; const seg = TOUR_SEGMENTS[index];
+  updateUI(index); setNarratingCards(seg.highlights || []);
+  if (seg.highlights && seg.highlights.length > 0) showDetail(seg.highlights[0]); else closeDetail();
+  speakChunks(chunkText(seg.text), index, 0);
+}
+
+function speakChunks(chunks, segIndex, ci) {
+  if (!isPlaying) return;
+  if (ci >= chunks.length) { speakSegment(segIndex + 1); return; }
+  const utt = new SpeechSynthesisUtterance(chunks[ci]);
+  utt.voice = getSelectedVoice(); utt.rate = getSelectedRate(); utt.pitch = 1.0; utt.volume = 1.0;
+  utt.lang = 'en-US';  // explicit lang prevents browser locale defaulting; reduces acronym mispronunciation
+  utt.onend = () => { if (isPlaying) speakChunks(chunks, segIndex, ci + 1); };
+  utt.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') speakChunks(chunks, segIndex, ci + 1); };
+  currentUtterance = utt; speechSynthesis.speak(utt);
 }
 
 function finishTour(){
@@ -789,28 +978,86 @@ function syncTranscriptHighlight(i){
 }
 
 buildTicks();
+
+// === IMAGE LIGHTBOX (native <dialog>) ===
+// showModal() handles focus trap, Escape key, and backdrop automatically — no custom code needed for those.
+function openLightbox(src, alt, triggerEl) {
+  const lb = document.getElementById('vizLightbox');
+  const img = document.getElementById('vizLightboxImg');
+  img.src = src; img.alt = alt || '';
+  lb._trigger = triggerEl || null;
+  lb.showModal();
+}
+function closeLightbox() {
+  const lb = document.getElementById('vizLightbox');
+  if (lb.open) lb.close();
+  if (lb._trigger) { lb._trigger.focus(); lb._trigger = null; }
+}
+function handleLightboxClick(e) {
+  // Close when clicking the backdrop (the <dialog> element itself, not the img or close button inside it)
+  if (e.target === e.currentTarget) closeLightbox();
+}
+// Restore focus when the browser closes the dialog natively via Escape
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('vizLightbox').addEventListener('cancel', () => {
+    const lb = document.getElementById('vizLightbox');
+    if (lb._trigger) { setTimeout(() => { if (lb._trigger) { lb._trigger.focus(); lb._trigger = null; } }, 0); }
+  });
+});
+// Wire up all .viz-img elements — runs once on load and again after detail panel opens
+function bindLightboxImages(root) {
+  (root || document).querySelectorAll('img.viz-img').forEach(img => {
+    if (img.dataset.lbBound) return;
+    img.dataset.lbBound = '1';
+    img.style.cursor = 'zoom-in';
+    img.addEventListener('click', e => { e.stopPropagation(); openLightbox(img.src, img.alt, img); });
+  });
+}
+document.addEventListener('DOMContentLoaded', () => bindLightboxImages());
+// Re-bind after detail panel updates (called from showDetail)
+const _origShowDetail = showDetail;
+showDetail = function(id) { _origShowDetail(id); setTimeout(() => bindLightboxImages(document.getElementById('detail')), 0); };
 ```
 
 ### TOUR_SEGMENTS writing guide
 
+- **Cap at 8 segments total** — users bail on long tours; 6–8 is the sweet spot
+- For concept-mode diagrams: use a **quick tour** structure — intro + 2–3 key concepts + summary (3–5 segments). Merge thin layers into one segment rather than padding.
 - Write 1 segment per major layer/section, plus 1 intro and 1 summary
-- **When a ticket is present**: add 2 dedicated segments right after the intro — one for the problem statement ("what was broken/missing before this ticket"), one for the solution ("what the ticket delivers and why it matters"). These anchor everything that follows.
-- Keep each segment 3–6 sentences — enough to explain but not overwhelming
+- **When a ticket is present**: add 2 dedicated segments right after the intro — one for the problem statement ("what was broken/missing before this ticket"), one for the solution. These count toward the 8-segment cap.
+- Keep each segment 2–4 sentences. Chrome cuts off utterances after ~15 seconds; the audio engine chunks text automatically, but shorter writing still sounds better aloud.
 - `highlights` should list the card IDs that get the blue pulse outline during narration
-- Spell out abbreviations phonetically if TTS mangles them (e.g., "T F F dash 1040" not "TFF-1040")
+- Spell out abbreviations phonetically (e.g., "T F F dash 1040" not "TFF-1040"); `utt.lang = 'en-US'` is already in the engine to reduce mispronunciation of tech acronyms
 - For ticket-related cards in highlights: open their detail panel so the user sees the before/after diagram while listening
+
+**Lead with WHY, not WHAT (most important writing rule):**
+
+Every segment must answer "why does this stage exist?" before explaining how it works. Users connect with purpose before mechanism.
+
+Structure each segment text as:
+1. **One sentence stating the problem this stage solves** — what goes wrong without it, or what need it fills. (The "why it exists")
+2. **One or two sentences on how it works** — the mechanism. Keep it plain. Use an analogy if the audience tier is Novice.
+3. **Optional: one sentence on what comes next** — bridges to the next segment.
+
+Good example (RAG embedding stage):
+> "The system needs to find documents that are *about* the same thing as your question — not just documents that share the same words. This stage turns both your question and every stored document into a list of numbers that captures meaning. Documents with similar meanings end up with similar numbers, so the next step can find them by distance."
+
+Bad example (same stage):
+> "The embedding layer uses a transformer model to convert text into dense vector representations stored in the vector database index."
+
+The bad version describes what it is. The good version explains why you'd want it.
 
 ---
 
 ## Step 4: Save and Open
 
 Pick an output directory:
-- If `workspace/[task-id]/` exists → save to `workspace/[task-id]/visualize/architecture.html`
-- Otherwise create `workspace/visualize-YYYY-MM-DD/` and save there
+- If `workspace/[task-id]/` exists → save to `workspace/[task-id]/visualize/[SLUG].html`
+- Otherwise create `workspace/visualize-YYYY-MM-DD/` and save there as `[SLUG].html`
 
 Open in browser (Windows):
 ```bash
-powershell.exe -NoProfile -Command "Start-Process 'C:\path\to\architecture.html'"
+powershell.exe -NoProfile -Command "Start-Process 'C:\path\to\[SLUG].html'"
 ```
 
 Use the literal Windows path with backslashes. Do not use `cygpath` or `cmd.exe /c start`.
@@ -820,6 +1067,7 @@ Use the literal Windows path with backslashes. Do not use `cygpath` or `cmd.exe 
 ## Step 5: Report
 
 Tell the user:
+- What was visualized (TOPIC) and which mode was used (self-map / project-map / concept)
 - How many components and layers are in the diagram
-- Where the file was saved
-- Click any card to see details. Export with the SVG / PDF buttons.
+- Where the file was saved (`[SLUG].html`)
+- Click any card to see details. Click any image to fullscreen it. Export with the SVG / PDF buttons.

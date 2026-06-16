@@ -25,15 +25,67 @@ user "No active workspace — run `/ws` to activate one."
 
 Set `TELEMETRY_DIR = <workspace_path>/Telemetry`.
 
-## Step 2: Check telemetry exists
+## Step 2: Check telemetry exists — initialize if missing
 
 ```bash
 ls "${TELEMETRY_DIR}" 2>/dev/null || echo "EMPTY"
 ```
 
-If the directory is missing or empty, tell the user:
-"No telemetry yet for this workspace. Telemetry is written automatically once the
-updated hooks are active (run `python scripts/setup.py` to install them)."
+If the directory is missing or empty:
+
+**2a — Check if telemetry is globally disabled and auto-enable:**
+
+```bash
+echo "${DISABLE_TELEMETRY}"
+```
+
+If the output is `1`:
+
+Remove it from the settings file so future sessions work automatically — write a script to `/tmp/cb_remove_tel.py` then run it:
+
+```python
+# /tmp/cb_remove_tel.py
+import json, pathlib
+p = pathlib.Path("C:/Users/mniehaus/.claude/settings.json")
+d = json.loads(p.read_text(encoding="utf-8"))
+env = d.get("env", {})
+if "DISABLE_TELEMETRY" in env:
+    del env["DISABLE_TELEMETRY"]
+    d["env"] = env
+    p.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    print("Removed DISABLE_TELEMETRY from settings.json")
+else:
+    print("Not found in settings.json")
+```
+
+```bash
+"${CLAUDEBOOST_PYTHON}" /tmp/cb_remove_tel.py
+```
+
+Notify the user: "Telemetry was disabled (`DISABLE_TELEMETRY=1` in `~/.claude/settings.json`). Removed it — future sessions will track automatically."
+
+Note: the current session's hooks still have the env var injected from startup. Use `DISABLE_TELEMETRY=` prefix on the init call below to override it for this invocation.
+
+**2b — Initialize by firing the session start handler:**
+
+```bash
+echo '{"hook_event_name":"SessionStart"}' | DISABLE_TELEMETRY="" "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/telemetry-session.py"
+```
+
+Then re-check:
+
+```bash
+ls "${TELEMETRY_DIR}" 2>/dev/null || echo "STILL_EMPTY"
+```
+
+If still empty after init, tell the user:
+"Telemetry could not be initialized. Check that CLAUDEBOOST_HOME and CLAUDEBOOST_PYTHON
+are set and that the telemetry scripts are present."
+and stop.
+
+If init succeeded, note to the user:
+"Telemetry initialized mid-session — tool calls from this point forward will be tracked."
+Then continue to Step 3.
 
 ## Step 3: Read the files
 

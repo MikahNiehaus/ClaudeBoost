@@ -1,12 +1,14 @@
 """
-Tests for scripts/consult-gate.py (PreToolUse hook on Edit/Write/Bash).
+Tests for scripts/consult-gate.py (PreToolUse hook on Write).
 
-The gate is a nudge (exit 0 + stderr), never a hard block. It prints a
-CONSULT reminder when in CONSULT mode editing non-exempt paths.
+The gate fires when creating a NEW file in CONSULT mode with no task-plan.json.
+It outputs permissionDecision:"ask" JSON to stdout and exits 0.
+Edit/MultiEdit/Bash are silent passes — they operate on existing files (grinding).
 """
 from __future__ import annotations
 
 import json
+import os
 import pytest
 from helpers import SCRIPTS_DIR, run_hook, pretooluse
 
@@ -19,7 +21,13 @@ def _edit(file_path: str) -> dict:
     })
 
 
-def _write(file_path: str) -> dict:
+def _write(file_path: str, *, existing: bool = False, boost_home=None) -> dict:
+    """Build a Write payload. existing=True pre-creates the file so the hook sees it."""
+    if existing and boost_home is not None:
+        # Create a real temp file the hook can stat
+        target = boost_home / "tmp_existing_file.py"
+        target.write_text("# existing", encoding="utf-8")
+        file_path = str(target)
     return pretooluse("Write", {
         "file_path": file_path,
         "content": "hello",
@@ -45,13 +53,14 @@ def test_passes_silently_in_auto_mode(boost_home):
     )
     assert result.returncode == 0
     assert result.stderr == b""
+    assert result.stdout == b""
 
 
 # ---------------------------------------------------------------------------
-# CONSULT mode on non-exempt path: nudge (exit 0, but stderr has reminder)
+# Edit/MultiEdit: always silent pass (these are on existing files)
 # ---------------------------------------------------------------------------
 
-def test_nudge_on_non_exempt_edit_in_consult_mode(boost_home):
+def test_edit_passes_silently_in_consult_mode(boost_home):
     mode_file = boost_home / "state" / "claudeboost-mode.json"
     mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
 
@@ -60,107 +69,16 @@ def test_nudge_on_non_exempt_edit_in_consult_mode(boost_home):
         _edit("/some/project/src/important_service.py"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
-    # Still exits 0 (nudge, not block)
     assert result.returncode == 0
-    # But prints a CONSULT reminder to stderr
-    assert b"CONSULT" in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Exempt paths: always silent pass
-# ---------------------------------------------------------------------------
-
-def test_passes_silently_on_workspace_path(boost_home):
-    result = run_hook(
-        "consult-gate.py",
-        _edit("/project/workspace/task-1/context.md"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    assert result.stderr == b""
-
-
-def test_passes_silently_on_claude_dir(boost_home):
-    result = run_hook(
-        "consult-gate.py",
-        _edit("/project/.claude/settings.json"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    assert result.stderr == b""
-
-
-def test_passes_silently_on_knowledge_path(boost_home):
-    result = run_hook(
-        "consult-gate.py",
-        _edit("/claudeboost/knowledge/security.md"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
+    assert result.stdout == b""
     assert result.stderr == b""
 
 
 # ---------------------------------------------------------------------------
-# Read-only Bash: silent pass
+# Bash: always silent pass
 # ---------------------------------------------------------------------------
 
-def test_passes_readonly_bash(boost_home):
-    result = run_hook(
-        "consult-gate.py",
-        _bash_write("git log --oneline"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    # No CONSULT nudge for read-only bash
-    assert b"CONSULT" not in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Pre-approved axis: skip reminder
-# ---------------------------------------------------------------------------
-
-def test_no_nudge_when_pre_approved(boost_home):
-    mode_file = boost_home / "state" / "claudeboost-mode.json"
-    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
-
-    approvals_file = boost_home / "state" / "session-approvals.json"
-    approvals_file.write_text(json.dumps({
-        "approvals": [
-            {"axis": "service", "choice": "add important_service.py endpoint"}
-        ]
-    }), encoding="utf-8")
-
-    result = run_hook(
-        "consult-gate.py",
-        _edit("/some/project/src/important_service.py"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    # Pre-approved → no nudge
-    assert b"CONSULT" not in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Missing mode file: defaults to CONSULT
-# ---------------------------------------------------------------------------
-
-def test_defaults_to_consult_when_no_mode_file(boost_home):
-    # Don't write mode file
-    result = run_hook(
-        "consult-gate.py",
-        _edit("/some/project/src/service.py"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    # Missing file → CONSULT mode → nudge fires
-    assert b"CONSULT" in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Bash write with redirection: nudge fires on the output path
-# ---------------------------------------------------------------------------
-
-def test_bash_write_redirect_nudges_in_consult_mode(boost_home):
+def test_bash_passes_silently_in_consult_mode(boost_home):
     mode_file = boost_home / "state" / "claudeboost-mode.json"
     mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
 
@@ -170,19 +88,151 @@ def test_bash_write_redirect_nudges_in_consult_mode(boost_home):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
-    # Write redirect to a non-exempt path → nudge
-    assert b"CONSULT" in result.stderr
+    assert result.stdout == b""
 
 
 # ---------------------------------------------------------------------------
-# Invalid JSON on stdin: recovers gracefully, still exits 0
+# Exempt paths: always silent pass
+# ---------------------------------------------------------------------------
+
+def test_passes_silently_on_workspace_path(boost_home):
+    result = run_hook(
+        "consult-gate.py",
+        _write("/project/workspace/task-1/context.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+
+
+def test_passes_silently_on_knowledge_path(boost_home):
+    result = run_hook(
+        "consult-gate.py",
+        _write("/claudeboost/knowledge/security.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+
+
+def test_passes_silently_on_docs_path(boost_home):
+    result = run_hook(
+        "consult-gate.py",
+        _write("/project/docs/README.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+
+
+# ---------------------------------------------------------------------------
+# .claude/ path: NOT exempt (skill edits must go through the gate)
+# ---------------------------------------------------------------------------
+
+def test_claude_dir_write_no_plan_triggers_ask(boost_home, tmp_path):
+    """Write to a new .claude/ file with no task plan triggers permissionDecision:ask."""
+    mode_file = boost_home / "state" / "claudeboost-mode.json"
+    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
+
+    result = run_hook(
+        "consult-gate.py",
+        _write("/project/.claude/commands/new-skill.md"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    if result.stdout.strip():
+        out = json.loads(result.stdout)
+        assert out.get("permissionDecision") == "ask"
+
+
+# ---------------------------------------------------------------------------
+# Core gate: Write to new file with no task-plan.json → permissionDecision:ask
+# ---------------------------------------------------------------------------
+
+def test_write_new_file_no_plan_triggers_ask(boost_home):
+    mode_file = boost_home / "state" / "claudeboost-mode.json"
+    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
+
+    result = run_hook(
+        "consult-gate.py",
+        # Path that doesn't exist on disk
+        _write("/tmp/nonexistent_new_service_12345.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip(), "expected JSON output on stdout"
+    out = json.loads(result.stdout)
+    assert out.get("permissionDecision") == "ask"
+    assert "task" in out.get("reason", "").lower() or "plan" in out.get("reason", "").lower()
+
+
+def test_write_new_file_with_plan_passes_silently(boost_home):
+    mode_file = boost_home / "state" / "claudeboost-mode.json"
+    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
+
+    # Task plan approved
+    plan_file = boost_home / "state" / "task-plan.json"
+    plan_file.write_text(json.dumps({
+        "task": "add new service",
+        "approved_at": "2026-06-16",
+    }), encoding="utf-8")
+
+    result = run_hook(
+        "consult-gate.py",
+        _write("/tmp/nonexistent_new_service_12345.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+
+
+# ---------------------------------------------------------------------------
+# Write to EXISTING file: silent pass (grinding, not new work)
+# ---------------------------------------------------------------------------
+
+def test_write_existing_file_passes_silently(boost_home, tmp_path):
+    mode_file = boost_home / "state" / "claudeboost-mode.json"
+    mode_file.write_text(json.dumps({"mode": "CONSULT"}), encoding="utf-8")
+
+    # Create an actual file so the hook sees it as existing
+    existing = tmp_path / "service.py"
+    existing.write_text("# existing", encoding="utf-8")
+
+    result = run_hook(
+        "consult-gate.py",
+        pretooluse("Write", {"file_path": str(existing), "content": "new content"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+
+
+# ---------------------------------------------------------------------------
+# Missing mode file: defaults to CONSULT
+# ---------------------------------------------------------------------------
+
+def test_defaults_to_consult_when_no_mode_file(boost_home):
+    # Don't write mode file — gate should still fire on new file + no plan
+    result = run_hook(
+        "consult-gate.py",
+        _write("/tmp/nonexistent_new_service_12345.py"),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    # Defaults to CONSULT → gate fires
+    if result.stdout.strip():
+        out = json.loads(result.stdout)
+        assert out.get("permissionDecision") == "ask"
+
+
+# ---------------------------------------------------------------------------
+# Invalid JSON on stdin: recovers gracefully, exits 0
 # ---------------------------------------------------------------------------
 
 def test_invalid_json_input_exits_0(boost_home):
     import subprocess
     import sys
     from helpers import SCRIPTS_DIR, COVERAGERC
-    import os
     script = SCRIPTS_DIR / "consult-gate.py"
     env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
     if COVERAGERC.exists():

@@ -84,14 +84,20 @@ Hooks remind you of this: PreToolUse nudges agents to call POST http://127.0.0.1
 
 ## Collaborative Mode (CONSULT / AUTO)
 
-Default: **CONSULT**. Research project, spawn `architect-agent` (Opus) for proposal, present via `AskUserQuestion`. User adds constraints; you implement.
+Default: **CONSULT**. Before starting any task that creates new things or makes choices with visible impact on the outcome: describe in 2-3 sentences what it will look/work like from the user's perspective, note any meaningful choice where different approaches produce different results, stop and wait for yes. Once confirmed, log to `state/task-plan.json` and grind freely through the whole task without asking again.
 
-**Triggers**: new endpoint/table/dependency/module/middleware/auth-strategy/API/config/concurrency.
-**Not triggers**: typos, bugfixes, tests, docs, config tweaks, renames, edits under `workspace/`/`.claude/`/`knowledge/`/`plans/`/`docs/`.
+This is a task-level gate, not a file-level gate. One check before work starts, then done. The hook (`consult-gate.py`) enforces it mechanically: Write to a new file with no task-plan.json on record triggers a permission dialog.
 
-Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically — not debatable.
-`architect-agent` requires >=2 `file:line` citations in spawn prompt.
+**Vision check format** — plain language, user-visible outcomes, concrete:
+- Good: "I'll make a yellow bird that flies through green pipes. Score counter at the top. Want sound effects too?"
+- Bad: "I'll implement a Canvas-based physics engine with requestAnimationFrame loop..."
+
+**What fires the gate**: any request to build, add, or create something new.
+**What doesn't**: bugfixes, typos, tests, docs, formatting, renames, edits to existing files, anything under `workspace/`/`knowledge/`/`plans/`/`docs/`. AUTO mode bypasses everything.
+
+Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically throughout — not up for debate.
 Approvals logged to `state/session-approvals.json` (session-scoped).
+Task approval logged to `state/task-plan.json` (overwritten per task).
 State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 `/auto [reason]` = AUTO. `/consult` = restore. Full protocol: `knowledge/consult-mode.xml`.
 
