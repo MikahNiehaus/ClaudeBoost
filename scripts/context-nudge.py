@@ -62,12 +62,19 @@ def _target_workspace(ctx_files: list, home: Path) -> Path:
     active_ws_path = home / "state" / "active-workspace.json"
     try:
         active_ws = json.loads(active_ws_path.read_text(encoding="utf-8"))
-        candidate = Path(active_ws.get("workspace_path", "")) / "context.md"
-        if candidate in ctx_files:
-            return candidate
+        # Match agent-spawn-gate.py's fallback chain for legacy "path" key
+        ws_path = active_ws.get("workspace_path") or active_ws.get("path") or ""
+        if ws_path:
+            candidate = Path(ws_path) / "context.md"
+            resolved = {f.resolve() for f in ctx_files}
+            if candidate.resolve() in resolved:
+                return candidate
     except Exception:
         pass
-    return max(ctx_files, key=lambda f: f.stat().st_mtime)
+    try:
+        return max(ctx_files, key=lambda f: f.stat().st_mtime)
+    except (OSError, ValueError):
+        return ctx_files[0]
 
 
 def _auto_save_handoff(home: Path, ctx_files: list, session_id: str = "") -> None:
@@ -161,6 +168,35 @@ def main() -> int:
     tool_name = payload.get("tool_name", "")
     session_id = payload.get("session_id", "")
 
+    # --- Behavior tracker ---
+    behavior_path = home / "state" / "behavior-tracker.json"
+    try:
+        behavior = json.loads(behavior_path.read_text(encoding="utf-8"))
+    except Exception:
+        behavior = {"reads_since_rag": 0, "tasks_since_evaluator": 0}
+
+    # Safety net for dirty trackers after a crash (session-clear-save.py didn't run).
+    # Only fires when the tracker already has a session_id that is DIFFERENT from the
+    # current one — meaning the previous session ended uncleanly. When session_id is
+    # absent from the tracker (normal after a clean /clear), skip the reset entirely
+    # because session-clear-save.py already zeroed everything out.
+    _prev_session = behavior.get("session_id")
+    if session_id and _prev_session and _prev_session != session_id:
+        behavior["reads_since_context_update"] = 0
+        behavior["reads_since_rag"] = 0
+        behavior["tasks_since_evaluator"] = 0
+        behavior["last_nudge_ctx_mtime"] = 0.0
+        behavior["last_nudge_ctx_path"] = ""
+        behavior["last_nudge_count"] = 0
+        behavior["reads_ctx_workspace_id"] = ""
+        try:
+            behavior_path.write_text(json.dumps(behavior), encoding="utf-8")
+        except Exception:
+            pass
+    # Always track the current session so the next call can detect a future change.
+    if session_id:
+        behavior["session_id"] = session_id
+
     # --- Context window pressure (from hook payload when available) ---
     ctx_usage = payload.get("context_window_usage") or {}
     input_tokens = ctx_usage.get("input_tokens", 0)
@@ -200,6 +236,8 @@ def main() -> int:
         pass
     if _current_ws_id and behavior.get("reads_ctx_workspace_id", "") != _current_ws_id:
         behavior["reads_since_context_update"] = 0
+        behavior["reads_since_rag"] = 0
+        behavior["tasks_since_evaluator"] = 0
         behavior["reads_ctx_workspace_id"] = _current_ws_id
 
     # Detect context.md write (Edit/Write to a file named context.md) — resets investigation counter
@@ -221,10 +259,12 @@ def main() -> int:
     elif tool_name in FILE_TOOLS:
         behavior["reads_since_rag"] = behavior.get("reads_since_rag", 0) + 1
 
-    # Track reads since last context.md update — fires "write your findings" nudge
+    # Track reads since last context.md update — fires "write your findings" nudge.
+    # Don't count reads during audit: suppressing the nudge but not the counter
+    # causes the BLOCK escalation to fire immediately when the audit ends.
     if wrote_context:
         behavior["reads_since_context_update"] = 0
-    elif tool_name in FILE_TOOLS or tool_name in RAG_TOOLS:
+    elif (tool_name in FILE_TOOLS or tool_name in RAG_TOOLS) and not audit_active:
         behavior["reads_since_context_update"] = behavior.get("reads_since_context_update", 0) + 1
 
     # Update evaluator counter
@@ -311,7 +351,7 @@ def main() -> int:
             "POST http://127.0.0.1:8612/search. "
             "Only read files after RAG confirms which ones are relevant."
         )
-    elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0:
+    elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0 and not audit_active:
         # Extract file:line citations from the most recent agent output so the
         # evaluator spawn prompt has something concrete to verify against.
         last_response = behavior.get("last_task_response", "")
@@ -362,7 +402,9 @@ def main() -> int:
         # whether context.md was just updated. No additionalContext — zero token cost.
         _auto_save_handoff(home, ctx_files, session_id)
 
-        # Nudge only when context.md is stale — no spam when it was just written
+        # Nudge only when context.md is stale — no spam when it was just written.
+        # No audit_active guard here: stale context.md is worth flagging even during audits,
+        # and audits don't do Edit/Write to code files so this rarely fires.
         most_recent = _target_workspace(ctx_files, home)
         age_seconds = time.time() - most_recent.stat().st_mtime
         if age_seconds > STALE_NUDGE_SECONDS:

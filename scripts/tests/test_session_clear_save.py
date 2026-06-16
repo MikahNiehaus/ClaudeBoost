@@ -98,6 +98,11 @@ def test_resets_behavior_tracker(boost_home):
     bt.write_text(json.dumps({
         "reads_since_rag": 99,
         "tasks_since_evaluator": 5,
+        "reads_since_context_update": 12,
+        "last_nudge_ctx_mtime": 1234567890.0,
+        "last_nudge_ctx_path": "/some/path/context.md",
+        "last_nudge_count": 42,
+        "reads_ctx_workspace_id": "old-workspace",
     }), encoding="utf-8")
 
     result = run_hook(
@@ -109,6 +114,11 @@ def test_resets_behavior_tracker(boost_home):
 
     tracker = json.loads(bt.read_text(encoding="utf-8"))
     assert tracker.get("reads_since_rag", 99) == 0
+    assert tracker.get("reads_since_context_update", 99) == 0
+    assert tracker.get("last_nudge_ctx_mtime", 1.0) == 0.0
+    assert tracker.get("last_nudge_ctx_path", "x") == ""
+    assert tracker.get("last_nudge_count", 99) == 0
+    assert tracker.get("reads_ctx_workspace_id", "x") == ""
 
 
 # ---------------------------------------------------------------------------

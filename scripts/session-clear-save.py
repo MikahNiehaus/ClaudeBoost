@@ -299,10 +299,18 @@ def main() -> int:
     except Exception:
         pass
 
-    # Reset counters so the new session starts clean (mirrors compaction-save.py)
+    # Reset counters so the new session starts clean (mirrors compaction-save.py).
+    # IMPORTANT: include every counter that context-nudge.py and rag-read-guard.py
+    # track — missing any one causes carryover blocks in the next session.
     for tracker_name, default in (
         ("compaction-tracker.json", '{"edit_count": 0}'),
-        ("behavior-tracker.json", '{"reads_since_rag": 0, "tasks_since_evaluator": 0}'),
+        (
+            "behavior-tracker.json",
+            '{"reads_since_rag": 0, "tasks_since_evaluator": 0, '
+            '"reads_since_context_update": 0, "last_nudge_ctx_mtime": 0.0, '
+            '"last_nudge_ctx_path": "", "last_nudge_count": 0, '
+            '"reads_ctx_workspace_id": ""}',
+        ),
     ):
         try:
             (state_dir / tracker_name).write_text(default, encoding="utf-8")

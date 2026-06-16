@@ -23,20 +23,19 @@ Bash snippets in this file mix two kinds of `$NAMES` — treat them differently:
 
 ## Phase 0: Session Readiness Check
 
-Before loading RAG context, verify the session is properly boosted:
+Run the sentinel check **alone** (never in parallel with other Bash calls — a parallel failure cancels both):
 
 ```bash
 ls "${TEMP}/claudeboost_active"
 ```
 
-If `ls` succeeds the session is BOOSTED; if it errors the session is NOT_BOOSTED. (Brace form `${TEMP}` and no `|| echo` fallback — both keep bash-guard happy.)
+- BOOSTED (`ls` succeeds): proceed silently.
+- NOT_BOOSTED (`ls` errors): note it but **do not emit a warning yet**. The RAG server often stays running across sessions after `/clear` even when the sentinel is gone. Phase 0.5 confirms the real state.
 
-If NOT_BOOSTED, emit this warning **once** and proceed — do NOT block:
-> "⚠ Session not boosted. Graph RAG and project codebase search will not be available.
-> For best results run `/boost` then `/index-project <path>` before planning.
-> Continuing with knowledge RAG only."
-
-If BOOSTED: proceed silently.
+After Phase 0.5 completes:
+- RAG responded `"status":"ready"` → proceed silently. No warning. RAG is the critical dependency; the sentinel is a proxy for it.
+- RAG is also down → emit this warning once and ask the user to run `/boost`:
+  > "⚠ Session not boosted and RAG is not responding. Run `/boost` then `/index-project <path>`, then retry."
 
 ---
 

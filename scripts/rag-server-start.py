@@ -80,6 +80,10 @@ def start_server(port: int) -> subprocess.Popen:
     python = sys.executable
     env = os.environ.copy()
     env["PYTHONPATH"] = str(RAG_SERVER_SRC)
+    # The server manages its own telemetry via _TelemetryMiddleware; it should not
+    # inherit DISABLE_TELEMETRY from the parent Claude Code session, which may have
+    # the env var set from a previous settings.json state that has since been corrected.
+    env.pop("DISABLE_TELEMETRY", None)
     # Disable tqdm/HF progress bars — they crash when stdout is a log file (closed fd)
     env["TQDM_DISABLE"] = "1"
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"

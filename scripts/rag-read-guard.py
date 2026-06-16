@@ -116,6 +116,16 @@ def main() -> int:
 
     reads_since_rag = behavior.get("reads_since_rag", 0)
 
+    # Allow the read when a crash left dirty counters from a prior session.
+    # Only fires when the tracker has a previous session_id that differs from the current
+    # one — absent session_id means session-clear-save.py already reset cleanly.
+    # We don't write here: writing session_id would prevent context-nudge.py (PostToolUse)
+    # from detecting the change and resetting reads_since_context_update and friends.
+    session_id = payload.get("session_id", "")
+    _prev = behavior.get("session_id")
+    if session_id and _prev and _prev != session_id:
+        return 0
+
     if reads_since_rag < RAG_THRESHOLD:
         return 0
 
