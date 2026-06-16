@@ -55,7 +55,7 @@ Most slash commands are used internally by agents — you rarely call them direc
 | `/review` | Quick A-F grade; add `--deep` for the full 15-pass parallel review |
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
-| `/qa` | Full QA session — learns the project via RAG + graph, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with screenshot evidence, and reports what was AND wasn't tested |
+| `/qa` | Full QA session — browser testing with screenshot evidence (auto-detects server), or general code/artifact QA with `--code` / file path / workspace ID. Both modes write a report with explicit coverage gaps. |
 | `/research-task` | Before implementing against an external API or unfamiliar library — pass URLs for manual curation or `--approve` for the approval gate |
 
 Everything else in the tables below is available, but most of it runs automatically — you won't need to invoke it by name unless you have a specific reason.
@@ -93,7 +93,7 @@ Everything else in the tables below is available, but most of it runs automatica
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/qa` | Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with screenshot evidence, and produces a report with explicit coverage gaps. | `/qa` or `/qa http://localhost:3000 auth` |
+| `/qa` | Dual-mode QA session. **Browser mode** (default): auto-detects or starts the dev server, builds a full app inventory via RAG + graph traversal, writes a risk-prioritized test plan, and executes browser tests with screenshot evidence. **General mode**: charter-based code/artifact QA — runs the existing test suite, writes edge case tests, and produces a session report with findings. | `/qa` or `/qa http://localhost:3000 auth` or `/qa --code` or `/qa scripts/my-hook.py` |
 
 ### RAG & Indexing
 

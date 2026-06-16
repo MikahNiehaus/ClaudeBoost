@@ -1014,6 +1014,7 @@ def install_rag_server() -> None:
     if rc == 0:
         _ok(f"RAG HTTP server running: {out.splitlines()[-1] if out else 'port 8612'}")
         _prime_rag_session()
+        _seed_rag_index()
     else:
         _warn("RAG HTTP server did not start — run it manually:")
         _warn(f"  {sys.executable} \"{start_script}\"")
@@ -1060,6 +1061,41 @@ def _prime_rag_session() -> None:
             _ok(f"RAG session primed ({sources} sources)")
     except Exception as e:
         _warn(f"RAG context prime failed ({e}) — model may still be loading, run /rag if needed")
+
+
+# ---------------------------------------------------------------------------
+# RAG index seed: index ClaudeBoost knowledge bases after server starts so
+# /context and /search work immediately after install without requiring the
+# user to run /index-boost or /boost first.
+# ---------------------------------------------------------------------------
+def _seed_rag_index() -> None:
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    _info("Indexing ClaudeBoost knowledge bases (agents/ + knowledge/)...")
+    try:
+        body = _json.dumps({
+            "project_path": BOOST_HOME_POSIX,
+            "force": False,
+        }).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:8612/index", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = _json.loads(r.read())
+            indexed = data.get("files_indexed", 0)
+            unchanged = data.get("files_unchanged", 0)
+            failed = data.get("files_failed", 0)
+            if failed:
+                _warn(f"Knowledge bases indexed with errors: {indexed} new, {unchanged} unchanged, {failed} failed")
+                _warn("  Run /index-boost in Claude Code to retry failed files")
+            else:
+                _ok(f"Knowledge bases indexed: {indexed} new, {unchanged} unchanged")
+    except Exception as e:
+        _warn(f"Knowledge base indexing failed ({e})")
+        _warn("  Run /index-boost in Claude Code to index manually")
 
 
 # ---------------------------------------------------------------------------
@@ -1291,6 +1327,9 @@ def install_netcoredbg() -> None:
         return
 
     if IS_WINDOWS:
+        if arch == "arm64":
+            _warn("netcoredbg: no Windows arm64 binary available — skipping .NET debugger install")
+            return
         asset_name = "netcoredbg-win64.zip"
     elif IS_MACOS:
         asset_name = f"netcoredbg-osx-{arch}.tar.gz"

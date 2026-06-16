@@ -44,8 +44,12 @@ if [ -e "$CLAUDE_DIR/CLAUDE.md" ] || [ -L "$CLAUDE_DIR/CLAUDE.md" ]; then
         exit 1
     fi
 fi
-ln -s "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
-echo "        CLAUDE.md linked (auto-updates on git pull)."
+if ln -s "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+    echo "        CLAUDE.md linked (auto-updates on git pull)."
+else
+    cp "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
+    echo "        CLAUDE.md copied (re-run install.sh after git pull to update it)."
+fi
 
 # ── 2. Link slash commands ────────────────────────────────────────────────────
 echo " [2/3] Linking slash commands..."
@@ -57,8 +61,11 @@ if [ -L "$CLAUDE_DIR/commands" ] || [ -d "$CLAUDE_DIR/commands" ]; then
         exit 1
     fi
 fi
-ln -s "$BOOST_DIR/.claude/commands" "$CLAUDE_DIR/commands"
-echo "        Slash commands linked (symlink — auto-updates on git pull)."
+if ln -s "$BOOST_DIR/.claude/commands" "$CLAUDE_DIR/commands" 2>/dev/null; then
+    echo "        Slash commands linked (symlink — auto-updates on git pull)."
+else
+    echo "        Symlink failed. setup.py will copy commands instead."
+fi
 
 # ── 3. Run setup.py ──────────────────────────────────────────────────────────
 echo " [3/3] Running setup.py (hooks, RAG server, MCP tools, permissions)..."

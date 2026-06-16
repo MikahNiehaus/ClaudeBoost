@@ -51,6 +51,25 @@ RAG_TOOLS: set = set()  # RAG is HTTP-only now; detection uses _is_http_rag (Bas
 FILE_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 
+def _target_workspace(ctx_files: list, home: Path) -> Path:
+    """Return the context.md file to nudge about.
+
+    Prefers the registered active workspace (state/active-workspace.json) over
+    the most-recently-modified context.md. The max(mtime) approach breaks when
+    a cross-cutting task (audit, research-task) touches many files — it keeps
+    targeting whatever workspace was last modified, not the one actually active.
+    """
+    active_ws_path = home / "state" / "active-workspace.json"
+    try:
+        active_ws = json.loads(active_ws_path.read_text(encoding="utf-8"))
+        candidate = Path(active_ws.get("workspace_path", "")) / "context.md"
+        if candidate in ctx_files:
+            return candidate
+    except Exception:
+        pass
+    return max(ctx_files, key=lambda f: f.stat().st_mtime)
+
+
 def _auto_save_handoff(home: Path, ctx_files: list, session_id: str = "") -> None:
     """Silently write handoff-latest.json from current workspace context.md files.
 
@@ -128,6 +147,10 @@ def main() -> int:
 
     has_workspace = bool(ctx_files)
 
+    # Bypass workspace checkpoint during cross-cutting operations that read many
+    # files by design. Mirrors the same pattern in agent-spawn-gate.py (line ~180).
+    audit_active = (home / "state" / "audit-in-progress.json").exists()
+
     # --- Read hook payload ---
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
@@ -165,6 +188,19 @@ def main() -> int:
         behavior = json.loads(behavior_path.read_text(encoding="utf-8"))
     except Exception:
         behavior = {"reads_since_rag": 0, "tasks_since_evaluator": 0}
+
+    # Reset the per-read counter when the active workspace changes.
+    # Without this, reads from one workspace accumulate and fire against
+    # a different workspace after switching tasks.
+    _current_ws_id = ""
+    try:
+        _aws = json.loads((home / "state" / "active-workspace.json").read_text(encoding="utf-8"))
+        _current_ws_id = _aws.get("workspace", "")
+    except Exception:
+        pass
+    if _current_ws_id and behavior.get("reads_ctx_workspace_id", "") != _current_ws_id:
+        behavior["reads_since_context_update"] = 0
+        behavior["reads_ctx_workspace_id"] = _current_ws_id
 
     # Detect context.md write (Edit/Write to a file named context.md) — resets investigation counter
     tool_input = payload.get("tool_input") or {}
@@ -248,8 +284,9 @@ def main() -> int:
         reads_since_ctx >= READS_BEFORE_CONTEXT_UPDATE
         and reads_since_ctx % READS_BEFORE_CONTEXT_UPDATE == 0
         and has_workspace
+        and not audit_active
     ):
-        most_recent_ctx = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        most_recent_ctx = _target_workspace(ctx_files, home)
         task_id = most_recent_ctx.parent.name
         if reads_since_ctx >= READS_BEFORE_CONTEXT_UPDATE * 2:
             # 2nd+ nudge without compliance — escalate to hard stop
@@ -326,7 +363,7 @@ def main() -> int:
         _auto_save_handoff(home, ctx_files, session_id)
 
         # Nudge only when context.md is stale — no spam when it was just written
-        most_recent = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        most_recent = _target_workspace(ctx_files, home)
         age_seconds = time.time() - most_recent.stat().st_mtime
         if age_seconds > STALE_NUDGE_SECONDS:
             task_id = most_recent.parent.name
@@ -336,9 +373,9 @@ def main() -> int:
                 "Update it now: current status, decision made, next step."
             )
 
-    elif has_workspace and total % NUDGE_INTERVAL == 0:
+    elif has_workspace and total % NUDGE_INTERVAL == 0 and not audit_active:
         # Fallback: periodic nudge for sessions without recent Edit/Write activity
-        most_recent = max(ctx_files, key=lambda f: f.stat().st_mtime)
+        most_recent = _target_workspace(ctx_files, home)
         task_id = most_recent.parent.name
         current_mtime = most_recent.stat().st_mtime
 

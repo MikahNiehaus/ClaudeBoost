@@ -1,5 +1,5 @@
 ---
-argument-hint: [target-url] [scope — auth | crud | nav | errors | responsive | all | quick] [--no-debug] [--fresh]
+argument-hint: [url | --code | file-path | workspace-id] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
 description: Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes with screenshot evidence, and reports what was tested AND what was not
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
 ---
@@ -7,7 +7,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__brow
 # /qa — QA Session
 
 Arguments: **$ARGUMENTS**
-(Format: `<url>` or `<url> <scope>` — e.g., `http://localhost:3000 auth`)
+(Format: `<url>` for browser testing, `--code` for recent git changes, or a file path / workspace ID for artifact QA)
 
 ---
 
@@ -36,9 +36,27 @@ Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the det
 **0a — Parse arguments.**
 
 Strip flags from `$ARGUMENTS` before parsing positional tokens:
-- `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3)
+- `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3 and G4d)
 - `--fresh` present → force a new workspace (already handled in 0c)
-- Remaining tokens: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
+- `--code` present → set `CODE_FLAG = true` (used in 0a-iii to set MODE = general)
+- Remaining tokens after stripping all flags: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
+
+**0a-iii — Set MODE based on parsed arguments.**
+
+| Condition | MODE | GENERAL_TARGET |
+|-----------|------|----------------|
+| `TARGET_URL` starts with `http://` or `https://` | `browser` | — |
+| `CODE_FLAG = true` (from `--code`) | `general` | Recent git changes (`git diff HEAD~1`) |
+| `TARGET_URL` matches `[a-z0-9]+-\d{4}-\d{2}-\d{2}` (workspace ID pattern) | `general` | Files in that workspace |
+| `TARGET_URL` contains `/` or `\` or starts with `.` (file path) | `general` | That file or directory |
+| `TARGET_URL` is non-empty but none of the above | `general` | Treat as description of what to QA |
+| `TARGET_URL` is empty | `detect` | Run Steps A–D to find a server |
+
+**If MODE = `general`:** skip Steps A–D, skip Phase 0a-ii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
+
+**If MODE = `detect` and Steps A–C find a running server:** set `MODE = browser` and `TARGET_URL` to the detected address.
+
+**If MODE = `detect` and no server found (Step D):** ask: "No running server found. Paste a URL for browser testing, or describe what to QA (file, workspace ID, or `--code` for recent git changes)." Set MODE based on the reply.
 
 **0a-i — Auto-detect TARGET_URL if not provided.**
 
@@ -312,6 +330,10 @@ Built from RAG vector + graph traversal — covers full codebase, not just nav-v
 **This inventory is the QA person's knowledge of the app. Every route in this table gets either tested or explicitly justified as out-of-scope in the final report. There are no silent gaps.**
 
 If RAG returns no results at all (project not indexed or search errors): note this in app-inventory.md and print a warning. Phase 1 browser crawl becomes the primary discovery method, but this is a degraded mode.
+
+---
+
+> **General mode only:** If MODE = `general`, skip Phase 1–4 below. Jump directly to the **General Mode** section at the bottom of this file.
 
 ---
 
@@ -1336,6 +1358,244 @@ Call `browser_close`.
 
 - If Phase 3 Close evaluator ran → confirm and cite the evaluator's RETAKE count.
 - If Phase 3 Close did NOT run → run it now before answering. Do not self-assess screenshot quality.
+
+---
+
+---
+
+## General Mode
+
+**Entry:** MODE = `general`. Used when there is no browser target — QAing code changes, scripts, hooks, artifacts, or workspace output.
+
+---
+
+### G1: Charter
+
+Define the session mission before any work starts.
+
+Template: **"Explore [GENERAL_TARGET] With [test suite + RAG search + edge case tests] To discover [regressions / logic errors / edge case failures / false positives]"**
+
+Derive `GENERAL_TARGET` from MODE detection:
+- `--code`: run `git diff HEAD~1 --name-only` and `git diff HEAD~1 --stat` to get the list of changed files
+- File path: the file or directory named
+- Workspace ID: files in `$WORKSPACE_ABS/` (plan.md, report.md, context.md, research-brief.md)
+- Description: the text the user provided
+
+Print the charter:
+```
+Session charter
+  Target  : [GENERAL_TARGET description]
+  Mission : Explore [target] with test suite + edge case tests to discover [problem classes]
+  Scope   : [list the specific files or artifacts in scope]
+```
+
+Write the charter to `$WORKSPACE_ABS/session-charter.md`.
+
+---
+
+### G2: Inventory
+
+Understand the target before testing it.
+
+**G2a — Read target files.** For each file in scope: read it, note its purpose, test surface, and any obvious inputs/outputs.
+
+**G2b — RAG search for related code.** Run both modes:
+```
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=vector limit=10
+POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=graph limit=10
+```
+Use results to find: callers, tests that already exist, related modules the change might affect.
+
+**G2c — Write inventory to `$WORKSPACE_ABS/session-inventory.md`:**
+```markdown
+# Session Inventory
+
+## Files in Scope
+| File | Purpose | Test Surface | Existing Tests |
+|------|---------|-------------|----------------|
+| path/to/file.py | ... | ... | test_file.py or "none" |
+
+## Related Files (from RAG)
+| File | Relationship |
+|------|-------------|
+| ... | calls this, imports from this, tested alongside |
+
+## Risk Areas
+- [things that could break, edge cases, surprising inputs]
+```
+
+---
+
+### G3: Static Pass
+
+Run what already exists before writing anything new.
+
+**G3a — Existing test suite.** Detect and run:
+- Python: `pytest` in the project root or nearest `tests/` directory
+- Node: `npm test` or `npx vitest run`
+- Other: check `package.json scripts.test` or `Makefile`
+
+Record output: pass count, fail count, any errors. Write to `$WORKSPACE_ABS/static-results.md`.
+
+**G3b — Type checking (if applicable).**
+- Python: `mypy <files-in-scope>` if mypy is installed
+- TypeScript: `tsc --noEmit` if tsconfig.json exists
+
+**G3c — Lint (if applicable).**
+- Python: `ruff check <files-in-scope>` or `flake8`
+- JS/TS: `eslint <files-in-scope>` if config exists
+
+Record any failures by file and line. A lint failure is not a FAIL unless it indicates a real bug — note it as an observation.
+
+---
+
+### G4: Exploratory Pass
+
+Write targeted tests for things the existing suite does not cover.
+
+**G4a — Identify gaps.** From the inventory risk areas and static pass results, list what is not tested:
+- Error paths (what happens when X fails?)
+- Boundary conditions (empty input, null, max length, negative numbers)
+- False positive / false negative risks (for checks and validators)
+- Interaction effects (does this change break something it calls or that calls it?)
+
+**G4b — Write edge case tests.** For each gap, write a minimal test. Place it alongside the existing test file if one exists, or create `$WORKSPACE_ABS/edge-case-tests.py` (or `.ts`, `.js`).
+
+Each test must be:
+- Self-contained: no external state dependencies
+- Labeled clearly: what scenario it covers and what outcome it expects
+- Runnable: actually run it and record pass/fail
+
+**G4c — Run edge case tests.** Record results. A test that was expected to fail and does pass is a regression catch — flag it.
+
+Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
+
+---
+
+### G4d: Debugger-Assisted Verification
+
+Running tests tells you pass/fail. The debugger tells you *why* — and whether the code actually does what the comments claim at runtime.
+
+**Skip this step only if `--no-debug` was passed.**
+
+**Debugger pre-flight.**
+
+Call `mcp__mcp-debugger__list_supported_languages` to confirm the language is supported. Then create a session:
+```
+mcp__mcp-debugger__create_debug_session(
+  language = detected language (python / javascript / typescript / go / etc.),
+  name     = "qa-general-[TASK_ID]"
+)
+```
+Store the `sessionId`.
+
+**Choose what to step through.**
+
+From the inventory and edge case test results, pick 2-4 code paths worth verifying at runtime. Good candidates:
+- Any test that failed — step through to find the actual branch taken
+- Any condition with multiple branches (if/elif chains, try/except blocks) where the comment doesn't match your expectation
+- Any function that transforms input in a non-obvious way
+- Any result that looked surprising during the static or exploratory pass
+
+**Step through each path.**
+
+For each chosen path:
+
+1. `mcp__mcp-debugger__set_breakpoint(sessionId, file, line)` — set at the entry point or the branch you want to verify
+2. `mcp__mcp-debugger__start_debugging` — run the test or script that exercises this path
+3. When the breakpoint hits:
+   - `mcp__mcp-debugger__get_variables` — inspect locals, confirm inputs match what you expect
+   - `mcp__mcp-debugger__get_stack_trace` — confirm the call came from where you think
+   - `mcp__mcp-debugger__step_over` / `step_into` — walk through the logic step by step
+   - `mcp__mcp-debugger__evaluate_expression` — test a hypothesis ("is this value actually None here?")
+4. At each decision point: record what the variable values actually are, and whether the branch taken matches what the code comment says it does.
+
+**Record findings.** For each path debugged, write to `$WORKSPACE_ABS/debug-log.md`:
+```markdown
+## [function or file:line]
+- Breakpoint at: [file:line]
+- Triggered by: [test name or manual run]
+- Variables at breakpoint: [key locals and their actual values]
+- Branch taken: [which path executed]
+- Matches code comments/expectations: YES / NO
+- Finding: [if NO — what the code actually does vs. what was claimed]
+```
+
+Close the session when done: `mcp__mcp-debugger__close_debug_session(sessionId)`.
+
+---
+
+### G5: Session Report
+
+Write `$WORKSPACE_ABS/report.md`:
+
+```markdown
+# QA Session Report — General Mode
+Target: [GENERAL_TARGET]
+Date: [today]
+Charter: Explore [target] With [tools] To discover [problem classes]
+
+## Summary
+
+| Category | Result |
+|----------|--------|
+| Existing tests | N passed, N failed |
+| Edge case tests written | N |
+| Edge case tests passed | N |
+| Code paths debugged | N |
+| Expectation mismatches found | N |
+| Bugs found | N |
+| Observations | N |
+
+## Static Pass Results
+
+[paste key output from G3 — test counts, type errors, lint issues]
+
+## Edge Case Results
+
+| Test | Scenario | Expected | Actual | PASS/FAIL |
+|------|----------|----------|--------|-----------|
+| TC-GEN-001 | empty input | return [] | return [] | PASS |
+| ... | | | | |
+
+## Debugger Findings
+
+[Each path stepped through: what was expected, what variables actually held, whether the branch taken matched the comment/assumption. Any mismatch is a finding.]
+
+## Bugs Found
+
+[Each bug: description, file:line, reproduction steps, severity]
+
+## Observations
+
+[Things noticed that aren't formal bugs — code smells, unclear behavior, missing docs, surprising edge cases]
+
+## Skipped Areas
+
+[What was NOT tested and why — explicit, not silent]
+
+## Open Questions
+
+[Things that need more investigation or a decision from the team]
+```
+
+**G5b — Print summary to user:**
+```
+General QA complete
+  Target           : [GENERAL_TARGET]
+  Tests run        : N existing + N edge case
+  Pass rate        : N/N (N%)
+  Paths debugged   : N (N mismatches found)
+  Bugs found       : N
+  Observations     : N
+
+  Session report   → $WORKSPACE_ABS/report.md
+  Inventory        → $WORKSPACE_ABS/session-inventory.md
+  Edge case tests  → $WORKSPACE_ABS/edge-case-tests.py (or path)
+  Debug log        → $WORKSPACE_ABS/debug-log.md
+```
+
+If bugs were found: list them by severity before the report path.
 
 ---
 

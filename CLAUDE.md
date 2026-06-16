@@ -122,6 +122,15 @@ Use the Write tool to create the file, then run it:
 
 bash-guard.py enforces both — multiline `-c` strings and cat heredocs are blocked at the hook level.
 
+### No Hardcoded Paths in ClaudeBoost Code
+Never write literal paths like `C:/Development/ClaudeBoost/...` or `C:/Users/mniehaus/...` inside any ClaudeBoost source file (scripts, server code, hooks, agents). Always derive paths from:
+- `os.environ.get("CLAUDEBOOST_HOME")` or the `BOOST_HOME` constant
+- `Path(__file__).resolve().parent...` to traverse relative to the file
+- `os.environ.get("LOCALAPPDATA")` / `Path.home()` for user-scoped paths
+- Temp files: use `tempfile.mkstemp()` or `os.environ.get("TEMP")`, never a hardcoded drive path
+
+This applies equally to debug code, one-off scripts, and test helpers. Hardcoded paths break on other machines and other users.
+
 ### Branch Creation (Non-Negotiable)
 Before creating any new git branch — including during workspace creation — STOP and ask the user for permission using AskUserQuestion. State the proposed branch name and purpose. Do not create the branch until the user confirms.
 
@@ -225,7 +234,7 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 | New codebase / first time in repo | `/index-project <path>` to enable semantic search, then `/research-project` for stack overview |
 | New subsystem or >15 files | `/create-prd` before `/workspace` — locks down scope and acceptance criteria |
 | Explaining architecture or flow | `/visualize` — interactive board in browser |
-| Code just changed | `/review` to check quality, then `/qa` to verify end-to-end |
+| Code just changed | `/review` to check quality, then `/qa --code` to run tests + edge cases, then `/qa <url>` for browser verification if there's a UI |
 | Security concern | `/security-review` — OWASP-aware review of pending branch changes |
 | Something feels off after changes | `/audit` — parallel multi-angle assessment with Opus verdict |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |

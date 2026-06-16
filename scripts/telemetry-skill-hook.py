@@ -26,6 +26,13 @@ _SKILL_RE = re.compile(r"^/([a-zA-Z][a-zA-Z0-9_-]*)(\s|$)")
 
 
 def main() -> None:
+    try:
+        _run()
+    except Exception:
+        pass  # Never let a telemetry hook surface errors to the user
+
+
+def _run() -> None:
     if _DISABLED:
         return
 

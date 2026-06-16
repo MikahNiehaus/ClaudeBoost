@@ -60,13 +60,14 @@ def handle_session_start() -> None:
     # Generate a stable session UUID and persist it so all telemetry writers
     # (server.py middleware, telemetry_writer.py) can read the same ID.
     new_session_id = str(uuid.uuid4())
+    sid_to_use = new_session_id
     try:
         (BOOST_HOME / "state" / "session-id.txt").write_text(new_session_id, encoding="utf-8")
     except Exception:
-        pass  # Best-effort — fall back to "unknown" on failure
+        sid_to_use = session_id()  # write failed — fall back to existing file or "unknown"
 
     record = {
-        "session_id": session_id(),
+        "session_id": sid_to_use,
         "workspace_id": workspace_id,
         "project_path_hash": path_hash(project_path),
         "started_at": now_iso(),
