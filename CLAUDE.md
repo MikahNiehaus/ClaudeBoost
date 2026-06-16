@@ -178,6 +178,7 @@ Same rules. Comments are output too.
 - Skip obvious comments; short beats long
 - Non-formal but professional — conversational, not corporate
 - No dashes of any kind (no hyphens as separators, no em dashes, no double dashes)
+- No hyphenated compound words: "non-blocking" → "not blocking", "hard-coded" → "hardcoded", "step-by-step" → "step by step". Exception: dashes inside actual code identifiers (filenames, flags, variable names) are fine
 - No: `// This function facilitates the seamless authentication flow`
 - Yes: `// Throws if the token is expired`
 

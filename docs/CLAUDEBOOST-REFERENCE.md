@@ -1055,7 +1055,7 @@ Agent reads and internalizes before taking any action
 **Role:** End-to-End UI Test Specialist — executes structured test plans through the browser only  
 **Key behaviors:**
 - STANDARD spawn template
-- Spawned by `/end-to-end-test` command; can also be spawned by orchestrator for structured E2E testing
+- Spawned by `/qa` command; can also be spawned by orchestrator for structured QA sessions
 - App discovery via Project RAG + browser navigation before generating test plan
 - Builds component registry — catalogs all UI instances by type and structure
 - Uses equivalence partitioning and boundary value analysis for test case generation
@@ -1373,7 +1373,7 @@ Agent reads and internalizes before taking any action
 ---
 
 ### 4.44 e2e-testing.xml
-**Triggers:** end-to-end test, e2e, UI test, browser test, integration test, acceptance test, smoke test, regression, playwright test, /end-to-end-test  
+**Triggers:** end-to-end test, e2e, UI test, browser test, integration test, acceptance test, smoke test, regression, playwright test, /qa, qa session, quality assurance  
 **Domain:** E2E UI testing philosophy and anti-cheat patterns  
 **Content:** E2E philosophy (verify user's experience, not developer's intent; every test reproducible by human at browser; honest FAIL > fabricated PASS); anti-cheat patterns (catalog of shortcuts that produce false results); intelligent test generation via equivalence partitioning and boundary value analysis; evidence collection requirements (snapshot-first, screenshot with red annotation overlay); used exclusively by e2e-agent
 
@@ -1515,22 +1515,20 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.12 /end-to-end-test <target-url> [scope]
-**File:** `.claude/commands/end-to-end-test.md`  
-**Description:** End-to-end UI testing — discovers app via RAG + browser, writes test plan, executes browser-only with annotated screenshot evidence  
-**Argument:** `<target-url>` (localhost only) + optional `scope` (auth|crud|nav|errors|responsive|all; default: all)  
+### 5.12 /qa [target-url] [scope]
+**File:** `.claude/commands/qa.md`  
+**Description:** Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with annotated screenshot evidence, and reports what was AND was not tested  
+**Argument:** optional `<target-url>` (localhost only; auto-detected if omitted) + optional `scope` (auth|crud|nav|errors|responsive|all|quick; default: all) + `--no-debug` + `--fresh`  
 **Agent:** `e2e-agent`  
 **Phases:**
-- Phase 0: Parse args, hard-stop on staging/prod URLs, derive task ID, create workspace, load RAG knowledge, index project codebase; sets `SNAPSHOTS_DIR = screenshots/` and `PROOF_DIR = screenshots/proof-[ticket-id]`
-- Phase 1: App discovery via browser snapshot crawl + RAG codebase search; builds component registry and App Map; discovery shots saved to `screenshots/` (base folder only)
-- Phase 2: Test plan generation using scope-to-category mapping + intelligent rules (equivalence partitioning, boundary values); each TC includes a `Code path: file:line` field; evaluator-agent removes unverified TCs; PAUSE for user approval
-- Phase 3: Test execution — browser MCP tools only; snapshot-first text verification; red-box annotation injected before every screenshot (annotation gate: FAIL immediately if overlay element has zero bounding box); TC evidence written to `PROOF_DIR`; every TC gets PASS/FAIL/BLOCKED; mcp-debugger step-through attempted for every server-side TC
-- Phase 4: Report written to `workspace/$TASK_ID/report.md`; proof evidence in `screenshots/proof-[ticket-id]/`  
-**Screenshot layout:** `screenshots/` = discovery + temp shots; `screenshots/proof-[ticket-id]/` = TC evidence (TC-NNN-after.png) and debug traces (TC-NNN-debug.json)  
-**Annotation gate:** Inject overlay → verify `document.getElementById('__e2e_ann__')` has non-zero bounding rect → screenshot. If gate fails, TC is marked FAIL, not skipped.  
-**TC plan fields:** Steps, Expected, Evidence, Code path (server-side file:line or `client-side`), Source  
+- Phase 0: Parse args, auto-detect URL (context.md Dev URL → port probe → package.json/launchSettings → ask), hard-stop on staging/prod, derive task ID with project slug, create workspace, load RAG knowledge, index project; Phase 0g builds **complete app inventory** via 6 parallel RAG searches (routes, mutations, auth, entities, jobs, integrations) → writes `app-inventory.md`
+- Phase 1: Browser crawl (nav links + snapshot-only); then **inventory cross-reference** — navigates every route in app-inventory.md not yet visited, classifying each as accessible/auth-blocked/broken; builds component registry and App Map
+- Phase 2: Journey-based test plan — derived from app-inventory entities (completeness gate), ticket content, and browser discoveries; risk-scored journeys; flow-map.md written before any TCs; evaluator-agent removes unverified TCs; PAUSE for user approval
+- Phase 3: Test execution — browser MCP tools only; snapshot-first; red-box annotation gate; mcp-debugger step-through; coverage gap analysis (compares executed TCs against inventory — writes `coverage-gaps.md`); screenshot evaluator audit
+- Phase 4: Report with explicit "What Was NOT Tested" and "QA Observations" sections  
+**Key outputs:** `app-inventory.md`, `flow-map.md`, `plan.md`, `coverage-gaps.md`, `report.md`, `screenshots/proof-*/`  
 **Anti-cheat enforcement:** No Bash DB queries, no API bypasses, no fabricated PASS — honest FAIL is the output  
-**Hard stops:** Production/staging URLs blocked; any self-audit question NO → FAIL, never PASS
+**Hard stops:** Production/staging URLs blocked; coverage gaps must be explicitly listed in report — no silent omissions
 
 ---
 

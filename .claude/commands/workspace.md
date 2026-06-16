@@ -164,6 +164,34 @@ Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ti
 
 ### 1d — Create feature branch
 
+**First: check the branch-creation setting in state.**
+
+Write `"C:/Development/ClaudeBoost/state/cb_branch_check.py"`:
+```python
+import json, pathlib, sys
+p = pathlib.Path("C:/Development/ClaudeBoost/state/workspace-settings.json")
+if not p.exists():
+    # Key absent — default is to create. Write true so future runs are explicit.
+    p.write_text(json.dumps({"create_branch": True}), encoding="utf-8")
+    print("CREATE")
+    sys.exit(0)
+d = json.loads(p.read_text(encoding="utf-8"))
+if "create_branch" not in d:
+    # Key absent — same: default to create and persist the decision.
+    d["create_branch"] = True
+    p.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    print("CREATE")
+    sys.exit(0)
+print("CREATE" if d["create_branch"] else "SKIP")
+```
+```bash
+"${CLAUDEBOOST_PYTHON}" "C:/Development/ClaudeBoost/state/cb_branch_check.py"
+```
+
+If the output is `SKIP`: skip this step silently. Record in `context.md` under **Key Decisions**: "Branch: skipped (create_branch=false in state)"
+
+If the output is `CREATE`: continue below.
+
 If `WORKSPACE_ROOT` is a git repo, create a feature branch for the task:
 
 ```bash

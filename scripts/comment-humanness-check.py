@@ -12,10 +12,13 @@ Patterns that trigger a nudge (research-backed, arxiv 2401.06461 / 2406.15583 / 
   4. Structural uniformity: 4+ consecutive comments within 5 chars of same length
   5. Banned vocab inside a comment (from human-voice.xml list)
   6. Dash separators: em-dash or spaced hyphen used as a separator
+  7. Hyphenated compound words: non-blocking, well-known, hard-coded, step-by-step, etc.
 
 Comment style rules (always enforced):
   - Non-formal, concise, polite, professional
   - No dashes whatsoever (no em-dash, no " - " separator)
+  - No hyphenated compounds — write "not blocking", "well known", "hardcoded"
+  - Exception: dashes in actual code identifiers (filenames, flags) are fine
   - Say WHY, not WHAT
   - Fragments over complete sentences
 
@@ -155,6 +158,47 @@ def check_dashes(comments: list[str]) -> Finding | None:
     return None
 
 
+def check_hyphenated_compounds(comments: list[str]) -> Finding | None:
+    """Flag hyphenated compound words used as adjectives in comments.
+
+    Things like non-blocking, well-known, hard-coded, step-by-step are AI tells.
+    Write them without the hyphen or rephrase: 'not blocking', 'well known', 'hardcoded'.
+
+    Skips words that look like code identifiers (contain a dot, are snake-cased with
+    underscores, or are inside backticks). Code names that happen to have dashes
+    (like human-voice-guard.py) are fine — they're naming a thing, not joining adjectives.
+    """
+    import re as _re
+
+    # Common compound prefixes AI uses habitually in comments
+    _COMPOUND_PREFIX = _re.compile(
+        r"\b(non|well|hard|step|read|write|compile|run|long|short|high|low|two|one|event|promise|callback|value|error|zero|null|empty)-[a-z]",
+        _re.IGNORECASE,
+    )
+
+    # Skip matches that look like filenames/identifiers: have a dot or underscore nearby,
+    # or are wrapped in backticks
+    _BACKTICK_RE = _re.compile(r"`[^`]*`")
+
+    for comment in comments:
+        # Strip backtick-quoted sections before checking
+        stripped = _BACKTICK_RE.sub("", comment)
+        m = _COMPOUND_PREFIX.search(stripped)
+        if m:
+            matched = m.group(0)
+            # Skip if the match is adjacent to a dot or slash (likely a filename/path)
+            start = m.start()
+            nearby = stripped[max(0, start - 1):m.end() + 5]
+            if "." in nearby or "/" in nearby or "\\" in nearby:
+                continue
+            return Finding(
+                "hyphenated-compound",
+                f"Hyphenated compound {matched!r} in comment — write without the hyphen "
+                f"or rephrase (e.g. 'non-blocking' → 'not blocking'): {comment!r}",
+            )
+    return None
+
+
 def get_new_content(payload: dict) -> str:
     """Extract the newly written text from Edit or Write tool input."""
     tool_input = payload.get("tool_input") or {}
@@ -191,6 +235,7 @@ def main() -> int:
         check_structural_uniformity,
         check_banned_vocab,
         check_dashes,
+        check_hyphenated_compounds,
     ]:
         result = check(comments)
         if result:
@@ -210,6 +255,7 @@ def main() -> int:
     lines.append("  - Mix '//word' and '// word' spacing (C4)")
     lines.append("  - Non-formal, concise, polite, professional")
     lines.append("  - No dashes whatsoever (use commas or colons instead)")
+    lines.append("  - No hyphenated compounds (non-blocking → 'not blocking', hard-coded → 'hardcoded')")
 
     print("\n".join(lines), file=sys.stderr)
     return 0  # nudge only, never blocks

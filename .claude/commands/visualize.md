@@ -742,7 +742,7 @@ dialog.viz-lightbox img { max-width: 92vw; max-height: 90vh; object-fit: contain
     </div>
     <div class="audio-select-group">
       <div class="audio-select-label">Voice</div>
-      <select class="audio-select" id="voiceSelect" style="max-width:160px;"><option>Loading…</option></select>
+      <select class="audio-select" id="voiceSelect" style="max-width:160px;" onchange="primeVoice()"><option>Loading…</option></select>
     </div>
   </div>
   <div class="audio-row-track">
@@ -812,8 +812,20 @@ function loadVoices() {
     o.textContent=v.name.replace('Microsoft ','').replace(' Online (Natural)',' ✦').replace(' Desktop','');
     if(i===0)o.selected=true; sel.appendChild(o);
   });
+  // Pre-warm the top-scored voice so the first play click is instant with no processing lag.
+  setTimeout(primeVoice, 400);
 }
 if(typeof speechSynthesis!=='undefined'){speechSynthesis.onvoiceschanged=loadVoices;loadVoices();}
+
+function primeVoice() {
+  // Speak a silent zero-width space to establish the Microsoft Online TTS connection before the user clicks play.
+  // Without this, the first utterance has a noticeable delay while the backend initializes.
+  const voice = getSelectedVoice();
+  if (!voice) return;
+  const utt = new SpeechSynthesisUtterance('\u200B');
+  utt.voice = voice; utt.volume = 0; utt.rate = 1.0; utt.lang = 'en-US';
+  speechSynthesis.speak(utt);
+}
 
 function getSelectedVoice() {
   const n = document.getElementById('voiceSelect').value;
@@ -1021,10 +1033,11 @@ showDetail = function(id) { _origShowDetail(id); setTimeout(() => bindLightboxIm
 
 ### TOUR_SEGMENTS writing guide
 
-- **Cap at 8 segments total** — users bail on long tours; 6–8 is the sweet spot
-- For concept-mode diagrams: use a **quick tour** structure — intro + 2–3 key concepts + summary (3–5 segments). Merge thin layers into one segment rather than padding.
+- **Segment count is dynamic** — write one segment per meaningful layer or section, plus an intro and a summary. Let the diagram drive the count; don't cap at a fixed number.
+- For concept-mode diagrams: match segments to layers. Four diagram layers → four content segments plus intro and summary (six total). Don't pad thin layers; don't merge distinct stages just to hit a target number.
+- Merge only when two layers are so closely related that splitting them adds no new insight for the listener.
 - Write 1 segment per major layer/section, plus 1 intro and 1 summary
-- **When a ticket is present**: add 2 dedicated segments right after the intro — one for the problem statement ("what was broken/missing before this ticket"), one for the solution. These count toward the 8-segment cap.
+- **When a ticket is present**: add 2 dedicated segments right after the intro — one for the problem statement ("what was broken/missing before this ticket"), one for the solution.
 - Keep each segment 2–4 sentences. Chrome cuts off utterances after ~15 seconds; the audio engine chunks text automatically, but shorter writing still sounds better aloud.
 - `highlights` should list the card IDs that get the blue pulse outline during narration
 - Spell out abbreviations phonetically (e.g., "T F F dash 1040" not "TFF-1040"); `utt.lang = 'en-US'` is already in the engine to reduce mispronunciation of tech acronyms

@@ -149,7 +149,7 @@ the session, and shows recent workspaces. From there:
 /workspace <task>        Create a workspace + implementation plan
 /research-task           Index task-specific docs into the workspace (auto or manual URL mode)
 /review                  Quick A-F grade by default; add --deep for full 15-pass parallel review
-/end-to-end-test         Browser E2E tests with screenshot evidence
+/qa                      Full QA session — app inventory, risk-based test plan, screenshot evidence
 /security-review         OWASP-grounded security audit
 ```
 
@@ -229,9 +229,9 @@ Scope flags: `--staged`, `--branch`, `--pr <url>`.
 `/security-review` focuses the full depth of the security pass on just security findings,
 with `--full` for a whole-project audit.
 
-### E2E Testing
+### QA Sessions
 
-`/end-to-end-test <url>` runs structured browser testing against a localhost app:
+`/qa <url>` runs a full QA session against a localhost app:
 
 1. **App discovery** — Playwright snapshot crawl + RAG codebase search to build a
    component registry and app map
@@ -390,7 +390,7 @@ when one is detected.
 `/review` `/security-review` `/audit` `/self-improve` `/simplify`
 
 **Testing**
-`/end-to-end-test` `/test-hooks`
+`/qa` `/test-hooks`
 
 **Git & Workflow**
 `/done` `/pr-description` `/changes` `/handoff` `/clear-safe`

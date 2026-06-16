@@ -13,7 +13,7 @@ Arguments: **$ARGUMENTS**
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="end-to-end UI test planning and execution", max_tokens=3000`.
+Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="QA session planning and execution: app inventory, risk-based test plan, browser testing", max_tokens=3000`.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
 
@@ -95,7 +95,7 @@ If the user says 'none', skip ticket tracing. Do not block on this.
 **URL pattern check (static):**
 If `TARGET_URL` contains any of: `staging`, `stg`, `stage`, `prod`, `prd`, `production`
 OR ends with: `.azurewebsites.net`, `.herokuapp.com`, `.vercel.app`, `.netlify.app`, `.azure.com`, `.cloudapp.net`, `.onmicrosoft.com`
-→ STOP immediately. Print: "Cannot run E2E tests against staging/production URL." No exceptions, no override.
+→ STOP immediately. Print: "Cannot run QA sessions against staging/production URL." No exceptions, no override.
 
 > Note: This is a static check on the URL you were given. A live environment probe happens in Phase 1a AFTER navigation, which catches OAuth redirects and hidden prod environments.
 
@@ -160,13 +160,13 @@ Check which files exist in `$WORKSPACE_ABS/`:
 | `plan.md` but no unchecked `[ ]` lines | All TCs already marked → print "All tests have results. Use `--fresh` to re-run." then STOP. |
 | `context.md` and `flow-map.md` but no `plan.md` | Phase 1 + 2a done → skip Phases 0e–2a, jump to Phase 2b |
 | `context.md` but no `flow-map.md` and no `plan.md` | Phase 1 done → skip Phases 0e–1, jump to Phase 2 |
-| Neither `context.md` nor `plan.md` | Workspace exists but no E2E state yet → proceed to Phase 0d |
+| Neither `context.md` nor `plan.md` | Workspace exists but no QA session state yet → proceed to Phase 0d |
 
 Print:
 ```
 Resuming workspace: workspace/[existing-task-id]/
 Detected state: Phase [N] in progress — skipping completed phases.
-(Use /end-to-end-test <url> --fresh to force a new session.)
+(Use /qa <url> --fresh to force a new session.)
 ```
 
 **0d — Create workspace, set SNAPSHOTS_DIR and PROOF_DIR.**
@@ -207,7 +207,7 @@ fi
 
 **0e — Load knowledge via RAG (do this FIRST before any browser action).**
 
-Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_description="end-to-end UI test of $TARGET_URL scope=$SCOPE", max_tokens=5000`.
+Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_description="QA session for $TARGET_URL scope=$SCOPE — app inventory, browser testing, coverage gap analysis", max_tokens=5000`.
 
 This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test generation, annotation technique), playwright knowledge, and testing patterns.
 
@@ -380,7 +380,7 @@ Only continue past this probe if ALL checks pass.
 Do not wait for codebase analysis before starting the browser crawl. Dispatch both at the same time.
 
 **Spawn `workflow-agent` (background) for codebase analysis.** The spawn prompt must include:
-1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for E2E discovery"`, `project_path=<WORKSPACE_ROOT>`
+1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for QA session discovery"`, `project_path=<WORKSPACE_ROOT>`
 2. Run all three RAG searches in parallel:
    - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="routes pages navigation URL paths" mode=graph limit=6`
    - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication login session user roles" mode=graph limit=5`
@@ -546,6 +546,12 @@ Keep all journeys scoring 3+. Keep the top 10 maximum. Smoke tests (home loads, 
 ## Smoke Tests (always include)
 - S1: Home page loads without console errors
 - S2: All primary nav links resolve without 404
+
+## Uncovered Routes
+Routes from app-inventory.md that have no covering journey — must list a reason for each.
+| Route | Reason not covered |
+|-------|--------------------|
+| (none — all routes have a covering journey) | |
 ```
 
 **Step 4 — Hard gate:** If `flow-map.md` does not exist when Phase 2b starts, STOP. Print: "Phase 2b blocked: flow-map.md not found. Complete Phase 2a first." Do not generate test cases until the flow map is written.
@@ -643,7 +649,7 @@ Evaluator checks each TC:
 
 Evaluator returns a list of TCs to remove or demote. Apply those changes.
 
-Print: "Evaluator removed N test cases as unverified or unit-level (not E2E scope)."
+Print: "Evaluator removed N test cases as unverified or unit-level (not in QA session scope)."
 
 **2d — Write final plan and present to user.**
 
@@ -705,7 +711,7 @@ If `plan.md` already contains result entries from a previous run (lines starting
 
 **`--no-debug` skip gate:** If `NO_DEBUG = true` (flag was passed in arguments), skip this entire pre-flight block. Set `DEBUG_ENABLED = false` and print: "Debugger skipped (`--no-debug`). Tests will run UI-only." Jump directly to the TC loop.
 
-Otherwise, code-level step-through runs as part of every E2E session. This block runs after the prior-session check and before the first TC.
+Otherwise, code-level step-through runs as part of every QA session. This block runs after the prior-session check and before the first TC.
 
 **Step A — Production guard (re-checked here — never skip).**
 
@@ -785,7 +791,7 @@ To install — pick one:
     3. Either add that folder to your PATH, or set the env var:
        $env:NETCOREDBG_PATH = "C:\Tools\netcoredbg"
 
-After installing, re-run this E2E test to enable code step-through.
+After installing, re-run this QA session to enable code step-through.
 Tests will run UI-only for this session.
 ```
 
@@ -1134,7 +1140,7 @@ For each screenshot the evaluator marks `RETAKE`:
 1. Re-navigate to the page the TC exercised (`browser_navigate`).
 2. Reproduce the exact post-action state by re-running the TC steps (use judgment — for a create TC, if the record was cleaned up, re-create it with `[E2E-TEST-RETAKE]` prefix so it's identifiable).
 3. Re-inject the annotation overlay targeting the correct element.
-4. Call `browser_take_screenshot` → overwrite `$SNAPSHOTS_DIR/TC-NNN-after.png`.
+4. Call `browser_take_screenshot` → overwrite `$PROOF_DIR/TC-NNN-after.png`.
 5. Remove the overlay.
 6. Note in plan.md alongside the TC: `screenshot retaken after evaluator audit`.
 

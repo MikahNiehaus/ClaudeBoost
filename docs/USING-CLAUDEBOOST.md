@@ -55,7 +55,7 @@ Most slash commands are used internally by agents — you rarely call them direc
 | `/review` | Quick A-F grade; add `--deep` for the full 15-pass parallel review |
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
-| `/end-to-end-test` | Browser-level verification of a running local app |
+| `/qa` | Full QA session — learns the project via RAG + graph, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with screenshot evidence, and reports what was AND wasn't tested |
 | `/research-task` | Before implementing against an external API or unfamiliar library — pass URLs for manual curation or `--approve` for the approval gate |
 
 Everything else in the tables below is available, but most of it runs automatically — you won't need to invoke it by name unless you have a specific reason.
@@ -93,7 +93,7 @@ Everything else in the tables below is available, but most of it runs automatica
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/end-to-end-test` | Runs browser E2E tests with Playwright and captures screenshot evidence. Discovers the app via RAG first, then writes and executes the test plan. | `/end-to-end-test` |
+| `/qa` | Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with screenshot evidence, and produces a report with explicit coverage gaps. | `/qa` or `/qa http://localhost:3000 auth` |
 
 ### RAG & Indexing
 
@@ -369,11 +369,11 @@ For large features (15+ source files or a new subsystem), use `/create-prd` firs
 
 For unit and integration tests: describe what needs testing. Claude spawns `test-agent`, which reads the code being tested, identifies the important cases (happy path, edge cases, error conditions), and writes tests that actually fail when the behavior breaks — not just tests that exist on paper.
 
-For browser E2E tests:
+For browser QA sessions:
 ```
-/end-to-end-test http://localhost:3000
-/end-to-end-test http://localhost:5173 auth
-/end-to-end-test http://localhost:3000 all
+/qa http://localhost:3000
+/qa http://localhost:5173 auth
+/qa http://localhost:3000 all
 ```
 
 What happens:
