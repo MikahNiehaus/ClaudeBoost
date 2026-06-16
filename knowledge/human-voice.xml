@@ -105,7 +105,7 @@ Claude overuses em-dashes. One per response is fine. Three in a paragraph is not
   <requirement>Polite: respectful enough to say in a code review without cringing</requirement>
   <requirement>Professional: no jokes, no rants, no dismissive remarks</requirement>
   <requirement>No dashes as separators: no em-dash (—), no en-dash (–), no spaced hyphen ( - ). Use a comma or colon instead.</requirement>
-  <requirement>No hyphenated compound words in comments: write "non-blocking" as "not blocking", "step-by-step" as "step by step", "well-known" as "well known", "hard-coded" as "hardcoded". Exception: when the dash is part of an actual identifier in the code being discussed — referencing a file called human-voice-guard.py is fine because you're naming a thing, not joining adjectives.</requirement>
+  <requirement>No hyphenated compound words in comments: write "non-blocking" as "not blocking", "step-by-step" as "step by step", "well-known" as "well known", "hard-coded" as "hardcoded". Exception: when the dash is part of an actual identifier in the code being discussed. Referencing a file called human-voice-guard.py is fine because you're naming a thing, not joining adjectives.</requirement>
 </style-requirements>
 
 <bad-comment>// This method facilitates the seamless integration of the authentication module</bad-comment>
@@ -196,7 +196,7 @@ to perfect either.
 Do not join words with hyphens in comments. This is a consistent AI pattern and reads
 as machine-written. Write the words separately or rephrase.
   BAD:  // non-blocking call, safe to await
-  GOOD: // doesn't block — safe to await
+  GOOD: // doesn't block, safe to await
   BAD:  // hard-coded for now, revisit later
   GOOD: // hardcoded for now, revisit later
   BAD:  // step-by-step validation before commit

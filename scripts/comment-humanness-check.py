@@ -1,29 +1,27 @@
 """
-ClaudeBoost comment humanness check — PostToolUse on Edit/Write.
+ClaudeBoost comment humanness check, PostToolUse on Edit/Write.
 
 Scans newly written code for AI-sounding comment patterns and nudges
-Claude to revise before moving on. Non-blocking (exit 0 always) — this
-is a quality nudge, not a hard gate.
+Claude to revise before moving on. Always exits 0, nudge only, never blocks.
 
 Patterns that trigger a nudge (research-backed, arxiv 2401.06461 / 2406.15583 / 2509.18880):
   1. Formal opener:  "// This [function|method|class|variable|code]"
   2. Complete-sentence uniformity: 3+ comments all ending with "."
-  3. Spacing uniformity: 5+ comments all using "// " — zero variation
+  3. Spacing uniformity: 5+ comments all using "// " with zero variation
   4. Structural uniformity: 4+ consecutive comments within 5 chars of same length
   5. Banned vocab inside a comment (from human-voice.xml list)
   6. Dash separators: em-dash or spaced hyphen used as a separator
   7. Hyphenated compound words: non-blocking, well-known, hard-coded, step-by-step, etc.
 
 Comment style rules (always enforced):
-  - Non-formal, concise, polite, professional
+  - Informal, concise, polite, professional
   - No dashes whatsoever (no em-dash, no " - " separator)
-  - No hyphenated compounds — write "not blocking", "well known", "hardcoded"
+  - No hyphenated compounds: write "not blocking", "well known", "hardcoded"
   - Exception: dashes in actual code identifiers (filenames, flags) are fine
   - Say WHY, not WHAT
   - Fragments over complete sentences
 
-Only fires when 3+ comment lines exist in the new content — not worth
-nudging on a single-line change.
+Only fires when 3+ comment lines exist in the new content. Single-line changes get a pass.
 """
 from __future__ import annotations
 
@@ -172,7 +170,7 @@ def check_hyphenated_compounds(comments: list[str]) -> Finding | None:
 
     # Common compound prefixes AI uses habitually in comments
     _COMPOUND_PREFIX = _re.compile(
-        r"\b(non|well|hard|step|read|write|compile|run|long|short|high|low|two|one|event|promise|callback|value|error|zero|null|empty)-[a-z]",
+        r"\b(non|well|hard|step|pre|auto|type|thread|lazy|self|read|write|compile|run|long|short|high|low|two|one|event|promise|callback|value|error|zero|null|empty)-[a-z]",
         _re.IGNORECASE,
     )
 

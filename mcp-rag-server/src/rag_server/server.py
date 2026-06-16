@@ -629,9 +629,21 @@ class _TelemetryMiddleware:
                     return None
                 return "sha256:" + hashlib.sha256(str(text).encode()).hexdigest()
 
+            def _read_session_id(home: Path) -> str:
+                try:
+                    return (home / "state" / "session-id.txt").read_text(encoding="utf-8").strip()
+                except Exception:
+                    return os.environ.get("CLAUDE_SESSION_ID", "unknown")
+
+            # Resolve boost_home here so _read_session_id and the workspace lookup
+            # both use the same Path object.
+            _env_home = os.environ.get("CLAUDEBOOST_HOME")
+            boost_home = Path(_env_home) if _env_home else Path(__file__).resolve().parent.parent.parent.parent
+
             record = {
                 "ts": datetime.now(timezone.utc).isoformat(),
-                "session_id": os.environ.get("CLAUDE_SESSION_ID", "unknown"),
+                "session_id": _read_session_id(boost_home),
+                "agent_name": req.get("agent"),
                 "endpoint": path,
                 "method": method,
                 "scope": scope_val,
@@ -647,8 +659,7 @@ class _TelemetryMiddleware:
 
             # Fall back to the repo root derived from this file's location when the
             # env var is unset or empty (mirrors the pattern in telemetry-writer.py).
-            _env_home = os.environ.get("CLAUDEBOOST_HOME")
-            boost_home = Path(_env_home) if _env_home else Path(__file__).resolve().parent.parent.parent.parent
+            # (boost_home already set above)
             active_file = boost_home / "state" / "active-workspace.json"
             wp: str | None = None
             try:

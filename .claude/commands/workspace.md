@@ -129,6 +129,14 @@ fi
 
 ```
 
+**Initialize telemetry for this workspace:**
+```bash
+DISABLE_TELEMETRY="" "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/telemetry-session.py"
+```
+
+This creates `$WORKSPACE_ABS/Telemetry/session.json` so tool-call tracking begins immediately.
+If it errors, note it but do not block — the workspace was already created.
+
 Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
 
 ### 1c — Save the goal verbatim
@@ -672,3 +680,17 @@ Context budget : [sequential/parallel note based on current context level]
 ```
 
 If any critical ambiguity remains (you genuinely cannot determine work type or scope): ask ONE focused question before presenting the plan. Do not ask about details that the plan itself can accommodate.
+
+---
+
+## What's Next After /workspace
+
+Once the plan is in place, these are the most common next moves:
+
+| If you... | Run |
+|-----------|-----|
+| Want to build domain expertise before agents start | `/research-task [workspace-id]` — indexes relevant docs so agents get them automatically |
+| Are working in an unfamiliar codebase | `/index-project <path>` first, then `/research-project` for a stack overview |
+| Have a new subsystem or >15 files | Consider `/create-prd` to lock down scope before implementation |
+| Want a dependency map seeded from ticket entities | `/graph [workspace-id]` |
+| Just want to start | Copy the "To start executing" command from the plan and run it |

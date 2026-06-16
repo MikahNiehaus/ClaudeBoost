@@ -176,7 +176,7 @@ Same rules. Comments are output too.
 - Write like a note to a colleague, not a spec document
 - Say WHY, not WHAT — the code shows what; the comment explains why
 - Skip obvious comments; short beats long
-- Non-formal but professional — conversational, not corporate
+- Informal but professional, conversational not corporate
 - No dashes of any kind (no hyphens as separators, no em dashes, no double dashes)
 - No hyphenated compound words: "non-blocking" → "not blocking", "hard-coded" → "hardcoded", "step-by-step" → "step by step". Exception: dashes inside actual code identifiers (filenames, flags, variable names) are fine
 - No: `// This function facilitates the seamless authentication flow`
@@ -220,11 +220,38 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 | Trigger | Action |
 |---------|--------|
 | Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
-| Complex feature | Workspace + sweep-then-verify + agents |
+| Complex feature (>5 files) | `/workspace` — creates plan, workspace, and agent routing |
 | Before delegating agents | Run `/research-task [task-id]` to build Tier 3c workspace research — agents get task-specific docs auto-loaded via `/context`. Add URLs as arguments to curate sources manually; add `--approve` for the approval gate. |
+| New codebase / first time in repo | `/index-project <path>` to enable semantic search, then `/research-project` for stack overview |
+| New subsystem or >15 files | `/create-prd` before `/workspace` — locks down scope and acceptance criteria |
+| Explaining architecture or flow | `/visualize` — interactive board in browser |
+| Code just changed | `/review` to check quality, then `/qa` to verify end-to-end |
+| Security concern | `/security-review` — OWASP-aware review of pending branch changes |
+| Something feels off after changes | `/audit` — parallel multi-angle assessment with Opus verdict |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |
 | New architecture | Spawn architect-agent (Opus) with SOLID review |
-| Visualize architecture | `/visualize` — interactive board in browser (self-map for ClaudeBoost, project-map for others) |
+| Ready to ship | `/done` — pre-push checklist then push |
+| Context window filling up | `/clear-safe` to save state, then `/handoff` to document progress |
+| Want to see what changed | `/changes` — interactive branch change explorer |
+| Performance bottleneck | Spawn performance-agent |
+| Logging / metrics gaps | Spawn observability-agent |
+| After indexing a project | `/research-project` — builds domain expertise from the indexed codebase |
+
+## Proactive Skill Suggestions
+
+When a response naturally completes a phase or the user's message matches a trigger pattern, append a short "What's next?" suggestion. Use `knowledge/skill-routing.xml` (loaded via RAG) for the full trigger-to-skill catalog.
+
+**Four rules — apply all before suggesting:**
+1. One suggestion per response max. Don't stack hints.
+2. Phrase it as an option: "Consider running /review to..." not "Run /review now."
+3. Skip if the user is already mid-skill (they know what they're doing).
+4. Skip for trivial one-liners where a suggestion would feel patronizing.
+
+**Format — two surfaces, two styles:**
+- **Mid-conversation hint** (proactive, inline): one or two sentences — `What's next: /skill-name — [one-line reason].`
+- **Post-skill completion** (at the end of a command): the "What's Next After /skill" table in each command file — rows are `If X | Run Y`, placed after the final output block of the skill.
+
+These are distinct. Don't use the table format for inline hints, and don't use the sentence format inside command files.
 
 ### SOLID Review
 Only when designing new classes, modules, interfaces, or systems.

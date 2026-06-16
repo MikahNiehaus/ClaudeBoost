@@ -2,18 +2,17 @@
 #
 # ClaudeBoost installer for macOS / Linux.
 #
-# Symlinks CLAUDE.md and slash commands into ~/.claude/, registers the RAG
-# MCP server with the Claude CLI, then hands off to scripts/setup.py for the
-# heavy lifting (hooks, state, ML deps).
+# Symlinks CLAUDE.md and slash commands into ~/.claude/, then delegates to
+# scripts/setup.py for everything else (hooks, RAG server, ML deps, MCP tools,
+# permissions).
 #
-# Idempotent — safe to re-run after `git pull`.
+# Idempotent — safe to re-run after git pull.
 
 set -e
 
 BOOST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 
-# Pick a Python — prefer python3, fall back to python (some macOS setups).
 PY=""
 if command -v python3 >/dev/null 2>&1; then
     PY="python3"
@@ -35,53 +34,41 @@ echo ""
 
 mkdir -p "$CLAUDE_DIR"
 
-# ── 1. Register RAG MCP server globally ──────────────────────────────────────
-echo " [1/3] Registering RAG MCP server..."
+# ── 1. Link CLAUDE.md ────────────────────────────────────────────────────────
+echo " [1/3] Linking CLAUDE.md..."
 
-if $PY -c "import rag_server" >/dev/null 2>&1; then
-    echo "        rag-server already installed."
-else
-    echo "        Installing rag-server package..."
-    if $PY -m pip install -e "$BOOST_DIR/mcp-rag-server" >/dev/null 2>&1; then
-        echo "        rag-server package installed."
-    else
-        echo "        WARNING: Could not install rag-server. Install manually:"
-        echo "          $PY -m pip install -e \"$BOOST_DIR/mcp-rag-server\""
-    fi
-fi
-
-if command -v claude >/dev/null 2>&1; then
-    claude mcp remove rag-server --scope user >/dev/null 2>&1 || true
-    claude mcp add rag-server --scope user \
-        -e RAG_PROJECT_ROOT="$BOOST_DIR" \
-        -- python -m rag_server >/dev/null 2>&1 || true
-    echo "        MCP server registered globally (RAG_PROJECT_ROOT=$BOOST_DIR)."
-else
-    echo "        Claude CLI not found. Add manually to ~/.claude.json."
-fi
-
-# ── 2. Symlink CLAUDE.md and slash commands ──────────────────────────────────
-echo " [2/3] Installing CLAUDE.md and slash commands..."
-
-# CLAUDE.md — symlink so edits in the repo propagate.
 if [ -e "$CLAUDE_DIR/CLAUDE.md" ] || [ -L "$CLAUDE_DIR/CLAUDE.md" ]; then
     rm -f "$CLAUDE_DIR/CLAUDE.md"
+    if [ -e "$CLAUDE_DIR/CLAUDE.md" ] || [ -L "$CLAUDE_DIR/CLAUDE.md" ]; then
+        echo " ERROR: Could not remove existing CLAUDE.md. Check permissions."
+        exit 1
+    fi
 fi
 ln -s "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
-echo "        CLAUDE.md linked to $CLAUDE_DIR/CLAUDE.md (auto-updates)."
+echo "        CLAUDE.md linked (auto-updates on git pull)."
 
-# commands/ — symlink the whole dir. setup.py detects the symlink and skips
-# the file-by-file mirror, so the repo stays the source of truth.
+# ── 2. Link slash commands ────────────────────────────────────────────────────
+echo " [2/3] Linking slash commands..."
+
 if [ -L "$CLAUDE_DIR/commands" ] || [ -d "$CLAUDE_DIR/commands" ]; then
     rm -rf "$CLAUDE_DIR/commands"
+    if [ -e "$CLAUDE_DIR/commands" ]; then
+        echo " ERROR: Could not remove existing commands directory. Check permissions."
+        exit 1
+    fi
 fi
 ln -s "$BOOST_DIR/.claude/commands" "$CLAUDE_DIR/commands"
-echo "        Slash commands linked."
+echo "        Slash commands linked (symlink — auto-updates on git pull)."
 
-# ── 3. Hand off to setup.py for hooks, state, ML deps ────────────────────────
-echo " [3/3] Running setup.py..."
+# ── 3. Run setup.py ──────────────────────────────────────────────────────────
+echo " [3/3] Running setup.py (hooks, RAG server, MCP tools, permissions)..."
 echo ""
-"$PY" "$BOOST_DIR/scripts/setup.py"
+
+if ! "$PY" "$BOOST_DIR/scripts/setup.py"; then
+    echo ""
+    echo " [ERROR] setup.py reported issues. Fix them, then re-run install.sh."
+    exit 1
+fi
 
 CMD_COUNT=$(find "$BOOST_DIR/.claude/commands" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 
@@ -89,11 +76,11 @@ echo ""
 echo " ============================================================"
 echo "  ClaudeBoost installed!"
 echo ""
-echo "  What's available now:"
-echo "    - RAG search in every Claude Code session"
-echo "    - $CMD_COUNT slash commands (global)"
+echo "  $CMD_COUNT slash commands available in every Claude Code session."
 echo ""
-echo "  To verify: open any project in Claude Code and try:"
-echo "    rag_status"
+echo "  Next: open Claude Code and run:"
+echo "    /boost"
+echo ""
+echo "  /boost checks all systems and auto-fixes anything still off."
 echo " ============================================================"
 echo ""

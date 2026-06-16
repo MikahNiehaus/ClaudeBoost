@@ -1,0 +1,277 @@
+<knowledge-base name="skill-routing" version="1.0">
+<triggers>suggest, next step, what to run, which skill, which command, proactive suggestion, routing, workflow guidance, what should I do next, what command</triggers>
+<overview>
+  Trigger-to-skill routing table. When a user's message or the current situation matches a trigger pattern below,
+  append a short "What's next?" suggestion at the end of the response. This helps users discover the right
+  ClaudeBoost skill without having to know the full catalog.
+
+  Rules (apply all four before suggesting):
+  1. One suggestion per response — don't stack multiple hints.
+  2. Phrase it as an option, not a command: "Consider running /review to..." not "Run /review now."
+  3. Skip if the user is already mid-skill (they're inside /qa, /workspace, /visualize, etc.).
+  4. Skip for trivial one-liners where a suggestion would feel patronizing.
+
+  Two suggestion surfaces — use the right format for each:
+  1. Mid-conversation proactive hint (inline, during a response): 1-2 sentences —
+     "What's next: [skill] — [one-line reason why it fits here]."
+  2. Post-skill completion block (at the end of a /command file): a two-column table —
+     "| If you... | Run |" with rows, placed after the final output section of the skill.
+  Do not mix the formats. The sentence form belongs in responses; the table form belongs in command files.
+</overview>
+
+<routing-table>
+
+  <!-- ============================================================
+       STARTING WORK
+       ============================================================ -->
+
+  <route id="start-complex-task">
+    <triggers>
+      <signal>User describes a multi-step feature, epic, or initiative</signal>
+      <signal>More than ~5 files will be touched</signal>
+      <signal>User says: "I want to build X", "I need to implement Y", "we're starting on Z"</signal>
+      <signal>Ticket or PRD text is pasted</signal>
+    </triggers>
+    <skill>/workspace</skill>
+    <why>Creates an isolated workspace, plan, and agent routing map so the work stays organized across multiple sessions</why>
+    <sample>What's next: consider running /workspace to set up a structured plan before diving in — it routes you to the right agents and keeps state across sessions.</sample>
+  </route>
+
+  <route id="new-codebase">
+    <triggers>
+      <signal>User mentions working in an unfamiliar repo for the first time</signal>
+      <signal>User says: "I just cloned", "new project", "starting on this repo", "haven't worked in this before"</signal>
+      <signal>No project RAG index exists for the path</signal>
+    </triggers>
+    <skill>/index-project then /research-project</skill>
+    <why>/index-project enables semantic codebase search; /research-project builds domain expertise about the stack and patterns before any code changes</why>
+    <sample>What's next: since this is a new codebase, run /index-project &lt;path&gt; to enable semantic search, then /research-project to build a stack overview before making changes.</sample>
+  </route>
+
+  <route id="large-feature-new-subsystem">
+    <triggers>
+      <signal>Task involves creating a new module, service, or subsystem</signal>
+      <signal>More than ~15 source files will be created</signal>
+      <signal>User says: "completely new", "new service", "new module", "greenfield", "rebuild"</signal>
+    </triggers>
+    <skill>/create-prd before /workspace</skill>
+    <why>Large initiatives need acceptance criteria and scope boundaries defined before implementation — a PRD prevents scope creep and gives agents a shared definition of done</why>
+    <sample>What's next: for a new subsystem this size, run /create-prd first to lock down scope and acceptance criteria, then /workspace to plan the build.</sample>
+  </route>
+
+  <route id="unknown-territory">
+    <triggers>
+      <signal>User is exploring an unfamiliar library, API, or pattern</signal>
+      <signal>User says: "I'm not sure how X works", "haven't used this before", "researching", "figuring out"</signal>
+      <signal>Task has external dependencies the team hasn't used yet</signal>
+    </triggers>
+    <skill>/workspace then /research-task</skill>
+    <why>Builds a curated knowledge base from relevant docs and sources; agents get those docs automatically via /context so they don't guess. /workspace must come first to create the workspace-id that /research-task requires.</why>
+    <sample>What's next: run /workspace to set up a plan, then /research-task [workspace-id] to index relevant docs — agents will pull from that knowledge automatically.</sample>
+  </route>
+
+  <!-- ============================================================
+       UNDERSTANDING / EXPLAINING
+       ============================================================ -->
+
+  <route id="explaining-architecture">
+    <triggers>
+      <signal>User asks to explain, describe, or understand a system, flow, or component</signal>
+      <signal>User says: "how does X work", "explain the architecture", "show me the flow", "what connects to what"</signal>
+      <signal>An explanation is given that involves multiple components or layers</signal>
+    </triggers>
+    <skill>/visualize</skill>
+    <why>Turns a verbal explanation into an interactive diagram — much easier to reason about relationships and flows visually</why>
+    <sample>What's next: run /visualize to turn this into an interactive diagram — makes the relationships a lot easier to follow.</sample>
+  </route>
+
+  <route id="dependency-mapping">
+    <triggers>
+      <signal>User wants to understand which files/modules depend on each other</signal>
+      <signal>User says: "what calls this", "what imports this", "dependency graph", "what touches this file"</signal>
+    </triggers>
+    <skill>/graph [task-id]</skill>
+    <why>Builds a Files in Scope map using both vector and graph RAG seeded from the relevant entities — shows callers, importers, and inheritance chains</why>
+    <sample>What's next: run /graph [workspace-id] to map the dependency chain using both vector and structural RAG — it finds callers and importers you might miss with grep.</sample>
+  </route>
+
+  <!-- ============================================================
+       CODE CHANGES MADE
+       ============================================================ -->
+
+  <route id="code-just-changed">
+    <triggers>
+      <signal>User just wrote or modified code</signal>
+      <signal>A code change was committed or staged</signal>
+      <signal>User says: "just added", "I changed", "updated the code", "wrote this", "here's the implementation"</signal>
+    </triggers>
+    <skill>/review then /qa</skill>
+    <why>/review catches quality issues, logic errors, and standards violations; /qa verifies it works end-to-end in a real browser</why>
+    <sample>What's next: run /review to catch any issues, then /qa to verify the feature works end-to-end.</sample>
+  </route>
+
+  <route id="security-concern">
+    <triggers>
+      <signal>User mentions authentication, authorization, secrets, tokens, or user input handling</signal>
+      <signal>Changes touch login, permissions, API keys, file uploads, or SQL queries</signal>
+      <signal>User says: "is this secure", "security review", "safe to ship", "auth"</signal>
+    </triggers>
+    <skill>/security-review</skill>
+    <why>Runs a focused OWASP-aware review on the pending branch changes — faster than a full /review when security is the primary concern</why>
+    <sample>What's next: run /security-review to check these changes for auth, injection, and data exposure issues before merging.</sample>
+  </route>
+
+  <route id="want-to-audit">
+    <triggers>
+      <signal>User completed a significant piece of work and wants confidence it was done right</signal>
+      <signal>User says: "did I do this right", "check this", "is this correct", "verify this", "something feels off"</signal>
+      <signal>Multiple agents or steps were involved and the user wants a holistic sanity check</signal>
+    </triggers>
+    <skill>/audit</skill>
+    <why>Runs a parallel multi-angle audit (security, quality, correctness, completeness) with an Opus verdict — independent of who did the work</why>
+    <sample>What's next: run /audit to get an independent parallel assessment — it checks security, quality, and correctness simultaneously.</sample>
+  </route>
+
+  <route id="ready-to-ship">
+    <triggers>
+      <signal>User says the feature is done, all tests pass, ready to merge</signal>
+      <signal>User says: "done", "ready to ship", "ready to merge", "finished", "all tests pass"</signal>
+    </triggers>
+    <skill>/done</skill>
+    <why>Runs a pre-push checklist (uncommitted changes, test status, branch hygiene) and pushes to remote when clean</why>
+    <sample>What's next: run /done to verify everything is clean and push to the remote.</sample>
+  </route>
+
+  <!-- ============================================================
+       REVIEW / QA
+       ============================================================ -->
+
+  <route id="review-someone-elses-code">
+    <triggers>
+      <signal>User wants to review a PR or someone else's code</signal>
+      <signal>User says: "review this PR", "look over this", "is this right", "check my colleague's code"</signal>
+    </triggers>
+    <skill>/review --deep</skill>
+    <why>Runs a structured 15-pass parallel code review with an A-F grade — far more thorough than a manual read-through</why>
+    <sample>What's next: run /review --deep for a 15-pass parallel review with a letter grade and specific findings.</sample>
+  </route>
+
+  <route id="testing-after-change">
+    <triggers>
+      <signal>User implemented a feature and wants to test it in a real browser</signal>
+      <signal>User says: "test this", "try it out", "run the tests", "does it work"</signal>
+      <signal>A local dev server is running or can be started</signal>
+    </triggers>
+    <skill>/qa</skill>
+    <why>Runs a structured QA session with Playwright — discovers routes, executes journeys, captures screenshots, and writes a coverage gap report</why>
+    <sample>What's next: run /qa to exercise the feature in a real browser — it maps routes, runs journeys, and flags coverage gaps.</sample>
+  </route>
+
+  <!-- ============================================================
+       CONTEXT / SESSION MANAGEMENT
+       ============================================================ -->
+
+  <route id="context-filling-up">
+    <triggers>
+      <signal>Context window is above 70% full</signal>
+      <signal>User says: "context is getting long", "should we clear?", "starting to forget things"</signal>
+      <signal>Session has been running for a long time with many file reads</signal>
+    </triggers>
+    <skill>/clear-safe then /handoff</skill>
+    <why>/clear-safe saves workspace state before clearing; /handoff writes a session summary so the next context window picks up exactly where this one left off</why>
+    <sample>What's next: run /clear-safe to save state, then /handoff to document the current progress before clearing — the next session will resume from where this one stopped.</sample>
+  </route>
+
+  <route id="want-to-see-changes">
+    <triggers>
+      <signal>User wants to review what changed on the current branch</signal>
+      <signal>User says: "what did we change", "show me the diff", "what's been modified", "what's on this branch"</signal>
+    </triggers>
+    <skill>/changes</skill>
+    <why>Interactive change explorer — shows everything modified on the current branch with file-level summaries</why>
+    <sample>What's next: run /changes to see an interactive summary of everything modified on this branch.</sample>
+  </route>
+
+  <!-- ============================================================
+       PERFORMANCE / OBSERVABILITY
+       ============================================================ -->
+
+  <route id="performance-concern">
+    <triggers>
+      <signal>User mentions slow queries, high latency, memory usage, or a bottleneck</signal>
+      <signal>User says: "slow", "performance", "optimize", "N+1", "memory leak", "taking too long"</signal>
+    </triggers>
+    <skill>spawn performance-agent</skill>
+    <why>Performance agent profiles bottlenecks, detects N+1 queries, and recommends caching strategies — specialized knowledge that the general context doesn't carry</why>
+    <sample>What's next: spawn performance-agent to profile the bottleneck — it has specific N+1 detection, query analysis, and caching strategy knowledge.</sample>
+  </route>
+
+  <route id="logging-observability">
+    <triggers>
+      <signal>User mentions missing logs, tracing, metrics, or monitoring gaps</signal>
+      <signal>User says: "add logging", "we can't see what's happening", "need metrics", "observability"</signal>
+    </triggers>
+    <skill>spawn observability-agent</skill>
+    <why>Observability agent applies the three-pillar strategy (logs/metrics/traces) and knows the project's logging standards to avoid both gaps and leakage</why>
+    <sample>What's next: spawn observability-agent to design a logging and metrics strategy — it applies the three-pillar model and project standards.</sample>
+  </route>
+
+  <!-- ============================================================
+       INDEXING / RAG
+       ============================================================ -->
+
+  <route id="after-index-project">
+    <triggers>
+      <signal>User just ran /index-project successfully</signal>
+      <signal>Project RAG index was just created for the first time</signal>
+    </triggers>
+    <skill>/research-project</skill>
+    <why>Now that the codebase is indexed, /research-project builds a domain-expert summary of the stack, patterns, and conventions — agents get this context automatically</why>
+    <sample>What's next: run /research-project to build a stack overview — now that the codebase is indexed, this gives agents expert context about your project's patterns.</sample>
+  </route>
+
+  <route id="rag-stale">
+    <triggers>
+      <signal>Many files were added or modified since the last RAG index</signal>
+      <signal>RAG search is returning stale or irrelevant results</signal>
+      <signal>User says: "reindex", "RAG seems off", "update the index"</signal>
+    </triggers>
+    <skill>/index-boost or /index-project</skill>
+    <why>/index-boost reindexes ClaudeBoost's own knowledge bases; /index-project reindexes a project codebase — pick based on what changed</why>
+    <sample>What's next: run /index-boost if ClaudeBoost files changed, or /index-project &lt;path&gt; if project source files changed — keeps RAG results accurate.</sample>
+  </route>
+
+  <!-- ============================================================
+       SELF-IMPROVEMENT / CLAUDEBOOST META
+       ============================================================ -->
+
+  <route id="claudeboost-meta-improvement">
+    <triggers>
+      <signal>User wants to improve ClaudeBoost itself — new skill, agent tweak, knowledge file</signal>
+      <signal>User says: "improve this skill", "update the agent", "add a new command", "fix ClaudeBoost"</signal>
+    </triggers>
+    <skill>/self-improve then /workspace for the specific change</skill>
+    <why>/self-improve runs an audit cycle that often surfaces related gaps; /workspace then plans the specific improvement with proper agent routing</why>
+    <sample>What's next: run /self-improve to check for related gaps first, then /workspace to plan the specific change.</sample>
+  </route>
+
+  <route id="telemetry-check">
+    <triggers>
+      <signal>User wants to see how the session performed — tool calls, RAG usage, latency</signal>
+      <signal>User says: "how did that go", "session stats", "how many tool calls", "RAG usage"</signal>
+    </triggers>
+    <skill>/telemetry</skill>
+    <why>Shows per-session tool call counts, RAG hit rates, DB breakdown, and latency — useful for spotting inefficiencies</why>
+    <sample>What's next: run /telemetry to see tool call counts, RAG usage, and latency for this session.</sample>
+  </route>
+
+</routing-table>
+
+<application-notes>
+  <note>This table is a guide, not a script. If none of the triggers fit cleanly, skip the suggestion.</note>
+  <note>If the user has already acknowledged a skill and chosen not to use it, don't suggest it again in the same session.</note>
+  <note>Suggestions work best right after a natural completion point — not mid-flow.</note>
+  <note>For the exact skill descriptions and arguments, see the skills listed in the session-primer or CLAUDE.md's "When to Use What" table.</note>
+</application-notes>
+
+</knowledge-base>

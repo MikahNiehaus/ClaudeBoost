@@ -116,4 +116,7 @@ def now_iso() -> str:
 
 
 def session_id() -> str:
-    return os.environ.get("CLAUDE_SESSION_ID", "unknown")
+    try:
+        return (BOOST_HOME / "state" / "session-id.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        return os.environ.get("CLAUDE_SESSION_ID", "unknown")

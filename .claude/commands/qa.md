@@ -1337,4 +1337,16 @@ Call `browser_close`.
 - If Phase 3 Close evaluator ran → confirm and cite the evaluator's RETAKE count.
 - If Phase 3 Close did NOT run → run it now before answering. Do not self-assess screenshot quality.
 
+---
+
+## What's Next After /qa
+
+| If the session... | Run |
+|-------------------|-----|
+| Passed with no failures | `/done` — run the pre-push checklist and push |
+| Found failures you need to fix | Fix them, then re-run `/qa` with `quick` scope to verify the fixes |
+| Revealed coverage gaps | Review `coverage-gaps.md`, then decide which gaps to add to the backlog |
+| Raised a security question (auth, input, tokens) | `/security-review` — focused OWASP review on the pending branch changes |
+| Feels like something is still off | `/audit` — parallel multi-angle assessment with an independent verdict |
+
 **Never self-verify.** The evaluator-agent checks annotation presence, annotation placement, and post-action state. These are three distinct checks that the orchestrator cannot objectively answer about its own screenshots — it produced them.

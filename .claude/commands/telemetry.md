@@ -141,10 +141,10 @@ RAG Usage (from rag-usage.jsonl)
     (others)        : N
 
   By scope:
-    codebase        : N
-    agents          : N
-    knowledge       : N
-    (unset)         : N
+    codebase                    : N
+    agents                      : N
+    knowledge                   : N
+    /context (multi-source)     : N  (scope=null — searches all collections)
 
   Avg chunks returned  : <mean chunks_returned across /search calls>
   Errors (4xx/5xx)     : <count where status_code >= 400>

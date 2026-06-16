@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
@@ -55,6 +56,14 @@ def handle_session_start() -> None:
                 return
         except Exception:
             pass  # Corrupted file — overwrite it below
+
+    # Generate a stable session UUID and persist it so all telemetry writers
+    # (server.py middleware, telemetry_writer.py) can read the same ID.
+    new_session_id = str(uuid.uuid4())
+    try:
+        (BOOST_HOME / "state" / "session-id.txt").write_text(new_session_id, encoding="utf-8")
+    except Exception:
+        pass  # Best-effort — fall back to "unknown" on failure
 
     record = {
         "session_id": session_id(),

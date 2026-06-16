@@ -1083,4 +1083,15 @@ Tell the user:
 - What was visualized (TOPIC) and which mode was used (self-map / project-map / concept)
 - How many components and layers are in the diagram
 - Where the file was saved (`[SLUG].html`)
-- Click any card to see details. Click any image to fullscreen it. Export with the SVG / PDF buttons.
+
+---
+
+## What's Next After /visualize
+
+| If the diagram revealed... | Run |
+|---------------------------|-----|
+| Something complex enough to plan out | `/workspace` — creates a structured implementation plan for the work |
+| A dependency you want to trace deeply | `/graph [workspace-id]` — maps callers, importers, and structural neighbours |
+| A security-relevant flow (auth, data, tokens) | `/security-review` — OWASP-aware review of pending changes |
+| A performance bottleneck | Spawn `performance-agent` to profile and recommend fixes |
+| Something you want to build | Describe it to Claude — if it's a big feature, use `/workspace` first |
