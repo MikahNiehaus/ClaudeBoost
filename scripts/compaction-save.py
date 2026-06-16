@@ -102,15 +102,43 @@ def main() -> int:
 
     # Collect workspace context summaries
     workspace_summaries = []
+    seen_ws_paths: set[str] = set()
     if workspace_dir.exists():
         for ctx_file in sorted(workspace_dir.glob("*/context.md")):
             task_id = ctx_file.parent.name
+            seen_ws_paths.add(str(ctx_file.parent))
             try:
                 content = ctx_file.read_text(encoding="utf-8")
                 summary = extract_summary(content)
                 workspace_summaries.append(f"### {task_id}\n{summary}")
             except Exception:
                 workspace_summaries.append(f"### {task_id}\n[unreadable]")
+
+    # Also include project-scoped workspaces stored outside home/workspace/
+    try:
+        reg = read_json(state_dir / "workspaces.json")
+        for ws_id, entry in reg.items():
+            ws_path = entry.get("workspace_path", "")
+            if not ws_path:
+                continue
+            ws_dir = Path(ws_path)
+            if str(ws_dir) in seen_ws_paths:
+                continue
+            seen_ws_paths.add(str(ws_dir))
+            ctx_file = ws_dir / "context.md"
+            if not ctx_file.exists():
+                continue
+            try:
+                content = ctx_file.read_text(encoding="utf-8")
+                summary = extract_summary(content)
+                workspace_summaries.append(f"### {ws_id}\n{summary}")
+            except Exception:
+                workspace_summaries.append(f"### {ws_id}\n[unreadable]")
+    except Exception:
+        pass
+
+    # Read active workspace so the restore can filter to just the right section
+    active_ws = read_json(state_dir / "active-workspace.json").get("workspace", "")
 
     # Read mode state
     mode = read_json(state_dir / "claudeboost-mode.json").get("mode", "CONSULT")
@@ -164,6 +192,7 @@ def main() -> int:
         "trigger": "PreCompact",
         "cwd": hook_input.get("cwd", ""),
         "workspace_memo": memo_text,
+        "active_workspace": active_ws,
         "conversation": conversation or {},
     }
     try:
@@ -173,10 +202,26 @@ def main() -> int:
     except Exception:
         pass
 
-    # Reset the context-nudge counter (fresh start after compaction)
+    # Reset counters so guards start fresh after compaction
     tracker_path = state_dir / "compaction-tracker.json"
     try:
         tracker_path.write_text('{"edit_count": 0}', encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        (state_dir / "behavior-tracker.json").write_text(
+            '{"reads_since_rag": 0, "tasks_since_evaluator": 0}', encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    # Write a one-shot flag so session-primer.py bypasses the 15-char guard on the
+    # first post-compaction message (same pattern as clear-pending.json).
+    try:
+        (state_dir / "compaction-pending.json").write_text(
+            json.dumps({"pending": True, "timestamp": datetime.now(timezone.utc).isoformat()}),
+            encoding="utf-8",
+        )
     except Exception:
         pass
 

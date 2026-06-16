@@ -111,6 +111,8 @@ def main() -> int:
             data = _load_compact_memo(state_dir)
         if not data:
             return 0
+        if not _cwd_ok(data, session_cwd):
+            return 0  # different project — don't inject wrong-project context
         label = "compaction"
 
     elif source == "clear":
@@ -129,6 +131,26 @@ def main() -> int:
     workspace_memo = data.get("workspace_memo", "") or data.get("memo", "")
     if not workspace_memo:
         return 0
+
+    # Filter to just the active workspace section so Claude isn't flooded with
+    # summaries from unrelated workspaces. Same pattern as session-primer.py's
+    # _consume_clear_pending() filtering.
+    active_ws = data.get("active_workspace", "").strip()
+    if active_ws:
+        marker = f"### {active_ws}\n"
+        idx = workspace_memo.find(marker)
+        if idx != -1:
+            rest = workspace_memo[idx + len(marker):]
+            next_section = rest.find("\n### ")
+            active_section = rest[:next_section].strip() if next_section != -1 else rest.strip()
+            # Keep the memo header (compaction number, session, time, mode) + active section
+            aw_heading = workspace_memo.find("## Active Workspaces")
+            memo_header = workspace_memo[:aw_heading].strip() if aw_heading != -1 else ""
+            workspace_memo = (
+                (memo_header + "\n\n" if memo_header else "")
+                + f"## Active Workspace: {active_ws}\n{active_section}\n\n"
+                + "(Other workspaces exist — run /ws to see them.)"
+            )
 
     # Build conversation section if available
     conversation = data.get("conversation", {})

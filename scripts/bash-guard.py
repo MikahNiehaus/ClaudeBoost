@@ -33,6 +33,32 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
+
+_BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+
+
+def _write_block_telemetry(tool: str, summary: str, reason: str) -> None:
+    """Write a PreToolUse block event to claude-actions.jsonl.
+
+    PostToolUse never fires when a PreToolUse hook exits 2, so we capture
+    the block here before returning.
+    """
+    try:
+        sys.path.insert(0, str(_BOOST_HOME / "scripts"))
+        from telemetry_writer import now_iso, session_id, write_telemetry
+        record = {
+            "ts": now_iso(),
+            "session_id": session_id(),
+            "tool": tool,
+            "summary": f"{tool} {summary[:200]}",
+            "result": "blocked",
+            "hook_event": "PreToolUse",
+            "block_reason": reason[:300],
+        }
+        write_telemetry(record, "claude-actions.jsonl")
+    except Exception:
+        pass
 
 
 def check_cd_compound(command: str) -> str | None:
@@ -327,6 +353,7 @@ def main() -> int:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)
+            _write_block_telemetry("Bash", command, msg)
             return 2
 
     return 0

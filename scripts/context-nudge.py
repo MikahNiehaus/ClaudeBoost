@@ -95,20 +95,37 @@ def main() -> int:
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     ))
-    workspace_dir = home / "workspace"
 
     # Compute ctx_files once — used by both Channel B paths and auto-save.
-    # Only include workspaces touched within the session window; old workspaces from
-    # previous sessions aren't "active" and shouldn't drive nudges.
+    # Read from the workspace registry so project workspaces (outside
+    # $CLAUDEBOOST_HOME/workspace/) are also monitored. Falls back to a
+    # direct glob of home/workspace/ if the registry is absent or empty.
     SESSION_WINDOW_HOURS = 4
     session_cutoff = time.time() - SESSION_WINDOW_HOURS * 3600
-    if workspace_dir.exists():
-        ctx_files = [
-            f for f in workspace_dir.glob("*/context.md")
-            if f.stat().st_mtime >= session_cutoff
+
+    reg_path = home / "state" / "workspaces.json"
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        _all_ctx = [
+            Path(ws["workspace_path"]) / "context.md"
+            for ws in reg.values()
+            if ws.get("workspace_path")
         ]
-    else:
-        ctx_files = []
+        ctx_files = [
+            f for f in _all_ctx
+            if f.exists() and f.stat().st_mtime >= session_cutoff
+        ]
+    except Exception:
+        # Fallback: scan the local workspace directory
+        workspace_dir = home / "workspace"
+        if workspace_dir.exists():
+            ctx_files = [
+                f for f in workspace_dir.glob("*/context.md")
+                if f.stat().st_mtime >= session_cutoff
+            ]
+        else:
+            ctx_files = []
+
     has_workspace = bool(ctx_files)
 
     # --- Read hook payload ---
@@ -215,6 +232,7 @@ def main() -> int:
     total = tracker.get("edit_count", 0)
 
     nudges = []
+    _should_block = False  # set True when WRITE FINDINGS escalates to decision:block
 
     # --- CHANNEL A: Behavior enforcement (one per turn, elif chain) ---
     if context_pct_used is not None and context_pct_used >= CONTEXT_PCT_WARN:
@@ -233,12 +251,22 @@ def main() -> int:
     ):
         most_recent_ctx = max(ctx_files, key=lambda f: f.stat().st_mtime)
         task_id = most_recent_ctx.parent.name
-        nudges.append(
-            f"WRITE FINDINGS: You've done {reads_since_ctx} reads/searches since last updating "
-            f"workspace/{task_id}/context.md. "
-            "Record what you found NOW before continuing — hypothesis, evidence, next lead. "
-            "Findings in context.md survive compaction; findings only in your head do not."
-        )
+        if reads_since_ctx >= READS_BEFORE_CONTEXT_UPDATE * 2:
+            # 2nd+ nudge without compliance — escalate to hard stop
+            _should_block = True
+            nudges.append(
+                f"WRITE FINDINGS — BLOCKED: You've done {reads_since_ctx} reads/searches "
+                f"without updating workspace/{task_id}/context.md. "
+                "Update it NOW (status, what you found, next step) before continuing. "
+                "The agentic loop is stopped until context.md is updated."
+            )
+        else:
+            nudges.append(
+                f"WRITE FINDINGS: You've done {reads_since_ctx} reads/searches since last updating "
+                f"workspace/{task_id}/context.md. "
+                "Record what you found NOW before continuing — hypothesis, evidence, next lead. "
+                "Findings in context.md survive compaction; findings only in your head do not."
+            )
     elif reads >= RAG_THRESHOLD and reads % RAG_THRESHOLD == 0:
         nudges.append(
             f"RAG REMINDER ({reads} file searches since last RAG call): "
@@ -357,7 +385,12 @@ def main() -> int:
     except Exception:
         pass
 
-    if nudges:
+    if nudges and _should_block:
+        print(json.dumps({
+            "decision": "block",
+            "reason": "\n\n".join(nudges),
+        }))
+    elif nudges:
         print(json.dumps({"additionalContext": "\n\n".join(nudges)}))
 
     return 0

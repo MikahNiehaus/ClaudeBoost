@@ -674,6 +674,24 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("session-clear-save.py")}],
     }, sentinel="session-clear-save.py", label="clear handoff save")
 
+    # --- Telemetry: session lifecycle (SessionStart creates session.json, SessionEnd closes it) ---
+    _install_hook(settings, "SessionStart", {
+        "matcher": "Always",
+        "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000,
+                   "statusMessage": "Opening telemetry session..."}],
+    }, sentinel="telemetry-session.py", label="telemetry session lifecycle")
+
+    _install_hook(settings, "SessionEnd", {
+        "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000}],
+    }, sentinel="telemetry-session.py", label="telemetry session end")
+
+    # --- Telemetry: PostToolUse action log (all tools -> claude-actions.jsonl) ---
+    _install_hook(settings, "PostToolUse", {
+        "matcher": ".*",
+        "hooks": [{"type": "command", "command": _py_cmd("telemetry-hook.py"), "timeout": 3000,
+                   "statusMessage": "Logging tool call..."}],
+    }, sentinel="telemetry-hook.py", label="telemetry action log")
+
     # --- UserPromptSubmit: ensure-setup bootstrap ---
     # Copy ensure-setup.py to ~/.claude/ so $HOME-relative path works on every machine.
     ensure_src = BOOST_HOME / "scripts" / "ensure-setup.py"

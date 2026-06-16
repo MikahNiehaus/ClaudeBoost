@@ -767,7 +767,7 @@ def _load_fresh_cn():
     mod_name = f"context_nudge_cov_{_uuid2.uuid4().hex}"
     spec = _ilu2.spec_from_file_location(
         mod_name,
-        "C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts/context-nudge.py",
+        SCRIPTS_DIR / "context-nudge.py",
     )
     mod = _ilu2.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -841,6 +841,7 @@ class TestMissingLineCoverage:
         assert rc == 0
 
     # -- Line 261: no file:line citations -> no_citations branch --------------
+
 
     def test_evaluator_nudge_no_citations_branch_covered(self, boost_home):
         """Line 261: unique_citations is empty -> else branch -> no-citations hint."""
@@ -968,3 +969,235 @@ class TestCitationHintElseBranch:
         result = mod.main()
         # Should exit 0 or 1 without crashing
         assert result in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# Step 1 fix: project workspace detection via state/workspaces.json registry
+# ---------------------------------------------------------------------------
+
+def test_project_workspace_detected_via_registry(boost_home, tmp_path):
+    """Registry-based lookup finds a workspace outside $CLAUDEBOOST_HOME/workspace/."""
+    project_ws = tmp_path / "myproject" / "workspace" / "task-proj"
+    project_ws.mkdir(parents=True)
+    (project_ws / "context.md").write_text(
+        "# Project Task\nStatus: investigating", encoding="utf-8"
+    )
+
+    reg = {"task-proj": {
+        "workspace_path": str(project_ws),
+        "project_path": str(tmp_path / "myproject"),
+    }}
+    (boost_home / "state" / "workspaces.json").write_text(
+        json.dumps(reg), encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 0,
+    }), encoding="utf-8")
+
+    # edit_count at 7 → after +1 = 8 = NUDGE_INTERVAL
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 7}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/src/foo.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    # Channel B checkpoint should fire and reference "task-proj"
+    if result.stdout.strip():
+        output = json.loads(result.stdout)
+        ctx = output.get("additionalContext", "")
+        assert "task-proj" in ctx
+
+
+def test_has_workspace_true_for_registry_path_only(boost_home, tmp_path):
+    """WRITE FINDINGS fires when has_workspace comes from the registry, not a local glob."""
+    # No boost_home/workspace/ directory at all — only registry
+    project_ws = tmp_path / "proj" / "workspace" / "issue-42"
+    project_ws.mkdir(parents=True)
+    (project_ws / "context.md").write_text(
+        "# Issue 42\nStatus: in progress", encoding="utf-8"
+    )
+
+    reg = {"issue-42": {
+        "workspace_path": str(project_ws),
+        "project_path": str(tmp_path / "proj"),
+    }}
+    (boost_home / "state" / "workspaces.json").write_text(
+        json.dumps(reg), encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    # reads_since_context_update at 4 → +1 from Read = 5 = READS_BEFORE_CONTEXT_UPDATE
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 4,
+    }), encoding="utf-8")
+
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 3}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/src/bar.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip(), "Expected WRITE FINDINGS nudge but got no output"
+    output = json.loads(result.stdout)
+    ctx = output.get("additionalContext", "")
+    assert "WRITE FINDINGS" in ctx
+    assert "issue-42" in ctx
+
+
+def test_registry_missing_workspace_path_key_skipped(boost_home, tmp_path):
+    """Registry entries without workspace_path are skipped gracefully."""
+    project_ws = tmp_path / "good" / "workspace" / "task-good"
+    project_ws.mkdir(parents=True)
+    (project_ws / "context.md").write_text("# Good\nStatus: ok", encoding="utf-8")
+
+    reg = {
+        "task-bad": {"project_path": str(tmp_path / "bad")},  # missing workspace_path
+        "task-good": {
+            "workspace_path": str(project_ws),
+            "project_path": str(tmp_path / "good"),
+        },
+    }
+    (boost_home / "state" / "workspaces.json").write_text(
+        json.dumps(reg), encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 4,
+    }), encoding="utf-8")
+
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 3}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/src/x.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    # task-good should be found; task-bad silently skipped
+    if result.stdout.strip():
+        output = json.loads(result.stdout)
+        ctx = output.get("additionalContext", "")
+        assert "task-good" in ctx
+
+
+# ---------------------------------------------------------------------------
+# Step 1b fix: decision:block escalation at 2x READS_BEFORE_CONTEXT_UPDATE
+# ---------------------------------------------------------------------------
+
+def test_block_escalation_at_double_threshold(boost_home):
+    """decision:block fires when reads_since_context_update >= 2 * READS_BEFORE_CONTEXT_UPDATE."""
+    ws_dir = boost_home / "workspace" / "task-block"
+    ws_dir.mkdir(parents=True)
+    (ws_dir / "context.md").write_text(
+        "# Block Test\nStatus: investigating", encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    # 9 → +1 from Read = 10 = 2 * READS_BEFORE_CONTEXT_UPDATE (5)
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 9,
+    }), encoding="utf-8")
+
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 3}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/src/main.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip(), "Expected block output but got none"
+    output = json.loads(result.stdout)
+    assert output.get("decision") == "block", f"Expected decision:block, got: {output}"
+    assert "BLOCKED" in output.get("reason", "")
+
+
+def test_first_nudge_is_soft_not_block(boost_home):
+    """First WRITE FINDINGS nudge (5 reads) is additionalContext only — no decision:block."""
+    ws_dir = boost_home / "workspace" / "task-soft"
+    ws_dir.mkdir(parents=True)
+    (ws_dir / "context.md").write_text(
+        "# Soft Task\nStatus: in progress", encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    # 4 → +1 from Read = 5 = first nudge threshold
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 4,
+    }), encoding="utf-8")
+
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 3}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/src/soft.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip(), "Expected a nudge but got none"
+    output = json.loads(result.stdout)
+    assert output.get("decision") != "block"
+    ctx = output.get("additionalContext", "")
+    assert "WRITE FINDINGS" in ctx
+    assert "BLOCKED" not in ctx
+
+
+def test_block_escalation_with_registry_workspace(boost_home, tmp_path):
+    """decision:block fires correctly for a registry-registered project workspace."""
+    project_ws = tmp_path / "app" / "workspace" / "feat-99"
+    project_ws.mkdir(parents=True)
+    (project_ws / "context.md").write_text(
+        "# Feat 99\nStatus: building", encoding="utf-8"
+    )
+
+    reg = {"feat-99": {
+        "workspace_path": str(project_ws),
+        "project_path": str(tmp_path / "app"),
+    }}
+    (boost_home / "state" / "workspaces.json").write_text(
+        json.dumps(reg), encoding="utf-8"
+    )
+
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    # 19 → +1 = 20 = 4 * READS_BEFORE_CONTEXT_UPDATE — still >= 2x, block fires
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 19,
+    }), encoding="utf-8")
+
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 3}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/app/src/main.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip()
+    output = json.loads(result.stdout)
+    assert output.get("decision") == "block"
+    assert "feat-99" in output.get("reason", "")

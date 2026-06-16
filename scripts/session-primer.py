@@ -120,7 +120,7 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     Returns:
     - (ws_id, ws_path, project_path, candidates) where candidates is a list
       of (ws_id, ws_path, project_path, summary_snippet, score) tuples
-    - If one workspace clearly dominates (score >= 2x runner-up): candidates is empty
+    - If one workspace clearly dominates (score >= 1.8x runner-up): candidates is empty
     - If scores are close: candidates list has top matches for Claude to pick from
     - If no workspace active in last 48h: all empty
     """
@@ -177,13 +177,27 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
         for row in scored[:3]
     ]
 
-    # Clear winner: only one candidate, OR top score >= 2x runner-up AND has keyword overlap
+    # Clear winner: only one candidate, OR top score >= 1.8x runner-up AND has keyword overlap
     if len(scored) == 1:
         return top_id, top_ws, top_proj, []
 
     runner_score = scored[1][0]
     if top_overlap_v > 0 and top_score_v >= runner_score * 1.8:
         return top_id, top_ws, top_proj, []
+
+    # Tiebreaker: consult active-workspace.json when keyword scoring is ambiguous.
+    # This is the authoritative human-set signal — if the active workspace is among
+    # the scored candidates, treat it as the winner regardless of keyword score.
+    try:
+        active_data = json.loads((home / 'state' / 'active-workspace.json').read_text(encoding='utf-8'))
+        active_id = active_data.get('workspace', '').strip()
+        if active_id:
+            for row in scored:
+                if row[3] == active_id:
+                    _, _, _, aid, aws, aproj, _ = row
+                    return aid, aws, aproj, []
+    except Exception:
+        pass
 
     # Ambiguous: return top match + candidates for Claude to consider
     return top_id, top_ws, top_proj, candidates
@@ -486,6 +500,22 @@ def _consume_clear_pending(home: Path) -> str:
     )
 
 
+def _consume_compaction_pending(home: Path) -> bool:
+    """
+    Check for a compaction-pending flag written by compaction-save.py.
+    If present, consume it (one-shot) and return True so the caller can
+    bypass the 15-char guard on the first post-compaction message.
+    """
+    flag_path = home / "state" / "compaction-pending.json"
+    if not flag_path.exists():
+        return False
+    try:
+        flag_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return True
+
+
 def main() -> int:
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
@@ -505,8 +535,11 @@ def main() -> int:
     # Always check for clear-pending flag — inject even on short prompts like "continue"
     clear_context = _consume_clear_pending(home)
 
-    # Skip standing orders for short prompts with no clear-pending context
-    if len(prompt) < 15 and not clear_context:
+    # Check for compaction-pending flag — bypass 15-char guard after compaction too
+    compaction_pending = _consume_compaction_pending(home)
+
+    # Skip standing orders for short prompts unless a post-clear or post-compaction flag is set
+    if len(prompt) < 15 and not clear_context and not compaction_pending:
         return 0
 
     # Always-inject rules: fire regardless of RAG state

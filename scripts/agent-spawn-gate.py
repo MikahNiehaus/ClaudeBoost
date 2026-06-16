@@ -54,6 +54,30 @@ def _log_usage(boost_home: Path, description: str, prompt: str, blocked: bool) -
         pass
 
 
+def _write_block_telemetry(boost_home: Path, tool: str, summary: str, reason: str) -> None:
+    """Write a PreToolUse block event to claude-actions.jsonl.
+
+    PostToolUse never fires when a PreToolUse hook exits 2, so we write
+    the telemetry record here before returning. Uses the same output file
+    as telemetry-hook.py so block events appear inline in the action log.
+    """
+    try:
+        sys.path.insert(0, str(boost_home / "scripts"))
+        from telemetry_writer import now_iso, session_id, write_telemetry
+        record = {
+            "ts": now_iso(),
+            "session_id": session_id(),
+            "tool": tool,
+            "summary": f"{tool} {summary[:200]}",
+            "result": "blocked",
+            "hook_event": "PreToolUse",
+            "block_reason": reason[:300],
+        }
+        write_telemetry(record, "claude-actions.jsonl")
+    except Exception:
+        pass
+
+
 def main() -> int:
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
@@ -178,6 +202,7 @@ def main() -> int:
         for n in nudges:
             print(n, file=sys.stderr)
         _log_usage(boost_home, description, prompt, blocked=True)
+        _write_block_telemetry(boost_home, "Task", description or "unknown", nudges[0])
         # Block when RAG context call is absent from spawn prompt — hard requirement
         return 2
 

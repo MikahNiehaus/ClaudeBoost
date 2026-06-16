@@ -208,6 +208,25 @@ def step_hooks() -> list[str]:
         print(f"  hooks: MISSING {missing} — run setup.py")
     else:
         print("  hooks: all 6 present")
+
+    # Verify telemetry sentinels are wired (added by telemetry feature).
+    # These sit inside existing event types so check-hooks.py won't catch them.
+    try:
+        import json
+        settings_path = Path.home() / ".claude" / "settings.json"
+        s = json.loads(settings_path.read_text(encoding="utf-8"))
+        hooks_cfg = s.get("hooks", {})
+        all_hook_text = json.dumps(hooks_cfg)
+        for sentinel in ("telemetry-session.py", "telemetry-hook.py"):
+            if sentinel not in all_hook_text:
+                missing.append(f"telemetry:{sentinel}")
+        if any(h.startswith("telemetry:") for h in missing):
+            print("  telemetry hooks: MISSING — run setup.py")
+        else:
+            print("  telemetry hooks: present")
+    except Exception:
+        pass
+
     return missing
 
 

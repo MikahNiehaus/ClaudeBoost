@@ -506,6 +506,186 @@ def _update_project_rag_flag(result: dict) -> None:
             pass
 
 
+class _TelemetryMiddleware:
+    """ASGI middleware that records every RAG HTTP request to rag-usage.jsonl.
+
+    Catches all callers (hook scripts, agents, external curl) at one point.
+    Writes happen in a daemon thread — the response path is never blocked.
+    Skipped entirely when DISABLE_TELEMETRY=1.
+
+    db_used is derived from the 'mode' parameter:
+      vector  -> ["chroma_vector"]
+      graph   -> ["sqlite_graph"]
+      both    -> ["chroma_vector", "sqlite_graph"]
+      (none)  -> ["chroma_vector"]  (default for /context and unspecified /search)
+    """
+
+    # Endpoints worth logging — skip health-check noise like /index/progress
+    _LOGGED_PATHS = frozenset([
+        "/search", "/context", "/status", "/index",
+        "/scan", "/index_research", "/reset_research", "/warmup",
+    ])
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self._disabled = os.environ.get("DISABLE_TELEMETRY", "") == "1"
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or self._disabled:
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path not in self._LOGGED_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        import time
+        t0 = time.monotonic()
+        method = scope.get("method", "GET")
+
+        # Buffer request body so the route handler can still read it.
+        body_parts: list[bytes] = []
+
+        async def buffered_receive():
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                body_parts.append(msg.get("body", b""))
+            return msg
+
+        status_holder: list[int] = [200]
+        resp_parts: list[bytes] = []
+
+        async def capture_send(msg) -> None:
+            if msg["type"] == "http.response.start":
+                status_holder[0] = msg.get("status", 200)
+            elif msg["type"] == "http.response.body":
+                resp_parts.append(msg.get("body", b""))
+            await send(msg)
+
+        try:
+            await self.app(scope, buffered_receive, capture_send)
+        finally:
+            try:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                import threading
+                raw_req = b"".join(body_parts)
+                raw_resp = b"".join(resp_parts)
+                threading.Thread(
+                    target=self._write,
+                    args=(path, method, status_holder[0], raw_req, raw_resp, latency_ms),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass  # Telemetry must never interfere with the response path
+
+    @staticmethod
+    def _write(path: str, method: str, status: int,
+               raw_req: bytes, raw_resp: bytes, latency_ms: int) -> None:
+        """Parse and write one rag-usage.jsonl record. Called in background thread."""
+        try:
+            import hashlib
+            import json
+            import os
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            req = json.loads(raw_req) if raw_req.strip() else {}
+            resp = json.loads(raw_resp) if raw_resp.strip() else {}
+
+            scope_val = req.get("scope")
+            mode = req.get("mode")
+            query = req.get("query") or req.get("task_description")
+            project_path = req.get("project_path")
+
+            # Determine which DB backends were hit.
+            # /context always uses both — it runs vector search (Tier 4) and graph
+            # neighbour expansion (Tier 4b) internally regardless of the 'mode' param.
+            if path in ("/status", "/index", "/scan", "/warmup"):
+                db_used: list[str] = []
+            elif path == "/context":
+                db_used = ["chroma_vector", "sqlite_graph"]
+            elif mode == "graph":
+                db_used = ["sqlite_graph"]
+            elif mode == "both":
+                db_used = ["chroma_vector", "sqlite_graph"]
+            else:
+                db_used = ["chroma_vector"]
+
+            # Count chunks returned
+            chunks = 0
+            if "results" in resp:
+                r = resp["results"]
+                if isinstance(r, list):
+                    chunks = len(r)
+                elif isinstance(r, dict):
+                    # mode=both: {"vector": {"results": [...]}, "graph": {"results": [...]}}
+                    for v in r.values():
+                        if isinstance(v, dict):
+                            chunks += len(v.get("results", []))
+
+            def _h(text) -> str | None:
+                if not text:
+                    return None
+                return "sha256:" + hashlib.sha256(str(text).encode()).hexdigest()
+
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "session_id": os.environ.get("CLAUDE_SESSION_ID", "unknown"),
+                "endpoint": path,
+                "method": method,
+                "scope": scope_val,
+                "mode": mode,
+                "query_hash": _h(query),
+                "project_path_hash": _h(project_path),
+                "db_used": db_used,
+                "chunks_returned": chunks,
+                "latency_ms": latency_ms,
+                "status_code": status,
+                "error": resp.get("error") if status >= 400 else None,
+            }
+
+            # Fall back to the repo root derived from this file's location when the
+            # env var is unset or empty (mirrors the pattern in telemetry-writer.py).
+            _env_home = os.environ.get("CLAUDEBOOST_HOME")
+            boost_home = Path(_env_home) if _env_home else Path(__file__).resolve().parent.parent.parent.parent
+            active_file = boost_home / "state" / "active-workspace.json"
+            wp: str | None = None
+            try:
+                ws_data = json.loads(active_file.read_text(encoding="utf-8"))
+                wp = ws_data.get("workspace_path")
+            except Exception:
+                pass
+
+            if wp:
+                tel_dir = Path(wp) / "Telemetry"
+                tel_dir.mkdir(parents=True, exist_ok=True)
+                target = tel_dir / "rag-usage.jsonl"
+            else:
+                fallback = boost_home / "state" / "telemetry-unrouted.jsonl"
+                fallback.parent.mkdir(parents=True, exist_ok=True)
+                target = fallback
+
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+
+            # Increment rag_count in session.json via the shared writer so the
+            # file lock is respected (prevents races with the PostToolUse hook).
+            if wp:
+                try:
+                    import sys as _sys
+                    scripts_dir = boost_home / "scripts"
+                    if str(scripts_dir) not in _sys.path:
+                        _sys.path.insert(0, str(scripts_dir))
+                    from telemetry_writer import update_session_json
+                    update_session_json("rag_count")
+                except Exception:
+                    pass
+
+        except Exception:
+            pass  # Never let telemetry crash the server
+
+
 async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
     """Run the HTTP REST server. Call sync_init() before this."""
     import asyncio
@@ -655,6 +835,12 @@ async def main_http(watcher: FileWatcher, host: str, port: int) -> None:
             Route("/warmup", endpoint=handle_rest_warmup, methods=["POST"]),
         ]
     )
+
+    # Wrap with telemetry middleware — writes rag-usage.jsonl per active workspace.
+    # Implemented as ASGI middleware so it catches all callers (hooks, agents, curl)
+    # at a single point. Writes happen in a background thread; overhead <1ms on the
+    # response path. Skipped entirely when DISABLE_TELEMETRY=1.
+    starlette_app = _TelemetryMiddleware(starlette_app)
 
     # Write server info so rag-server-start.py knows we're up
     _write_server_info(port)
