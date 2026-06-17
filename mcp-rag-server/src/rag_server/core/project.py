@@ -70,13 +70,16 @@ def project_index_dir(project_path: str) -> Path:
 
 
 def load_ragignore(project_path: str) -> set[str]:
-    """Read .ragignore from the project root and return a set of directory names to skip.
+    """Read .ragignore from the project root and return entries to skip.
 
-    Syntax (same philosophy as .gitignore, but directory-names only for now):
+    Two entry types (callers split them by whether "/" appears):
+      - Simple name (no slash): matched against directory names during os.walk
+      - Path/glob (contains slash): applied as a gitignore-style pathspec pattern
+        against relative file paths after discovery (e.g. ".claudeboost/knowledge/foo.md")
+    Common syntax:
       - Lines starting with # are comments
-      - Trailing slash is optional and ignored (e.g. "myproject/" == "myproject")
+      - Trailing slash is stripped
       - Blank lines are ignored
-      - Each entry is matched against directory *names* during os.walk (not full paths)
     """
     ragignore = Path(project_path).resolve() / ".ragignore"
     extras: set[str] = set()
@@ -107,10 +110,14 @@ def discover_files(
     Returns:
         List of absolute file paths.
     """
+    ragignore_raw = load_ragignore(project_path)
+    ragignore_dir_excludes = {e for e in ragignore_raw if "/" not in e}
+    ragignore_path_patterns = [e for e in ragignore_raw if "/" in e]
+
     if excludes is None:
-        excludes = DEFAULT_EXCLUDES | load_ragignore(project_path)
+        excludes = DEFAULT_EXCLUDES | ragignore_dir_excludes
     else:
-        excludes = excludes | load_ragignore(project_path)
+        excludes = excludes | ragignore_dir_excludes
 
     # Resolve which extensions to look for
     if languages:
@@ -134,6 +141,20 @@ def discover_files(
         for fname in filenames:
             if Path(fname).suffix in target_exts:
                 files.append(str(Path(dirpath) / fname))
+
+    # Filter out .ragignore path patterns (entries containing a slash).
+    if ragignore_path_patterns and files:
+        try:
+            import pathspec as _ps
+            ragignore_spec = _ps.PathSpec.from_lines("gitwildmatch", ragignore_path_patterns)
+            files = [
+                f for f in files
+                if not ragignore_spec.match_file(
+                    str(Path(f).relative_to(root)).replace("\\", "/")
+                )
+            ]
+        except Exception as e:
+            logger.warning(".ragignore path patterns could not be applied: %s", e)
 
     logger.info("Discovered %d source files in %s", len(files), project_path)
     return files

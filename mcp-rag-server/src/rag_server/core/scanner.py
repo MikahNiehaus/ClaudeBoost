@@ -66,8 +66,12 @@ def scan_project(
 
     root = Path(project_path).resolve()
 
-    # Merge .ragignore entries (per-project) into the exclude set
-    excludes = DEFAULT_EXCLUDES | load_ragignore(project_path)
+    # .ragignore entries: simple names (no slash) are directory excludes; paths
+    # containing a slash are file/glob patterns applied after discovery via pathspec.
+    ragignore_raw = load_ragignore(project_path)
+    ragignore_dir_excludes = {e for e in ragignore_raw if "/" not in e}
+    ragignore_path_patterns = [e for e in ragignore_raw if "/" in e]
+    excludes = DEFAULT_EXCLUDES | ragignore_dir_excludes
 
     # Resolve target extensions from language filter
     if languages:
@@ -93,6 +97,25 @@ def scan_project(
         raw_files = _discover_via_walk(root, target_exts, excludes)
         skipped_gitignore = 0
         method = "walk"
+
+    # Apply .ragignore path patterns (e.g. `.claudeboost/knowledge/foo.md`).
+    # Directory-name entries are already handled above via excludes; this pass
+    # handles entries that contain a slash and therefore refer to specific files
+    # or glob patterns that can't be matched by directory pruning alone.
+    if ragignore_path_patterns and raw_files:
+        try:
+            import pathspec as _ps
+            ragignore_spec = _ps.PathSpec.from_lines("gitwildmatch", ragignore_path_patterns)
+            filtered: list[str] = []
+            for abs_path in raw_files:
+                rel = str(Path(abs_path).relative_to(root)).replace("\\", "/")
+                if ragignore_spec.match_file(rel):
+                    skipped_gitignore += 1
+                else:
+                    filtered.append(abs_path)
+            raw_files = filtered
+        except Exception as e:
+            logger.warning(".ragignore path patterns could not be applied: %s", e)
 
     logger.info("Discovery method: %s, raw candidates: %d", method, len(raw_files))
 
