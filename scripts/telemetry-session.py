@@ -53,6 +53,21 @@ def handle_session_start() -> None:
         try:
             existing = json.loads(session_file.read_text(encoding="utf-8"))
             if existing.get("ended_at") is None:
+                # Session still active — patch session_id if it was never resolved,
+                # and record the resume time so long-idle gaps are visible.
+                changed = False
+                if existing.get("session_id") == "unknown":
+                    try:
+                        persisted = (BOOST_HOME / "state" / "session-id.txt").read_text(encoding="utf-8").strip()
+                        if persisted and persisted != "unknown":
+                            existing["session_id"] = persisted
+                            changed = True
+                    except Exception:
+                        pass
+                existing["last_resumed_at"] = now_iso()
+                changed = True
+                if changed:
+                    session_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
                 return
         except Exception:
             pass  # Corrupted file — overwrite it below
@@ -92,6 +107,15 @@ def handle_session_end() -> None:
     try:
         data = json.loads(session_file.read_text(encoding="utf-8"))
         data["ended_at"] = now_iso()
+        # Recompute rag_count from the JSONL to fix any lost increments from
+        # the advisory-lock race condition (concurrent writes within the 0.5s window).
+        rag_log = tel_dir / "rag-usage.jsonl"
+        if rag_log.exists():
+            try:
+                count = sum(1 for line in rag_log.read_text(encoding="utf-8").splitlines() if line.strip())
+                data["rag_count"] = count
+            except Exception:
+                pass
         session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
         pass

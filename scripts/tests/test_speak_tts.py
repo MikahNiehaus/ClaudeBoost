@@ -138,15 +138,13 @@ import importlib.util
 import sys as _sys
 from pathlib import Path as _Path
 
-_SCRIPTS_DIR = _Path("C:/Users/grayw/OneDrive/prj/ClaudeBoost/scripts")
-
 
 def _load_mod():
     spec = importlib.util.spec_from_file_location(
-        "speak_tts", _SCRIPTS_DIR / "speak-tts.py"
+        "speak_tts", SCRIPTS_DIR / "speak-tts.py"
     )
     mod = importlib.util.module_from_spec(spec)
-    _sys.path.insert(0, str(_SCRIPTS_DIR))
+    _sys.path.insert(0, str(SCRIPTS_DIR))
     spec.loader.exec_module(mod)
     return mod
 

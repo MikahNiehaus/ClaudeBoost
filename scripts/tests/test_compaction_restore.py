@@ -271,7 +271,7 @@ class TestMainDirectly:
         ts = datetime.now(timezone.utc).isoformat()
         handoff = {
             "timestamp": ts,
-            "cwd": str(tmp_path),
+            "cwd": "/test/project",
             "workspace_memo": "Working on feature X",
             "conversation": {
                 "user_messages": ["Can you fix the bug?", "Also add a test."],

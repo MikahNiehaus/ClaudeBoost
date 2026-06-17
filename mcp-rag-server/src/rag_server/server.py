@@ -191,8 +191,14 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             # Do NOT run live check_project_health() here — it opens a ChromaDB connection
             # per project, and with 60+ projects this causes rag_status to hang for minutes.
             from rag_server.config import DEVICE
+            _main_ready = embedder.is_loaded
+            _code_ready = (
+                code_embedder is None
+                or code_embedder is embedder
+                or code_embedder.is_loaded
+            )
             status: dict = {
-                "status": "ready",
+                "status": "ready" if (_main_ready and _code_ready) else "warming_up",
                 "project_root": str(PROJECT_ROOT),
                 "collections": collections_status,
                 "model": EMBEDDING_MODEL,
@@ -203,6 +209,7 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
             }
             if code_embedder is not None and code_embedder is not embedder:
                 status["code_model"] = CODE_EMBEDDING_MODEL
+                status["code_model_ready"] = code_embedder.is_loaded
             return status
 
         elif name == "rag_context":
