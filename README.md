@@ -148,7 +148,7 @@ the session, and shows recent workspaces. From there:
 /research-project        Become an expert in the full project stack (reads deps, researches each tech deeply)
 /workspace <task>        Create a workspace + implementation plan
 /research-task           Index task-specific docs into the workspace (auto or manual URL mode)
-/review                  Quick A-F grade by default; add --deep for full 15-pass parallel review
+/xray                    Quick A-F grade by default; add --deep for full 16-pass parallel review
 /qa                      Full QA session — app inventory, risk-based test plan, screenshot evidence
 /security-review         OWASP-grounded security audit
 ```
@@ -218,10 +218,12 @@ isolation but breaks a caller is flagged as a BLOCKER.
 
 ### Code Review
 
-`/review` gives you a quick A–F grade by default. Add `--deep` for the full 15-pass
-parallel review: 14 passes run in parallel (logic, security, performance, test coverage,
-dead code, debug artifacts, banned patterns, project pattern consistency, caller impact,
-and ticket alignment), then the evaluator-agent (Opus) runs last in a fresh context.
+`/xray` gives you a quick A–F grade by default. Add `--deep` for the full 16-pass
+parallel review: a deterministic pre-scan (grep patterns for closure-scope timers, template
+secret rendering, and loading states with no exit) runs first, then 15 passes run in parallel
+(logic, security, performance, test coverage, dead code, debug artifacts, banned patterns,
+project pattern consistency, caller impact, ticket alignment, async pattern audit, and template
+rendering security), then the evaluator-agent (Opus) runs last in a fresh context.
 Every finding needs a `file:line` citation or it gets dropped.
 
 Scope flags: `--staged`, `--branch`, `--pr <url>`.
@@ -387,7 +389,7 @@ when one is detected.
 `/ws` `/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
 
 **Code Quality**
-`/review` `/security-review` `/audit` `/self-improve` `/simplify`
+`/xray` `/security-review` `/audit` `/self-improve` `/simplify`
 
 **Testing**
 `/qa` `/test-hooks`

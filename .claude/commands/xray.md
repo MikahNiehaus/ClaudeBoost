@@ -242,7 +242,8 @@ If not found, print the "no ticket found" version with inferred intent from comm
 
 List selections before spawning:
 ```
-Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10-12 conditional], 13, 14, [14b if templates], 15, 15b
+Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10-12 conditional], 13, 14, [14b if templates], 15b
+Evaluator: Phase 4 (always last, always Opus — not a numbered pass)
 Skipping: [X — reason]
 Pre-scan flags: [results from Phase 2b below]
 ```
