@@ -876,6 +876,57 @@ def update_settings() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Project-level settings cleanup — runs after update_settings() so env vars
+# are current. After a repo move, hooks with absolute ClaudeBoost paths in
+# project settings.local.json files become stale and block Edit/Write/Bash
+# until removed. This makes cleanup automatic on every install.
+# ---------------------------------------------------------------------------
+def _clean_project_local_settings() -> None:
+    reg_path = BOOST_HOME / "state" / "workspaces.json"
+    project_paths: set = set()
+
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        for entry in reg.values():
+            pp = entry.get("project_path")
+            if pp:
+                project_paths.add(Path(pp))
+    except Exception:
+        pass
+
+    project_paths.add(Path.cwd())
+
+    cleaned = 0
+    for project_path in sorted(project_paths):
+        local_settings = project_path / ".claude" / "settings.local.json"
+        if not local_settings.exists():
+            continue
+        try:
+            settings = read_json(local_settings, {})
+        except json.JSONDecodeError:
+            _warn(f"Skipping malformed {local_settings}")
+            continue
+
+        before = json.dumps(settings)
+        _clean_stale_hooks(settings)
+        after = json.dumps(settings)
+
+        if before != after:
+            write_json(local_settings, settings)
+            try:
+                label = str(local_settings.relative_to(Path.home()))
+            except ValueError:
+                label = str(local_settings)
+            _ok(f"Cleaned stale hooks in ~/{label}")
+            cleaned += 1
+
+    if cleaned:
+        _ok(f"Project local settings cleaned: {cleaned} file(s) updated")
+    else:
+        _skip("No stale hooks in project settings.local.json files")
+
+
+# ---------------------------------------------------------------------------
 # Subprocess helper: run a native command without letting stderr trigger
 # PowerShell-style exceptions. Returns exit code + merged output.
 # ---------------------------------------------------------------------------
@@ -1419,6 +1470,7 @@ def main() -> int:
     sync_slash_commands()
     seed_state()
     update_settings()
+    _clean_project_local_settings()
     install_rag_server()
     register_mcp_debugger()
     register_playwright_mcp()
