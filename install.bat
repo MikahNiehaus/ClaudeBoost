@@ -49,9 +49,9 @@ if errorlevel 1 (
         echo  ERROR: Could not link or copy CLAUDE.md. Check permissions.
         exit /b 1
     )
-    echo        CLAUDE.md copied (re-run install.bat after git pull to update it).
+    echo        CLAUDE.md copied ^(re-run install.bat after git pull to update it^).
 ) else (
-    echo        CLAUDE.md linked (auto-updates on git pull).
+    echo        CLAUDE.md linked ^(auto-updates on git pull^).
 )
 
 :: ── 2. Link slash commands ───────────────────────────────────────────────────
@@ -68,7 +68,7 @@ if not exist "%CLAUDE_DIR%\commands" (
     if errorlevel 1 (
         echo        Could not create junction. setup.py will copy commands instead.
     ) else (
-        echo        Slash commands linked (junction — auto-updates on git pull).
+        echo        Slash commands linked ^(junction - auto-updates on git pull^).
     )
 ) else (
     echo        Existing commands directory could not be removed. setup.py will copy commands instead.
