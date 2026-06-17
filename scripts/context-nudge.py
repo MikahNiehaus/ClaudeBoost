@@ -218,13 +218,6 @@ def main() -> int:
     except Exception:
         pass
 
-    # --- Behavior tracker ---
-    behavior_path = home / "state" / "behavior-tracker.json"
-    try:
-        behavior = json.loads(behavior_path.read_text(encoding="utf-8"))
-    except Exception:
-        behavior = {"reads_since_rag": 0, "tasks_since_evaluator": 0}
-
     # Reset the per-read counter when the active workspace changes.
     # Without this, reads from one workspace accumulate and fire against
     # a different workspace after switching tasks.

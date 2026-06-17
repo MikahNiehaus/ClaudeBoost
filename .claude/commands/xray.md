@@ -1,10 +1,10 @@
 ---
-description: Code review — quick A-F grade by default; add --deep for full 15-pass parallel review with test execution and Opus evaluator
+description: Code X-ray — quick A-F grade by default; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator
 allowed-tools: Read, Write, Bash, Glob, Grep, Agent
 argument-hint: [--staged | --branch | --pr <url>] [--deep]
 ---
 
-# /review — Code Review
+# /xray — Code X-ray
 
 Arguments: $ARGUMENTS
 
@@ -12,7 +12,7 @@ Arguments: $ARGUMENTS
 
 Scan `$ARGUMENTS` for any of: `--deep`, `--full`, `deep`, `full`, `in depth`, `in-depth`, `thorough`, `detailed`
 
-- **Match found** → `DEEP_MODE = true` — full 15-pass parallel review with test execution and Opus evaluator
+- **Match found** → `DEEP_MODE = true` — full 16-pass parallel review with deterministic pre-scan, test execution, and Opus evaluator
 - **No match** → `DEEP_MODE = false` — quick single-agent A-F grade
 
 Strip the depth keyword from scope args before proceeding. Remaining tokens are the scope.
@@ -28,7 +28,7 @@ Strip the depth keyword from scope args before proceeding. Remaining tokens are 
 
 Set `PROJECT_PATH` to the detected value.
 
-Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code review $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000`.
+Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code xray $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000`.
 
 If it fails: stop — "RAG is not connected. Run `/rag` first."
 
@@ -149,7 +149,7 @@ Surface any NEEDS_EVIDENCE items alongside the grade.
 
 After delivering the grade, always end with:
 
-> "Quick review done. Reply **deep** to run the full 15-pass parallel review with test execution and Opus evaluator."
+> "Quick review done. Reply **deep** to run the full 16-pass X-ray with deterministic pre-scan, test execution, and Opus evaluator."
 
 ## Post-Review: Escalation Handling
 
@@ -228,7 +228,10 @@ If not found, print the "no ticket found" version with inferred intent from comm
 
 ## Phase 2: Pass Selection
 
-**Always run:** Pass 8 (Ticket Alignment), Pass 13 (Banned Dependencies), Pass 14 (Test Coverage & Logging)
+**Always run (NEVER SKIP):** Pass 8 (Ticket Alignment), Pass 13 (Banned Dependencies), Pass 14 (Test Coverage & Logging), Pass 15b (Async Pattern Audit)
+
+**Run when applicable:**
+- Pass 14b (Template Rendering Security): run if diff contains ANY `.cshtml`, `.razor`, `.html`, `.j2`, `.hbs`, or `.ejs` file
 
 **Skip only when clearly inapplicable:**
 - Pass 10 (Smoke Test): skip if pure backend/config with no UI
@@ -239,8 +242,63 @@ If not found, print the "no ticket found" version with inferred intent from comm
 
 List selections before spawning:
 ```
-Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10-12 conditional], 13, 14, 15
+Running: 1, 2, 3, 4, 5, 6, 7, 8, 9, [10-12 conditional], 13, 14, [14b if templates], 15, 15b
 Skipping: [X — reason]
+Pre-scan flags: [results from Phase 2b below]
+```
+
+---
+
+## Phase 2b: Deterministic Pre-Scan (runs before any agent spawns)
+
+Before spawning pass agents, run these deterministic grep checks against `REVIEW_DIFF` or the actual changed files. They cost nothing and feed hard evidence into the relevant passes.
+
+**Pre-scan 1 — Closure-scoped timers:**
+Search the diff for `setTimeout` or `setInterval` inside a function that can be called more than once. Specifically look for:
+- `const\s+\w+\s*=\s*set(Timeout|Interval)` inside a function body (not module scope)
+- Same variable used without `clearTimeout`/`clearInterval` before the next `set*` call
+
+```bash
+# Extract added lines from diff and grep
+grep "^+" "$DIFF_FILE" | grep -E "(const|let)\s+\w+\s*=\s*set(Timeout|Interval)"
+```
+
+Flag: if found AND no matching `clear(Timeout|Interval)` call on same variable in the function → `PRE_SCAN: CLOSURE_TIMER_BUG` (feeds into Pass 15b as evidence)
+
+**Pre-scan 2 — addEventListener inside re-callable function:**
+```bash
+grep "^+" "$DIFF_FILE" | grep -E "addEventListener\s*\("
+```
+Flag: if `addEventListener` appears inside a named function (not a module-level setup block) → `PRE_SCAN: DUPLICATE_LISTENER_RISK` (feeds into Pass 15b as WARNING)
+
+**Pre-scan 3 — Template secret rendering:**
+```bash
+grep "^+" "$DIFF_FILE" | grep -E "(@Json\.Serialize|@Html\.Raw|@ViewBag\.|@ViewData\[)" 
+```
+Flag: if found inside a `<script>` block context → `PRE_SCAN: TEMPLATE_RENDER_IN_SCRIPT` (feeds into Pass 14b as evidence)
+
+**Pre-scan 4 — High-entropy string rendering:**
+```bash
+grep "^+" "$DIFF_FILE" | grep -E "[A-Za-z0-9+/]{30,}={0,2}"
+```
+Flag: if high-entropy strings appear in template files inside `<script>` blocks → `PRE_SCAN: HIGH_ENTROPY_IN_TEMPLATE` (feeds into Pass 14b as WARNING)
+
+**Pre-scan 5 — Loading state with no timeout:**
+Search for loading state UI (CSS classes like `status-loading`, `loading`, `spinner`) in the diff with no `setTimeout` anywhere in the same file.
+Flag: if loading state exists and no timeout fallback found → `PRE_SCAN: LOADING_NO_TIMEOUT` (feeds into Pass 15b as BLOCKER)
+
+**Collect all flags into `PRE_SCAN_FLAGS` list. Inject into each relevant agent prompt.**
+
+If no flags triggered: `PRE_SCAN_FLAGS = [] — no deterministic issues found`
+
+Print pre-scan results before spawning any agents:
+```
+Pre-scan complete:
+  Closure-scoped timers   : [FOUND | clean]
+  Re-callable listeners   : [FOUND | clean]
+  Template secret render  : [FOUND | clean]
+  High-entropy in template: [FOUND | clean]
+  Loading with no timeout : [FOUND | clean]
 ```
 
 ---
@@ -274,6 +332,10 @@ Review ONLY the diff below for your assigned pass.
 == TICKET ==
 <ticket content>
 == END TICKET ==
+
+== PRE-SCAN FLAGS ==
+<PRE_SCAN_FLAGS — list any flags relevant to your pass; treat flagged patterns as confirmed starting points, not hypotheses>
+== END PRE-SCAN FLAGS ==
 
 Output JSON only:
 {
@@ -339,6 +401,47 @@ Grep for jQuery: `$(`, `jQuery`, `import.*jquery`, `require.*jquery`. **jQuery i
 **Pass 14 — Test Coverage & Logging** (skip only for pure docs/config/comments)
 *Tests:* new functions/classes need test coverage. Changed behaviour needs regression test. Flag missing tests as WARNING (BLOCKER for auth/payments/data integrity).
 *Logging:* every `catch` block must call `logger.error` (BLOCKER if missing). No sensitive data in logs (BLOCKER). Service methods and external calls should have INFO logging (WARNING if missing).
+
+**Pass 14b — Template Rendering Security** (skip if zero template files in diff)
+Scan every `.cshtml`, `.razor`, `.html`, `.j2`, `.hbs`, and `.ejs` file in the diff. For any server-rendered expression (`@Json.Serialize()`, `@Html.Raw()`, `@ViewBag.*`, `@ViewData[]`, `{{variable}}`, `<%= ... %>`) that appears inside a `<script>` block or inline event handler:
+
+- **User display data only** (name, email, role label): acceptable — no finding
+- **Config values, feature flags, app settings**: WARNING — prefer server-side conditional rendering, not JS config injection
+- **JWT or auth tokens rendered for a display SDK** (e.g. Tableau Embedding API, embedded analytics): WARNING — requires a sign-off comment explaining why the token must be in the page
+- **Secrets, credentials, connection strings, API keys, private keys**: BLOCKER — never render server-side secrets into page output
+- **High-entropy strings (20+ chars, base64-ish, or hex)**: WARNING — verify this is not a credential
+
+Check PRE_SCAN_FLAGS for `TEMPLATE_RENDER_IN_SCRIPT` and `HIGH_ENTROPY_IN_TEMPLATE` — if flagged, treat as confirmed starting points for this pass.
+
+Pass 14b output MUST include:
+```json
+{"pass":"14b","name":"Template Rendering Security","template_files_scanned":["file1.cshtml"],"findings":[]}
+```
+
+**Pass 15b — Async Pattern Audit (NEVER SKIP)**
+Find patterns where async state can get stuck or corrupt across multiple calls. Check the diff for all of these:
+
+1. **Closure-scoped timer leak**: `const` or `let` timer variable declared inside a function body that can be called more than once. If a second call fires before the timeout, the first timer runs against stale state and there is no way to cancel it. Severity: BLOCKER.
+   - Pattern: `const \w+ = setTimeout(...)` or `let \w+ = setTimeout(...)` inside a function, not at module scope
+   - Fix: hoist the timer variable to module/component scope and call `clearTimeout` at the start of each invocation
+
+2. **Missing cancel pair**: `setTimeout` or `setInterval` call with no corresponding `clearTimeout`/`clearInterval` on the same variable within the same function or component lifecycle. Severity: BLOCKER.
+
+3. **Loading state with no exit**: A UI loading state (spinner, "Loading..." text, progress indicator) that has no guaranteed exit path. If the async operation never resolves (CDN blocked, network hang, event never fires), the user sees a permanent loading state with no feedback. Severity: BLOCKER.
+   - Check: if loading state set in a function, confirm there is a `setTimeout` fallback AND that it is reachable even when the primary async event never fires
+   - Check: verify timeout variable is cleared before being reset (to prevent stale timeout firing after a successful reload)
+
+4. **Re-callable function with addEventListener**: An event listener attached inside a function that can be called multiple times. Each call attaches another listener; listeners accumulate and fire N times per event. Severity: WARNING.
+   - Pattern: `element.addEventListener(...)` inside a named function that is called as part of a load/init flow
+   - Fix: attach listeners once at setup time, or call `removeEventListener` before re-attaching
+
+Check PRE_SCAN_FLAGS for `CLOSURE_TIMER_BUG`, `DUPLICATE_LISTENER_RISK`, and `LOADING_NO_TIMEOUT` — if flagged, treat as confirmed starting points and cite the exact diff line.
+
+Pass 15b output MUST include:
+```json
+{"pass":"15b","name":"Async Pattern Audit","async_audit_complete":true,"findings":[]}
+```
+Missing `async_audit_complete` → Evaluator flags pass as INCOMPLETE.
 
 ---
 
@@ -411,6 +514,9 @@ Rules:
 3. Multiple findings about the same issue count as one.
 4. Every BLOCKER/WARNING must have file:line and a concrete fix. If not: downgrade to NIT or FALSE POSITIVE.
 5. Use FINDINGS_CITATIONS as your work queue. Read each cited file:line to confirm the issue exists.
+6. Pass 8 without `artifact_type_checked` field = INCOMPLETE — flag it.
+7. Pass 14b without `template_files_scanned` field = INCOMPLETE — flag it.
+8. Pass 15b without `async_audit_complete` field = INCOMPLETE — flag it.
 
 Output:
 **Grade: A/B/C/D/F** (A=no blockers/warnings, B=warnings/nits only, C=meaningful warnings, D=1-2 blockers, F=3+ blockers or test failures)
@@ -419,6 +525,7 @@ Output:
 **NITS**
 **FALSE POSITIVES** (with explanation)
 **TEST RESULTS SUMMARY**
+**INCOMPLETE PASSES** (passes missing required output fields)
 ```
 
 ---
@@ -430,7 +537,7 @@ Gate: confirm evaluator returned a result. If not, spawn it now.
 Output the full evaluator report. Lead with grade → blockers → warnings → nits → test summary.
 
 Final message:
-> "Review complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [C or better: ready to merge after warnings addressed. D/F or test failures: fix blockers first.]"
+> "X-ray complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [C or better: ready to merge after warnings addressed. D/F or test failures: fix blockers first.]"
 
 ---
 

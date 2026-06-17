@@ -1,13 +1,14 @@
 ---
-argument-hint: [url | --code | file-path | workspace-id] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
-description: Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes with screenshot evidence, and reports what was tested AND what was not
+argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
+description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, and reports what was tested AND what was not
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
 ---
 
 # /qa — QA Session
 
 Arguments: **$ARGUMENTS**
-(Format: `<url>` for browser testing, `--code` for recent git changes, or a file path / workspace ID for artifact QA)
+
+Works on anything — browser apps, API endpoints, Python scripts, JS modules, bash hooks, workspace artifacts, recent git changes, or any description of what to test. No URL required.
 
 ---
 
@@ -49,8 +50,15 @@ Strip flags from `$ARGUMENTS` before parsing positional tokens:
 | `CODE_FLAG = true` (from `--code`) | `general` | Recent git changes (`git diff HEAD~1`) |
 | `TARGET_URL` matches `[a-z0-9]+-\d{4}-\d{2}-\d{2}` (workspace ID pattern) | `general` | Files in that workspace |
 | `TARGET_URL` contains `/` or `\` or starts with `.` (file path) | `general` | That file or directory |
-| `TARGET_URL` is non-empty but none of the above | `general` | Treat as description of what to QA |
+| `TARGET_URL` ends with `.py`, `.js`, `.ts`, `.sh`, `.rb`, `.go`, `.cs`, `.rs`, or other recognized code extension | `general` | That file (even without a path prefix) |
+| `TARGET_URL` is non-empty but none of the above | `general` | Treat as natural language description — resolve to files, scripts, or artifacts |
 | `TARGET_URL` is empty | `detect` | Run Steps A–D to find a server |
+
+**Natural language target resolution** (applies when MODE = `general` and target is a description):
+- "these three Python scripts" / "the auth module" / "my hook scripts" → use RAG to find matching files, ask user to confirm before proceeding
+- "recent changes" / "what I just wrote" → `git diff HEAD~1 --name-only`
+- "the workspace output" / "the plan" → files in `$WORKSPACE_ABS/`
+- Anything else → print the resolved target and ask "Is this what you want to QA?" before starting
 
 **If MODE = `general`:** skip Steps A–D, skip Phase 0a-ii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
 
@@ -91,10 +99,15 @@ If the command is found but no port responds within 15 seconds: print "Dev serve
 
 **Step D — Ask the user (only if all auto-detect paths failed):**
 ```
-No running dev server detected and no start command found in the project.
-Please provide the URL (e.g. http://localhost:3000) or start the server first.
+No running dev server found. What do you want to QA?
+
+  Browser testing  — paste a URL (e.g. http://localhost:3000)
+  Code / scripts   — say what to test (e.g. "my_service.py", "the hook scripts", "--code" for recent git changes)
+  Workspace output — paste a workspace ID or say "the plan" / "the report"
 ```
-Wait for the user's response and set `TARGET_URL` to what they provide.
+Wait for the user's response. Set MODE and TARGET based on what they provide:
+- URL → `browser`
+- File name, path, description of scripts/code, or `--code` → `general`
 
 **0a-ii — Ticket tracing (ask if not provided).**
 
@@ -603,6 +616,30 @@ TCs come from journeys, not from components. For each journey in flow-map.md:
 - `TC-SMOKE-01`: Home page loads without console errors
 - `TC-SMOKE-02`: All primary nav links resolve without 404
 
+**Mandatory SDK failure TC (add automatically when detected):**
+
+After generating journeys, scan the diff and the pages in scope for external SDK imports:
+- `<script type="module" src="https://...">` in any template or HTML file
+- `import ... from 'https://...'` in any JS/TS file
+- Any third-party CDN script (`cdn.`, `unpkg.com`, `esm.sh`, `jsdelivr.net`)
+
+For EACH external SDK found, generate one additional TC:
+
+```markdown
+- [ ] TC-SDK-NNN: [SDK name] fails to load — page does NOT stay stuck in loading state
+  - Journey: [the journey that loads this SDK]
+  - Steps:
+    1. Simulate SDK failure (block the CDN URL via devtools / browser_evaluate network intercept, OR verify behavior when the SDK times out naturally in this environment)
+    2. Wait for the SDK's expected load event timeout period + 10 seconds
+    3. Call browser_snapshot — verify the page has exited the loading state
+  - Expected: Error message or fallback UI visible. Page is NOT showing a permanent loading indicator.
+  - Code path: [the JS function that handles the SDK load event or timeout]
+  - Evidence: TC-SDK-NNN-after.png
+  - Note: If the SDK CDN is permanently blocked in this environment (e.g. Tableau Cloud rejects localhost), this TC is auto-classified as UNVERIFIABLE — mark [U] and add a post-deploy validation note.
+```
+
+If no CDN intercept is possible and the CDN is confirmed permanently blocked in the test environment: mark TC as `[U] UNVERIFIABLE` immediately with: "CDN blocked in this environment — validate after deployment to a registered domain."
+
 **Intelligent test generation rules (apply per journey step):**
 
 | Control type | Rule |
@@ -643,7 +680,8 @@ TCs come from journeys, not from components. For each journey in flow-map.md:
 - Every **page in UI Pages in Scope** (from Phase 0g) that is part of a journey → covered by the journey's TCs; no extra per-page TCs needed unless the page has a form or action not covered by any journey.
 - Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists) — these map to the CRUD journeys.
 - If a discovered component has NO journey that exercises it: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
-- BLOCKED status is only valid for genuine external preconditions (e.g., "requires admin account not provisioned"). Complexity or difficulty is never a valid reason.
+- BLOCKED `[B]` status is only valid for genuine external preconditions that CAN be removed with setup changes (e.g., "requires admin account not provisioned", "flag must be toggled"). Complexity or difficulty is never a valid reason.
+- UNVERIFIABLE `[U]` is distinct from BLOCKED. Use `[U]` for conditions that are permanently untestable in any available environment (e.g., CDN blocks localhost by design, Tableau Cloud rejects non-registered domains, live payment gateway required). Every UNVERIFIABLE TC MUST include: "Post-deploy: [who validates, when, and how]".
 
 **Ticket tracing (if TICKET_ID was provided in Phase 0):**
 
@@ -702,7 +740,7 @@ This gate exists because Phase 3 executes a pre-written plan. There is no such t
 
 **Prior-session result check (mandatory when resuming an existing workspace):**
 
-If `plan.md` already contains result entries from a previous run (lines starting with `- [x]`, `- [F]`, or `- [B]`):
+If `plan.md` already contains result entries from a previous run (lines starting with `- [x]`, `- [F]`, `- [B]`, or `- [U]`):
 
 1. Count prior-session results: how many TCs are already marked in each category.
 2. Print:
@@ -710,9 +748,10 @@ If `plan.md` already contains result entries from a previous run (lines starting
    ⚠️  RESUMING WORKSPACE — Prior Session Results Detected
    ─────────────────────────────────────────────────────
    Found N tests with prior-session results:
-     [x] PASS:    M  →  must re-run or explicitly accepted
-     [F] FAIL:    N  →  must re-run or explicitly accepted
-     [B] BLOCKED: N  →  carried over if blocking reason unchanged
+     [x] PASS:          M  →  must re-run or explicitly accepted
+     [F] FAIL:          N  →  must re-run or explicitly accepted
+     [B] BLOCKED:       N  →  carried over if blocking reason unchanged
+     [U] UNVERIFIABLE:  N  →  carried over unless environment has changed
 
    Type 'rerun all'          — re-run everything from scratch
    Type 'accept TC-001,002'  — carry over specific results as-is
@@ -1037,7 +1076,8 @@ Edit `plan.md`, replacing the checkbox:
 - PASS (debug disabled): `- [x] TC-NNN: ... PASS | evidence: TC-NNN-after.png | code path: client-side | debug: UI-only (no server process found)`
 - FAIL (annotation gate): `- [F] TC-NNN: ... FAIL | annotation gate failed — overlay not visible (element '[label]' not found in DOM or zero bounding box)`
 - FAIL: `- [F] TC-NNN: ... FAIL | observed: [snapshot text describing what was seen]`
-- BLOCKED: `- [B] TC-NNN: ... BLOCKED | reason: [specific verifiable reason]`
+- BLOCKED: `- [B] TC-NNN: ... BLOCKED | reason: [specific verifiable external precondition — removable with setup changes]`
+- UNVERIFIABLE: `- [U] TC-NNN: ... UNVERIFIABLE | reason: [why no available environment can test this] | post-deploy: [who validates, when, and how after deployment to a registered environment]`
 - NEEDS-RERUN: `- [S] TC-NNN: ... NEEDS-RERUN | reason: [prior session result not re-executed / precondition changed]`
 
 **Step 8 — Rollback attempt (destructive TCs only).**
@@ -1245,7 +1285,7 @@ The orchestrator must NOT self-verify screenshots. "I checked them and they look
 
 **4a — Tally results.**
 
-Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`, NEEDS-RERUN `[S]`.
+Read `plan.md`. Count: PASS `[x]`, FAIL `[F]`, BLOCKED `[B]`, UNVERIFIABLE `[U]`, NEEDS-RERUN `[S]`.
 
 **4b — Write report.**
 
@@ -1265,13 +1305,14 @@ Write `$WORKSPACE_ABS/report.md`:
 
 ## Summary
 
-| Result       | Count |
-|--------------|-------|
-| PASS         | N     |
-| FAIL         | N     |
-| BLOCKED      | N     |
-| NEEDS-RERUN  | N     |
-| Total        | N     |
+| Result         | Count |
+|----------------|-------|
+| PASS           | N     |
+| FAIL           | N     |
+| BLOCKED        | N     |
+| UNVERIFIABLE   | N     |
+| NEEDS-RERUN    | N     |
+| Total          | N     |
 
 **Overall**: PASS / FAIL / PARTIAL
 
@@ -1282,6 +1323,14 @@ Write `$WORKSPACE_ABS/report.md`:
 ## Blocked Tests
 
 [For each BLOCKED: TC-ID, description, blocking reason]
+
+## Unverifiable Tests
+
+[For each UNVERIFIABLE: TC-ID, description, reason this environment cannot test it, and post-deploy validation plan]
+
+| TC-ID | Description | Why Unverifiable | Post-Deploy Validation |
+|-------|-------------|-----------------|----------------------|
+| TC-SDK-001 | Tableau SDK loads successfully | CDN rejects localhost | After deploy to manager-test.vivery.org: QA engineer opens page, confirms dashboard renders within 30s |
 
 ## Needs-Rerun
 
@@ -1332,6 +1381,16 @@ If no observations: write "No notable observations this session."
 ## Temp-Logging Used
 
 [Any TCs that used temp-logging, with rationale and confirmation of removal]
+
+## Post-Deploy Validation Required
+
+[Only present when UNVERIFIABLE count > 0. This section tells the team what still needs to be manually validated after deployment to a registered/production-like environment.]
+
+| TC-ID | What to Validate | Environment Needed | Assigned To | When |
+|-------|-----------------|-------------------|-------------|------|
+| [TC-SDK-001] | [Tableau dashboard loads, JWT auth chain end-to-end] | [domain registered with Tableau Connected App] | [QA engineer] | [on first deploy to manager-test.vivery.org] |
+
+These items are not bugs — they are genuine environment constraints that prevented local validation. Each must be checked before the feature is considered fully validated.
 ```
 
 **4c — Print summary to user.**

@@ -1201,3 +1201,75 @@ def test_block_escalation_with_registry_workspace(boost_home, tmp_path):
     output = json.loads(result.stdout)
     assert output.get("decision") == "block"
     assert "feat-99" in output.get("reason", "")
+
+
+# ---------------------------------------------------------------------------
+# session_id persistence — crash safety net reliability
+# ---------------------------------------------------------------------------
+
+def test_session_id_persisted_to_tracker(boost_home):
+    """session_id must be written to behavior-tracker.json so the crash safety
+    net can fire on the NEXT crash. The double-load bug would lose it."""
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 0,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 0,
+    }), encoding="utf-8")
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 0}), encoding="utf-8")
+
+    # posttooluse always uses session_id="test-session" — verify it reaches the tracker
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/foo.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    data = json.loads(tracker.read_text(encoding="utf-8"))
+    assert data.get("session_id") == "test-session", (
+        "session_id not persisted — crash safety net will fail on second crash"
+    )
+
+
+def test_crash_safety_net_resets_and_persists_new_session_id(boost_home):
+    """Simulates crash: tracker has old session_id + dirty counters.
+    New session starts → crash safety net resets counters AND persists new id.
+    posttooluse uses session_id='test-session'; tracker has 'old-session-id' → differs → fires."""
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 5,
+        "tasks_since_evaluator": 3,
+        "reads_since_context_update": 12,
+        "last_nudge_ctx_mtime": 1234567890.0,
+        "last_nudge_ctx_path": "/old/context.md",
+        "last_nudge_count": 99,
+        "reads_ctx_workspace_id": "old-ws",
+        "session_id": "old-session-id",
+    }), encoding="utf-8")
+    ct = boost_home / "state" / "compaction-tracker.json"
+    ct.write_text(json.dumps({"edit_count": 0}), encoding="utf-8")
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Read", {"file_path": "/foo.py"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    data = json.loads(tracker.read_text(encoding="utf-8"))
+
+    # Counters must be near-zero: reset to 0 by the safety net, then +1 from the
+    # current Read call (normal processing runs after the reset). Key proof that the
+    # reset fired is that they are 1, not 12/5/3 from the crashed session.
+    assert data.get("reads_since_context_update") == 1, "expected 1, not dirty value"
+    assert data.get("reads_since_rag") == 1, "expected 1, not dirty value"
+    assert data.get("tasks_since_evaluator") == 0
+    assert data.get("last_nudge_ctx_mtime") == 0.0
+    assert data.get("last_nudge_ctx_path") == ""
+    assert data.get("last_nudge_count") == 0
+    assert data.get("reads_ctx_workspace_id") == ""
+
+    # New session_id persisted so a SECOND crash triggers the net again
+    assert data.get("session_id") == "test-session", (
+        "new session_id not persisted — crash safety net would fail on next crash"
+    )

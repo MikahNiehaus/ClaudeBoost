@@ -655,7 +655,7 @@ body { padding-bottom: 110px; } /* room for audio bar */
 dialog.viz-lightbox { border: none; padding: 0; background: transparent; width: 100dvw; height: 100dvh; max-width: 100dvw; max-height: 100dvh; margin: 0; display: flex; align-items: center; justify-content: center; cursor: zoom-out; overflow: hidden; }
 dialog.viz-lightbox::backdrop { background: rgba(2,6,23,0.92); cursor: zoom-out; }
 dialog.viz-lightbox img { max-width: 92vw; max-height: 90vh; object-fit: contain; border-radius: 8px; box-shadow: 0 24px 80px rgba(0,0,0,0.8); pointer-events: none; cursor: default; }
-.viz-lightbox-close { position: absolute; top: 16px; right: 20px; background: rgba(15,23,42,0.8); border: 1px solid #334155; color: #f1f5f9; font-size: 22px; line-height: 1; width: 38px; height: 38px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.viz-lightbox-close { position: fixed; top: 16px; right: 20px; z-index: 1; background: rgba(15,23,42,0.8); border: 1px solid #334155; color: #f1f5f9; font-size: 22px; line-height: 1; width: 38px; height: 38px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .viz-lightbox-close:hover { background: #1e293b; }
 
 /* === AUDIO TOUR BAR (two-row) === */
