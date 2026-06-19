@@ -117,33 +117,52 @@ def _normalize_path(p: str) -> str:
     return p.replace("\\", "/").rstrip("/").lower()
 
 
+def _scan_local_workspaces(cwd: str) -> dict[str, Path]:
+    """Return {folder_name: full_path} for each dir inside <cwd>/workspace/."""
+    ws_dir = Path(cwd) / "workspace"
+    if not ws_dir.is_dir():
+        return {}
+    return {d.name: d for d in ws_dir.iterdir() if d.is_dir()}
+
+
+def _fuzzy_match(query: str, candidates: list[str]) -> list[str]:
+    """Return candidates whose name contains query as a substring (case-insensitive)."""
+    q = query.lower()
+    return [c for c in candidates if q in c.lower()]
+
+
 def show_table() -> None:
     home = _home()
     reg_path = home / "state" / "workspaces.json"
-
-    if not reg_path.exists():
-        print("No workspaces.json found — no workspaces registered yet.")
-        return
-
-    try:
-        registry: dict = json.loads(reg_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"Error reading workspaces.json: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    cwd = _normalize_path(os.getcwd())
+    cwd = os.getcwd()
+    cwd_norm = _normalize_path(cwd)
     cb_home = _normalize_path(str(home))
+
+    registry: dict = {}
+    if reg_path.exists():
+        try:
+            registry = json.loads(reg_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"Error reading workspaces.json: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     def _matches(entry: dict) -> bool:
         pp = _normalize_path(entry.get("project_path", ""))
-        return not pp or pp in (cwd, cb_home)
+        return not pp or pp in (cwd_norm, cb_home)
 
     filtered = {k: v for k, v in registry.items() if _matches(v)}
-    if not filtered:
+    if not filtered and registry:
         filtered = registry
 
+    # Merge in local workspace folders from <cwd>/workspace/
+    local_dirs = _scan_local_workspaces(cwd)
+    merged: dict[str, dict] = dict(filtered)
+    for name, path in local_dirs.items():
+        if name not in merged:
+            merged[name] = {"workspace_path": str(path), "project_path": cwd, "_local_only": True}
+
     rows = []
-    for ws_id, entry in filtered.items():
+    for ws_id, entry in merged.items():
         ws_path = Path(entry.get("workspace_path", ""))
         context_path = ws_path / "context.md"
         _, description, _ = _parse_context(context_path)
@@ -152,6 +171,7 @@ def show_table() -> None:
             "id": ws_id,
             "description": description,
             "last_edit": last_edit,
+            "local_only": entry.get("_local_only", False),
         })
 
     rows.sort(key=lambda r: r["last_edit"] if r["last_edit"] > 0 else float("-inf"), reverse=True)
@@ -176,7 +196,8 @@ def show_table() -> None:
 
     for r in rows:
         marker = "✎" if r["id"] == last_edited_id else " "
-        ws_col = _trunc(r["id"], W_WS)
+        local_tag = " (local)" if r.get("local_only") else ""
+        ws_col = _trunc(r["id"] + local_tag, W_WS)
         nx_col = _trunc(r["description"], W_NX)
         up_col = _relative_time(r["last_edit"]) if r["last_edit"] > 0 else "—"
 
@@ -369,20 +390,46 @@ def switch_workspace(ws_id: str) -> None:
         print("Cleared active workspace for this project (WS N/A)")
         return
 
-    if not reg_path.exists():
-        print(f"Error: workspaces.json not found at {reg_path}", file=sys.stderr)
-        sys.exit(1)
+    registry: dict = {}
+    if reg_path.exists():
+        try:
+            registry = json.loads(reg_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"Error reading workspaces.json: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    try:
-        registry: dict = json.loads(reg_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"Error reading workspaces.json: {exc}", file=sys.stderr)
-        sys.exit(1)
-
+    # Exact match wins immediately
     if ws_id not in registry:
-        print(f"Error: workspace '{ws_id}' not found in registry.", file=sys.stderr)
-        print(f"Known workspaces: {', '.join(registry.keys())}", file=sys.stderr)
-        sys.exit(1)
+        # Fuzzy match against registered names
+        fuzzy_reg = _fuzzy_match(ws_id, list(registry.keys()))
+
+        # Also fuzzy match against local workspace folders in <cwd>/workspace/
+        local_dirs = _scan_local_workspaces(cwd)
+        fuzzy_local = _fuzzy_match(ws_id, list(local_dirs.keys()))
+
+        # Merge, prefer registered matches first, deduplicate
+        all_matches = list(dict.fromkeys(fuzzy_reg + [k for k in fuzzy_local if k not in fuzzy_reg]))
+
+        if len(all_matches) == 0:
+            print(f"Error: no workspace matching '{ws_id}' found.", file=sys.stderr)
+            known = list(registry.keys()) + [k for k in local_dirs if k not in registry]
+            print(f"Known: {', '.join(known)}", file=sys.stderr)
+            sys.exit(1)
+
+        if len(all_matches) > 1:
+            print(f"Ambiguous: '{ws_id}' matches multiple workspaces: {', '.join(all_matches)}", file=sys.stderr)
+            print("Be more specific.", file=sys.stderr)
+            sys.exit(1)
+
+        ws_id = all_matches[0]
+
+        # If matched a local-only folder, auto-register it now
+        if ws_id not in registry and ws_id in local_dirs:
+            ws_path = str(local_dirs[ws_id])
+            registry[ws_id] = {"workspace_path": ws_path, "project_path": cwd}
+            reg_path.parent.mkdir(parents=True, exist_ok=True)
+            reg_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+            print(f"Registered local workspace '{ws_id}' from {ws_path}")
 
     entry = registry[ws_id]
     payload = {
