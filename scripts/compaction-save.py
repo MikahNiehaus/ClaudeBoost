@@ -24,6 +24,128 @@ def read_json(path: str | os.PathLike, default=None):
         return default if default is not None else {}
 
 
+def _find_claude_pid_windows() -> int | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize",              ctypes.wintypes.DWORD),
+                ("cntUsage",            ctypes.wintypes.DWORD),
+                ("th32ProcessID",       ctypes.wintypes.DWORD),
+                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID",        ctypes.wintypes.DWORD),
+                ("cntThreads",          ctypes.wintypes.DWORD),
+                ("th32ParentProcessID", ctypes.wintypes.DWORD),
+                ("pcPriClassBase",      ctypes.c_long),
+                ("dwFlags",             ctypes.wintypes.DWORD),
+                ("szExeFile",           ctypes.c_char * 260),
+            ]
+
+        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == ctypes.wintypes.HANDLE(-1).value:
+            return None
+
+        process_map: dict[int, tuple[int, str]] = {}
+        try:
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
+                while True:
+                    pid  = entry.th32ProcessID
+                    ppid = entry.th32ParentProcessID
+                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
+                    process_map[pid] = (ppid, exe)
+                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
+                        break
+        finally:
+            ctypes.windll.kernel32.CloseHandle(snap)
+
+        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
+        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
+
+        pid = os.getpid()
+        seen: set[int] = set()
+        for _ in range(20):
+            if pid in seen or pid not in process_map:
+                break
+            seen.add(pid)
+            ppid, _ = process_map[pid]
+            if ppid not in process_map:
+                break
+            _, parent_exe = process_map[ppid]
+            if target_exe in parent_exe or "node" in parent_exe:
+                return ppid
+            pid = ppid
+
+        return None
+    except Exception:
+        return None
+
+
+def _get_instance_id() -> str:
+    node_pid = _find_claude_pid_windows()
+    if node_pid:
+        return f"node-{node_pid}"
+    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
+    if env_id:
+        return env_id
+    return f"ppid-{os.getppid()}"
+
+
+def _resolve_active_workspace(state_dir: Path, hook_cwd: str = "") -> str:
+    """Return the active workspace ID for this Claude instance.
+
+    Priority:
+    1. Per-instance file keyed by Claude process PID (unique per window)
+    2. project-workspaces.json keyed by CWD
+    3. Legacy active-workspace.json (global fallback)
+    """
+    cwd = (hook_cwd or os.getcwd()).replace("\\", "/").rstrip("/")
+
+    instance_id = _get_instance_id()
+    inst_path = state_dir / "ws-instance" / f"{instance_id}.json"
+    try:
+        data = json.loads(inst_path.read_text(encoding="utf-8"))
+        if "workspace_id" not in data:
+            # New format: {cwd: workspace_id}
+            ws = data.get(cwd)
+            if ws is None:
+                cwd_lower = cwd.lower()
+                for key, val in data.items():
+                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                        ws = val
+                        break
+        else:
+            # Old format: only use if stored CWD matches
+            stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
+            ws = data.get("workspace_id") if stored.lower() == cwd.lower() else None
+        if ws:
+            return str(ws)
+    except Exception:
+        pass
+    try:
+        pws = json.loads((state_dir / "project-workspaces.json").read_text(encoding="utf-8"))
+        ws = pws.get(cwd)
+        if ws is None:
+            cwd_lower = cwd.lower()
+            for key, val in pws.items():
+                if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                    ws = val
+                    break
+        if ws and isinstance(ws, str):
+            return ws
+    except Exception:
+        pass
+
+    return read_json(state_dir / "active-workspace.json").get("workspace", "")
+
+
 def extract_summary(content: str, char_budget: int = 2000) -> str:
     """
     Split content on ## headings. Include sections up to char_budget,
@@ -138,7 +260,8 @@ def main() -> int:
         pass
 
     # Read active workspace so the restore can filter to just the right section
-    active_ws = read_json(state_dir / "active-workspace.json").get("workspace", "")
+    hook_cwd = hook_input.get("cwd", "")
+    active_ws = _resolve_active_workspace(state_dir, hook_cwd)
 
     # Read mode state
     mode = read_json(state_dir / "claudeboost-mode.json").get("mode", "CONSULT")

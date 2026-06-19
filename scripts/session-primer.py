@@ -69,6 +69,80 @@ def _get_rag_status(timeout: float = 0.2) -> dict | None:
         return None
 
 
+def _find_claude_pid_windows() -> int | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize",              ctypes.wintypes.DWORD),
+                ("cntUsage",            ctypes.wintypes.DWORD),
+                ("th32ProcessID",       ctypes.wintypes.DWORD),
+                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID",        ctypes.wintypes.DWORD),
+                ("cntThreads",          ctypes.wintypes.DWORD),
+                ("th32ParentProcessID", ctypes.wintypes.DWORD),
+                ("pcPriClassBase",      ctypes.c_long),
+                ("dwFlags",             ctypes.wintypes.DWORD),
+                ("szExeFile",           ctypes.c_char * 260),
+            ]
+
+        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == ctypes.wintypes.HANDLE(-1).value:
+            return None
+
+        process_map: dict[int, tuple[int, str]] = {}
+        try:
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
+                while True:
+                    pid  = entry.th32ProcessID
+                    ppid = entry.th32ParentProcessID
+                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
+                    process_map[pid] = (ppid, exe)
+                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
+                        break
+        finally:
+            ctypes.windll.kernel32.CloseHandle(snap)
+
+        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
+        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
+
+        pid = os.getpid()
+        seen: set[int] = set()
+        for _ in range(20):
+            if pid in seen or pid not in process_map:
+                break
+            seen.add(pid)
+            ppid, _ = process_map[pid]
+            if ppid not in process_map:
+                break
+            _, parent_exe = process_map[ppid]
+            if target_exe in parent_exe or "node" in parent_exe:
+                return ppid
+            pid = ppid
+
+        return None
+    except Exception:
+        return None
+
+
+def _get_instance_id() -> str:
+    node_pid = _find_claude_pid_windows()
+    if node_pid:
+        return f"node-{node_pid}"
+    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
+    if env_id:
+        return env_id
+    return f"ppid-{os.getppid()}"
+
+
 def _get_cached_rag_status(timeout: float = 0.2) -> dict | None:
     """GET /status with a 60s per-process cache. Skips the round-trip on every prompt."""
     import time
@@ -110,12 +184,12 @@ def _read_workspace_summary(ws_path: str) -> str:
 
 def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     """
-    Scan workspaces.json and return the best-matching workspace for the
-    user's current message.
+    Return the best-matching workspace for the current project and message.
 
-    Scoring:
-    - Keyword overlap between user message and workspace ticket/context summary
-    - Recency bonus: workspaces modified more recently score slightly higher
+    Priority:
+    1. project-workspaces.json keyed by CWD — authoritative human-set signal
+    2. Keyword scoring + recency across project-scoped workspaces only (CWD filter)
+    3. No cross-project bleed — workspaces from other projects are excluded
 
     Returns:
     - (ws_id, ws_path, project_path, candidates) where candidates is a list
@@ -130,6 +204,54 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     except Exception:
         return '', '', '', []
 
+    cwd_norm = os.getcwd().replace('\\', '/').rstrip('/')
+
+    # Check per-instance file first — CWD-keyed map, unique per Claude window, survives compaction
+    instance_id = _get_instance_id()
+    try:
+        inst_path = home / 'state' / 'ws-instance' / f'{instance_id}.json'
+        data = json.loads(inst_path.read_text(encoding='utf-8'))
+        if 'workspace_id' not in data:
+            # New format: {cwd: workspace_id}
+            ws_id = data.get(cwd_norm)
+            if ws_id is None:
+                cwd_lower = cwd_norm.lower()
+                for key, val in data.items():
+                    if isinstance(val, str) and key.replace('\\', '/').rstrip('/').lower() == cwd_lower:
+                        ws_id = val
+                        break
+        else:
+            # Old format: only use if stored CWD matches
+            stored = data.get('cwd', '').replace('\\', '/').rstrip('/')
+            ws_id = data.get('workspace_id') if stored.lower() == cwd_norm.lower() else None
+        if ws_id and isinstance(ws_id, str):
+            entry = reg.get(ws_id, {})
+            ws_path = entry.get('workspace_path', '')
+            project_path = entry.get('project_path', '')
+            if ws_path:
+                return ws_id, ws_path, project_path, []
+    except Exception:
+        pass
+
+    # Check project-workspaces.json — authoritative per-project pointer (shared fallback)
+    try:
+        pws = json.loads((home / 'state' / 'project-workspaces.json').read_text(encoding='utf-8'))
+        ws_id = pws.get(cwd_norm)
+        if ws_id is None:
+            cwd_lower = cwd_norm.lower()
+            for key, val in pws.items():
+                if key.replace('\\', '/').rstrip('/').lower() == cwd_lower:
+                    ws_id = val
+                    break
+        if ws_id and isinstance(ws_id, str):
+            entry = reg.get(ws_id, {})
+            ws_path = entry.get('workspace_path', '')
+            project_path = entry.get('project_path', '')
+            if ws_path:
+                return ws_id, ws_path, project_path, []
+    except Exception:
+        pass
+
     cutoff = datetime.now(timezone.utc).timestamp() - 48 * 3600
     user_tokens = _tokenize(user_message) if user_message else set()
 
@@ -138,6 +260,12 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
         ws_path = entry.get('workspace_path', '')
         if not ws_path:
             continue
+
+        # Only score workspaces that belong to the current project
+        pp = entry.get('project_path', '').replace('\\', '/').rstrip('/')
+        if pp and pp.lower() != cwd_norm.lower():
+            continue
+
         ws_dir = Path(ws_path)
         ctx = ws_dir / 'context.md'
         target = ctx if ctx.exists() else ws_dir
@@ -184,20 +312,6 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     runner_score = scored[1][0]
     if top_overlap_v > 0 and top_score_v >= runner_score * 1.8:
         return top_id, top_ws, top_proj, []
-
-    # Tiebreaker: consult active-workspace.json when keyword scoring is ambiguous.
-    # This is the authoritative human-set signal — if the active workspace is among
-    # the scored candidates, treat it as the winner regardless of keyword score.
-    try:
-        active_data = json.loads((home / 'state' / 'active-workspace.json').read_text(encoding='utf-8'))
-        active_id = active_data.get('workspace', '').strip()
-        if active_id:
-            for row in scored:
-                if row[3] == active_id:
-                    _, _, _, aid, aws, aproj, _ = row
-                    return aid, aws, aproj, []
-    except Exception:
-        pass
 
     # Ambiguous: return top match + candidates for Claude to consider
     return top_id, top_ws, top_proj, candidates

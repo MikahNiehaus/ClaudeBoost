@@ -61,6 +61,57 @@ This loads architecture, workflow, orchestration, and model-selection knowledge 
 
 ---
 
+## Phase 0.75: New or Existing Workspace?
+
+Before creating anything, check if the user wants to continue in an existing workspace.
+
+Write `"C:/Development/ClaudeBoost/state/cb_recent_workspaces.py"`:
+```python
+import json, pathlib, sys
+
+home = pathlib.Path('C:/Development/ClaudeBoost')
+reg_path = home / 'state' / 'workspaces.json'
+if not reg_path.exists():
+    sys.exit(0)
+reg = json.loads(reg_path.read_text(encoding='utf-8'))
+recent = []
+for wid, entry in reg.items():
+    ctx = pathlib.Path(entry.get('workspace_path', '')) / 'context.md'
+    if ctx.exists():
+        recent.append((ctx.stat().st_mtime, wid, entry.get('workspace_path', ''), entry.get('project_path', '')))
+recent.sort(reverse=True)
+for _, wid, wpath, ppath in recent[:5]:
+    print(f"{wid}|{wpath}|{ppath}")
+```
+```bash
+"${CLAUDEBOOST_PYTHON}" "C:/Development/ClaudeBoost/state/cb_recent_workspaces.py"
+```
+
+If the output is empty (no existing workspaces with a `context.md`): skip this phase and proceed to Phase 1.
+
+If workspaces are listed, parse each `wid|wpath|ppath` line and ask the user:
+
+> "New workspace or piggyback on an existing one?
+>
+> 0. New workspace
+> 1. `[wid-1]` — [ppath-1]
+> 2. `[wid-2]` — [ppath-2]
+> ...
+>
+> Reply with the number or workspace name."
+
+**If the user picks 0 or says "new":** proceed to Phase 1.
+
+**If the user picks an existing workspace (any other answer):**
+- Set `WORKSPACE_ID = [chosen wid]`, `WORKSPACE_ABS = [chosen wpath]`, `PROJECT_PATH = [chosen ppath]`, `WORKSPACE_ROOT = PROJECT_PATH`
+- Read and print `$WORKSPACE_ABS/context.md`
+- If `$WORKSPACE_ABS/plan.md` exists, read and print it
+- Report: "Using existing workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
+- If `$ARGUMENTS` contains a substantive new goal (not just a workspace ID or empty): update `$WORKSPACE_ABS/goal.md` with the new goal, then continue to Phase 1.5 to produce a fresh plan within this workspace — skip Phase 1 (no mkdir, no branch, no registration)
+- If `$ARGUMENTS` is empty or just a workspace ID with no new goal: skip directly to Phase 6 and present the existing plan as-is
+
+---
+
 ## Phase 1: Create the Workspace
 
 ### 1a — Generate a slug

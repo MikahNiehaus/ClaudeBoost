@@ -19,16 +19,23 @@ def main() -> int:
         os.path.join(os.path.dirname(__file__), "..")
     ))
 
-    # Read the active workspace so the compaction summary is anchored to it
+    # Read the active workspace for this project so the compaction summary is anchored to it
     workspace_line = ""
     try:
-        active = json.loads(
-            (home / "state" / "active-workspace.json").read_text(encoding="utf-8")
-        )
-        ws_id = active.get("workspace", "").strip()
-        ws_path = active.get("workspace_path", "").strip()
-        proj_path = active.get("project_path", "").strip()
-        if ws_id:
+        cwd_norm = os.getcwd().replace("\\", "/").rstrip("/")
+        pws = json.loads((home / "state" / "project-workspaces.json").read_text(encoding="utf-8"))
+        ws_id = pws.get(cwd_norm)
+        if ws_id is None:
+            cwd_lower = cwd_norm.lower()
+            for key, val in pws.items():
+                if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                    ws_id = val
+                    break
+        if ws_id and isinstance(ws_id, str):
+            reg = json.loads((home / "state" / "workspaces.json").read_text(encoding="utf-8"))
+            entry = reg.get(ws_id, {})
+            ws_path = entry.get("workspace_path", "").strip()
+            proj_path = entry.get("project_path", "").strip()
             parts = [f"ACTIVE WORKSPACE: {ws_id}"]
             if ws_path:
                 parts.append(f"  workspace_path: {ws_path}")

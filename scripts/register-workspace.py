@@ -49,7 +49,8 @@ def register(task_id: str, workspace_path: str, project_path: str = "") -> None:
 
 
 def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
-    p = _home() / "state" / "active-workspace.json"
+    home = _home()
+    p = home / "state" / "active-workspace.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
         json.dumps(
@@ -58,6 +59,18 @@ def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
         ),
         encoding="utf-8",
     )
+
+    # Also update per-project pointer so statusline and skills pick up the right workspace
+    pws_path = home / "state" / "project-workspaces.json"
+    try:
+        pws = json.loads(pws_path.read_text(encoding="utf-8"))
+    except Exception:
+        pws = {}
+    key = (project_path or workspace_path).replace("\\", "/").rstrip("/")
+    if key:
+        pws[key] = task_id
+        pws_path.write_text(json.dumps(pws, indent=2), encoding="utf-8")
+
     print(f"Activated: {task_id}")
 
 

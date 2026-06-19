@@ -23,6 +23,80 @@ def _get_home() -> Path:
     return Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
 
 
+def _find_claude_pid_windows() -> int | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize",              ctypes.wintypes.DWORD),
+                ("cntUsage",            ctypes.wintypes.DWORD),
+                ("th32ProcessID",       ctypes.wintypes.DWORD),
+                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID",        ctypes.wintypes.DWORD),
+                ("cntThreads",          ctypes.wintypes.DWORD),
+                ("th32ParentProcessID", ctypes.wintypes.DWORD),
+                ("pcPriClassBase",      ctypes.c_long),
+                ("dwFlags",             ctypes.wintypes.DWORD),
+                ("szExeFile",           ctypes.c_char * 260),
+            ]
+
+        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == ctypes.wintypes.HANDLE(-1).value:
+            return None
+
+        process_map: dict[int, tuple[int, str]] = {}
+        try:
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
+                while True:
+                    pid  = entry.th32ProcessID
+                    ppid = entry.th32ParentProcessID
+                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
+                    process_map[pid] = (ppid, exe)
+                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
+                        break
+        finally:
+            ctypes.windll.kernel32.CloseHandle(snap)
+
+        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
+        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
+
+        pid = os.getpid()
+        seen: set[int] = set()
+        for _ in range(20):
+            if pid in seen or pid not in process_map:
+                break
+            seen.add(pid)
+            ppid, _ = process_map[pid]
+            if ppid not in process_map:
+                break
+            _, parent_exe = process_map[ppid]
+            if target_exe in parent_exe or "node" in parent_exe:
+                return ppid
+            pid = ppid
+
+        return None
+    except Exception:
+        return None
+
+
+def _get_instance_id() -> str:
+    node_pid = _find_claude_pid_windows()
+    if node_pid:
+        return f"node-{node_pid}"
+    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
+    if env_id:
+        return env_id
+    return f"ppid-{os.getppid()}"
+
+
 def _detect_stack(project_path: str) -> str:
     """Return a human-readable stack label by checking indicator files."""
     p = Path(project_path)
@@ -57,18 +131,50 @@ def _tier3c_status(workspace_path: str) -> tuple[bool, int]:
 def main() -> int:
     home = _get_home()
 
-    active_ws_path = home / "state" / "active-workspace.json"
-    if not active_ws_path.exists():
-        return 0
+    # Resolve active workspace for this Claude instance
+    cwd_norm = os.getcwd().replace("\\", "/").rstrip("/")
+    workspace_id = ""
+    workspace_path = ""
+    project_path = ""
 
+    # 1. Per-instance file — CWD-keyed map (unique per Claude window, survives compaction)
+    instance_id = _get_instance_id()
     try:
-        active = json.loads(active_ws_path.read_text(encoding="utf-8"))
-        workspace_id = active.get("workspace", "")
-        # New schema includes workspace_path and project_path directly
-        workspace_path = active.get("workspace_path", "")
-        project_path = active.get("project_path", "")
+        inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
+        data = json.loads(inst_path.read_text(encoding="utf-8"))
+        if "workspace_id" not in data:
+            # New format: {cwd: workspace_id}
+            ws = data.get(cwd_norm)
+            if ws is None:
+                cwd_lower = cwd_norm.lower()
+                for key, val in data.items():
+                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                        ws = val
+                        break
+        else:
+            # Old format: only use if stored CWD matches
+            stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
+            ws = data.get("workspace_id") if stored.lower() == cwd_norm.lower() else None
+        if ws and isinstance(ws, str):
+            workspace_id = ws
     except Exception:
-        return 0
+        pass
+
+    # 2. Project-level fallback (shared within project, keyed by CWD)
+    if not workspace_id:
+        try:
+            pws = json.loads((home / "state" / "project-workspaces.json").read_text(encoding="utf-8"))
+            ws_id = pws.get(cwd_norm)
+            if ws_id is None:
+                cwd_lower = cwd_norm.lower()
+                for key, val in pws.items():
+                    if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                        ws_id = val
+                        break
+            if ws_id and isinstance(ws_id, str):
+                workspace_id = ws_id
+        except Exception:
+            pass
 
     if not workspace_id:
         return 0

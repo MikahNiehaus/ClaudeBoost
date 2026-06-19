@@ -195,10 +195,179 @@ def show_table() -> None:
     print()
 
 
+def _normalize_cwd() -> str:
+    """Return CWD as a normalized string for use as a JSON key."""
+    return os.getcwd().replace("\\", "/").rstrip("/")
+
+
+def _read_instance_ws(inst_path: Path, cwd: str) -> str:
+    """Read workspace for this CWD from per-instance file.
+
+    New format: {cwd: workspace_id, ...} — each project tracked independently.
+    Old format: {"workspace_id": "...", "cwd": "..."} — migrated on read.
+    """
+    try:
+        data = json.loads(inst_path.read_text(encoding="utf-8"))
+        cwd_norm = cwd.replace("\\", "/").rstrip("/")
+        if "workspace_id" not in data:
+            # New format
+            ws = data.get(cwd_norm)
+            if ws is None:
+                cwd_lower = cwd_norm.lower()
+                for key, val in data.items():
+                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                        ws = val
+                        break
+            return str(ws) if ws else ""
+        # Old format — only valid if stored CWD matches
+        stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
+        if stored.lower() == cwd_norm.lower():
+            return str(data.get("workspace_id", "") or "")
+        return ""
+    except Exception:
+        return ""
+
+
+def _write_instance_ws(inst_path: Path, cwd: str, ws_id: str | None) -> None:
+    """Write workspace for this CWD into the per-instance CWD-keyed map."""
+    try:
+        data = json.loads(inst_path.read_text(encoding="utf-8"))
+        if "workspace_id" in data:
+            data = {}  # migrate old single-value format
+    except Exception:
+        data = {}
+    cwd_norm = cwd.replace("\\", "/").rstrip("/")
+    if ws_id is None:
+        data.pop(cwd_norm, None)
+    else:
+        data[cwd_norm] = ws_id
+    inst_path.parent.mkdir(parents=True, exist_ok=True)
+    inst_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _find_claude_pid_windows() -> int | None:
+    """Walk the Windows process tree to find the node.exe (Claude Code) ancestor PID.
+
+    Returns the PID of the nearest node.exe ancestor, or None if not found / not Windows.
+    Each Claude Code instance is a separate node.exe process, making this PID unique
+    per terminal window with zero shell setup required.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize",              ctypes.wintypes.DWORD),
+                ("cntUsage",            ctypes.wintypes.DWORD),
+                ("th32ProcessID",       ctypes.wintypes.DWORD),
+                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID",        ctypes.wintypes.DWORD),
+                ("cntThreads",          ctypes.wintypes.DWORD),
+                ("th32ParentProcessID", ctypes.wintypes.DWORD),
+                ("pcPriClassBase",      ctypes.c_long),
+                ("dwFlags",             ctypes.wintypes.DWORD),
+                ("szExeFile",           ctypes.c_char * 260),
+            ]
+
+        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == ctypes.wintypes.HANDLE(-1).value:
+            return None
+
+        process_map: dict[int, tuple[int, str]] = {}
+        try:
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
+                while True:
+                    pid  = entry.th32ProcessID
+                    ppid = entry.th32ParentProcessID
+                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
+                    process_map[pid] = (ppid, exe)
+                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
+                        break
+        finally:
+            ctypes.windll.kernel32.CloseHandle(snap)
+
+        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
+        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
+
+        pid = os.getpid()
+        seen: set[int] = set()
+        for _ in range(20):
+            if pid in seen or pid not in process_map:
+                break
+            seen.add(pid)
+            ppid, _ = process_map[pid]
+            if ppid not in process_map:
+                break
+            _, parent_exe = process_map[ppid]
+            if target_exe in parent_exe or "node" in parent_exe:
+                return ppid
+            pid = ppid
+
+        return None
+    except Exception:
+        return None
+
+
+def _get_instance_id() -> str:
+    """Return a stable, per-Claude-instance identifier (no shell setup required).
+
+    Priority:
+      1. Windows process tree walk → node.exe (Claude) PID → unique per window
+      2. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
+      3. os.getppid() as last resort
+    """
+    node_pid = _find_claude_pid_windows()
+    if node_pid:
+        return f"node-{node_pid}"
+
+    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
+    if env_id:
+        return env_id
+
+    return f"ppid-{os.getppid()}"
+
+
+def _read_project_workspaces(home: Path) -> dict:
+    p = home / "state" / "project-workspaces.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_project_workspaces(home: Path, data: dict) -> None:
+    p = home / "state" / "project-workspaces.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def switch_workspace(ws_id: str) -> None:
     home = _home()
     reg_path = home / "state" / "workspaces.json"
     active_path = home / "state" / "active-workspace.json"
+    cwd = _normalize_cwd()
+
+    # Special command: clear the active workspace for this project
+    instance_id = _get_instance_id()
+
+    if ws_id == "off":
+        # Clear this CWD's entry from per-instance file
+        if instance_id:
+            inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
+            _write_instance_ws(inst_path, cwd, None)
+        # Also clear in project-workspaces.json for this CWD
+        pws = _read_project_workspaces(home)
+        pws[cwd] = None
+        _write_project_workspaces(home, pws)
+        print("Cleared active workspace for this project (WS N/A)")
+        return
 
     if not reg_path.exists():
         print(f"Error: workspaces.json not found at {reg_path}", file=sys.stderr)
@@ -227,6 +396,16 @@ def switch_workspace(ws_id: str) -> None:
     except OSError as exc:
         print(f"Error writing active-workspace.json: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Write per-instance file — CWD-keyed map so each project tracks independently
+    if instance_id:
+        inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
+        _write_instance_ws(inst_path, cwd, ws_id)
+
+    # Write per-CWD pointer using the ACTUAL CWD (not the workspace's registered project_path)
+    pws = _read_project_workspaces(home)
+    pws[cwd] = ws_id
+    _write_project_workspaces(home, pws)
 
     print(f"Switched to: {ws_id}")
 

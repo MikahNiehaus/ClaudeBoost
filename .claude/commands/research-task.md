@@ -28,8 +28,8 @@ Run this after creating a workspace but before delegating to implementation agen
 Parse `[workspace-id]` from arguments. Collect any `http://` or `https://` tokens as
 `SEED_URLS`. Note if `--approve` flag is present.
 
-If workspace-id not provided: check `$CLAUDEBOOST_HOME/state/active-workspace.json` for the
-current workspace. If still not found, ask the user.
+If workspace-id not provided: check `$CLAUDEBOOST_HOME/state/project-workspaces.json` keyed by
+the current working directory for the active workspace ID. If still not found, ask the user.
 
 Resolve:
 - `WORKSPACE_ID` = the workspace slug (e.g. `ASC-1199`, `knowledge-tiers-2026-06-03`)
@@ -72,9 +72,7 @@ from ticket, manifest, and codebase graph (e.g. "ticket: React, manifest: zustan
 **0c — Verify project is indexed** (required for codebase search to work):
 
 Detect project path:
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use `project_path` from the entry whose
-   `workspace_path` was most recently modified.
-2. Fall back to current working directory if no registry entry found.
+1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
 Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
 

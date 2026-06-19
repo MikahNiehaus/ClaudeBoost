@@ -23,8 +23,7 @@ Strip the depth keyword from scope args before proceeding. Remaining tokens are 
 
 **0a — Detect project path:**
 
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory
+1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
 Set `PROJECT_PATH` to the detected value.
 

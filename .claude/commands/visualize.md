@@ -18,8 +18,7 @@ If it fails: stop and tell the user "RAG is not connected. Run /rag before using
 **0b — Verify project is indexed** (required for codebase search to work):
 
 Detect the project path:
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
+1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
 Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
 

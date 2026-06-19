@@ -23,8 +23,7 @@ Run this Bash command to set the flag (resolves CLAUDEBOOST_HOME dynamically):
 
 **0a — Detect project path (before loading context):**
 
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
+1. Run `"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"` to get the active workspace ID for this Claude instance (same source as the blue WS indicator in the statusline — per-instance, not shared across windows). The output is JSON with `workspace_id`, `workspace_path`, and `project_path`. Fall back to current working directory if no workspace is active.
 
 Set `PROJECT_PATH` to the detected value.
 

@@ -168,8 +168,7 @@ This is a fast probe. `GET /status` does not use the embedding model, so it resp
 **0b — Verify project is indexed** (required for codebase search to work):
 
 Detect the project path:
-1. Read `$CLAUDEBOOST_HOME/state/workspaces.json` — use the `project_path` from the entry whose `workspace_path` was most recently modified
-2. Fall back to current working directory if no registry entry found
+1. Run `"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"` to get the active workspace ID for this Claude instance (same source as the blue WS indicator — per-instance, not shared). Output is JSON with `workspace_id`, `workspace_path`, `project_path`. Fall back to current working directory if no workspace is active.
 
 Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
 

@@ -167,6 +167,19 @@
     <sample>What's next: run /qa to exercise the feature in a real browser — it maps routes, runs journeys, and flags coverage gaps.</sample>
   </route>
 
+  <route id="debug-session">
+    <triggers>
+      <signal>User pastes a stack trace or error message</signal>
+      <signal>User says: "debug this", "why is X failing", "set a breakpoint", "step through", "step into", "trace this"</signal>
+      <signal>User asks: "what is the value of X at line Y", "why is this variable wrong"</signal>
+      <signal>User describes a runtime bug that needs live inspection</signal>
+      <signal>User says a process is crashing, hanging, or producing wrong output</signal>
+    </triggers>
+    <skill>/debug</skill>
+    <why>Analyzes the error and traces root cause — static analysis for obvious bugs, live mcp-debugger step-through for runtime issues. Works across Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust.</why>
+    <sample>What's next: consider running /debug — it traces the root cause and can step through execution live with mcp-debugger to inspect runtime values at any line.</sample>
+  </route>
+
   <!-- ============================================================
        CONTEXT / SESSION MANAGEMENT
        ============================================================ -->
