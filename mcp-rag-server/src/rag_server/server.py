@@ -129,8 +129,29 @@ def _dispatch_tool(name: str, arguments: dict) -> dict:
                 return {"error": "Embedding model not ready yet — retry in 30-60 seconds."}
             force = arguments.get("force", False)
             scope = arguments.get("scope", "all")
-            if scope == "all":
+            if scope == "memories":
+                from rag_server.config import MEMORY_DIR
+                from rag_server.tools.memory import rag_index_memories
+                mem = rag_index_memories(embedder=embedder, store=store, memory_dir=MEMORY_DIR, force=force)
+                if "error" in mem:
+                    return mem
+                result = {
+                    "files_indexed": mem.get("indexed", 0),
+                    "chunks_created": mem.get("indexed", 0),
+                    "files_unchanged": mem.get("skipped", 0),
+                    "files_failed": mem.get("failed", 0),
+                    "scope": "memories",
+                }
+            elif scope == "all":
                 result = kb_engine.index_all(force=force)
+                # memories scope has no file patterns and is skipped by index_all — run separately
+                from rag_server.config import MEMORY_DIR
+                from rag_server.tools.memory import rag_index_memories
+                if MEMORY_DIR:
+                    mem = rag_index_memories(embedder=embedder, store=store, memory_dir=MEMORY_DIR, force=force)
+                    result["files_indexed"] += mem.get("indexed", 0)
+                    result["files_unchanged"] = result.get("files_unchanged", 0) + mem.get("skipped", 0)
+                    result["files_failed"] += mem.get("failed", 0)
                 result["scope"] = "all"
             else:
                 result = kb_engine.index_scope(scope, force=force)

@@ -85,6 +85,12 @@ def rag_index_memories(
                      "Set RAG_MEMORY_DIR env var or ensure CLAUDEBOOST_HOME is set."
         }
 
+    # When force=True, drop the collection first so a model swap (e.g. 384d → 768d)
+    # doesn't leave a stale schema that rejects the new-dimension embeddings.
+    if force and store.collection_exists(COLLECTION):
+        store.delete_collection(COLLECTION)
+        logger.info("Dropped memories collection for clean re-index (force=True)")
+
     if not store.collection_exists(COLLECTION):
         store.create_collection(COLLECTION)
 
