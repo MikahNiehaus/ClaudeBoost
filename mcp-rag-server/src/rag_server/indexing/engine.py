@@ -1249,6 +1249,7 @@ class IndexingEngine:
                 "project_path": project_path,
                 "indexed_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "files_indexed": files_indexed,
+                "files_unchanged": files_unchanged,
                 "chunks_created": chunks_created,
                 "files_failed": files_failed,
                 "graph_edges": edge_count,

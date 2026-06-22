@@ -218,7 +218,7 @@ Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJ
 | WT-03 | `$WORKSPACE_ABS/context.md` exists | File present |
 | WT-04 | context.md Status field | Not stuck on PLAN_READY if work has started (should be IN_PROGRESS or COMPLETE) |
 | WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
-| WT-06 | Project RAG indexed (if project path exists) | POST /index output from Phase 1 shows files_indexed > 0 (note: `GET /status` does not report project chunks) |
+| WT-06 | Project RAG indexed (if project path exists) | POST /index output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
 | WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
 | WT-08 | Tests planned → test files exist | If plan includes a test-agent step, at least one test file is present |
 
@@ -227,7 +227,7 @@ Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJ
 | ID | Check | Pass condition |
 |----|-------|----------------|
 | PT-01 | README exists | File present at project root |
-| PT-02 | Project RAG indexed | POST /index output from Phase 1 shows files_indexed > 0 (note: `GET /status` does not report project chunks) |
+| PT-02 | Project RAG indexed | POST /index output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
 | PT-03 | Raw SQL string concatenation | Zero occurrences (grep for string-concatenated query patterns) |
 | PT-04 | Secrets in source | Zero hardcoded API keys, passwords, tokens in non-.env source files |
 | PT-05 | logger.error in catch blocks | Sample 10 catch blocks via grep; flag any missing error logging (INFO, not FAIL) |

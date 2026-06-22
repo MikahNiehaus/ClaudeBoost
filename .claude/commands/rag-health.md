@@ -62,12 +62,17 @@ Only run checks matching the resolved target. For `all`, run all sections.
 **3a. Registration check**
 Find the project in `indexed_projects` from the saved status by matching `project_path`:
 - ❌ FAIL if not found → "Project not indexed — run /index-project first."
-- Record `files_indexed`, `graph_edges`, `graph_resolved`, `graph_active`, `indexed_at`.
+- Record `files_indexed`, `files_unchanged` (may be absent in older registry entries — treat as 0 if missing), `graph_edges`, `graph_resolved`, `graph_active`, `indexed_at`.
 
 **3b. Files indexed count**
-From the registry entry:
-- ❌ FAIL if `files_indexed == 0`
-- ⚠️ WARN if `files_indexed < 100` — likely a partial or timed-out index
+From the registry entry. `files_indexed` counts files newly embedded in the last run; `files_unchanged` counts files that were already current (hash-matched) and skipped. Together they represent the total covered by the index.
+
+Let `effective = files_indexed + files_unchanged` (treat missing `files_unchanged` as 0).
+- ✅ PASS if `effective > 0` — index has content
+- ⚠️ WARN if `effective > 0` but `files_indexed == 0` and `files_unchanged` is absent from the registry (old format — cannot distinguish no-op from empty run)
+- ❌ FAIL if `effective == 0` — nothing has ever been indexed
+
+Do NOT fail solely because `files_indexed == 0`. That is normal when all files are already current.
 
 **3c. Partial index ratio**
 Scan the project to get total file count:
@@ -76,8 +81,9 @@ curl -s -X POST http://127.0.0.1:8612/scan \
   -H "Content-Type: application/json" \
   -d '{"project_path": "<path>"}'
 ```
-Compare `files_indexed` (from registry) to `files_to_index` (from scan):
-- ✅ PASS if files_indexed >= 90% of files_to_index
+Let `effective = files_indexed + files_unchanged` (treat missing `files_unchanged` as 0).
+Compare `effective` to `files_to_index` (from scan):
+- ✅ PASS if effective >= 90% of files_to_index
 - ⚠️ WARN if 50–89% → "Index may have timed out mid-run — run /index-project force"
 - ❌ FAIL if < 50% → "Index is severely incomplete (N/M files). Run /index-project force."
 

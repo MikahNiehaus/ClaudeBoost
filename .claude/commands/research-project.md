@@ -291,9 +291,12 @@ Call `POST http://127.0.0.1:8612/index` with:
 ```
 
 Check response:
-- `files_indexed` > 0: success
+- `files_indexed + files_unchanged` > 0: success (either new files were embedded or all existing files were already current)
+- `files_indexed == 0 AND files_unchanged == 0`: index produced nothing — check `errors[]` and retry with `force: true`
 - `files_failed` > 0: check `errors[]`, retry once; if still failing report the specific files
 - HTTP error: tell the user to run `/rag`, then retry
+
+After the index completes, run `/rag-health project` to confirm the index is healthy before proceeding.
 
 ### Phase 5b — Synthesis layer
 
