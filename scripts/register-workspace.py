@@ -48,6 +48,16 @@ def register(task_id: str, workspace_path: str, project_path: str = "") -> None:
     print(f"Registered: {task_id} -> {workspace_path}")
 
 
+def _get_instance_id() -> str:
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        return f"session-{session_id}"
+    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
+    if env_id:
+        return env_id
+    return f"ppid-{os.getppid()}"
+
+
 def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
     home = _home()
     p = home / "state" / "active-workspace.json"
@@ -60,16 +70,22 @@ def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
         encoding="utf-8",
     )
 
-    # Also update per-project pointer so statusline and skills pick up the right workspace
-    pws_path = home / "state" / "project-workspaces.json"
+    # Write to per-instance file so the statusline picks it up for this session
+    instance_id = _get_instance_id()
+    inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
+    cwd = (project_path or os.getcwd()).replace("\\", "/").rstrip("/")
     try:
-        pws = json.loads(pws_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(inst_path.read_text(encoding="utf-8"))
+            if "workspace_id" in data:
+                data = {}
+        except Exception:
+            data = {}
+        data[cwd] = task_id
+        inst_path.parent.mkdir(parents=True, exist_ok=True)
+        inst_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
-        pws = {}
-    key = (project_path or workspace_path).replace("\\", "/").rstrip("/")
-    if key:
-        pws[key] = task_id
-        pws_path.write_text(json.dumps(pws, indent=2), encoding="utf-8")
+        pass
 
     print(f"Activated: {task_id}")
 

@@ -88,6 +88,9 @@ def _find_claude_pid_windows() -> int | None:
 
 
 def _get_instance_id() -> str:
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        return f"session-{session_id}"
     node_pid = _find_claude_pid_windows()
     if node_pid:
         return f"node-{node_pid}"
@@ -127,22 +130,6 @@ def resolve() -> dict:
             workspace_id = ws
     except Exception:
         pass
-
-    # 2. Project-level fallback keyed by CWD
-    if not workspace_id:
-        try:
-            pws = json.loads((state_dir / "project-workspaces.json").read_text(encoding="utf-8"))
-            ws = pws.get(cwd)
-            if ws is None:
-                cwd_lower = cwd.lower()
-                for key, val in pws.items():
-                    if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
-                        ws = val
-                        break
-            if ws and isinstance(ws, str):
-                workspace_id = ws
-        except Exception:
-            pass
 
     if not workspace_id:
         return {"workspace_id": "", "workspace_path": "", "project_path": ""}

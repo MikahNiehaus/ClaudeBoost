@@ -139,11 +139,15 @@ def _get_instance_id() -> str:
     """Return a stable, per-Claude-instance identifier.
 
     Priority:
-      1. Windows ctypes process tree walk → node.exe (Claude Code) ancestor PID
-         → unique per Claude window, zero setup required
-      2. CLAUDEBOOST_INSTANCE_ID env var (shell init fallback for non-Windows)
-      3. os.getppid() as last resort (may not be stable across skill invocations)
+      1. CLAUDE_CODE_SESSION_ID env var — set by Claude Code, inherited by all subprocesses
+      2. Windows ctypes process tree walk → claude.exe ancestor PID
+      3. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
+      4. os.getppid() as last resort
     """
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        return f"session-{session_id}"
+
     if sys.platform == "win32":
         node_pid = _find_claude_pid_windows()
         if node_pid:
@@ -159,23 +163,19 @@ def _get_instance_id() -> str:
 def _active_workspace() -> str | None:
     """Return the active workspace ID for this Claude instance.
 
-    Priority:
-      1. Per-instance file keyed by Claude process PID (automatic, zero setup)
-      2. Project-level project-workspaces.json[cwd] (shared fallback)
-
-    Returns the workspace ID string if one is set, or None if not set or cleared.
+    Uses only the per-instance file keyed by CLAUDE_CODE_SESSION_ID so each
+    Claude window tracks its own workspace independently, and new instances
+    start with no workspace set.
     """
     boost_home = Path(os.environ.get("CLAUDEBOOST_HOME", Path(__file__).resolve().parent.parent))
     instance_id = _get_instance_id()
 
     cwd = os.getcwd().replace("\\", "/").rstrip("/")
 
-    # Per-instance check — CWD-keyed map (one file per Claude window, one entry per project)
     inst_path = boost_home / "state" / "ws-instance" / f"{instance_id}.json"
     try:
         data = json.loads(inst_path.read_text(encoding="utf-8"))
         if "workspace_id" not in data:
-            # New format: {cwd: workspace_id}
             ws = data.get(cwd) or data.get(cwd.lower())
             if ws is None:
                 cwd_lower = cwd.lower()
@@ -184,24 +184,10 @@ def _active_workspace() -> str | None:
                         ws = val
                         break
         else:
-            # Old format: only use if stored CWD matches
             stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
             ws = data.get("workspace_id") if stored.lower() == cwd.lower() else None
         if ws:
             return str(ws)
-    except Exception:
-        pass
-
-    # Project-level fallback: keyed by CWD
-    pws_path = boost_home / "state" / "project-workspaces.json"
-    try:
-        data = json.loads(pws_path.read_text(encoding="utf-8"))
-        if cwd in data:
-            return data[cwd]
-        cwd_lower = cwd.lower()
-        for key, val in data.items():
-            if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
-                return val
     except Exception:
         pass
     return None

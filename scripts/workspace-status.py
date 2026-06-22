@@ -340,10 +340,15 @@ def _get_instance_id() -> str:
     """Return a stable, per-Claude-instance identifier (no shell setup required).
 
     Priority:
-      1. Windows process tree walk → node.exe (Claude) PID → unique per window
-      2. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
-      3. os.getppid() as last resort
+      1. CLAUDE_CODE_SESSION_ID env var — set by Claude Code, inherited by all subprocesses
+      2. Windows process tree walk → claude.exe ancestor PID
+      3. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
+      4. os.getppid() as last resort
     """
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        return f"session-{session_id}"
+
     node_pid = _find_claude_pid_windows()
     if node_pid:
         return f"node-{node_pid}"
