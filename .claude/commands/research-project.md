@@ -115,6 +115,11 @@ For each technology, run up to 6 search angles with multiple query phrasings per
 4. **Migration/upgrade** — `[tech] [version] migration guide upgrade breaking changes`, `[tech] changelog site:github.com`, `[tech] release notes`
 5. **Integration patterns** — `[tech] integration patterns examples production usage`, `[tech] [version] tutorial example site:github.com`, `[tech] cookbook patterns`
 6. **Pitfalls** — `[tech] common mistakes pitfalls troubleshooting`, `[tech] [version] known issues bugs site:github.com`, `[tech] anti-patterns`
+7. **Best practices** — `[tech] best practices recommended patterns`, `[tech] idiomatic usage examples site:github.com`, `[tech] production usage guide`
+8. **Testing** — `[tech] testing patterns unit test`, `[tech] mocking test utilities site:github.com`, `[tech] how to test [tech] integration`
+9. **Debugging** — `[tech] debugging common errors troubleshooting`, `[tech] error messages diagnosis`, `[tech] logging diagnostics production`
+10. **Configuration/deployment** — `[tech] configuration deployment production`, `[tech] pool sizing timeout settings`, `[tech] environment variables dangerous defaults`
+11. **Real-world usage** — `[tech] site:github.com production example`, `[tech] open source project example`, `[tech] real world implementation patterns`
 
 Source tier scoring:
 - **Tier A** (official docs, github.com, arxiv.org, MDN, OWASP, NIST, ietf.org): auto-include
@@ -133,13 +138,13 @@ If an angle returns fewer than 20 Tier A sources:
 
 ### Phase 2c — Minimum Source Gate
 
-Count total Tier A sources across all technologies and angles. **Minimum required: 1000 Tier A sources.**
+Count total Tier A + Tier B sources across all technologies and angles. **Target: 300-500 sources. Minimum to proceed: 300.**
 
-If total < 1000:
-1. Log: "Minimum source gate: collected N Tier A sources — need 1000. Running expansion pass."
+If total < 300:
+1. Log: "Minimum source gate: collected N sources — target 300-500. Running expansion pass."
 2. For each technology and angle with the fewest hits, run additional searches with new query variants
-3. Keep expanding until total >= 1000 or query space is exhausted
-4. If still < 1000: log "Source gate: collected N Tier A sources (below 1000 target) — query space exhausted. Proceeding."
+3. Keep expanding until total >= 300 or query space is exhausted
+4. If still < 300: log "Source gate: collected N sources (below 300 target) — query space exhausted. Proceeding."
 
 Do not proceed to Phase 3 until this gate passes or is explicitly logged as exhausted.
 

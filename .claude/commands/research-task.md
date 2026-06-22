@@ -112,6 +112,11 @@ Each agent handles its own entity across 6 angles with 3 query phrasings per ang
 4. Migration/upgrade — `[entity] migration guide breaking changes`, `[entity] changelog site:github.com`, `[entity] upgrade guide`
 5. Integration patterns — `[entity] integration examples tutorial`, `[entity] cookbook site:github.com`, `[entity] production patterns`
 6. Pitfalls — `[entity] common mistakes gotchas`, `[entity] anti-patterns known issues site:github.com`, `[entity] troubleshooting`
+7. Best practices — `[entity] best practices recommended patterns`, `[entity] idiomatic usage examples site:github.com`, `[entity] production usage guide`
+8. Testing — `[entity] testing patterns unit test`, `[entity] mocking test utilities site:github.com`, `[entity] how to test [entity] integration`
+9. Debugging — `[entity] debugging common errors troubleshooting`, `[entity] error messages diagnosis`, `[entity] logging diagnostics production`
+10. Configuration/deployment — `[entity] configuration deployment production`, `[entity] pool sizing timeout settings`, `[entity] environment variables dangerous defaults`
+11. Real-world usage — `[entity] site:github.com production example`, `[entity] open source project example`, `[entity] real world implementation patterns`
 
 **legal:**
 1. Primary legislation — `[entity] legislation statute text`, `[entity] act law site:gov`, `[entity] regulation official text`
@@ -162,7 +167,7 @@ Each agent handles its own entity across 6 angles with 3 query phrasings per ang
 
 Each agent returns collected URLs with tier, angle, and entity labels. Merge and deduplicate across all agents. Add any `SEED_URLS` from arguments.
 
-**Minimum required: 100 sources (Tier A + Tier B combined).**
+**Target: 50-100 sources (Tier A + Tier B combined). Minimum to proceed: 50.**
 
 ### Phase 3b: Gap Detection Retry
 
@@ -172,11 +177,11 @@ Log each retry: `Retried [entity] [angle] with: "[refined query]" → N sources 
 
 ### Phase 3c: Minimum Source Gate
 
-If total Tier A + Tier B < 100:
-1. Log: "Minimum source gate: collected N sources — need 100. Running expansion."
+If total Tier A + Tier B < 50:
+1. Log: "Minimum source gate: collected N sources — target 50-100. Running expansion."
 2. Spawn additional search agents targeting entities and angles with the fewest hits
-3. Keep expanding until total >= 100 or query space is exhausted
-4. If still < 100: log "Source gate: collected N sources (below 100 target) — query space exhausted. Proceeding."
+3. Keep expanding until total >= 50 or query space is exhausted
+4. If still < 50: log "Source gate: collected N sources (below 50 target) — query space exhausted. Proceeding."
 
 ---
 
