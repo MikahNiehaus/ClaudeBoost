@@ -165,16 +165,22 @@ def main() -> None:
 
     lines = [
         "[RAG locations — use whichever tiers apply to the current task]",
-        f"1. ClaudeBoost KB: POST /search scope=knowledge|agents — best practices, agent specs, ClaudeBoost internals",
+        f"1. ClaudeBoost KB: POST /search scope=knowledge|agents",
+        f"   Intent: ClaudeBoost internals — agent specs, skill definitions, orchestration patterns. Search this when you need to know how ClaudeBoost works or which agent to spawn.",
         f"2. Project KB ({('indexed' if has_project_kb else 'not yet indexed')}): {project_kb_path}",
+        f"   Intent: Deep indexed research docs for every library and technology the project uses. Search this when you need expert knowledge about a specific tech (e.g. pgx, LangGraph, Redpanda).",
         f"   Index: POST /index {{\"project_path\":\"{project_path}\"}}",
         f"   Search: POST /search {{\"scope\":\"codebase\",\"project_path\":\"{project_path}\"}}",
         f"3. Codebase: POST /search {{\"scope\":\"codebase\",\"mode\":\"both\",\"project_path\":\"{project_path}\"}}",
+        f"   Intent: The actual project source code. Search this when you need to find implementations, trace how things are wired, or locate a specific function or component.",
     ]
 
     if workspace_kb_path:
         lines.append(
             f"4. Workspace KB ({('indexed' if has_workspace_kb else 'not yet indexed')}): {workspace_kb_path} [{workspace_id}]"
+        )
+        lines.append(
+            f"   Intent: Task-scoped research docs fetched for this specific ticket. Search this when working on tasks that had /research-task run against them."
         )
     else:
         lines.append("4. Workspace KB: none active (run /ws <id> to set one)")
@@ -184,6 +190,11 @@ def main() -> None:
         "When spawning agents: include all 4 RAG locations in the spawn prompt.",
         "[Rules] Concise and informal but polite. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions.",
     ]
+
+    if workspace_id:
+        lines.append(
+            f"[Workspace active: {workspace_id}] Update workspace/{workspace_id}/context.md after every significant finding, decision, or file read."
+        )
 
     print("\n".join(lines))
 
