@@ -68,9 +68,12 @@ Find the project in `indexed_projects` from the saved status by matching `projec
 From the registry entry. `files_indexed` counts files newly embedded in the last run; `files_unchanged` counts files that were already current (hash-matched) and skipped. Together they represent the total covered by the index.
 
 Let `effective = files_indexed + files_unchanged` (treat missing `files_unchanged` as 0).
-- ✅ PASS if `effective > 0` — index has content
-- ⚠️ WARN if `effective > 0` but `files_indexed == 0` and `files_unchanged` is absent from the registry (old format — cannot distinguish no-op from empty run)
-- ❌ FAIL if `effective == 0` — nothing has ever been indexed
+
+When `effective == 0` (either `files_unchanged` is absent from the registry or both counters are 0), **fall back to the manifest count before failing**: the manifest is read in check 3d, so run 3d first if not yet done. If the manifest has entries, the index has content and the zero counters are an artifact of an old registry format — report ⚠️ WARN (old registry format, manifest OK) not ❌ FAIL.
+
+- ✅ PASS if `effective > 0`
+- ⚠️ WARN if `effective == 0` but manifest has entries → "Registry missing files_unchanged (old format) — index appears healthy via manifest. Run any incremental index to update the registry."
+- ❌ FAIL if `effective == 0` AND manifest is missing or empty → "Nothing indexed. Run /index-project."
 
 Do NOT fail solely because `files_indexed == 0`. That is normal when all files are already current.
 
@@ -81,7 +84,8 @@ curl -s -X POST http://127.0.0.1:8612/scan \
   -H "Content-Type: application/json" \
   -d '{"project_path": "<path>"}'
 ```
-Let `effective = files_indexed + files_unchanged` (treat missing `files_unchanged` as 0).
+Let `effective = files_indexed + files_unchanged`. When `files_unchanged` is absent, use manifest entry count as `effective` (count keys in `manifest.json` excluding `__schema_version__` and `__embedding_model__`).
+
 Compare `effective` to `files_to_index` (from scan):
 - ✅ PASS if effective >= 90% of files_to_index
 - ⚠️ WARN if 50–89% → "Index may have timed out mid-run — run /index-project force"
