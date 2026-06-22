@@ -91,6 +91,28 @@ $ARGUMENTS — flexible, any of:
    - **Stop and tell the user**: "Run `/index-project force` to rebuild the index."
    - Do NOT auto-run `force=true` — always wait for explicit user confirmation.
 
+   **Large project handling** — when `force=true` AND scan shows > 500 files:
+   1. Warn the user before starting: "Large project (N files) — indexing may take several minutes."
+   2. Run the index in the background and poll `/index/progress` every 30 seconds for live updates:
+      ```bash
+      curl -s -X POST http://127.0.0.1:8612/index \
+        -H "Content-Type: application/json" \
+        -d '{"project_path": "<path>", "force": true}' \
+        -o "${TEMP}/rag_index_result.json" &
+      INDEX_PID=$!
+      echo "Indexing started (background PID $INDEX_PID)..."
+      while kill -0 "$INDEX_PID" 2>/dev/null; do
+        curl -s http://127.0.0.1:8612/index/progress
+        sleep 30
+      done
+      wait "$INDEX_PID"
+      cat "${TEMP}/rag_index_result.json"
+      ```
+   3. Report progress to the user every poll: show `files_done/files_total`, `pct%`, `eta_s`, and `current_file`.
+   4. When complete, read the result from `${TEMP}/rag_index_result.json`.
+
+   **Note on progress endpoint:** `GET http://127.0.0.1:8612/index/progress` returns live indexing state including `active`, `pct`, `files_done`, `files_total`, `eta_s`, and `current_file`. Use it to confirm the index is actually progressing, not stalled.
+
 7. Report results concisely:
    - Files indexed / chunks created / files skipped
    - Total time if notable
@@ -203,6 +225,19 @@ $ARGUMENTS — flexible, any of:
 
       **Do NOT block** on summary generation — it's a background process. Always proceed after triggering the fix.
 
+   h. **Partial index ratio** — compare `files_indexed` from the index result against `files_to_index` from the scan (step 3):
+      This check only applies when `force=true` (on an incremental run, `files_unchanged` being high is expected).
+      - PASS: `files_indexed` ≥ 90% of `files_to_index`
+      - WARN: `files_indexed` is 50–89% of `files_to_index` — index likely stopped early
+      - FAIL: `files_indexed` < 50% of `files_to_index` — index almost certainly timed out or crashed
+
+      If WARN or FAIL:
+      - Report: "Only N/M files were indexed (X%). The request likely timed out mid-run."
+      - Do NOT silently pass. This means the index is incomplete and subsequent quality checks may give false positives — note this explicitly.
+      - Next steps: run `/index-project force` again. The background + progress polling method (step 6) will show if it completes fully this time.
+
+      **Important:** this is why previous health checks passed after a timed-out index — the graph and relevance checks test a small sample that may exist in whichever files were indexed before the timeout. A partial index can appear healthy on targeted queries while missing most of the codebase.
+
    **After all auto-fixes, print a summary table:**
    ```
    ────────────────────────────────────────────────────────
@@ -215,6 +250,7 @@ $ARGUMENTS — flexible, any of:
    e. Context pipeline  ✓ / ⚠ [→ FIXED via knowledge re-index]
    f. .ragignore        ✓ / ⚠ [excluded dirs verified / not active → restart RAG server (/rag)]
    g. Summaries         ✓ N/N / ⚠ N/N — background regen triggered / SKIP
+   h. Partial index     ✓ N/N files (force run) / ⚠ N/M (X%) / ❌ N/M (X%) — likely timed out
    ────────────────────────────────────────────────────────
    ```
    End with one line: `✓ All checks passed` or `⚠ N warning(s) — [non-fixable items listed]`.
