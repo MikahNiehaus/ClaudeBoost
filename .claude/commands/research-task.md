@@ -392,7 +392,7 @@ Research complete for workspace/[WORKSPACE_ID]
 - Re-running `/research-task` on the same workspace is incremental — unchanged sources are skipped automatically.
 - Domain detection is automatic but you can override it by stating the domain in the ticket: "This is a legal research task about..."
 - For cross-domain tasks (e.g. GDPR compliance in a web app), note both domains in the ticket — primary drives angle selection, secondary adds supplementary angles.
-- Converted documents in `research/` are clean markdown — agents can read them directly or find them via semantic search.
-- `research-brief.md` is for human and agent reading; the `research/` folder is the actual indexed content.
+- Converted documents in `knowledge/` are clean markdown — agents can read them directly or find them via semantic search.
+- `research-brief.md` is for human and agent reading; the `knowledge/` folder is the actual indexed content.
 - `mode=graph` only works on `scope=codebase` — research scope always uses vector internally.
 - **Passing URLs directly**: `/research-task my-workspace https://example.com/law.pdf` — URLs are auto-detected and trigger manual approval mode.

@@ -363,12 +363,6 @@ def _read_project_workspaces(home: Path) -> dict:
         return {}
 
 
-def _write_project_workspaces(home: Path, data: dict) -> None:
-    p = home / "state" / "project-workspaces.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
 def switch_workspace(ws_id: str) -> None:
     home = _home()
     reg_path = home / "state" / "workspaces.json"
