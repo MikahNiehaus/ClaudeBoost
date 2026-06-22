@@ -139,18 +139,18 @@ We do not scan the KB for gaps. We start from what the project actually uses.
 
 ---
 
-## Phase 3 — Multi-Angle External Research
+## Phase 3 — Multi-Angle External Research (Parallel Agents)
 
-For each technology in the final research list:
+Spawn **one research agent per technology in parallel** — all run concurrently. Each agent is responsible for one technology and all its search angles.
 
-Run up to 6 search angles:
+For each technology, the agent runs up to 6 search angles. For each angle, run **multiple search queries** with different phrasings to maximise Tier A coverage — not just one query per angle:
 
-1. **Official docs** — `[tech] [version] official documentation reference`
-2. **Security** — `[tech] security vulnerabilities CVE common attacks OWASP`
-3. **Performance** — `[tech] performance optimization best practices scaling`
-4. **Migration/upgrade** — `[tech] [version] migration guide upgrade breaking changes`
-5. **Integration patterns** — `[tech] integration patterns examples production usage`
-6. **Pitfalls/gotchas** — `[tech] common mistakes gotchas pitfalls troubleshooting`
+1. **Official docs** — run 3-5 queries: `[tech] [version] official documentation reference`, `[tech] [version] API reference site:docs.[domain].com`, `[tech] [version] guide tutorial site:github.com`, etc.
+2. **Security** — run 3-5 queries: `[tech] security vulnerabilities CVE common attacks OWASP`, `[tech] [version] CVE NVD`, `[tech] security best practices NIST`, `[tech] auth bypass injection site:owasp.org`, etc.
+3. **Performance** — run 3-5 queries: `[tech] performance optimization best practices scaling`, `[tech] [version] benchmark profiling`, `[tech] performance tuning production`, etc.
+4. **Migration/upgrade** — run 3-5 queries: `[tech] [version] migration guide upgrade breaking changes`, `[tech] changelog site:github.com`, `[tech] release notes`, etc.
+5. **Integration patterns** — run 3-5 queries: `[tech] integration patterns examples production usage`, `[tech] [version] tutorial example site:github.com`, `[tech] cookbook patterns`, etc.
+6. **Pitfalls/gotchas** — run 3-5 queries: `[tech] common mistakes gotchas pitfalls troubleshooting`, `[tech] [version] known issues bugs site:github.com`, `[tech] anti-patterns`, etc.
 
 Source tier scoring:
 - **Tier A** (official docs, github.com, arxiv.org, MDN, OWASP, NIST, ietf.org): auto-include
@@ -158,23 +158,68 @@ Source tier scoring:
 - **Tier C** (medium.com, hashnode, personal blogs): only if no Tier A/B found for this angle
 - **Skip** (paywalled, social media, SEO aggregators): exclude silently
 
-Collect 1-2 URLs per angle. Deduplicate across all angles for this technology.
-Add approved SEED_URLS to the pool for their assigned KB file.
+Collect as many Tier A URLs as possible per angle — target **20+ Tier A sources per angle**. Deduplicate across all angles for this technology.
+
+Each agent returns its collected URLs with tier, angle, and technology labels. After all parallel agents complete, merge and deduplicate the full URL pool across all technologies. Add approved SEED_URLS to the merged pool for their assigned KB file.
 
 ### Phase 3b — Low-source angle retry
 
-If an angle returns 0 Tier A/B sources:
-1. Refine the query: add version number, add primary language, try alternate phrasing
-2. Run one retry — hard cap, one retry per angle
-3. Log: "Retried [angle] for [tech] with: '[refined query]' → N sources found"
-4. If still no Tier A/B: log "No authoritative source for [angle] — [tech]", continue
+If an angle returns fewer than 20 Tier A sources after all queries:
+1. Refine and expand: add version number, add primary language, try alternate phrasing, use site-specific operators
+2. Run additional searches — no hard cap per angle; keep going until 20 Tier A sources are found or you've exhausted all reasonable query variations
+3. Log: "Expanded search for [angle] / [tech] with: '[refined query]' → N sources found (total: M)"
+4. If no further Tier A/B sources are findable after exhausting queries: log "Exhausted queries for [angle] — [tech], collected N Tier A sources", continue
+
+### Phase 3c — Minimum Source Gate
+
+After completing all angles for all technologies:
+
+Count total Tier A sources collected across all technologies and all angles. **Minimum required: 1000 Tier A sources.**
+
+If total Tier A count < 1000:
+1. Log: "Minimum source gate: collected N Tier A sources — need 1000. Running expansion pass."
+2. For each technology and angle with the fewest Tier A sources, run additional searches with new query variants (include related terms, alternative spellings, version aliases, ecosystem packages)
+3. Keep expanding until total Tier A sources >= 1000 or all reasonable query space is exhausted
+4. If total Tier A < 1000 after exhausting all queries: log "Source gate: collected N Tier A sources (below 1000 target) — query space exhausted. Proceeding with available sources."
+
+Do not proceed to Phase 4 until this gate passes or is explicitly logged as exhausted.
 
 ---
 
-## Phase 4 — Fetch and Write Expert Content
+## Phase 4 — Fetch, Index, and Write Expert Content
 
-For each technology: fetch all collected URLs with `WebFetch`. Extract the information
-that makes an agent an expert in this technology for this project's context.
+For each technology, in parallel:
+
+**Step 1 — Fetch.** Use `WebFetch` to retrieve the raw content of each collected URL.
+
+**Step 2 — Convert.** Clean and convert the fetched content into indexed-ready markdown:
+- Strip HTML tags, navigation, ads, cookie banners, and repeated boilerplate — keep only substantive content
+- Convert to clean markdown: preserve headings, lists, tables, and code blocks
+- For PDFs: extract text, preserve section structure, discard page numbers and repeated headers
+- For API docs: preserve method signatures, parameter tables, and example code
+- For GitHub READMEs and changelogs: preserve version sections and breaking-change markers
+- Normalize whitespace; remove duplicate blank lines
+
+**Step 3 — Save.** Write each converted document directly to `$KB_DIR/[tech]-[slug].md`.
+Do NOT create a `sources/` subdirectory — files live at the top level of `knowledge/`.
+Include a source header at the top of each file:
+```markdown
+<!-- Source: [URL] | Tier: [A/B] | Tech: [technology] | Angle: [angle] | Fetched: [date] -->
+```
+
+Do NOT save URL lists as standalone files. URLs are telemetry only — they go in `discovery-log.md`.
+
+**Step 4 — Index the content files.** After each technology batch:
+```json
+{
+  "sources": ["<KB_DIR>/[tech]-[file-1].md", "<KB_DIR>/[tech]-[file-2].md", ...],
+  "workspace_path": "<KB_DIR>"
+}
+```
+
+If indexing fails for a file, log it and continue — don't block the phase on one failure.
+
+**Step 5 — Synthesize.** Extract the information that makes an agent an expert in this technology and write the synthesized summary to the KB files. Both the raw indexed content and the summary are kept — they serve different purposes.
 
 Focus on:
 - What this library does and why the project likely uses it
@@ -214,19 +259,24 @@ block below the old one.
 
 ### Discovery log
 
-Append to `$KB_DIR/discovery-log.md` for each technology researched this run:
+Append to `$KB_DIR/discovery-log.md` for each technology researched this run. This is the ONLY place URLs are recorded — do not save URL lists anywhere else.
 
 ```markdown
 ## [YYYY-MM-DD] — [technology] [version]
 - Role: [framework|database|auth|API client|utility]
 - Angles run: official docs, security, performance, migration, integration, pitfalls
 - Sources found: N (Tier A: N, Tier B: N)
+- URLs (all collected, before fetch):
+  - [url-1] (Tier A, official docs)
+  - [url-2] (Tier B, security)
+  - ...
+- Files saved: [tech]-[slug-1].md, [tech]-[slug-2].md, ...
 - Retried angles: [list or "none"]
 - No source found for: [list or "none"]
 - KB file updated: stack.md
 ```
 
-`discovery-log.md` is NOT indexed — audit trail only.
+`discovery-log.md` is NOT indexed — audit trail only. Agents never read it.
 
 ---
 

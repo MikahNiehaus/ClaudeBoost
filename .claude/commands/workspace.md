@@ -179,6 +179,13 @@ fi
 
 ```
 
+**Switch active workspace (updates status line immediately):**
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/workspace-status.py" "$WORKSPACE_ID"
+```
+
+This writes to the per-instance CWD-keyed file so the status bar shows `WS $WORKSPACE_ID` right away.
+
 **Initialize telemetry for this workspace:**
 ```bash
 DISABLE_TELEMETRY="" "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/telemetry-session.py"

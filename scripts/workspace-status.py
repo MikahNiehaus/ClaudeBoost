@@ -372,21 +372,15 @@ def _write_project_workspaces(home: Path, data: dict) -> None:
 def switch_workspace(ws_id: str) -> None:
     home = _home()
     reg_path = home / "state" / "workspaces.json"
-    active_path = home / "state" / "active-workspace.json"
     cwd = _normalize_cwd()
 
-    # Special command: clear the active workspace for this project
     instance_id = _get_instance_id()
 
     if ws_id == "off":
-        # Clear this CWD's entry from per-instance file
+        # Clear this CWD's entry from the per-instance file
         if instance_id:
             inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
             _write_instance_ws(inst_path, cwd, None)
-        # Also clear in project-workspaces.json for this CWD
-        pws = _read_project_workspaces(home)
-        pws[cwd] = None
-        _write_project_workspaces(home, pws)
         print("Cleared active workspace for this project (WS N/A)")
         return
 
@@ -432,27 +426,11 @@ def switch_workspace(ws_id: str) -> None:
             print(f"Registered local workspace '{ws_id}' from {ws_path}")
 
     entry = registry[ws_id]
-    payload = {
-        "workspace": ws_id,
-        "workspace_path": entry.get("workspace_path", ""),
-        "project_path": entry.get("project_path", ""),
-    }
-
-    try:
-        active_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError as exc:
-        print(f"Error writing active-workspace.json: {exc}", file=sys.stderr)
-        sys.exit(1)
 
     # Write per-instance file — CWD-keyed map so each project tracks independently
     if instance_id:
         inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
         _write_instance_ws(inst_path, cwd, ws_id)
-
-    # Write per-CWD pointer using the ACTUAL CWD (not the workspace's registered project_path)
-    pws = _read_project_workspaces(home)
-    pws[cwd] = ws_id
-    _write_project_workspaces(home, pws)
 
     print(f"Switched to: {ws_id}")
 

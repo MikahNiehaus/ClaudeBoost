@@ -202,6 +202,13 @@ def seed_state() -> None:
     else:
         _skip("state/speak-state.json - preserving existing setting")
 
+    enforcement_path = state_dir / "rag-enforcement.json"
+    if not enforcement_path.exists():
+        write_json(enforcement_path, {"enabled": True, "setAt": now, "setBy": "default"})
+        _ok("state/rag-enforcement.json - seeded enforcement enabled default")
+    else:
+        _skip("state/rag-enforcement.json - preserving existing setting")
+
 
 # ---------------------------------------------------------------------------
 # Slash commands — repo .claude/commands/*.md is the source of truth.
@@ -720,6 +727,11 @@ def _install_all_hooks(settings: dict) -> None:
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
     }, sentinel="speak-stop.py", label="TTS interrupt (command-type)")
+
+    # --- UserPromptSubmit: RAG location injector ---
+    _install_hook(settings, "UserPromptSubmit", {
+        "hooks": [{"type": "command", "command": _py_cmd("rag-location-injector.py"), "timeout": 5000}],
+    }, sentinel="rag-location-injector.py", label="RAG location injector (command-type)")
 
     # --- Stop: human voice guard (enforces human voice standard on responses) ---
     _install_hook(settings, "Stop", {

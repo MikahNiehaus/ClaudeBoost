@@ -21,7 +21,20 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import sys
+from pathlib import Path
+
+
+def _enforcement_enabled() -> bool:
+    """Return False if the user has toggled RAG enforcement off via /edit-state."""
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
+    state_path = boost_home / "state" / "rag-enforcement.json"
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        return bool(data.get("enabled", True))
+    except Exception:
+        return True
 
 # Phrases that indicate a genuine server/connection error vs. empty results
 ERROR_SIGNALS = (
@@ -112,6 +125,9 @@ def check_total_index_failure(text_lower: str) -> str | None:
 
 
 def main() -> int:
+    if not _enforcement_enabled():
+        return 0
+
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
         payload = json.loads(raw) if raw.strip() else {}
