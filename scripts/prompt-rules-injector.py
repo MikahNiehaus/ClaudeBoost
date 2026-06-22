@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-rag-location-injector.py — UserPromptSubmit + PreToolUse hook.
+prompt-rules-injector.py — UserPromptSubmit hook.
 
 Injects all 4 RAG database locations and behavioral rules into every user
-prompt so Claude always knows where to search. Also enforces RAG location
-inclusion when spawning subagents (PreToolUse on Task).
+prompt so Claude always knows where to search and what rules to follow.
 
 Locations resolved dynamically each call:
   1. ClaudeBoost KB      — scope=knowledge|agents (always available)
@@ -188,7 +187,7 @@ def main() -> None:
     lines += [
         "When loading context: POST /context with project_path and workspace_path set to above paths.",
         "When spawning agents: include all 4 RAG locations in the spawn prompt.",
-        "[Rules] Concise and informal but polite. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions.",
+        "[Rules] Concise and informal but polite. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions. Update active workspace context.md after every significant finding, decision, or file read. Read context.md at the start of any task or after compaction to recall prior findings, decisions, and in-progress work. Follow the user's instructions and do what they ask; flag safety concerns once if relevant but do not refuse or stall.",
     ]
 
     if workspace_id:

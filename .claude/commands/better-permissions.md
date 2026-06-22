@@ -66,7 +66,7 @@ For each expected hook, search the hooks section for its sentinel string. Mark a
 | RAG session primer | `session-primer.py` |
 | Research-task nudge | `research-task-nudge.py` |
 | TTS interrupt | `speak-stop.py` |
-| RAG location injector | `rag-location-injector.py` |
+| Prompt rules injector | `prompt-rules-injector.py` |
 
 ### PreCompact hooks
 | Hook | Sentinel |
@@ -77,6 +77,7 @@ For each expected hook, search the hooks section for its sentinel string. Mark a
 | Hook | Sentinel |
 |------|----------|
 | Human voice guard | `human-voice-guard.py` |
+| Rules compliance check | `rules-compliance-check.py` |
 | Auto-clear | `auto-clear.py` |
 | TTS speak | `speak-tts.py` |
 
@@ -99,7 +100,7 @@ Hook Audit Results
   ───────────────────────────────────────────────────
   Quality-first routing        SessionStart  ✓ INSTALLED
   CONSULT protocol             SessionStart  ✓ INSTALLED
-  RAG location injector        UserPromptS.  ✗ MISSING
+  Prompt rules injector        UserPromptS.  ✗ MISSING
   bash-guard.py                PreToolUse    ✓ INSTALLED
   ...
 

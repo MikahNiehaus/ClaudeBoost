@@ -318,7 +318,7 @@ Your FIRST two actions:
 3. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", mode="graph", limit=5
    (Both calls are mandatory — vector and graph surface different files)
 
-Review ONLY the diff below for your assigned pass.
+Review ONLY the diff below for your assigned pass. Exception: if you are about to flag something as MISSING (missing row, missing emit, missing field, missing record) you MUST read the full enclosing method in the actual file — not just the diff — before raising the finding. Pre-existing code above or below the changed lines may already handle what appears absent from the diff.
 
 == DIFF ==
 <REVIEW_DIFF verbatim>
@@ -491,7 +491,7 @@ Spawn one Opus evaluator after ALL batches and Phase 3b complete. Do NOT proceed
 
 ```
 Your FIRST two actions:
-1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>"
+1. Call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>"
 2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8612/search scope="codebase", query="<symbol from finding>", mode="graph", limit=3 to verify it exists and isn't already handled elsewhere.
 
 You are the Evaluator. You do NOT re-review the code — you review the FINDINGS and TEST RESULTS.
@@ -513,7 +513,7 @@ Rules:
 2. Findings without specific evidence (exact quote, file:line) = FALSE POSITIVE.
 3. Multiple findings about the same issue count as one.
 4. Every BLOCKER/WARNING must have file:line and a concrete fix. If not: downgrade to NIT or FALSE POSITIVE.
-5. Use FINDINGS_CITATIONS as your work queue. Read each cited file:line to confirm the issue exists.
+5. Use FINDINGS_CITATIONS as your work queue. Read each cited file:line to confirm the issue exists. For any BLOCKER claiming something is MISSING (missing row, missing emit, missing field, missing record) — read the full enclosing method from its opening brace, not just the cited line. A row that looks absent from the emission block may be present via a write path in pre-existing code above it that was not in the diff. Confirm or discard based on the full data flow.
 6. Pass 8 without `artifact_type_checked` field = INCOMPLETE — flag it.
 7. Pass 14b without `template_files_scanned` field = INCOMPLETE — flag it.
 8. Pass 15b without `async_audit_complete` field = INCOMPLETE — flag it.

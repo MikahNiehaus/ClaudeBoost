@@ -637,6 +637,29 @@ For EACH external SDK found, generate one additional TC:
   - Note: If the SDK CDN is permanently blocked in this environment (e.g. Tableau Cloud rejects localhost), this TC is auto-classified as UNVERIFIABLE — mark [U] and add a post-deploy validation note.
 ```
 
+**External embed URL validation (runs when any external embed SDK is detected — before generating TCs):**
+
+An external embed SDK only accepts content URLs in a format its backend will serve. Using a wrong-format URL causes the SDK to reject the embed immediately — before any server communication, JWT validation, or data loading occurs. Testing with a rejected URL proves nothing about your code.
+
+Before writing TCs for any external embed:
+
+1. **Detect whether the SDK immediately errors after page load.** Navigate to the page and observe: does an error event fire within 1-2 seconds of page load, before any user interaction? If yes, the embed URL is almost certainly wrong-format or unreachable — proceed to step 2.
+
+2. **Determine the required URL format.** Search for it in this order:
+   - RAG workspace knowledge (if SDK docs were indexed by /research-task)
+   - SDK documentation for "embed URL format" or "supported URL patterns"
+   - Codebase config files (appsettings.json, launchSettings.json, Azure App Config, any Settings page in the app) — look for the canonical URL format already in use
+   - Key question: does the embed URL point at the same service that issued the credentials for this SDK? If the credentials come from ServiceX, the embed URL must also point at ServiceX — not at a share link, proxy, or unrelated domain.
+
+3. **If the test URL does NOT match the required format:**
+   - Search for a matching URL in: codebase config, ticket.md, context.md, ReportsSettings or equivalent admin pages in the app
+   - If a matching URL is found: use it for all TCs that require real SDK rendering
+   - If no matching URL is found after searching: mark ALL TCs that depend on real SDK rendering as `[U] UNVERIFIABLE`. This includes the happy path TC and any scenario that requires the embed to actually load — not just the error-handler TC. Document what was searched and why no valid URL was found.
+
+4. **The error-handler TC (`TC-SDK-NNN`) is a separate concern.** Even when the real integration cannot be tested, the error-handler frontend branch can still be verified via synthetic event dispatch. Label any such TC as `[HANDLER-ONLY]` — it proves the handler fires correctly, not that the real service sends the expected error.
+
+Do NOT use a wrong-format URL and mark TCs as PASS. If the SDK errors immediately, the TC did not test your feature.
+
 If no CDN intercept is possible and the CDN is confirmed permanently blocked in the test environment: mark TC as `[U] UNVERIFIABLE` immediately with: "CDN blocked in this environment — validate after deployment to a registered domain."
 
 **Intelligent test generation rules (apply per journey step):**
@@ -680,7 +703,7 @@ If no CDN intercept is possible and the CDN is confirmed permanently blocked in 
 - Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists) — these map to the CRUD journeys.
 - If a discovered component has NO journey that exercises it: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
 - BLOCKED `[B]` status is only valid for genuine external preconditions that CAN be removed with setup changes (e.g., "requires admin account not provisioned", "flag must be toggled"). Complexity or difficulty is never a valid reason.
-- UNVERIFIABLE `[U]` is distinct from BLOCKED. Use `[U]` for conditions that are permanently untestable in any available environment (e.g., CDN blocks localhost by design, Tableau Cloud rejects non-registered domains, live payment gateway required). Every UNVERIFIABLE TC MUST include: "Post-deploy: [who validates, when, and how]".
+- UNVERIFIABLE `[U]` is distinct from BLOCKED. Use `[U]` for conditions that are permanently untestable in any available environment (e.g., CDN blocks localhost by design, Tableau Cloud rejects non-registered domains, live payment gateway required). Every UNVERIFIABLE TC MUST include: "Post-deploy: [who validates, when, and how]". **Before marking a TC UNVERIFIABLE, you MUST run the TC Blocker Recovery Protocol (defined in Phase 3). A TC marked UNVERIFIABLE without a documented resolution attempt is treated as BLOCKED by difficulty.**
 
 **Ticket tracing (if TICKET_ID was provided in Phase 0):**
 
@@ -918,6 +941,71 @@ text confirms expected state. Failed tests: no screenshot needed.
 4. Do NOT execute any destructive TC until user responds with `go` or a skip list.
 5. For all destructive TCs that create named records: prefix the value in any name/title/label field with `[E2E-TEST]` during execution. This makes synthetic records identifiable.
 6. Note each destructive TC in the report under a "Data Side-Effects" section.
+
+---
+
+**TC Blocker Recovery Protocol — mandatory before marking any TC BLOCKED or UNVERIFIABLE.**
+
+When a TC step fails or cannot be executed as written, run this protocol IN ORDER before reaching for BLOCKED or UNVERIFIABLE.
+
+**Step 1 — Diagnose the blocker type.**
+
+| Type | Signal |
+|---|---|
+| `ENV_URL` | The URL or endpoint used is rejected because it does not match the external service's required format or domain (e.g., vivery.gogrow.com used where `*.online.tableau.com` is required) |
+| `ENV_AUTH` | Credentials or accounts required by this TC are not provisioned in this environment |
+| `ENV_NETWORK` | External service is unreachable from this host (CDN blocked, firewall, service rejects localhost) |
+| `ENV_SETUP` | Required infrastructure is not running (background job not started, email server offline) |
+| `ENV_DATA` | Specific data state required (specific user role, specific record) |
+
+**Step 2 — Resolution attempts (by type, in order — stop at first success).**
+
+`ENV_URL`:
+1. Search the codebase and config files (appsettings.json, launchSettings.json, Azure App Config, ReportsSettings, ticket.md) for a URL matching the required format
+2. If found: swap the URL into the TC and re-execute — do not mark UNVERIFIABLE
+3. If not found: document what was searched and fall through to Step 3
+
+`ENV_AUTH`:
+1. Check memory, context.md, and ticket.md for provisioned test credentials
+2. Check if a lower-privilege account can substitute for the TC's goal
+3. If substitute found: adapt TC steps and continue
+4. If not found: fall through to Step 3
+
+`ENV_NETWORK`:
+1. Try a synthetic alternative: dispatch a corresponding event (e.g., `CustomEvent`) to test the handler in isolation — clearly label any synthetic TC as `[HANDLER-ONLY]`, meaning it proves the frontend handler fires correctly but NOT the real service integration
+2. A `[HANDLER-ONLY]` TC DOES NOT replace the full integration TC — it runs alongside it; the original TC is still marked `[U] UNVERIFIABLE` with the synthetic TC noted as partial evidence
+3. If no synthetic alternative is possible: fall through to Step 3
+
+`ENV_SETUP`:
+1. Search for a dev or admin trigger endpoint (e.g., `/admin/jobs/trigger`, a dev-only controller action)
+2. Check if setup can be completed in under 5 minutes
+3. If triggerable or setup is quick: complete setup and re-execute
+4. If not: fall through to Step 3
+
+`ENV_DATA`:
+1. Check if test data can be created via the UI now (use `[E2E-TEST]` prefix)
+2. Check if existing data in the environment can substitute
+3. If creatable: create and continue
+4. If not: fall through to Step 3
+
+**Step 3 — Document if no resolution found.**
+
+Only reach here after exhausting ALL applicable attempts in Step 2.
+
+BLOCKED entry MUST include:
+- What was tried (list each resolution attempt from Step 2)
+- Why each attempt failed
+- The specific setup change that would unblock it
+
+UNVERIFIABLE entry MUST include:
+- What was tried (list each resolution attempt from Step 2)
+- Why each attempt failed
+- Which environment would unblock it (e.g., "staging with Tableau Connected App registered for manager-test.vivery.org")
+- Post-deploy plan: who validates, on which environment, when, and what they will confirm
+
+**A TC marked UNVERIFIABLE without documented resolution attempts is treated as BLOCKED by difficulty — the most common form of QA cheating. The auditor will flag it.**
+
+---
 
 **For each `- [ ] TC-NNN` in `plan.md`, execute this loop:**
 

@@ -728,15 +728,20 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
     }, sentinel="speak-stop.py", label="TTS interrupt (command-type)")
 
-    # --- UserPromptSubmit: RAG location injector ---
+    # --- UserPromptSubmit: prompt rules injector (RAG locations + behavioral rules) ---
     _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": _py_cmd("rag-location-injector.py"), "timeout": 5000}],
-    }, sentinel="rag-location-injector.py", label="RAG location injector (command-type)")
+        "hooks": [{"type": "command", "command": _py_cmd("prompt-rules-injector.py"), "timeout": 5000}],
+    }, sentinel="prompt-rules-injector.py", label="prompt rules injector (command-type)")
 
     # --- Stop: human voice guard (enforces human voice standard on responses) ---
     _install_hook(settings, "Stop", {
         "hooks": [{"type": "command", "command": _py_cmd("human-voice-guard.py")}],
     }, sentinel="human-voice-guard.py", label="human voice guard (command-type)")
+
+    # --- Stop: rules compliance check (forces explicit rules attestation on every response) ---
+    _install_hook(settings, "Stop", {
+        "hooks": [{"type": "command", "command": _py_cmd("rules-compliance-check.py")}],
+    }, sentinel="rules-compliance-check.py", label="rules compliance check (command-type)")
 
     # --- Stop: auto-clear (fires /clear after /clear-safe sets the pending flag) ---
     _install_hook(settings, "Stop", {

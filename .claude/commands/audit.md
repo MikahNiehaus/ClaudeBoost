@@ -256,7 +256,7 @@ Collect all JSON outputs as `AUDIT_FINDINGS`.
 After ALL batches complete, spawn a single verdict agent. Use **Opus model**.
 
 ```
-Your FIRST action: call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="audit verdict synthesis", project_path="<PROJECT_PATH>", max_tokens=2000
+Your FIRST action: call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="audit verdict synthesis", project_path="<PROJECT_PATH>", max_tokens=2000
 
 You are the Verdict Agent. You do NOT re-audit the content. You synthesize the findings from all dimension auditors into a single "is it legit" verdict.
 
