@@ -14,13 +14,36 @@ Performs a security-focused review. Without arguments, reviews pending branch ch
 
 ## Phase 0: RAG Context
 
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[security-review] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+
+
+
 **0a — Detect project path (before loading context):**
 
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
 Set `PROJECT_PATH` to the detected value.
 
-Call `POST http://127.0.0.1:8612/context with agent="security-agent", task_description="security review $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=5000` as your FIRST action.
+Call `POST http://127.0.0.1:8612/context with agent="security-agent", task_description="security review $ARGUMENTS", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>", max_tokens=5000` as your FIRST action.
 
 **0b — Verify project is indexed** (required for codebase search to work):
 

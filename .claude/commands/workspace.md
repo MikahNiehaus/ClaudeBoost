@@ -23,6 +23,29 @@ Bash snippets in this file mix two kinds of `$NAMES` — treat them differently:
 
 ## Phase 0: Session Readiness Check
 
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[workspace] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+
+
+
 Run the sentinel check **alone** (never in parallel with other Bash calls — a parallel failure cancels both):
 
 ```bash
@@ -86,6 +109,11 @@ If workspaces are listed, parse each `wid|wpath|ppath` line and ask the user:
 
 **If the user picks an existing workspace (any other answer):**
 - Set `WORKSPACE_ID = [chosen wid]`, `WORKSPACE_ABS = [chosen wpath]`, `PROJECT_PATH = [chosen ppath]`, `WORKSPACE_ROOT = PROJECT_PATH`
+- Re-register and update the status bar:
+  ```bash
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/register-workspace.py" "$WORKSPACE_ID" "$WORKSPACE_ABS" "$WORKSPACE_ROOT" --activate
+  "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/workspace-status.py" "$WORKSPACE_ID"
+  ```
 - Read and print `$WORKSPACE_ABS/context.md`
 - If `$WORKSPACE_ABS/plan.md` exists, read and print it
 - Report: "Using existing workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
@@ -213,10 +241,11 @@ Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ti
 
 **First: check the branch-creation setting in state.**
 
-Write `"C:/Development/ClaudeBoost/state/cb_branch_check.py"`:
+Write `"${TEMP}/cb_branch_check.py"`:
 ```python
-import json, pathlib, sys
-p = pathlib.Path("C:/Development/ClaudeBoost/state/workspace-settings.json")
+import json, os, pathlib, sys
+home = os.environ.get("CLAUDEBOOST_HOME", "")
+p = pathlib.Path(home) / "state" / "workspace-settings.json"
 if not p.exists():
     # Key absent — default is to create. Write true so future runs are explicit.
     p.write_text(json.dumps({"create_branch": True}), encoding="utf-8")
@@ -232,7 +261,7 @@ if "create_branch" not in d:
 print("CREATE" if d["create_branch"] else "SKIP")
 ```
 ```bash
-"${CLAUDEBOOST_PYTHON}" "C:/Development/ClaudeBoost/state/cb_branch_check.py"
+"${CLAUDEBOOST_PYTHON}" "${TEMP}/cb_branch_check.py"
 ```
 
 If the output is `SKIP`: skip this step silently. Record in `context.md` under **Key Decisions**: "Branch: skipped (create_branch=false in state)"

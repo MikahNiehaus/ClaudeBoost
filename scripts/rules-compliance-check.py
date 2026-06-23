@@ -5,11 +5,15 @@ Reads the last assistant turn and checks that it contains a populated
 [Rules Check] block with all required fields filled in. Forces Claude
 to articulate how it followed each behavioral rule before stopping.
 
+Fires on any non-trivial response, including read-only work (file reads,
+searches, grep). Not just writes/edits. Anything more than a one-liner.
+
 Required block format (must appear at end of response):
 
   [Rules Check]
-  tone: <how the response was kept concise and polite>
+  tone: <concise, informal, polite — no banned vocab>
   no dashes: <confirmed none used, or note any violations>
+  rag used: <which tiers searched (vector/graph/context), or n/a if no codebase lookup needed>
   context updated: <what was added to context.md, or n/a>
   architecture confirmed: <confirmed or n/a>
   destructive actions: <confirmed with user or n/a>
@@ -33,6 +37,7 @@ MIN_RESPONSE_CHARS = 80
 REQUIRED_FIELDS = [
     "tone",
     "no dashes",
+    "rag used",
     "context updated",
     "architecture confirmed",
     "destructive actions",
@@ -162,13 +167,15 @@ def main() -> int:
         f"Missing or empty fields:\n{missing_list}\n\n"
         "Add this block at the end of your response:\n\n"
         "  [Rules Check]\n"
-        "  tone: <how you kept the response concise and polite>\n"
+        "  tone: <concise, informal, polite — no banned vocab>\n"
         "  no dashes: <confirmed none used, or note any violations>\n"
+        "  rag used: <which tiers searched (vector/graph/context), or n/a if no codebase lookup needed>\n"
         "  context updated: <what you added to context.md, or n/a>\n"
         "  architecture confirmed: <confirmed or n/a>\n"
         "  destructive actions: <confirmed with user or n/a>\n"
         "  instructions followed: <yes + brief summary, or what you flagged>\n\n"
-        "Every field must have a non-empty value. 'n/a' is acceptable when a rule does not apply this turn."
+        "Every field must have a non-empty value. 'n/a' is acceptable when a rule does not apply this turn.\n"
+        "The 'rag used' field must be honest: if you did codebase work without searching RAG, say so."
     )
 
     print(json.dumps({"decision": "block", "reason": reason}))

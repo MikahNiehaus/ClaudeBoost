@@ -90,7 +90,7 @@ git -C "$PROJECT_PATH" log --format="%h %s" --not origin/master | grep -i "<TICK
 git -C "$PROJECT_PATH" show --stat <commit-sha>
 ```
 
-Also read `C:/Development/ClaudeBoost/state/handoff-latest.json` if it exists for workspace memo context.
+Also read `$CLAUDEBOOST_HOME/state/handoff-latest.json` if it exists for workspace memo context.
 
 ### 3. Read the changed files
 
@@ -122,7 +122,7 @@ Use everything gathered to fill out the template. Rules:
 
 **Voice and style rules (apply to every word in the document):**
 
-Read `C:/Development/ClaudeBoost/knowledge/human-voice.xml` and apply all rules. The short version:
+Read `$CLAUDEBOOST_HOME/knowledge/human-voice.xml` and apply all rules. The short version:
 
 - **Zero dashes of any kind.** No em dash (—), no en dash (–), no spaced hyphen ( - ), and no hyphenated compound words. "auto-dismiss" becomes "auto dismiss". "double-banner" becomes "double banner". "step-by-step" becomes "step by step". "client-side" becomes "client side". The only exception is when a dash is part of an actual identifier being named (a filename, branch name, or flag).
 - No AI vocabulary: never use seamless, robust, leverage, utilize, facilitate, comprehensive, nuanced, pivotal, delve, empower, holistic, or any word from the banned list in the XML.
@@ -215,3 +215,30 @@ Tell the user:
 - The handoff doc is ready and copied to clipboard
 - Paste it directly into the Confluence page at https://upstreamimpact.atlassian.net/wiki/spaces/UI/pages/1268318209
 - Note any sections they should manually fill in (e.g. Acceptance Criteria if not obvious from context)
+
+
+---
+
+## Phase 0: Workspace Detection
+
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[ticket-handoff] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+

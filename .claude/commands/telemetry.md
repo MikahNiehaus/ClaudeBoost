@@ -46,7 +46,7 @@ Remove it from the settings file so future sessions work automatically — write
 ```python
 # /tmp/cb_remove_tel.py
 import json, pathlib
-p = pathlib.Path("C:/Users/mniehaus/.claude/settings.json")
+p = pathlib.Path.home() / ".claude" / "settings.json"
 d = json.loads(p.read_text(encoding="utf-8"))
 env = d.get("env", {})
 if "DISABLE_TELEMETRY" in env:

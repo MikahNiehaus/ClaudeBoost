@@ -21,13 +21,26 @@ Strip the depth keyword from scope args before proceeding. Remaining tokens are 
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-**0a — Detect project path:**
+**0a — Detect project path and active workspace:**
 
-1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
+Run `get-active-workspace.py` — this matches the blue "WS XXXX" status bar (per-instance, not the stale shared file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
 
-Set `PROJECT_PATH` to the detected value.
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
 
-Call `POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code xray $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000`.
+**Collision check:** if your context or memory references a different workspace than what the script returned:
+```
+[xray] Conflict: status bar shows <X>, context/memory says <Y>.
+Which workspace should I use? (You are the source of truth.)
+```
+Wait for the user's answer before proceeding.
+
+If `WORKSPACE_PATH` is empty after the check: print `[xray] No active workspace — Pass 8 and 9 running without ticket spec` and continue.
+
+Call `POST http://127.0.0.1:8612/context` with `agent="reviewer-agent"`, `task_description="code xray $ARGUMENTS"`, `project_path="<PROJECT_PATH>"`, `workspace_path="<WORKSPACE_PATH>"`, `max_tokens=4000`.
 
 If it fails: stop — "RAG is not connected. Run `/rag` first."
 
@@ -313,9 +326,9 @@ Each agent prompt:
 
 ```
 Your FIRST two actions:
-1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<cwd>"
-2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", limit=5
-3. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<cwd>", query="<targeted query for this pass>", mode="graph", limit=5
+1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>"
+2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<PROJECT_PATH>", query="<targeted query for this pass>", limit=5
+3. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<PROJECT_PATH>", query="<targeted query for this pass>", mode="graph", limit=5
    (Both calls are mandatory — vector and graph surface different files)
 
 Review ONLY the diff below for your assigned pass. Exception: if you are about to flag something as MISSING (missing row, missing emit, missing field, missing record) you MUST read the full enclosing method in the actual file — not just the diff — before raising the finding. Pre-existing code above or below the changed lines may already handle what appears absent from the diff.
@@ -491,8 +504,8 @@ Spawn one Opus evaluator after ALL batches and Phase 3b complete. Do NOT proceed
 
 ```
 Your FIRST two actions:
-1. Call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="evaluator pass — classify review findings", project_path="<cwd>"
-2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8612/search scope="codebase", query="<symbol from finding>", mode="graph", limit=3 to verify it exists and isn't already handled elsewhere.
+1. Call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="evaluator pass — classify review findings", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>"
+2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8612/search scope="codebase", project_path="<PROJECT_PATH>", query="<symbol from finding>", mode="graph", limit=3 to verify it exists and isn't already handled elsewhere.
 
 You are the Evaluator. You do NOT re-review the code — you review the FINDINGS and TEST RESULTS.
 

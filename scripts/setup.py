@@ -616,6 +616,12 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("consult-gate.py")}],
     }, sentinel="consult-gate.py", label="CONSULT gate on Edit/Write/Bash (command-type)")
 
+    # --- PreToolUse: action gate (requires [Action] form before Edit/Write/MultiEdit) ---
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": _py_cmd("action-gate.py")}],
+    }, sentinel="action-gate.py", label="action form gate on Edit/Write/MultiEdit (command-type)")
+
     # --- PreToolUse: Bash guard (blocks commands that trigger permission prompts) ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Bash",
@@ -661,9 +667,9 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("context-nudge.py"), "timeout": 3000}],
     }, sentinel="context-nudge.py", label="context nudge (command-type)")
 
-    # --- PostToolUse: comment humanness check (Edit/Write) ---
+    # --- PostToolUse: comment humanness check (Edit/Write/MultiEdit) ---
     _install_hook(settings, "PostToolUse", {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": _py_cmd("comment-humanness-check.py"), "timeout": 5000}],
     }, sentinel="comment-humanness-check.py", label="comment humanness check (command-type)")
 

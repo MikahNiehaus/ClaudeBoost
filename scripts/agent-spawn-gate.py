@@ -116,34 +116,26 @@ def main() -> int:
             "codebase context (Tier 4 RAG). Run `pwd` before spawning to get the path."
         )
     if "workspace_path" not in prompt_lower:
-        # Check if there is an active workspace — only nudge when one exists.
-        # NOTE: do not import os/json locally here. A function-local import makes
-        # the name local to the WHOLE function, so when this branch is skipped
-        # (prompt already has workspace_path), later os.environ access raises
-        # UnboundLocalError and the hook crashes on every well-formed spawn.
-        boost_home_env = os.environ.get("CLAUDEBOOST_HOME", "")
-        active_ws_file = os.path.join(boost_home_env, "state", "active-workspace.json") if boost_home_env else ""
-        if active_ws_file and os.path.exists(active_ws_file):
-            try:
-                ws_data = json.loads(open(active_ws_file, encoding="utf-8").read())
-                # New schema has workspace_path directly; old schema has only workspace (ID)
-                ws_path = ws_data.get("workspace_path") or ws_data.get("path") or ""
-                if not ws_path:
-                    # Fall back: look up workspace_path in the registry by workspace ID
-                    ws_id = ws_data.get("workspace", "")
-                    if ws_id and boost_home_env:
-                        reg_file = os.path.join(boost_home_env, "state", "workspaces.json")
-                        if os.path.exists(reg_file):
-                            reg = json.loads(open(reg_file, encoding="utf-8").read())
-                            ws_path = (reg.get(ws_id) or {}).get("workspace_path", "")
-                if ws_path:
-                    nudges.append(
-                        "[agent-spawn nudge] Active workspace detected but workspace_path is not in the spawn prompt. "
-                        f"Include workspace_path=\"{ws_path}\" in the context call so the agent "
-                        "receives Tier 3c workspace research (task-specific docs indexed by /research-task)."
-                    )
-            except Exception:
-                pass
+        # Use get-active-workspace.py resolve() for per-instance detection.
+        # This matches the blue "WS XXXX" status bar — reads per-instance CWD-keyed
+        # state, not the stale shared active-workspace.json which reflects the last
+        # window to write it rather than the current Claude instance.
+        ws_path = ""
+        try:
+            import importlib.util as _ilu
+            _gaw_path = str(boost_home / "scripts" / "get-active-workspace.py")
+            _spec = _ilu.spec_from_file_location("_get_active_workspace", _gaw_path)
+            _gaw = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_gaw)
+            ws_path = _gaw.resolve().get("workspace_path", "")
+        except Exception:
+            pass
+        if ws_path:
+            nudges.append(
+                "[agent-spawn nudge] Active workspace detected but workspace_path is not in the spawn prompt. "
+                f"Include workspace_path=\"{ws_path}\" in the context call so the agent "
+                "receives Tier 3c workspace research (task-specific docs indexed by /research-task)."
+            )
 
     # Secondary check: architect-agent proposal contract.
     # Only fires when the spawn IS an architect-agent, not when the prompt merely

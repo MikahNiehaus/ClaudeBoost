@@ -111,3 +111,51 @@ Audit trail of /research-project runs. NOT indexed — for human reference only.
 - No source found for: none
 - KB file updated: stack.md
 - Critical finding: nomic-embed-text silently truncates at 2048 tokens; dimension mismatch with chromadb collections if model is swapped
+
+## 2026-06-23 — prompt-caching (token reduction topic)
+- Role: Anthropic API prompt caching for token cost reduction
+- Angles searched: official docs, performance, integration patterns, pitfalls, best practices
+- Sources found: 13 (Tier A: 13, Tier B: 5) — medium.com 403'd
+- Files fetched: 17 saved (1 failed: github.com/anthropics/anthropic-cookbook .ipynb 429)
+- Retried angles: none
+- No source found for: none
+
+## 2026-06-23 — rag-chunk-optimization (token reduction topic)
+- Role: RAG chunk size and retrieval optimization for token efficiency
+- Angles searched: chunk size research, retrieval precision, semantic chunking, arxiv papers, practical guides
+- Sources found: 12 (Tier A: 12, Tier B: 9)
+- Files fetched: 11 saved (Tier C excluded per user request)
+- Retried angles: none
+- No source found for: none
+
+## 2026-06-23 — context-compression (token reduction topic)
+- Role: LLM context compression techniques (LLMLingua, RAPTOR, gist tokens, active compression)
+- Angles searched: LLMLingua, context distillation, RAPTOR/summary, practical tools, Anthropic context management
+- Sources found: 23 (Tier A: 23, Tier B: 1)
+- Files fetched: 24 saved
+- Retried angles: none
+- No source found for: none
+
+## 2026-06-23 — agent-token-efficiency (token reduction topic)
+- Role: Multi-agent orchestration token efficiency and context sharing
+- Angles searched: Anthropic multi-agent guides, context sharing, tool call efficiency, summarization patterns, SDK patterns
+- Sources found: 18 (Tier A: 18, Tier B: 7)
+- Files fetched: 25 saved
+- Retried angles: none
+- No source found for: none
+
+## 2026-06-23 — batch-api-cost (token reduction topic)
+- Role: Anthropic batch API and model routing for cost reduction
+- Angles searched: batch API docs, model routing, output length control, token counting, cost analysis, streaming
+- Sources found: 19 (Tier A: 19, Tier B: 4)
+- Files fetched: 22 saved (1 failed: batches.py direct file 429)
+- Retried angles: none
+- No source found for: none
+
+## 2026-06-23 — rag-reranking (token reduction topic)
+- Role: RAG cross-encoder reranking and hybrid search for retrieval precision
+- Angles searched: cross-encoder reranking, ColBERT/late interaction, MMR, hybrid search, practical tools
+- Sources found: 30 (Tier A: 30, Tier B: 0)
+- Files fetched: 29 saved (1 failed: github.com/aadityac91/hybrid-search-demo 404)
+- Retried angles: none
+- No source found for: none

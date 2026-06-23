@@ -45,7 +45,7 @@ Default to `all` if empty.
 For `project`: project_path = current working directory.
 For `workspace`: read active workspace from:
 ```bash
-cat "C:/Development/ClaudeBoost/state/active-workspace.json" 2>/dev/null || echo "{}"
+cat "${CLAUDEBOOST_HOME}/state/active-workspace.json" 2>/dev/null || echo "{}"
 ```
 Extract `workspace_path`. If empty, report ⚠️ WARN "No active workspace" for that scope.
 

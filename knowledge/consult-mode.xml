@@ -33,7 +33,7 @@
   </fires-when>
   <does-not-fire>
     <condition>Grinding through an approved task — edits, file writes, and sub-steps within a task already confirmed by task-plan.json</condition>
-    <condition>Bugfixes, typos, formatting, test-only changes, doc edits, renames within a single file</condition>
+    <condition>Bugfixes the user explicitly requested (not bugs Claude diagnosed autonomously from a vague complaint), typos, formatting, test-only changes, doc edits, renames within an already-approved task</condition>
     <condition>AUTO mode — no gate</condition>
     <condition>/self-improve — runs in AUTO context, no gate</condition>
     <condition>Changes under workspace/, knowledge/, plans/, docs/ — low-stakes meta files</condition>

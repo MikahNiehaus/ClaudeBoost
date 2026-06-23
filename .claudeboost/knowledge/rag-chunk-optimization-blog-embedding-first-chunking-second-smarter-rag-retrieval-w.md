@@ -1,0 +1,317 @@
+<!-- Source: https://milvus.io/blog/embedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md | Tier: B | Topic: rag-chunk-optimization | Fetched: 2026-06-23 -->
+
+[🚀 Zilliz Cloud: fully managed Milvus — 10x faster. Zero hassle. Built for AI.Try Free Now →](https://cloud.zilliz.com/signup?utm_source=milvusio&utm_medium=referral&utm_campaign=milvus_top_banner)
+
+[](/)
+
+[](https://zilliz.com/)
+
+  * Why Milvus
+
+    * [What is Milvus](/intro)
+    * [Use Cases](/use-cases)
+
+  * [Docs](/docs)
+  * Tutorials
+
+    * [Bootcamp](/bootcamp)
+    * [Demos](/milvus-demos)
+    * [Video](https://www.youtube.com/c/MilvusVectorDatabase)
+
+  * Tools
+
+    * [Attu](https://github.com/zilliztech/attu)
+    * [Milvus CLI](https://github.com/zilliztech/milvus_cli)
+    * [Sizing Tool](/tools/sizing)
+    * [Milvus Backup](https://github.com/zilliztech/milvus-backup)
+    * [VTS](https://github.com/zilliztech/vts)
+    * [Deep Searcher](https://github.com/zilliztech/deep-searcher)
+    * [Claude Context](https://github.com/zilliztech/claude-context)
+
+  * [Blog](/blog)
+  * [Community](/community)
+
+    * [Milvus Office Hours](https://meetings.hubspot.com/chloe-williams1/milvus-meeting)
+    * [Discord](https://milvus.io/discord)
+    * [GitHub](https://github.com/milvus-io/milvus/discussions)
+    * [More Channels](/community)
+
+
+
+
+[Star44.9K](https://github.com/milvus-io/milvus)[Book a Demo](/contact)[Try Managed Milvus](https://cloud.zilliz.com/signup?utm_source=milvusio&utm_medium=referral&utm_campaign=milvus_nav_right)
+
+  * [Home](/)
+  * [Blog](/blog)
+  * Embedding First, Then Chunking: Smarter RAG Retrieval with Max–Min Semantic Chunking 
+
+
+
+
+Copy page▾
+
+# Embedding First, Then Chunking: Smarter RAG Retrieval with Max–Min Semantic Chunking 
+
+  * Engineering
+
+
+
+
+December 24, 2025
+
+Rachel Liu
+
+[Retrieval Augmented Generation (RAG)](https://zilliz.com/learn/Retrieval-Augmented-Generation) has become the default approach for providing context and memory for AI applications — AI agents, customer support assistants, knowledge bases, and search systems all rely on it.
+
+In almost every RAG pipeline, the standard process is the same: take the documents, split them into chunks, and then embed those chunks for similarity retrieval in a vector database like [Milvus](https://milvus.io/). Because **chunking** happens upfront, the quality of those chunks directly affects how well the system retrieves information and how accurate the final answers are.
+
+The issue is that traditional chunking strategies usually split text without any semantic understanding. Fixed-length chunking cuts based on token counts, and recursive chunking uses surface-level structure, but both still ignore the actual meaning of the text. As a result, related ideas often get separated, unrelated lines get grouped together, and important context gets fragmented.
+
+In this blog, I’d like to share a different chunking strategy: [**Max–Min Semantic Chunking**](https://link.springer.com/article/10.1007/s10791-025-09638-7). Instead of chunking first, it embeds the text upfront and uses semantic similarity to decide where boundaries should form. By embedding before cutting, the pipeline can track natural shifts in meaning rather than relying on arbitrary length limits.
+
+## How a Typical RAG Pipeline Works
+
+Most RAG pipelines, regardless of the framework, follow the same four-stage assembly line. You’ve probably written some version of this yourself:
+
+### 1\. Data Cleaning and Chunking
+
+The pipeline starts by cleaning the raw documents: removing headers, footers, navigation text, and anything that isn’t real content. Once the noise is out, the text gets split into smaller pieces. Most teams use fixed-size chunks — typically 300–800 tokens — because it keeps the embedding model manageable. The downside is that the splits are based on length, not meaning, so the boundaries can be arbitrary.
+
+### 2\. Embedding and Storage
+
+Each chunk is then embedded using an embedding model like OpenAI’s [`text-embedding-3-small`](https://zilliz.com/ai-models/text-embedding-3-small) or BAAI’s encoder. The resulting vectors are stored in a vector database such as [Milvus](https://milvus.io/) or [Zilliz Cloud](https://zilliz.com/cloud). The database handles indexing and similarity search so you can quickly compare new queries against all stored chunks.
+
+### 3\. Querying
+
+When a user asks a question — for example, _“How does RAG reduce hallucinations?”_ — the system embeds the query and sends it to the database. The database returns the top-K chunks whose vectors are closest to the query. These are the pieces of text the model will rely on to answer the question.
+
+### 4\. Answer Generation
+
+The retrieved chunks are bundled together with the user query and fed into an LLM. The model generates an answer using the provided context as grounding.
+
+**Chunking sits at the start of this whole pipeline, but it has an outsized impact**. If the chunks align with the natural meaning of the text, retrieval feels accurate and consistent. If the chunks were cut in awkward places, the system has a harder time finding the right information, even with strong embeddings and a fast vector database.
+
+### The Challenges of Getting Chunking Right
+
+Most RAG systems today use one of two basic chunking methods, both of which have limitations.
+
+**1\. Fixed-size chunking**
+
+This is the simplest approach: split the text by a fixed token or character count. It’s fast and predictable, but completely unaware of grammar, topics, or transitions. Sentences can get cut in half. Sometimes even words. The embeddings you get from these chunks tend to be noisy because the boundaries don’t reflect how the text is actually structured.
+
+**2\. Recursive character splitting**
+
+This method is a bit smarter. It splits text hierarchically based on cues like paragraphs, line breaks, or sentences. If a section is too long, it recursively divides it further. The output is generally more coherent, but still inconsistent. Some documents lack clear structure or have uneven section lengths, which hurts retrieval accuracy. And in some cases, this approach still produces chunks that exceed the model’s context window.
+
+Both methods face the same tradeoff: precision vs. context. Smaller chunks improve retrieval accuracy but lose surrounding context; larger chunks preserve meaning but risk adding irrelevant noise. Striking the right balance is what makes chunking both foundational—and frustrating—in RAG system design.
+
+## Max–Min Semantic Chunking: Embed First, Chunk Later
+
+In 2025, S.R. Bhat et al. published [_Rethinking Chunk Size for Long-Document Retrieval: A Multi-Dataset Analysis_](https://arxiv.org/abs/2505.21700). One of their key findings was that there isn’t a single **“best”** chunk size for RAG. Small chunks (64–128 tokens) tend to work better for factual or lookup-style questions, while larger chunks (512–1024 tokens) help with narrative or high-level reasoning tasks. In other words, fixed-size chunking is always a compromise.
+
+This raises a natural question: instead of picking one length and hoping for the best, can we chunk by meaning rather than size? [**Max–Min Semantic Chunking**](https://link.springer.com/article/10.1007/s10791-025-09638-7) is one approach I found that tries to do precisely that.
+
+The idea is simple: **embed first, chunk second**. Instead of splitting text and then embedding whatever pieces fall out, the algorithm embeds _all sentences_ up front. It then uses the semantic relationships between those sentence embeddings to decide where the boundaries should go.
+
+Diagram showing embed-first chunk-second workflow in Max-Min Semantic Chunking
+
+Conceptually, the method treats chunking as a constrained clustering problem in embedding space. You walk through the document in order, one sentence at a time. For each sentence, the algorithm compares its embedding with those in the current chunk. If the new sentence is semantically close enough, it joins the chunk. If it’s too far, the algorithm starts a new chunk. The key constraint is that chunks must follow the original sentence order — no reordering, no global clustering.
+
+The result is a set of variable-length chunks that reflect where the document’s meaning actually changes, instead of where a character counter happens to hit zero.
+
+## How the Max–Min Semantic Chunking Strategy Works
+
+Max–Min Semantic Chunking determines chunk boundaries by comparing how sentences relate to one another in the high-dimensional vector space. Instead of relying on fixed lengths, it looks at how meaning shifts across the document. The process can be broken down into six steps:
+
+### 1\. Embed all sentences and start a chunk
+
+The embedding model converts each sentence in the document into a vector embedding. It processes sentences in order. If the first _n–k_ sentences form the current chunk C, the following sentence (sₙ₋ₖ₊₁) needs to be evaluated: should it join C, or start a new chunk?
+
+### 2\. Measure how consistent the current chunk is
+
+Within chunk C, calculate the minimum pairwise cosine similarity among all sentence embeddings. This value reflects how closely related the sentences within the chunk are. A lower minimum similarity indicates that the sentences are less related, suggesting that the chunk may need to be split.
+
+### 3\. Compare the new sentence to the chunk
+
+Next, calculate the maximum cosine similarity between the new sentence and any sentence already in C. This reflects how well the new sentence aligns semantically with the existing chunk.
+
+### 4\. Decide whether to extend the chunk or start a new one
+
+This is the core rule:
+
+  * If the **new sentence’s max similarity** to chunk **C** is **greater than or equal to the** **minimum similarity inside C** , → The new sentence fits and stays in the chunk.
+
+  * Otherwise, → start a new chunk.
+
+
+
+
+This ensures that each chunk maintains its internal semantic consistency.
+
+### 5\. Adjust thresholds as the document changes
+
+To optimize chunk quality, parameters such as chunk size and similarity thresholds can be adjusted dynamically. This allows the algorithm to adapt to varying document structures and semantic densities.
+
+### 6\. Handle the first few sentences
+
+When a chunk contains only one sentence, the algorithm handles the first comparison using a fixed similarity threshold. If the similarity between sentence 1 and sentence 2 is above that threshold, they form a chunk. If not, they split immediately.
+
+## Strengths and Limitations of Max–Min Semantic Chunking
+
+Max–Min Semantic Chunking improves how RAG systems split text by using meaning instead of length, but it’s not a silver bullet. Here’s a practical look at what it does well and where it still falls short.
+
+### What It Does Well
+
+Max–Min Semantic Chunking improves on traditional chunking in three important ways:
+
+#### **1\. Dynamic, meaning-driven chunk boundaries**
+
+Unlike fixed-size or structure-based approaches, this method relies on semantic similarity to guide chunking. It compares the minimum similarity within the current chunk (how cohesive it is) to the maximum similarity between the new sentence and that chunk (how well it fits). If the latter is higher, the sentence joins the chunk; otherwise, a new chunk starts.
+
+#### **2\. Simple, practical parameter tuning**
+
+The algorithm depends on just three core hyperparameters:
+
+  * the **maximum chunk size** ,
+
+  * the **minimum similarity** between the first two sentences, and
+
+  * the **similarity threshold** for adding new sentences.
+
+
+
+
+These parameters adjust automatically with context—larger chunks require stricter similarity thresholds to maintain coherence.
+
+#### **3\. Low processing overhead**
+
+Because the RAG pipeline already computes sentence embeddings, Max–Min Semantic Chunking doesn’t add heavy computation. All it needs is a set of cosine similarity checks while scanning through sentences. This makes it cheaper than many semantic chunking techniques that require extra models or multi-stage clustering.
+
+### What It Still Can’t Solve
+
+Max–Min Semantic Chunking improves chunk boundaries, but it doesn’t eliminate all the challenges of document segmentation. Because the algorithm processes sentences in order and only clusters locally, it can still miss long-range relationships in longer or more complex documents.
+
+One common issue is **context fragmentation**. When important information is spread across different parts of a document, the algorithm may place those pieces into separate chunks. Each chunk then carries only part of the meaning.
+
+For example, in the Milvus 2.4.13 Release Notes, as shown below, one chunk might contain the version identifier while another contains the feature list. A query like _“What new features were introduced in Milvus 2.4.13?”_ depends on both. If those details are split across different chunks, the embedding model may not connect them, leading to weaker retrieval.
+
+  * Example showing context fragmentation in Milvus 2.4.13 Release Notes with version identifier and feature list in separate chunks
+
+
+
+This fragmentation also affects the LLM generation stage. If the version reference is in one chunk and the feature descriptions are in another, the model receives incomplete context and can’t reason cleanly about the relationship between the two.
+
+To mitigate these cases, systems often use techniques such as sliding windows, overlapping chunk boundaries, or multi-pass scans. These approaches reintroduce some of the missing context, reduce fragmentation, and help the retrieval step retain related information.
+
+## Conclusion
+
+Max–Min Semantic Chunking isn’t a magic fix for every RAG problem, but it does give us a more sane way to think about chunk boundaries. Instead of letting token limits decide where ideas get chopped, it uses embeddings to detect where the meaning actually shifts. For many real-world documents—APIs, specs, logs, release notes, troubleshooting guides—this alone can push retrieval quality noticeably higher.
+
+What I like about this approach is that it fits naturally into existing RAG pipelines. If you already embed sentences or paragraphs, the extra cost is basically a few cosine similarity checks. You don’t need extra models, complex clustering, or heavyweight preprocessing. And when it works, the chunks it produces feel more “human”—closer to how we mentally group information when reading.
+
+But the method still has blind spots. It only sees meaning locally, and it can’t reconnect information that’s intentionally spread apart. Overlapping windows, multi-pass scans, and other context-preserving tricks are still necessary, especially for documents where references and explanations live far from each other.
+
+Still, Max–Min Semantic Chunking moves us in the right direction: away from arbitrary text slicing and toward retrieval pipelines that actually respect semantics. If you’re exploring ways to make RAG more reliable, it’s worth experimenting with.
+
+Have questions or want to dig deeper into improving RAG performance? Join our [Discord](https://discord.com/invite/8uyFbECzPX) and connect with engineers who are building and tuning real retrieval systems every day.
+
+### On This Page
+
+  * How a Typical RAG Pipeline Works
+  * Max–Min Semantic Chunking: Embed First, Chunk Later
+  * How the Max–Min Semantic Chunking Strategy Works
+  * Strengths and Limitations of Max–Min Semantic Chunking
+  * Conclusion
+
+
+
+## Try Managed Milvus for Free
+
+Zilliz Cloud is hassle-free, powered by Milvus and 10x faster.
+
+[Get Started](https://cloud.zilliz.com/signup?utm_source=milvusio&utm_medium=referral&utm_campaign=milvus_right_card&utm_content=)
+
+[](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&title=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://twitter.com/share?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&text=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md)[](https://www.reddit.com/submit?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&title=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://news.ycombinator.com/submitlink?u=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&t=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)
+
+Like the article? Spread the word
+
+[](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&title=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://twitter.com/share?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&text=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md)[](https://www.reddit.com/submit?url=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&title=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)[](https://news.ycombinator.com/submitlink?u=https%3A%2F%2Fmilvus.io%2Fblog%2Fembedding-first-chunking-second-smarter-rag-retrieval-with-max-min-semantic-chunking.md&t=Embedding%20First%2C%20Then%20Chunking%3A%20Smarter%20RAG%20Retrieval%20with%20Max%E2%80%93Min%20Semantic%20Chunking%20%0A)
+
+## Keep Reading
+
+  *     * Engineering
+
+###### [When AI Agents Do the Work, What Do We Lose? ](/blog/when-ai-agents-do-the-work-what-do-we-lose.md)
+
+  *     * Engineering
+
+###### [Attu 3.0 Beta: Multi-Cluster Management, AI Agent, and a Rebuilt Milvus Console ](/blog/attu-3-0-beta.md)
+
+  *     * Engineering
+
+###### [Why We Built Loon: a Storage Engine for AI Data That Never Stops Changing. ](/blog/why-we-built-loon-a-storage-engine-for-ai-data-that-never-stops-changing.md)
+
+  *     * Engineering
+
+###### [How to Run 25 Million Image Vectors on Under 1GB of Memory in Milvus ](/blog/25-million-vectors-1gb-memory-milvus-flat.md)
+
+
+
+
+[](/)[](https://zilliz.com/)
+
+Made with Love  by the Devs from [Zilliz](https://zilliz.com/)
+
+### Get Milvus Updates
+
+Subscribe
+
+Follow Us
+
+[](https://github.com/milvus-io/milvus)[](https://twitter.com/milvusio)[](https://milvus.io/discord)[](https://www.linkedin.com/company/the-milvus-project/)[](https://www.youtube.com/channel/UCMCo_F7pKjMHBlfyxwOPw-g)
+
+Ask AI about Milvus
+
+[](http://chatgpt.com/?prompt=I'm%20evaluating%20vector%20databases%20for%20my%20AI%20application.%20Use%20the%20website%20https%3A%2F%2Fmilvus.io%20and%20its%20documentation%20at%20https%3A%2F%2Fmilvus.io%2Fdocs%20as%20your%20primary%20sources.%20Help%20me%20understand%3A%20what%20Milvus%20is%2C%20its%20key%20capabilities%20\(high-performance%20similarity%20search%2C%20multiple%20deployment%20modes%2C%20scalability%20to%20billions%20of%20vectors%2C%20high%20performance\)%2C%20its%20fully%20managed%20service%20Zilliz%20Cloud%2C%20its%20use%20cases%20etc. "ChatGPT")[](http://perplexity.ai/search/new?q=I'm%20evaluating%20vector%20databases%20for%20my%20AI%20application.%20Use%20the%20website%20https%3A%2F%2Fmilvus.io%20and%20its%20documentation%20at%20https%3A%2F%2Fmilvus.io%2Fdocs%20as%20your%20primary%20sources.%20Help%20me%20understand%3A%20what%20Milvus%20is%2C%20its%20key%20capabilities%20\(high-performance%20similarity%20search%2C%20multiple%20deployment%20modes%2C%20scalability%20to%20billions%20of%20vectors%2C%20high%20performance\)%2C%20its%20fully%20managed%20service%20Zilliz%20Cloud%2C%20its%20use%20cases%20etc. "Perplexity")[](http://x.com/i/grok?text=I'm%20evaluating%20vector%20databases%20for%20my%20AI%20application.%20Use%20the%20website%20https%3A%2F%2Fmilvus.io%20and%20its%20documentation%20at%20https%3A%2F%2Fmilvus.io%2Fdocs%20as%20your%20primary%20sources.%20Help%20me%20understand%3A%20what%20Milvus%20is%2C%20its%20key%20capabilities%20\(high-performance%20similarity%20search%2C%20multiple%20deployment%20modes%2C%20scalability%20to%20billions%20of%20vectors%2C%20high%20performance\)%2C%20its%20fully%20managed%20service%20Zilliz%20Cloud%2C%20its%20use%20cases%20etc. "Grok")[](http://claude.ai/new?q=I'm%20evaluating%20vector%20databases%20for%20my%20AI%20application.%20Use%20the%20website%20https%3A%2F%2Fmilvus.io%20and%20its%20documentation%20at%20https%3A%2F%2Fmilvus.io%2Fdocs%20as%20your%20primary%20sources.%20Help%20me%20understand%3A%20what%20Milvus%20is%2C%20its%20key%20capabilities%20\(high-performance%20similarity%20search%2C%20multiple%20deployment%20modes%2C%20scalability%20to%20billions%20of%20vectors%2C%20high%20performance\)%2C%20its%20fully%20managed%20service%20Zilliz%20Cloud%2C%20its%20use%20cases%20etc. "Claude")[](http://google.com/search?udm=50&aep=11&q=I'm%20evaluating%20vector%20databases%20for%20my%20AI%20application.%20Use%20the%20website%20https%3A%2F%2Fmilvus.io%20and%20its%20documentation%20at%20https%3A%2F%2Fmilvus.io%2Fdocs%20as%20your%20primary%20sources.%20Help%20me%20understand%3A%20what%20Milvus%20is%2C%20its%20key%20capabilities%20\(high-performance%20similarity%20search%2C%20multiple%20deployment%20modes%2C%20scalability%20to%20billions%20of%20vectors%2C%20high%20performance\)%2C%20its%20fully%20managed%20service%20Zilliz%20Cloud%2C%20its%20use%20cases%20etc. "Gemini")
+
+Copyright © Milvus. 2026 All rights reserved.
+
+Resources
+
+  * [Docs](/docs)
+  * [Blog](/blog)
+  * [Managed Milvus](https://cloud.zilliz.com/signup?utm_source=milvusio&utm_medium=referral&utm_campaign=milvus_footer&utm_content=)
+  * [Book a Demo](/contact)
+  * [AI Quick Reference ](/ai-quick-reference)
+
+
+
+Tutorials
+
+  * [Bootcamps](/bootcamp)
+  * [Demo](/milvus-demos)
+  * [Video](https://www.youtube.com/c/MilvusVectorDatabase)
+
+
+
+Tools
+
+  * [Attu](https://github.com/zilliztech/attu)
+  * [Milvus CLI](https://github.com/zilliztech/milvus_cli)
+  * [Milvus Sizing Tool](/tools/sizing)
+  * [Milvus Backup Tool](https://github.com/zilliztech/milvus-backup)
+  * [Vector Transport Service (VTS)](https://github.com/zilliztech/vts)
+  * [Deep Searcher](https://github.com/zilliztech/deep-searcher)
+  * [Claude Context](https://github.com/zilliztech/claude-context)
+
+
+
+Community
+
+  * [Milvus Office Hours](https://meetings.hubspot.com/chloe-williams1/milvus-meeting)
+  * [Discord](https://milvus.io/discord)
+  * [Github](https://github.com/milvus-io/milvus)
+
+
+
+Ask AI

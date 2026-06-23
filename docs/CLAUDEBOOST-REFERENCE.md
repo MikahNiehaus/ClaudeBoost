@@ -115,21 +115,22 @@
 
 **File:** `scripts/consult-gate.py`  
 **Event:** PreToolUse  
-**Tool matcher:** `Edit|Write|MultiEdit`  
+**Tool matcher:** `Edit|Write|MultiEdit|Bash`  
 **Type:** Command hook  
 
 **Behavior:**
 1. Reads `state/claudeboost-mode.json`
 2. If mode is not CONSULT, exits 0 (no-op)
-3. If CONSULT, checks the file path against exempt fragments:
-   - `/workspace/`, `/.claude/`, `/knowledge/`, `/plans/`, `/docs/`
-4. If the path is exempt, exits 0
-5. Checks `state/session-approvals.json` for existing approval
-6. If path is non-exempt AND not approved: writes 4-line nudge to `stderr`
-7. Always exits `0` — never blocks
+3. Only fires on `Write` tool calls — Edit, MultiEdit, and Bash exit 0 immediately (intentional design: Edit bypass is by design, self-enforcement via CLAUDE.md covers those cases)
+4. For `Write`, checks the file path against exempt fragments:
+   - `/workspace/`, `/knowledge/`, `/plans/`, `/docs/` (note: `/.claude/` is NOT exempt)
+5. If the path is exempt, exits 0
+6. Checks `state/task-plan.json` for existing task approval
+7. If path is non-exempt AND no task-plan exists: outputs `{"permissionDecision":"ask","permissionDenialReason":"..."}` JSON to stdout — triggers a live user permission prompt
+8. If task-plan.json exists, exits 0 (task already approved)
 
-**Exit codes:** `0` always  
-**Files read:** `state/claudeboost-mode.json`, `state/session-approvals.json`  
+**Exit codes:** `0` (pass) or triggers ask permission dialog  
+**Files read:** `state/claudeboost-mode.json`, `state/task-plan.json`  
 
 ---
 

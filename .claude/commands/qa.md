@@ -14,6 +14,29 @@ Works on anything — browser apps, API endpoints, Python scripts, JS modules, b
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[qa] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+
+
+
 Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="QA session planning and execution: app inventory, risk-based test plan, browser testing", max_tokens=3000`.
 
 This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
@@ -199,26 +222,55 @@ Detected state: Phase [N] in progress — skipping completed phases.
 (Use /qa <url> --fresh to force a new session.)
 ```
 
-**0d — Create workspace, set SNAPSHOTS_DIR and PROOF_DIR.**
+**0d — Create workspace, set SNAPSHOTS_DIR, PROOF_DIR, and DEBUG_PROOF_DIR.**
 
 Set `SNAPSHOTS_DIR = $WORKSPACE_ABS/screenshots`.
 
-Derive `PROOF_DIR` — this is where TC pass-evidence screenshots land (separate from discovery and temp shots):
+Derive `PROOF_DIR` — where TC pass-evidence screenshots land (separate from discovery and temp shots):
 - If `TICKET_ID` is set (not 'none'): `PROOF_DIR = $SNAPSHOTS_DIR/proof-[TICKET_ID]`
   Example: `$WORKSPACE_ABS/screenshots/proof-ASC-1175`
 - Otherwise: `PROOF_DIR = $SNAPSHOTS_DIR/proof-[hostname]-[YYYY-MM-DD]`
   Example: `$WORKSPACE_ABS/screenshots/proof-localhost-2026-06-05`
 
+Set `DEBUG_PROOF_DIR = $WORKSPACE_ABS/debug-proof` — where code step-through evidence lands. This is a first-class proof artifact, not an afterthought. Every TC that hits a server breakpoint produces a file here.
+
 ```bash
 mkdir -p "$SNAPSHOTS_DIR"
 mkdir -p "$PROOF_DIR"
+mkdir -p "$DEBUG_PROOF_DIR"
 ```
 
-Announce: "Screenshots → `$SNAPSHOTS_DIR/` | Proof → `$PROOF_DIR/`"
+Announce:
+```
+Screenshots  → $WORKSPACE_ABS/screenshots/
+Proof imgs   → $PROOF_DIR/
+Debug proof  → $DEBUG_PROOF_DIR/
+```
+
+Workspace folder layout:
+```
+$WORKSPACE_ABS/
+├── context.md              (app map and findings)
+├── app-inventory.md        (RAG-built route + entity table)
+├── flow-map.md             (user journeys)
+├── plan.md                 (test cases with results)
+├── coverage-gaps.md        (what was NOT tested)
+├── report.md               (final summary)
+├── screenshots/            (all browser images)
+│   ├── discovery-home.png  (initial load — only one taken during discovery)
+│   └── proof-[id]/         (TC pass evidence screenshots)
+│       ├── TC-001-after.png
+│       └── TC-001-before.png
+└── debug-proof/            (code step-through logs — one JSON per TC with server hit)
+    ├── TC-001-debug.json
+    ├── TC-002-debug.json
+    └── session-summary.json  (written at close — totals, miss count, hit count)
+```
 
 What goes where:
-- `$SNAPSHOTS_DIR/` — discovery shots (`discovery-home.png`) and anything taken outside a TC
-- `$PROOF_DIR/` — TC-NNN-after.png (PASS evidence), TC-NNN-before.png (state-change pairs), TC-NNN-debug.json
+- `$SNAPSHOTS_DIR/` — discovery shots and anything taken outside a TC
+- `$PROOF_DIR/` — TC-NNN-after.png (PASS evidence), TC-NNN-before.png (state-change pairs)
+- `$DEBUG_PROOF_DIR/` — TC-NNN-debug.json (stack, variables, branch taken), session-summary.json
 
 **Register and protect (new workspaces only):**
 
@@ -794,7 +846,15 @@ If `plan.md` already contains result entries from a previous run (lines starting
 
 **Phase 3 Pre-flight: Attach Debugger (runs once, before any TC executes).**
 
-**`--no-debug` skip gate:** If `NO_DEBUG = true` (flag was passed in arguments), skip this entire pre-flight block. Set `DEBUG_ENABLED = false` and print: "Debugger skipped (`--no-debug`). Tests will run UI-only." Jump directly to the TC loop.
+**Debug step-through is a mandatory proof deliverable, not an optional enhancement.**
+
+Screenshots prove what the UI shows. The debug step-through proves the server code actually ran. A QA session with screenshots but no debug evidence only proves the frontend rendered correctly — it does not prove the backend logic executed. Both forms of proof are required for a complete session.
+
+Every TC that submits data, calls an API, or triggers a server-side operation MUST produce a `TC-NNN-debug.json` in `$DEBUG_PROOF_DIR/`. If a breakpoint is set and does not hit, that is recorded as a finding ("no server path hit") — it is not a reason to skip the step.
+
+`--no-debug` is an escape hatch for client-side-only projects and CI environments where no server process runs. Using it for convenience when a server is running produces an incomplete session.
+
+**`--no-debug` skip gate:** If `NO_DEBUG = true` (flag was passed in arguments), skip this entire pre-flight block. Set `DEBUG_ENABLED = false` and print: "Debugger skipped (`--no-debug`). Tests will run UI-only with no code proof. Use this flag only when no server process is running." Jump directly to the TC loop.
 
 Otherwise, code-level step-through runs as part of every QA session. This block runs after the prior-session check and before the first TC.
 
@@ -1091,9 +1151,9 @@ Remove overlay:
 
 If coordinates unknown from snapshot: annotate the relevant viewport region (e.g., `top:0,left:0,width:full-width,height:80` for nav bar tests).
 
-**Step 4b — Debug step-through (always runs after Step 4 if DEBUG_ENABLED = true and TC is not FAIL/BLOCKED).**
+**Step 4b — Debug step-through (mandatory code proof — runs after Step 4 for every passing TC with a server code path).**
 
-Skip if `DEBUG_ENABLED = false`.
+This step produces the code-level proof that the server actually executed. Without it, you have only UI evidence. Skip ONLY if `DEBUG_ENABLED = false` — not for convenience.
 
 1. **Figure out what code to step through (three-tier lookup — stop at first hit):**
 
@@ -1124,7 +1184,7 @@ Skip if `DEBUG_ENABLED = false`.
    - Call `mcp__mcp-debugger__step_over` 2–3 times through the key logic
    - Call `mcp__mcp-debugger__get_variables` again — capture post-step state
    - Call `mcp__mcp-debugger__continue_execution` to let the request complete
-   - Write debug evidence to `$PROOF_DIR/TC-NNN-debug.json`:
+   - Write debug evidence to `$DEBUG_PROOF_DIR/TC-NNN-debug.json`:
      ```json
      {
        "tc": "TC-NNN",
@@ -1137,7 +1197,8 @@ Skip if `DEBUG_ENABLED = false`.
      ```
 
 6. **If breakpoint does NOT hit within 5 seconds:**
-   - Write: `{ "tc": "TC-NNN", "verdict": "breakpoint not hit — may be client-side only or async handler", "breakpoint_attempted": "file:line" }`
+   - Write to `$DEBUG_PROOF_DIR/TC-NNN-debug.json`: `{ "tc": "TC-NNN", "verdict": "breakpoint not hit — may be client-side only or async handler", "breakpoint_attempted": "file:line" }`
+   - This is still a debug artifact — "not hit" is a valid recorded finding, not a skip.
    - Call `mcp__mcp-debugger__continue_execution` to unblock.
 
 7. **Remove the breakpoint** before the next TC to avoid it accumulating:
@@ -1355,8 +1416,27 @@ If ALL routes and entity operations are covered: write coverage-gaps.md with "Fu
 **Close debug session (runs after coverage gap analysis and all TCs and evaluator pass complete).**
 
 If `DEBUG_ENABLED = true`:
+
+Count the debug results from `$DEBUG_PROOF_DIR/`:
+- `HITS` = number of TC-NNN-debug.json files where `verdict` contains "breakpoint hit"
+- `MISSES` = files where `verdict` contains "not hit"
+- `TOTAL` = HITS + MISSES
+
+Write `$DEBUG_PROOF_DIR/session-summary.json`:
+```json
+{
+  "session": "[TASK_ID]",
+  "date": "[date]",
+  "debug_session_id": "[DEBUG_SESSION_ID]",
+  "breakpoints_hit": [HITS],
+  "breakpoints_missed": [MISSES],
+  "total_tcs_with_debug_attempt": [TOTAL],
+  "tc_files": ["TC-001-debug.json", "TC-002-debug.json", ...]
+}
+```
+
 Call `mcp__mcp-debugger__close_debug_session` with `sessionId=DEBUG_SESSION_ID`.
-Print: "Debug session closed. N TCs had breakpoint hits, M had no server code path found."
+Print: "Debug session closed. [HITS]/[TOTAL] TCs had breakpoint hits. Debug proof → `$DEBUG_PROOF_DIR/`"
 Set `DEBUG_ENABLED = false`.
 
 ---
@@ -1427,9 +1507,25 @@ Write `$WORKSPACE_ABS/report.md`:
 
 ## Evidence Index
 
-| TC-ID | Description | Result | Before | After |
-|-------|-------------|--------|--------|-------|
-| TC-001 | ... | PASS | — | TC-001-after.png |
+| TC-ID | Description | Result | Screenshot | Debug Proof |
+|-------|-------------|--------|------------|-------------|
+| TC-001 | ... | PASS | TC-001-after.png | TC-001-debug.json (breakpoint hit) |
+| TC-002 | ... | PASS | TC-002-after.png | TC-002-debug.json (no server path) |
+| TC-003 | ... | FAIL | — | TC-003-debug.json (breakpoint hit) |
+
+Screenshot column: populated for browser mode only. For non-browser (general mode) write "N/A — not a UI test".
+Debug proof column: populated whenever `DEBUG_ENABLED = true` — always attempted for TCs with server calls.
+
+## Debug Proof Summary
+
+**Debug session:** [DEBUG_SESSION_ID or "disabled"]
+**Breakpoints hit:** [N] / [TOTAL TCs attempted]
+**Full debug log:** `$DEBUG_PROOF_DIR/`
+
+For each TC with a breakpoint hit, note the key finding:
+| TC-ID | Breakpoint | Key Variables Observed | Branch Taken |
+|-------|-----------|----------------------|--------------|
+| TC-001 | OrdersController.cs:42 | orderId=123, userId=5 | create path |
 
 ## What Was NOT Tested
 
@@ -1486,17 +1582,158 @@ These items are not bugs — they are genuine environment constraints that preve
 
 Print the Summary table. List all failures with their observed state. List blocked tests with reasons.
 
-End with:
-```
-Full report        → $WORKSPACE_ABS/report.md
-App inventory      → $WORKSPACE_ABS/app-inventory.md
-Coverage gaps      → $WORKSPACE_ABS/coverage-gaps.md
-Proof screenshots  → $PROOF_DIR/
-All screenshots    → $SNAPSHOTS_DIR/
-```
-If coverage-gaps.md has explicit gaps: call them out here by name — don't bury them in the file.
+Do NOT print the final "session complete" message yet — Phase 5 runs next.
 
-Call `browser_close`.
+---
+
+## Phase 5: Session Integrity Audit + Skipped Test Remediation
+
+**This phase runs automatically after every QA session. It is NOT optional.**
+
+Phase 5 has two jobs:
+1. Audit the completed session for real proof (both code and UI where applicable)
+2. Attempt to run anything that was skipped, blocked, or unverifiable — if it can now be resolved, resolve it
+
+---
+
+### 5a — Proof inventory check (before running audit)
+
+Before calling `/audit`, inventory what proof exists:
+
+**Code proof (always required when `DEBUG_ENABLED = true`):**
+Count files in `$DEBUG_PROOF_DIR/`. For each TC in plan.md marked `[x] PASS`:
+- Does a `TC-NNN-debug.json` exist in `$DEBUG_PROOF_DIR/`? If no → flag as "PASS without code proof"
+- A "not hit" json counts as attempted — it is NOT a gap. A missing json IS a gap.
+
+**Screenshot proof (required for browser mode, not required for general mode):**
+Only check this if `MODE = browser`. For each TC in plan.md marked `[x] PASS`:
+- Does a `TC-NNN-after.png` exist in `$PROOF_DIR/`? If no → flag as "PASS without screenshot"
+- For general mode (code testing, scripts, hooks): screenshots are not expected — do not flag their absence.
+
+Print the proof inventory:
+```
+Proof inventory:
+  TCs with PASS                     : [N]
+  TCs with debug json (code proof)  : [N]  ← gaps: [list TC-IDs missing debug json]
+  TCs with screenshot (UI proof)    : [N]  ← N/A for general mode
+  TCs flagged as PASS without proof : [list]
+```
+
+---
+
+### 5b — Skipped and blocked test remediation
+
+Before the audit, attempt to clear any BLOCKED `[B]` or NEEDS-RERUN `[S]` items.
+
+For each `[B] BLOCKED` TC:
+1. Re-read the blocking reason. Has anything changed that would unblock it?
+2. Check if setup can now be completed (the TC Blocker Recovery Protocol already ran before — this is a second pass at a fresh look after the rest of the session is done).
+3. If newly unblockable: run it now. Mark result in plan.md.
+4. If still genuinely blocked: leave as `[B]`. The audit will see the reason.
+
+For each `[S] NEEDS-RERUN` TC:
+1. Re-run it now. Mark result in plan.md.
+2. There is no valid reason to leave a NEEDS-RERUN item unrun at the end of a session.
+
+For each `[U] UNVERIFIABLE` TC:
+1. These are environment constraints — do not attempt to change the verdict.
+2. Confirm the post-deploy validation note is filled in (who validates, when, how). If not filled: fill it before the audit.
+
+---
+
+### 5c — Run the session audit
+
+Invoke `/audit` on the completed session output. Pass it:
+- The full content of `$WORKSPACE_ABS/report.md`
+- The full content of `$WORKSPACE_ABS/plan.md`
+- The proof inventory from 5a
+- The debug proof count from `$DEBUG_PROOF_DIR/session-summary.json` (if exists)
+
+The audit checks:
+- **Completion coverage** — does the report address all planned TCs? Any TC with no result?
+- **Evidence quality** — every PASS must have either a debug json OR a screenshot OR both. A PASS with neither is not evidence.
+- **Screenshot requirement** — for browser mode: every PASS for a visible UI state must have a screenshot. For general mode: screenshots are not expected.
+- **Code proof requirement** — for any TC that exercises server-side code: a debug json must exist (even a "not hit" json). If the debugger was disabled, this check is waived — but is noted.
+- **Skipped item resolution** — any BLOCKED item that could have been resolved (based on the retry attempt in 5b) but wasn't.
+- **Post-deploy plans** — every UNVERIFIABLE TC has a filled post-deploy validation entry.
+- **Gap honesty** — the "What Was NOT Tested" section is present and non-empty when gaps exist.
+
+---
+
+### 5d — Post-audit remediation
+
+After the audit returns its verdict:
+
+**If audit flags PASS-without-evidence TCs:**
+1. For each flagged TC: attempt to gather the missing proof now.
+   - Missing debug json: re-run Step 4b for that TC (re-trigger the action, set the breakpoint, capture variables).
+   - Missing screenshot (browser mode only): re-run Step 4 for that TC (navigate back, re-execute the final action, take the annotated screenshot).
+2. Update plan.md and the evidence index in report.md with any newly gathered proof.
+3. If proof still cannot be gathered (page state not reproducible, no server process): downgrade the TC from `[x] PASS` to `[F] FAIL | evidence not collectible post-session — re-run needed`.
+
+**If audit flags unfilled post-deploy entries:**
+Fill them now before printing the final output.
+
+**If audit flags a PASS verdict on the overall session (`VERIFIED` or `LEGIT`):**
+No remediation needed. Proceed to 5e.
+
+---
+
+### 5e — Final report to user
+
+Print the complete final output to the user:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  QA SESSION COMPLETE                                         ║
+╚══════════════════════════════════════════════════════════════╝
+
+Target    : [TARGET_URL or GENERAL_TARGET]
+Workspace : [WORKSPACE_ABS]
+Date      : [date]
+
+── Test Results ─────────────────────────────────────────────
+  PASS         : [N]
+  FAIL         : [N]
+  BLOCKED      : [N]
+  UNVERIFIABLE : [N]
+  NEEDS-RERUN  : [N]  (should be 0 after Phase 5b)
+  Total        : [N]
+
+── Proof ────────────────────────────────────────────────────
+  Debug json files   : [N] / [PASS count] TCs  ([hits]/[total] breakpoints hit)
+  Screenshots        : [N] / [PASS count] TCs  [or "N/A — general mode"]
+  TCs with no proof  : [N]  (should be 0 after Phase 5d)
+
+── Session Integrity Audit ──────────────────────────────────
+  Verdict    : [VERIFIED / PARTIALLY VERIFIED / UNVERIFIED]
+  Confidence : [HIGH / MEDIUM / LOW]
+  Gaps found : [N]  (resolved: [N], unresolvable: [N])
+
+── Failures ─────────────────────────────────────────────────
+[List each FAIL with: TC-ID — what was expected — what was observed]
+
+── Blocked (needs setup to resolve) ─────────────────────────
+[List each BLOCKED with: TC-ID — blocking reason — setup needed]
+
+── Not Tested ───────────────────────────────────────────────
+[Copy from coverage-gaps.md — every gap named explicitly]
+
+── Post-Deploy Validation Required ──────────────────────────
+[List each UNVERIFIABLE with: TC-ID — what to validate — environment needed]
+
+── Files ────────────────────────────────────────────────────
+  Full report   → [WORKSPACE_ABS]/report.md
+  Test plan     → [WORKSPACE_ABS]/plan.md
+  Coverage gaps → [WORKSPACE_ABS]/coverage-gaps.md
+  Debug proof   → [WORKSPACE_ABS]/debug-proof/
+  Screenshots   → [WORKSPACE_ABS]/screenshots/proof-*/  [or "N/A — general mode"]
+```
+
+If there are failures: say what to do next (fix them and re-run `/qa quick` to verify).
+If everything passed: say that and suggest `/done` to ship.
+
+Call `browser_close` if `MODE = browser`.
 
 ---
 
@@ -1620,11 +1857,15 @@ Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
 
 ---
 
-### G4d: Debugger-Assisted Verification
+### G4d: Debugger-Assisted Verification (mandatory code proof)
 
 Running tests tells you pass/fail. The debugger tells you *why* — and whether the code actually does what the comments claim at runtime.
 
-**Skip this step only if `--no-debug` was passed.**
+This is not optional polish. It is the code proof that the logic runs correctly. A general mode QA session without debugger evidence only proves the tests pass — it does not prove the runtime behavior matches expectations. The debug log is the equivalent of the screenshot in browser mode: it is the evidence.
+
+**Skip this step only if `--no-debug` was passed.** If you are skipping it for any other reason, you are producing an incomplete session.
+
+Set `DEBUG_PROOF_DIR = $WORKSPACE_ABS/debug-proof` and create it if it does not exist.
 
 **Debugger pre-flight.**
 
@@ -1658,7 +1899,24 @@ For each chosen path:
    - `mcp__mcp-debugger__evaluate_expression` — test a hypothesis ("is this value actually None here?")
 4. At each decision point: record what the variable values actually are, and whether the branch taken matches what the code comment says it does.
 
-**Record findings.** For each path debugged, write to `$WORKSPACE_ABS/debug-log.md`:
+**Record findings — two outputs per path:**
+
+**1. Per-path JSON in `$DEBUG_PROOF_DIR/`:**
+
+Name the file after the code path or test: `path-NNN-[function-name].json`
+```json
+{
+  "path": "NNN",
+  "function": "[file:line — function name]",
+  "triggered_by": "[test name or script invocation]",
+  "variables_at_breakpoint": { ... },
+  "branch_taken": "[which branch executed]",
+  "matches_expectations": true,
+  "finding": "[if false — what the code actually does vs. what was expected]"
+}
+```
+
+**2. Narrative entry in `$WORKSPACE_ABS/debug-log.md`:**
 ```markdown
 ## [function or file:line]
 - Breakpoint at: [file:line]
@@ -1667,6 +1925,18 @@ For each chosen path:
 - Branch taken: [which path executed]
 - Matches code comments/expectations: YES / NO
 - Finding: [if NO — what the code actually does vs. what was claimed]
+- Proof file: debug-proof/path-NNN-[function-name].json
+```
+
+After all paths are stepped through, write `$DEBUG_PROOF_DIR/session-summary.json`:
+```json
+{
+  "session": "[TASK_ID]",
+  "date": "[date]",
+  "paths_debugged": [N],
+  "expectation_mismatches": [N],
+  "path_files": ["path-001-funcname.json", ...]
+}
 ```
 
 Close the session when done: `mcp__mcp-debugger__close_debug_session(sessionId)`.
@@ -1727,34 +1997,30 @@ Charter: Explore [target] With [tools] To discover [problem classes]
 [Things that need more investigation or a decision from the team]
 ```
 
-**G5b — Print summary to user:**
-```
-General QA complete
-  Target           : [GENERAL_TARGET]
-  Tests run        : N existing + N edge case
-  Pass rate        : N/N (N%)
-  Paths debugged   : N (N mismatches found)
-  Bugs found       : N
-  Observations     : N
+**G5b — Proceed to Phase 5.**
 
-  Session report   → $WORKSPACE_ABS/report.md
-  Inventory        → $WORKSPACE_ABS/session-inventory.md
-  Edge case tests  → $WORKSPACE_ABS/edge-case-tests.py (or path)
-  Debug log        → $WORKSPACE_ABS/debug-log.md
-```
+Do NOT print the final output yet. General mode sessions also run Phase 5 (Session Integrity Audit + Skipped Test Remediation) before printing the final report to the user.
 
-If bugs were found: list them by severity before the report path.
+Jump to **Phase 5** now. Use `MODE = general` context:
+- Phase 5a: Check debug proof (no screenshots expected — `MODE = general`)
+- Phase 5b: Retry any BLOCKED items
+- Phase 5c: Run audit on report.md + debug-proof/session-summary.json
+- Phase 5d: Remediate gaps
+- Phase 5e: Print the final output to the user (same format as browser mode, screenshot line shows "N/A — general mode")
 
 ---
 
 ## What's Next After /qa
 
-| If the session... | Run |
-|-------------------|-----|
-| Passed with no failures | `/done` — run the pre-push checklist and push |
-| Found failures you need to fix | Fix them, then re-run `/qa` with `quick` scope to verify the fixes |
-| Revealed coverage gaps | Review `coverage-gaps.md`, then decide which gaps to add to the backlog |
-| Raised a security question (auth, input, tokens) | `/security-review` — focused OWASP review on the pending branch changes |
-| Feels like something is still off | `/audit` — parallel multi-angle assessment with an independent verdict |
+The session integrity audit (Phase 5) already ran before you saw this output. It checked proof coverage, retried blocked items, and confirmed the verdict.
+
+| If Phase 5 verdict was... | Do this |
+|---------------------------|---------|
+| VERIFIED — all PASS, proof complete | `/done` — run the pre-push checklist and push |
+| PARTIALLY VERIFIED — some gaps remain | Fix the flagged gaps, then re-run `/qa quick` to verify |
+| UNVERIFIED — missing proof or open items | Read the audit findings and address each one before shipping |
+| Failures in the session | Fix them, re-run `/qa quick`, re-run Phase 5 automatically |
+| Coverage gaps noted | Review `coverage-gaps.md` — decide which to backlog vs. address now |
+| Security concern visible (auth, input, tokens) | `/security-review` — OWASP-focused review of pending changes |
 
 **Never self-verify.** The evaluator-agent checks annotation presence, annotation placement, and post-action state. These are three distinct checks that the orchestrator cannot objectively answer about its own screenshots — it produced them.

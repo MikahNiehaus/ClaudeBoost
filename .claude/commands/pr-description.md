@@ -10,6 +10,32 @@ Generate a filled PR template and title for **$ARGUMENTS** (defaults to current 
 
 ---
 
+## Phase 0: Workspace Detection
+
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[pr-description] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+
+
+---
+
 ## Phase 1: Resolve scope
 
 **1a — Determine branches.**

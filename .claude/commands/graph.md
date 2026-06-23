@@ -18,6 +18,29 @@ Run this at task start, or any time you need to refresh the scope map during a t
 
 ## Phase 0: Resolve Arguments
 
+**Workspace detection (run before any other action):**
+
+Run `get-active-workspace.py` to get the active workspace for this Claude
+instance — matches the blue "WS XXXX" status bar (per-instance, not the
+stale shared global file):
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"
+```
+
+Store `project_path` as `PROJECT_PATH` and `workspace_path` as `WORKSPACE_PATH`.
+If `PROJECT_PATH` is empty: fall back to current working directory (`pwd`).
+
+**Collision check:** if your context or memory references a different workspace
+than what the script returned, print:
+`[graph] Conflict: status bar shows <X>, context/memory says <Y>. Which workspace should I use?`
+Wait for the user's answer — the user is always the source of truth.
+
+If `WORKSPACE_PATH` is empty: note it and continue.
+
+Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+
+
+
 Parse `$ARGUMENTS`:
 - First token: `TASK_ID` (workspace slug or ticket ID like `ASC-1199`). If not provided, scan active workspaces.
 - Remaining tokens: optional `PROJECT_PATH` (absolute path starting with a drive letter or `/`)

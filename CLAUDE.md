@@ -88,12 +88,16 @@ Default: **CONSULT**. Before starting any task that creates new things or makes 
 
 This is a task-level gate, not a file-level gate. One check before work starts, then done. The hook (`consult-gate.py`) enforces it mechanically: Write to a new file with no task-plan.json on record triggers a permission dialog.
 
+**Hook coverage gap — self-enforce for Edit:** The mechanical hook only catches Write calls to new files. Edit calls on existing files pass through silently. For any edit triggered by an ambiguous user request (e.g. "something seems off" or "I don't know if it's working"), Claude must self-enforce the consult step — describe what you found and what you're about to change, wait for yes — before reaching for Edit.
+
 **Vision check format** — plain language, user-visible outcomes, concrete:
 - Good: "I'll make a yellow bird that flies through green pipes. Score counter at the top. Want sound effects too?"
 - Bad: "I'll implement a Canvas-based physics engine with requestAnimationFrame loop..."
 
 **What fires the gate**: any request to build, add, or create something new.
-**What doesn't**: bugfixes, typos, tests, docs, formatting, renames, edits to existing files, anything under `workspace/`/`knowledge/`/`plans/`/`docs/`. AUTO mode bypasses everything.
+**What doesn't**: bugfixes the user explicitly asked for, typos, tests, docs, formatting, renames, edits to existing files within an already-approved task, anything under `workspace/`/`knowledge/`/`plans/`/`docs/`. AUTO mode bypasses everything.
+
+**Bugfix exemption boundary**: "bugfix" means the user said fix/repair/correct this — not a bug Claude diagnosed on its own from a vague complaint. If Claude identifies a bug the user didn't explicitly name, it must describe the finding and proposed fix and wait for confirmation before editing.
 
 Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically throughout — not up for debate.
 Approvals logged to `state/session-approvals.json` (session-scoped).
