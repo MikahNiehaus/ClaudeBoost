@@ -212,7 +212,11 @@ The action form gate (`action-gate.py`) blocks Edit, Write, and MultiEdit until 
 tool   : Edit | Write | MultiEdit
 target : path/to/file
 why    : reason for this action
-rag    : ClaudeBoost KB: [searched/not needed — why] | Project KB: [searched/not needed — why] | Codebase: [searched/not needed — why] | Workspace KB: [searched/not needed/does not exist — why]
+rag    :
+  ClaudeBoost KB  (agents/skills/orchestration patterns): [searched | not needed — why]
+  Project KB      (indexed research, search only via POST /search — if needed but not indexed, run /research-task first): [searched | not needed — why | not indexed — running /research-task]
+  Codebase        (existing implementations/patterns to follow): [searched | not needed — why]
+  Workspace KB    (prior session research for this task): [searched | not needed — why | does not exist]
 impact : what will change and what it might affect
 safe   : yes — why it is safe, or no — what the risk is
 aligned: [quote or describe the user message that authorized this — never assume consent]

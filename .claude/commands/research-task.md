@@ -185,8 +185,10 @@ Each agent handles its own entity across 6 angles with 3 query phrasings per ang
 
 - **Tier A** — official sources, gov sites, academic (arxiv, pubmed, ietf), github.com, MDN, OWASP, NIST, WHO, ISO, IEEE: auto-include
 - **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp, established news, industry publications): include if clearly relevant
-- **Tier C** — personal blogs, medium, hashnode: only if no Tier A/B found for this angle
+- **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index regardless of availability
 - **Skip** — paywalled, social media, SEO farms: exclude silently
+
+If no Tier A or B source exists for an angle, log it as a coverage gap — do NOT fall back to Tier C.
 
 Each agent returns collected URLs with tier, angle, and entity labels. Merge and deduplicate across all agents. Add any `SEED_URLS` from arguments.
 
@@ -246,7 +248,7 @@ Write all approved URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
 ]
 ```
 
-Prioritize: all Tier A first, then Tier B (cap at 40), then Tier C (cap at 5).
+Prioritize: all Tier A first, then Tier B (cap at 40). Tier C is never included.
 
 **Step 2 — Run the local downloader.**
 

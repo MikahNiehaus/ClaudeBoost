@@ -300,6 +300,13 @@ Flag: if high-entropy strings appear in template files inside `<script>` blocks 
 Search for loading state UI (CSS classes like `status-loading`, `loading`, `spinner`) in the diff with no `setTimeout` anywhere in the same file.
 Flag: if loading state exists and no timeout fallback found → `PRE_SCAN: LOADING_NO_TIMEOUT` (feeds into Pass 15b as BLOCKER)
 
+**Pre-scan 6: Dashes in comments:**
+Search added/changed lines in the diff that are comments (`//`, `///`, `#`) for any dash character: em-dash (—), en-dash (–), or a hyphen with spaces on both sides.
+```bash
+grep "^+" "$DIFF_FILE" | grep -E "^\+\s*(//|#)" | grep -E "—|–| - "
+```
+Flag: if any match found → `PRE_SCAN: DASH_IN_COMMENT` (feeds into Pass 5 as confirmed evidence)
+
 **Collect all flags into `PRE_SCAN_FLAGS` list. Inject into each relevant agent prompt.**
 
 If no flags triggered: `PRE_SCAN_FLAGS = [] — no deterministic issues found`
@@ -312,6 +319,7 @@ Pre-scan complete:
   Template secret render  : [FOUND | clean]
   High-entropy in template: [FOUND | clean]
   Loading with no timeout : [FOUND | clean]
+  Dashes in comments      : [FOUND | clean]
 ```
 
 ---
@@ -325,11 +333,38 @@ Context rule: < 50% → 3 parallel; 50-75% → 2; > 75% → 1
 Each agent prompt:
 
 ```
-Your FIRST two actions:
-1. Call POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="<pass name> review pass", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>"
-2. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<PROJECT_PATH>", query="<targeted query for this pass>", limit=5
-3. Call POST http://127.0.0.1:8612/search with scope="codebase", project_path="<PROJECT_PATH>", query="<targeted query for this pass>", mode="graph", limit=5
-   (Both calls are mandatory — vector and graph surface different files)
+== MANDATORY RAG PRIMING — CRITICAL — COMPLETE ALL STEPS BEFORE REVIEWING ANYTHING ==
+
+You have four RAG sources. You MUST call all of them before you look at a single line of diff.
+Skipping any source means you are reviewing blind. Incomplete RAG = incomplete findings = bad review.
+This is not optional. Do not skip any step for any reason.
+
+Step 1 — Context load (always first):
+  POST http://127.0.0.1:8612/context
+    agent="reviewer-agent"
+    task_description="<pass name> review pass"
+    project_path="<PROJECT_PATH>"
+    workspace_path="<WORKSPACE_PATH>"
+
+Step 2 — ClaudeBoost KB (orchestration patterns, agent specs, skill conventions):
+  POST http://127.0.0.1:8612/search  scope="knowledge"  query="<targeted query>"  limit=5
+
+Step 3 — Codebase vector search (semantically similar implementations):
+  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<PROJECT_PATH>"
+    query="<targeted query>"  mode="vector"  limit=5
+
+Step 4 — Codebase graph search (callers, imports, structural neighbors):
+  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<PROJECT_PATH>"
+    query="<targeted query>"  mode="graph"  limit=5
+
+Step 5 — Workspace KB (task-scoped research for this ticket, if workspace_path is set):
+  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<WORKSPACE_PATH>/knowledge"
+    query="<targeted query>"  mode="vector"  limit=5
+
+Vector and graph return different files. Running only one will miss findings. All five steps
+are required every time. There are no exceptions.
+
+== END RAG PRIMING — NOW YOU MAY REVIEW THE DIFF ==
 
 Review ONLY the diff below for your assigned pass. Exception: if you are about to flag something as MISSING (missing row, missing emit, missing field, missing record) you MUST read the full enclosing method in the actual file — not just the diff — before raising the finding. Pre-existing code above or below the changed lines may already handle what appears absent from the diff.
 
@@ -375,6 +410,8 @@ Any temporary logs, toasts, flags, debug UI, commented blocks, or test-only hand
 
 **Pass 5 — Project Patterns** | USE_GRAPH: yes
 How does this repo usually solve this problem? Match naming, file placement, error handling, data flow, testing style. Don't introduce a parallel mechanism when the codebase has an established one.
+
+Also check every new or changed comment in the diff (`//`, `///`, block comments). Flag as WARNING if any comment contains a dash of any kind: em-dash (—), en-dash (–), or spaced hyphen ( - ). This rule applies even when a dash would be grammatically correct. Also flag comments that are overly formal, verbose, or unprofessional in tone. Use the exact comment text as evidence. Check PRE_SCAN_FLAGS for `DASH_IN_COMMENT` as a confirmed starting point.
 
 **Pass 6 — Common-Pattern Breaker** | USE_GRAPH: yes
 Are you breaking a shared convention? Count how many files solve similar problems differently — if all of them do it differently, this approach is the outlier.
