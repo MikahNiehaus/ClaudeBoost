@@ -45,6 +45,7 @@ For each expected hook, search the hooks section for its sentinel string. Mark a
 | Hook | Sentinel |
 |------|----------|
 | Task RAG gate | `agent-spawn-gate.py` |
+| Skill verify gate | `skill-verify-gate.py` |
 | Workspace boost gate | `workspace-boost-gate.py` |
 | Workspace creation check | `WORKSPACE CREATION CHECK` |
 | CONSULT gate | `consult-gate.py` |
