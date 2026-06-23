@@ -40,14 +40,20 @@ def _trunc(s: str, n: int) -> str:
 
 
 def _workspace_last_edit(ws_path: Path) -> float:
-    """Max mtime of any file directly inside the workspace directory."""
+    """Max mtime of any file inside the workspace directory tree."""
     if not ws_path.is_dir():
         return 0.0
+    _SKIP = {'.git', 'node_modules', '__pycache__', '.rag-index', '.claudeboost'}
     try:
-        return max(
-            (e.stat().st_mtime for e in os.scandir(ws_path) if e.is_file()),
-            default=0.0,
-        )
+        mtimes = []
+        for root, dirs, files in os.walk(ws_path):
+            dirs[:] = [d for d in dirs if d not in _SKIP and not d.startswith('.')]
+            for f in files:
+                try:
+                    mtimes.append(os.path.getmtime(os.path.join(root, f)))
+                except OSError:
+                    pass
+        return max(mtimes, default=0.0)
     except OSError:
         return 0.0
 
@@ -122,7 +128,7 @@ def _scan_local_workspaces(cwd: str) -> dict[str, Path]:
     ws_dir = Path(cwd) / "workspace"
     if not ws_dir.is_dir():
         return {}
-    return {d.name: d for d in ws_dir.iterdir() if d.is_dir()}
+    return {d.name: d for d in ws_dir.iterdir() if d.is_dir() and not d.name.startswith('.')}
 
 
 def _fuzzy_match(query: str, candidates: list[str]) -> list[str]:

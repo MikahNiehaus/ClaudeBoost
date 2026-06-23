@@ -65,26 +65,8 @@ This loads architecture, workflow, orchestration, and model-selection knowledge 
 
 Before creating anything, check if the user wants to continue in an existing workspace.
 
-Write `"C:/Development/ClaudeBoost/state/cb_recent_workspaces.py"`:
-```python
-import json, pathlib, sys
-
-home = pathlib.Path('C:/Development/ClaudeBoost')
-reg_path = home / 'state' / 'workspaces.json'
-if not reg_path.exists():
-    sys.exit(0)
-reg = json.loads(reg_path.read_text(encoding='utf-8'))
-recent = []
-for wid, entry in reg.items():
-    ctx = pathlib.Path(entry.get('workspace_path', '')) / 'context.md'
-    if ctx.exists():
-        recent.append((ctx.stat().st_mtime, wid, entry.get('workspace_path', ''), entry.get('project_path', '')))
-recent.sort(reverse=True)
-for _, wid, wpath, ppath in recent[:5]:
-    print(f"{wid}|{wpath}|{ppath}")
-```
 ```bash
-"${CLAUDEBOOST_PYTHON}" "C:/Development/ClaudeBoost/state/cb_recent_workspaces.py"
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/recent-workspaces.py"
 ```
 
 If the output is empty (no existing workspaces with a `context.md`): skip this phase and proceed to Phase 1.
