@@ -139,7 +139,8 @@ def main() -> int:
         f"  why    : [reason for this action]\n"
         f"  rag    : ClaudeBoost KB: [searched/not needed — why] | Project KB: [searched/not needed — why] | Codebase: [searched/not needed — why] | Workspace KB: [searched/not needed/does not exist — why]\n"
         f"  impact : [what will change and what it might affect]\n"
-        f"  safe   : [yes — why it is safe, or no — what the risk is]\n\n"
+        f"  safe   : [yes — why it is safe, or no — what the risk is]\n"
+        f"  aligned: [quote or describe the user message that authorized this — never assume consent]\n\n"
         f"Fill in every field then retry the tool call.\n"
         f"This applies to every Edit, Write, and MultiEdit."
     )

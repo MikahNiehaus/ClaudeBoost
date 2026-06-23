@@ -24,6 +24,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 GREEN  = "\033[32;1m"
 YELLOW = "\033[33;1m"
+RED    = "\033[31;1m"
 BLUE   = "\033[34;1m"
 DIM    = "\033[2m"
 RESET  = "\033[0m"
@@ -206,6 +207,15 @@ def _mcp_registered(name: str) -> bool:
 
 
 def main() -> None:
+    # Read stdin JSON — Claude Code passes context_window data on every status poll
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        stdin_data = json.loads(raw) if raw else {}
+    except Exception:
+        stdin_data = {}
+    ctx = stdin_data.get("context_window", {})
+    used_pct = float(ctx.get("used_percentage", 0.0))
+
     status = _heartbeat_status()
 
     # Use short prefix so status bar doesn't clip on narrow terminals
@@ -228,6 +238,23 @@ def main() -> None:
         parts.append(f"{DIM}|{RESET} {BLUE}WS {ws}{RESET}")
     else:
         parts.append(f"{DIM}| WS N/A{RESET}")
+
+    # Low Token Mode indicator — only shown when enabled in state/low-token-mode.json
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME", "") or Path(__file__).resolve().parent.parent)
+    try:
+        lt_state = json.loads((boost_home / "state" / "low-token-mode.json").read_text(encoding="utf-8"))
+    except Exception:
+        lt_state = {}
+
+    if lt_state.get("enabled", False):
+        threshold = int(lt_state.get("threshold_pct", 70))
+        if used_pct >= threshold + 10:
+            lt_color = RED
+        elif used_pct >= threshold:
+            lt_color = YELLOW
+        else:
+            lt_color = GREEN
+        parts.append(f"{DIM}|{RESET} {lt_color}LT ●{RESET}")
 
     print(" ".join(parts), end="", flush=True)
 

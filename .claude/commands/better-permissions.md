@@ -37,6 +37,7 @@ action-gate.py
 agent-spawn-gate.py
 auto-clear.py
 bash-guard.py
+lt-precompact.py
 comment-humanness-check.py
 compaction-restore.py
 consult-gate.py
@@ -130,6 +131,7 @@ For each expected hook, search the hooks section for its sentinel string. Mark a
 | Hook | Sentinel |
 |------|----------|
 | Context preservation | `CONTEXT PRESERVATION` |
+| Low Token Mode handler | `lt-precompact.py` |
 
 ### Stop hooks
 | Hook | Sentinel |
@@ -213,6 +215,7 @@ why    : reason for this action
 rag    : ClaudeBoost KB: [searched/not needed — why] | Project KB: [searched/not needed — why] | Codebase: [searched/not needed — why] | Workspace KB: [searched/not needed/does not exist — why]
 impact : what will change and what it might affect
 safe   : yes — why it is safe, or no — what the risk is
+aligned: [quote or describe the user message that authorized this — never assume consent]
 ```
 
 Every RAG tier requires a real reason. "Not needed" is fine but must explain why. "Does not exist" is valid for Workspace KB when no workspace is active. Bare "n/a" is not accepted.

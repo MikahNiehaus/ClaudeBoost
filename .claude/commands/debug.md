@@ -1,6 +1,6 @@
 ---
 argument-hint: ["error message" | file.py:42 | --live | --static | --no-log]
-description: Debug a bug — static analysis for obvious errors, live mcp-debugger step-through for runtime issues. Works with Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust. Outputs a Bug Analysis Report.
+description: Debug a bug — static analysis, live step-through, and test-project debugging. Works with Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust. Handles test projects (xUnit/VSTest, pytest, Jest, go test, JUnit, cargo test) with runner-specific attach workflows. Outputs a Bug Analysis Report.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__redefine_classes
 ---
 
@@ -107,6 +107,29 @@ Determine `LANGUAGE` from:
 1. `TARGET_FILE` extension — `.py` → python, `.cs` / `.csproj` → dotnet, `.go` → go, `.js` / `.ts` → javascript, `.java` → java, `.rs` → rust, `.rb` → ruby
 2. If no file: ask the user "What language/runtime is this?" or infer from the error message.
 3. Check project root for `*.csproj`, `go.mod`, `requirements.txt`, `package.json`, `pom.xml`, `Cargo.toml` as fallback signals.
+
+### 2b-test — Test project detection (LIVE and HYBRID modes)
+
+Determine whether the target is a **test project**. This controls Phase 4b-test routing.
+
+Set `IS_TEST_PROJECT = true` if any of the following match:
+
+- `TARGET_FILE` name contains `Test`, `Spec`, `Fixture`, or matches patterns: `*Tests.cs`, `*_test.go`, `*_test.py`, `test_*.py`, `*.test.ts`, `*.spec.ts`, `*Test.java`, `*_spec.rb`
+- Project manifest references a test framework:
+  - .NET `.csproj`: `xunit`, `nunit`, `mstest`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`
+  - Python `requirements*.txt` / `pyproject.toml`: `pytest`
+  - JS/TS `package.json` devDependencies: `jest`, `vitest`, `mocha`, `jasmine`, `@testing-library`
+  - Go: file ends in `_test.go` or imports `testing` or `testify`
+  - Java `pom.xml` / `build.gradle`: `junit`, `testng`
+  - Rust `Cargo.toml`: `[dev-dependencies]` contains test crates
+- User description contains: "test", "spec", "unit test", "xunit", "pytest", "jest", "go test", "nunit", "mstest", "testify", "junit"
+
+Set `IS_TEST_PROJECT = false` otherwise.
+
+If `IS_TEST_PROJECT = true`: print:
+```
+Target type : TEST PROJECT — runner-specific attach workflow will run in Phase 4b-test
+```
 
 ### 2c — Prerequisite check (LIVE and HYBRID modes)
 
@@ -304,6 +327,123 @@ Running processes:
 - If exactly one matching process found → use it. Set `ATTACH_PID = <PID>`, `ATTACH_MODE = true`.
 - If multiple matching processes → print the table and ask: "Which process should I attach to? (Enter PID)"
 - If no matching process found → `ATTACH_MODE = false`. Will use `start_debugging` to launch.
+
+### 4b-test — Test runner workflow (IS_TEST_PROJECT = true only)
+
+**Skip this section if `IS_TEST_PROJECT = false`.**
+
+Test project binaries are class libraries with no `Main` entry point — mcp-debugger cannot launch them directly. A test runner (dotnet test, pytest, jest, etc.) must load them. The strategy is runner-specific:
+
+#### Test Runner Matrix
+
+| Language | Framework | Mechanism | Strategy |
+|----------|-----------|-----------|----------|
+| .NET | xUnit 2.x / NUnit ≤3 / MSTest ≤2 (VSTest) | `dotnet test` via VSTest | `VSTEST_HOST_DEBUG=1` → capture testhost PID → attach |
+| .NET | xUnit 3.x / NUnit 4.x / MSTest 3.x (MTP) | `dotnet test` via Microsoft.Testing.Platform | `--debugging` flag → attach |
+| Python | pytest / unittest | `python -m pytest` | `debugpy --wait-for-client` → attach port 5678 |
+| JS / TS | Jest | `jest --runInBand` | `node --inspect-brk` → attach port 9229 |
+| JS / TS | Vitest | `vitest` | `--inspect-brk` → attach port 9229 |
+| Go | go test / testify | `go test` | `dlv test <package>` — Delve compiles and attaches natively |
+| Java | JUnit / TestNG | Maven / Gradle | JDWP agent `suspend=y,address=5005` → attach |
+| Rust | cargo test | `cargo test` | `cargo test --no-run` → run binary under `rust-lldb` / `rust-gdb` |
+
+---
+
+#### .NET VSTest Workflow (xUnit 2.x, NUnit ≤3.x, MSTest ≤2.x)
+
+xUnit 2.x DLLs are class libraries — `start_debugging` on the DLL exits immediately (no Main). VSTest spawns a `testhost` child process that loads the DLL. `VSTEST_HOST_DEBUG=1` makes testhost pause on startup and print its PID, giving mcp-debugger time to attach before any test runs.
+
+**Step 1 — Run the helper script:**
+```bash
+python "C:/Development/ClaudeBoost/scripts/debug-dotnet-tests.py" \
+  --project-path "<path-to-test.csproj>" \
+  --filter "FullyQualifiedName~<TestMethodName>" \
+  [--no-build]
+```
+
+The script outputs one JSON line and then blocks (keeping testhost alive):
+```json
+{"status": "waiting", "pid": 12345, "name": "testhost", "dotnet_test_pid": 67890, "message": "..."}
+```
+
+Extract `pid`. Set `ATTACH_PID = <pid>`, `ATTACH_MODE = true`. Proceed to Phase 4b and 4c immediately — testhost waits indefinitely, but don't delay.
+
+**Step 2 — Set breakpoints BEFORE continuing:**
+
+After attaching (Phase 4c), set all breakpoints (Phase 4d) while testhost is still paused. Only after breakpoints are set, call `continue_execution` (Phase 4e). Tests run and hit your breakpoints.
+
+**Timing note:** For sub-millisecond tests, use `--filter` to isolate the specific test method. testhost will not time out on its own — it stays paused until `continue_execution` is called.
+
+**If the script errors** (`"status": "error"`): the adapter likely does not support `VSTEST_HOST_DEBUG`. Ensure `xunit.runner.visualstudio`, `NUnit3TestAdapter`, or `MSTest.TestAdapter` is in the `.csproj`. Fall back to static analysis.
+
+---
+
+#### .NET MTP Workflow (xUnit 3.x, NUnit 4.x, MSTest 3.x)
+
+```bash
+dotnet test "<project>" -- --debugging
+```
+
+Process pauses and prints a port/PID. Set `ATTACH_PID`, `ATTACH_MODE = true`, proceed to Phase 4b/4c.
+
+---
+
+#### Python pytest Workflow
+
+```bash
+python -m debugpy --listen 5678 --wait-for-client -m pytest "<file>::<TestClass>::<test_method>" -s
+```
+
+Process pauses waiting for attach. Create session (language: python), set `ATTACH_PID` to port 5678, `ATTACH_MODE = true`.
+
+---
+
+#### Jest / Vitest Workflow
+
+```bash
+# Jest
+node --inspect-brk node_modules/.bin/jest --runInBand --testPathPattern="<file>"
+
+# Vitest
+node --inspect-brk node_modules/.bin/vitest run "<file>"
+```
+
+Attach to port 9229. Language: javascript, `ATTACH_MODE = true`.
+
+---
+
+#### Go test Workflow
+
+```bash
+dlv test "<./path/to/package>" -- -run "^TestFunctionName$" -v
+```
+
+`dlv test` compiles and attaches natively. If mcp-debugger cannot drive `dlv` interactively, run `dlv test` in a terminal and use Phase 3 static analysis alongside it.
+
+---
+
+#### Java JUnit / TestNG Workflow
+
+```bash
+mvn test -Dsurefire.argLine="-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005" -Dtest="ClassName#methodName"
+```
+
+Process pauses at port 5005. Language: java, `ATTACH_MODE = true`.
+
+---
+
+#### Rust cargo test Workflow
+
+```bash
+cargo test --no-run 2>&1 | grep "Executable"
+# Then: rust-lldb "target/debug/deps/<test-binary>"
+```
+
+Run the test binary under `rust-lldb` or `rust-gdb` interactively in a terminal. mcp-debugger Rust support is limited — use Phase 3 static analysis as the primary tool.
+
+---
+
+After 4b-test completes, `ATTACH_PID` and `ATTACH_MODE = true` are set. Proceed to Phase 4b (create session) then Phase 4c (attach).
 
 ### 4b — Create debug session
 

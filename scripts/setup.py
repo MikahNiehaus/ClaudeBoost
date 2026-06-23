@@ -700,6 +700,19 @@ def _install_all_hooks(settings: dict) -> None:
         ],
     }, sentinel="CONTEXT PRESERVATION", label="context preservation + compaction save")
 
+    # --- PreCompact: Low Token Mode handler ---
+    _install_hook(settings, "PreCompact", {
+        "matcher": "Always",
+        "hooks": [
+            {
+                "type": "command",
+                "command": _py_cmd("lt-precompact.py"),
+                "timeout": 8000,
+                "statusMessage": "Checking Low Token Mode...",
+            },
+        ],
+    }, sentinel="lt-precompact.py", label="Low Token Mode precompact handler")
+
     # --- SessionEnd: clear handoff save ---
     _install_hook(settings, "SessionEnd", {
         "hooks": [{"type": "command", "command": _py_cmd("session-clear-save.py")}],
