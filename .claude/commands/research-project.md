@@ -138,61 +138,58 @@ If an angle returns fewer than 20 Tier A sources:
 
 ### Phase 2c — Minimum Source Gate
 
-Count total Tier A + Tier B sources across all technologies and angles. **Target: 300-500 sources. Minimum to proceed: 300.**
+Count total Tier A + Tier B sources across all technologies and angles. **Target: 50-100 sources. Minimum to proceed: 30.**
 
-If total < 300:
-1. Log: "Minimum source gate: collected N sources — target 300-500. Running expansion pass."
-2. For each technology and angle with the fewest hits, run additional searches with new query variants
-3. Keep expanding until total >= 300 or query space is exhausted
-4. If still < 300: log "Source gate: collected N sources (below 300 target) — query space exhausted. Proceeding."
+If total < 30:
+1. Log: "Minimum source gate: collected N sources — target 50-100. Running expansion pass."
+2. For each technology and angle with the fewest hits, run one more search with a different query
+3. If still < 30 after one expansion: log "Source gate: N sources (below 30) — proceeding anyway."
 
-Do not proceed to Phase 3 until this gate passes or is explicitly logged as exhausted.
+Do not spawn additional agents in a loop trying to hit 300+. One expansion pass is enough.
 
 ---
 
-## Phase 3 — Fetch, Convert, Save, and Index
+## Phase 3 — Build URL Queue and Fetch Locally
 
-For each URL in the collected pool, in parallel batches of 10:
+No AI agents fetch pages. Pages are downloaded by a local Python script using `httpx` + `html2text`. This avoids burning tokens on content conversion.
 
-**Step 1 — Fetch.** Use `WebFetch` to retrieve the raw content.
+**Step 1 — Write the URL queue.**
 
-**Step 2 — Convert.** Clean and convert to indexed-ready markdown:
-- Strip HTML tags, navigation, ads, cookie banners, boilerplate — keep only substantive content
-- Convert to clean markdown: preserve headings, lists, tables, code blocks
-- For PDFs: extract text, preserve section structure, discard page numbers and repeated headers
-- For API docs: preserve method signatures, parameter tables, and example code
-- For GitHub READMEs and changelogs: preserve version sections and breaking-change markers
-- Normalize whitespace; remove duplicate blank lines
-
-**Step 3 — Save.** Write each converted document directly to `$KB_DIR/[tech]-[slug].md`.
-Do NOT create subdirectories — all files live at the top level of `knowledge/`.
-Include a source header at the top of each file:
-```markdown
-<!-- Source: [URL] | Tier: [A/B/C] | Tech: [technology] | Angle: [angle] | Fetched: [date] -->
-```
-
-Do NOT save URL lists as standalone files. URLs are recorded in `discovery-log.md` only.
-
-**Step 4 — Index each batch.** After each batch of 10:
+Write all collected URLs to `$KB_DIR/pending-urls.json`:
 ```json
-{
-  "sources": ["<KB_DIR>/[tech]-[file-1].md", "<KB_DIR>/[tech]-[file-2].md"],
-  "workspace_path": "<KB_DIR>"
-}
+[
+  {"url": "https://...", "topic": "playwright-python", "tier": "A", "title": "Page title"},
+  {"url": "https://...", "topic": "praw-reddit",       "tier": "A", "title": "..."},
+  ...
+]
 ```
 
-If a URL fails to fetch: log it, skip, continue.
+Prioritize: all Tier A first, then Tier B (cap at 40), then Tier C (cap at 5).
 
-### Discovery log
+**Step 2 — Run the local downloader.**
 
-Append to `$KB_DIR/discovery-log.md` for each technology:
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/fetch-docs.py" --project-path "PROJECT_PATH"
+```
 
+This reads `pending-urls.json` from the KB dir, downloads each URL with `httpx`, converts HTML to markdown with `html2text`, and saves the result as `$KB_DIR/[topic]-[slug].md`. Files that already exist are skipped.
+
+Check the output for any 403/404 failures and note them. No AI used — just HTTP.
+
+If the script is unavailable (missing deps), install them:
+```bash
+pip install httpx html2text
+```
+
+**Step 3 — Write the discovery log.**
+
+Append to `$KB_DIR/discovery-log.md`:
 ```markdown
 ## [YYYY-MM-DD] — [technology] [version]
 - Role: [framework|database|auth|API client|utility]
-- Angles run: official docs, security, performance, migration, integration, pitfalls
+- Angles searched: official docs, security, performance, migration, integration, pitfalls
 - Sources found: N (Tier A: N, Tier B: N)
-- Files saved: [tech]-[slug-1].md, [tech]-[slug-2].md, ...
+- Files fetched: N saved, N failed
 - Retried angles: [list or "none"]
 - No source found for: [list or "none"]
 ```
@@ -203,20 +200,18 @@ Append to `$KB_DIR/discovery-log.md` for each technology:
 
 ## Phase 4 — Final Index
 
-Call `POST http://127.0.0.1:8612/index` with:
-```json
-{
-  "project_path": "<PROJECT_PATH>",
-  "force": true
-}
+```bash
+curl -s --max-time 120 -X POST http://127.0.0.1:8612/index \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "PROJECT_PATH", "force": true}'
 ```
 
 Check response:
 - `files_indexed + files_unchanged` > 0: success
 - `files_failed` > 0: check `errors[]`, retry once; report any persistent failures
-- HTTP error: tell the user to run `/rag`, then retry
+- HTTP error or timeout: tell the user to run `/rag`, then retry
 
-After the index completes, run `/rag-health project` to confirm the index is healthy.
+After the index completes, confirm success by checking the `indexed_projects` entry in `GET /status`.
 
 ---
 

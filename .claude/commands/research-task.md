@@ -209,66 +209,62 @@ Wait for response before proceeding.
 
 ---
 
-## Phase 4: Fetch, Convert, Save, and Index
+## Phase 4: Build URL Queue and Fetch Locally
 
-For each URL in the approved list, in parallel batches of 10:
+No AI agents fetch pages. Pages are downloaded by a local Python script using `httpx` + `html2text`. This avoids burning tokens on content conversion.
 
-**Step 1 — Fetch.** Use `WebFetch` to retrieve the raw content.
+**Step 1 — Write the URL queue.**
 
-**Step 2 — Convert.** Clean and convert to indexed-ready markdown:
-- Strip HTML tags, navigation, ads, cookie banners, boilerplate — keep only substantive content
-- Convert to clean markdown: preserve headings, lists, tables, code blocks
-- For PDFs: extract text, preserve section structure, discard page numbers and repeated headers
-- For legislation/legal docs: preserve section numbering, definitions, and clause structure
-- For academic papers: preserve abstract, key findings, methodology notes, conclusions
-- Normalize whitespace; remove duplicate blank lines
-
-**Step 3 — Save.** Write the converted content to `$WORKSPACE_ABS/knowledge/[sanitized-title].md`.
-Files go directly in `knowledge/` — do NOT create subdirectories.
-Include a header at the top of each file:
-```markdown
-<!-- Source: [URL] | Tier: [A/B/C] | Domain: [domain] | Angle: [angle] | Fetched: [date] -->
-```
-
-Do NOT save URL lists as standalone files. URLs go in `discovery-log.md` only.
-
-**Step 4 — Index each batch.** After each batch of 10:
+Write all approved URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
 ```json
-{
-  "sources": ["<WORKSPACE_ABS>/knowledge/[file-1].md", "<WORKSPACE_ABS>/knowledge/[file-2].md"],
-  "workspace_path": "<WORKSPACE_ABS>"
-}
+[
+  {"url": "https://...", "topic": "entity-name", "tier": "A", "title": "Page title"},
+  ...
+]
 ```
 
-If a URL fails to fetch: log it, skip, continue. If more than 30% fail: warn the user and list the failed URLs.
+Prioritize: all Tier A first, then Tier B (cap at 40), then Tier C (cap at 5).
 
-### Discovery log
+**Step 2 — Run the local downloader.**
+
+Determine project path from the workspace registry (`state/workspaces.json`).
+
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/fetch-docs.py" \
+  --project-path "PROJECT_PATH" \
+  --queue "WORKSPACE_ABS/knowledge/pending-urls.json" \
+  --kb-dir "WORKSPACE_ABS/knowledge"
+```
+
+This downloads each URL with `httpx`, converts HTML to markdown with `html2text`, and saves to `$WORKSPACE_ABS/knowledge/`. Files that already exist are skipped.
+
+If the script is unavailable: `pip install httpx html2text`
+
+**Step 3 — Write the discovery log.**
 
 Append to `$WORKSPACE_ABS/discovery-log.md`:
-
 ```markdown
 ## [YYYY-MM-DD] — [entity]
 - Domain: [domain]
 - Angles run: [list]
 - Sources found: N (Tier A: N, Tier B: N)
-- Files saved: [file-1].md, [file-2].md, ...
+- Files fetched: N saved, N failed
 - Retried angles: [list or "none"]
 - No source found for: [list or "none"]
 ```
 
 `discovery-log.md` is NOT indexed — audit trail only.
 
+If more than 30% of URLs failed: warn the user and list the failed ones.
+
 ---
 
 ## Phase 5: Final Index
 
-Call `POST http://127.0.0.1:8612/index`:
-```json
-{
-  "project_path": "<PROJECT_PATH>",
-  "workspace_path": "<WORKSPACE_ABS>",
-  "force": true
-}
+```bash
+curl -s --max-time 120 -X POST http://127.0.0.1:8612/index \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "PROJECT_PATH", "workspace_path": "WORKSPACE_ABS", "force": true}'
 ```
 
 ---
