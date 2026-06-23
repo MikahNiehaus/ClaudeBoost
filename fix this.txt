@@ -1,6 +1,0 @@
-I get this and cluade will not run also fixing this should be first thing claude does UserPromptSubmit operation blocked by hook:
-  ["$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-location-injector.py"]: C:\Python312\python.exe: can't open
-  file 'C:\\prj\\ClaudeBoost\\scripts\\rag-location-injector.py': [Errno 2] No such file or directory
-
-
-  Original prompt: what did u just reseach?

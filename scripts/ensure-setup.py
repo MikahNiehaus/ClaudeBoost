@@ -28,12 +28,16 @@ def _needs_setup() -> bool:
     # Sentinel: setup was already triggered this session — don't spawn again
     if _SENTINEL.exists():
         return False
-    # Fast path: CLAUDEBOOST_HOME env present. Also check CLAUDEBOOST_PYTHON.
+    # Fast path: CLAUDEBOOST_HOME env present. Check both vars for staleness.
     if os.environ.get("CLAUDEBOOST_HOME"):
+        boost_home_val = os.environ["CLAUDEBOOST_HOME"]
+        # Stale CLAUDEBOOST_HOME: set but doesn't contain a valid ClaudeBoost install.
+        # Happens when settings.json was copied from another machine where ClaudeBoost
+        # lived at a different path — every hook command fails with "no such file".
+        if not (Path(boost_home_val) / "scripts" / "setup.py").exists():
+            return True
+        # Stale CLAUDEBOOST_PYTHON: path set but Python binary moved or deleted.
         py_path = os.environ.get("CLAUDEBOOST_PYTHON", "")
-        # If CLAUDEBOOST_PYTHON is set to a path that no longer exists on this
-        # machine (e.g. after copying settings.json from another machine), every
-        # hook command will fail. Re-run setup.py to fix CLAUDEBOOST_PYTHON.
         if py_path and not Path(py_path).exists():
             return True
         return False
@@ -46,6 +50,26 @@ def _needs_setup() -> bool:
     except (json.JSONDecodeError, OSError):
         pass
     return True
+
+
+def _find_fix_script() -> Path | None:
+    """Locate fix_hooks.py using the same search logic as _find_setup_script."""
+    candidates = []
+    home_file = Path.home() / ".claude" / "claudeboost-home.txt"
+    try:
+        boost_home = Path(home_file.read_text(encoding="utf-8").strip())
+        candidates.append(boost_home / "scripts" / "fix_hooks.py")
+    except OSError:
+        pass
+    here = Path(__file__).resolve().parent
+    candidates += [
+        here / "fix_hooks.py",
+        here.parent / "scripts" / "fix_hooks.py",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 
 def _find_setup_script() -> Path | None:
@@ -96,8 +120,35 @@ def main() -> int:
     except OSError:
         pass
 
+    # When CLAUDEBOOST_HOME is stale (points to old machine path), existing hooks
+    # reference dead script paths and block every prompt. Run fix_hooks.py first
+    # (synchronous, fast) to remove those stale entries before setup.py reinstalls
+    # the correct ones. Without this step, stale hooks survive the reinstall.
+    boost_home_val = os.environ.get("CLAUDEBOOST_HOME", "")
+    stale_home = bool(
+        boost_home_val
+        and not (Path(boost_home_val) / "scripts" / "setup.py").exists()
+    )
+    if stale_home:
+        fix_script = _find_fix_script()
+        if fix_script:
+            try:
+                subprocess.run(
+                    [sys.executable, str(fix_script)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except Exception:
+                pass  # best effort — setup.py will catch remaining issues
+
     print(json.dumps({
         "additionalContext": (
+            "CLAUDEBOOST AUTO-SETUP: settings.json has a stale ClaudeBoost path from another machine. "
+            "Removing stale hooks and reinstalling correct ones now. "
+            "Restart Claude Code once setup completes."
+            if stale_home else
             "CLAUDEBOOST AUTO-SETUP: CLAUDEBOOST_HOME is not configured on this machine. "
             "Running setup.py now in the background. "
             "Run /mcp in Claude Code once setup completes."
