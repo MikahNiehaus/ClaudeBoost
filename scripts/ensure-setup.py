@@ -25,11 +25,17 @@ _IS_WINDOWS = os.name == "nt"
 
 
 def _needs_setup() -> bool:
-    # Fast path: env var already injected by settings.json env block
-    if os.environ.get("CLAUDEBOOST_HOME"):
-        return False
     # Sentinel: setup was already triggered this session — don't spawn again
     if _SENTINEL.exists():
+        return False
+    # Fast path: CLAUDEBOOST_HOME env present. Also check CLAUDEBOOST_PYTHON.
+    if os.environ.get("CLAUDEBOOST_HOME"):
+        py_path = os.environ.get("CLAUDEBOOST_PYTHON", "")
+        # If CLAUDEBOOST_PYTHON is set to a path that no longer exists on this
+        # machine (e.g. after copying settings.json from another machine), every
+        # hook command will fail. Re-run setup.py to fix CLAUDEBOOST_PYTHON.
+        if py_path and not Path(py_path).exists():
+            return True
         return False
     # Slow path: settings.json exists but this session predates it being set
     settings_path = Path.home() / ".claude" / "settings.json"
