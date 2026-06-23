@@ -253,12 +253,14 @@ def _is_junction(path: Path) -> bool:
 # Settings.json: env + statusLine + hooks.
 # ---------------------------------------------------------------------------
 def _statusline_cmd() -> str:
-    """Build the status line command.
-
-    Both CLAUDEBOOST_PYTHON and CLAUDEBOOST_HOME are expanded at runtime from
-    the env block in settings.json — no machine-specific paths baked in.
-    """
-    return '"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
+    """Build the status line command with same fallback chain as _py_cmd."""
+    script = '"$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
+    return (
+        f'"$CLAUDEBOOST_PYTHON" {script}'
+        f' || python {script}'
+        f' || python3 {script}'
+        f' || py {script}'
+    )
 
 
 def _load_settings() -> dict:
@@ -276,11 +278,19 @@ def _load_settings() -> dict:
 def _py_cmd(script_name: str) -> str:
     """Hook command that invokes a ClaudeBoost script.
 
-    Uses $CLAUDEBOOST_PYTHON and $CLAUDEBOOST_HOME — both set in the settings.json
-    env block by update_settings(). No machine-specific paths baked in: works after
-    repo moves, Python upgrades, and fresh clones on any machine.
+    Uses $CLAUDEBOOST_PYTHON from the settings.json env block. Falls back to
+    python / python3 / py on PATH so hooks survive a machine move where
+    settings.json still has the old machine's Python path baked in.
+    The || chain is bash short-circuit: each fallback only fires if the
+    previous command returned non-zero (e.g. exit 127 = binary not found).
     """
-    return f'"$CLAUDEBOOST_PYTHON" "$CLAUDEBOOST_HOME/scripts/{script_name}"'
+    script = f'"$CLAUDEBOOST_HOME/scripts/{script_name}"'
+    return (
+        f'"$CLAUDEBOOST_PYTHON" {script}'
+        f' || python {script}'
+        f' || python3 {script}'
+        f' || py {script}'
+    )
 
 
 def _hook_command_stale(cmd: str) -> bool:
@@ -714,9 +724,14 @@ def _install_all_hooks(settings: dict) -> None:
     shutil.copy2(ensure_src, ensure_dst)
     _ok(f"ensure-setup.py copied to {ensure_dst}")
 
-    # $CLAUDEBOOST_PYTHON is set in the env block, so this stays portable across
-    # Python installs and repo locations. $HOME is stable on every platform.
-    ensure_cmd = '"$CLAUDEBOOST_PYTHON" "$HOME/.claude/ensure-setup.py"'
+    # Fallback chain ensures ensure-setup.py runs even when CLAUDEBOOST_PYTHON
+    # still points to the old machine's Python path after a machine move.
+    ensure_cmd = (
+        '"$CLAUDEBOOST_PYTHON" "$HOME/.claude/ensure-setup.py"'
+        ' || python "$HOME/.claude/ensure-setup.py"'
+        ' || python3 "$HOME/.claude/ensure-setup.py"'
+        ' || py "$HOME/.claude/ensure-setup.py"'
+    )
     _install_hook(settings, "UserPromptSubmit", {
         "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
