@@ -668,6 +668,7 @@ If no CDN intercept is possible and the CDN is confirmed permanently blocked in 
 |---|---|
 | Toggle/select/enum with N≤7 states | Generate ONE TC per state |
 | Boolean | Always 2 TCs |
+| **Conditional AC** | **Always 2 TCs — one for the true branch (condition met) and one for the false branch (condition NOT met). Applies whenever an AC uses "if", "when", "only when", "unless", or "only if". A TC that tests only one side is INCOMPLETE.** |
 | List/collection UI | Always 4 TCs: empty state, one item, 3-5 items, max/full |
 | Form validation | One TC per validation rule (not per field) — E2E only if the validation requires a server round-trip or cross-field dependency; client-only validation belongs in unit tests |
 | Same component with multiple instances | One UI consistency TC for the type |
@@ -701,6 +702,7 @@ If no CDN intercept is possible and the CDN is confirmed permanently blocked in 
 - Every **journey in flow-map.md** → at least one TC per decision point or observable outcome in that journey. These cannot be omitted or marked BLOCKED for difficulty.
 - Every **page in UI Pages in Scope** (from Phase 0g) that is part of a journey → covered by the journey's TCs; no extra per-page TCs needed unless the page has a form or action not covered by any journey.
 - Every **entity** discovered via RAG with CRUD routes → create + read-list + delete TCs (update if an edit route exists) — these map to the CRUD journeys.
+- Every **conditional AC** (containing "if", "when", "only when", "unless", "only if") → two TCs: one where the condition is MET (true branch) and one where it is NOT MET (false branch). Scan every AC for conditional language before finalizing plan.md. A plan that covers only the false branch of a conditional AC is incomplete and will be flagged by the evaluator.
 - If a discovered component has NO journey that exercises it: write it in a `## Gaps` section of plan-draft.md with a one-line justification. "It seemed unimportant" is not a valid justification.
 - BLOCKED `[B]` status is only valid for genuine external preconditions that CAN be removed with setup changes (e.g., "requires admin account not provisioned", "flag must be toggled"). Complexity or difficulty is never a valid reason.
 - UNVERIFIABLE `[U]` is distinct from BLOCKED. Use `[U]` for conditions that are permanently untestable in any available environment (e.g., CDN blocks localhost by design, Tableau Cloud rejects non-registered domains, live payment gateway required). Every UNVERIFIABLE TC MUST include: "Post-deploy: [who validates, when, and how]". **Before marking a TC UNVERIFIABLE, you MUST run the TC Blocker Recovery Protocol (defined in Phase 3). A TC marked UNVERIFIABLE without a documented resolution attempt is treated as BLOCKED by difficulty.**

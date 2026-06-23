@@ -572,6 +572,14 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py")}],
     }, sentinel="agent-spawn-gate.py", label="Task RAG/proposal gate (command-type)")
 
+    # --- PreToolUse: skill verify gate on Skill tool ---
+    # Blocks action skills (qa, workspace, explore, etc.) when needs-verification.json
+    # is pending. Companion to agent-spawn-gate — that gate only fires on Task spawns.
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Skill",
+        "hooks": [{"type": "command", "command": _py_cmd("skill-verify-gate.py")}],
+    }, sentinel="skill-verify-gate.py", label="Skill verify gate (command-type)")
+
     # --- PreToolUse: workspace boost gate (blocks mkdir workspace/* if /boost not run) ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Bash(mkdir*workspace*)",
