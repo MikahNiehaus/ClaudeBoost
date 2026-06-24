@@ -10,9 +10,17 @@ allowed-tools: Bash
 Before running, interpret the user's intent:
 - If `$ARGUMENTS` is empty or "list" → list mode (no arg to script)
 - If `$ARGUMENTS` is `off` → pass `off` to clear the active workspace
-- If `$ARGUMENTS` looks like a workspace ID or partial name (including natural language like "the dispute one") → extract the key search term and pass that single word/phrase as the argument
+- If `$ARGUMENTS` looks like a workspace ID or partial name (including natural language, slang, or phonetic variants) → extract the key search term and pass that single word/phrase as the argument
 
 For natural language like "set ws for the dispute one" or "switch to disputes", extract the meaningful identifier ("disputes") and pass only that to the script.
+
+Phonetic and slang variants must be normalized before passing to the script. Common examples:
+- "pie hole" → "pihole" (Pi-hole, the DNS blocker)
+- "pi hole" → "pihole"
+- "rust desk" → "rustdesk"
+- "space desk" → "spacedesk"
+
+When in doubt, collapse multi-word phrases that sound like a single compound tool or project name into one word.
 
 Run the workspace status script:
 

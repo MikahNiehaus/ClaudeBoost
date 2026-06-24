@@ -45,6 +45,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\"",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -74,6 +83,15 @@
             "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-primer.py\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/lt-precompact.py\"",
+            "timeout": 15
           }
         ]
       }
@@ -106,6 +124,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/auto-clear.py\"",
             "timeout": 10
           }
         ]

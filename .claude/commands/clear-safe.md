@@ -1,12 +1,11 @@
 ---
-description: Pre-flight verified context clear — saves workspace state before /clear so the next session can restore it
+description: Save workspace state, then launch a new terminal with claude ready to go — no manual steps needed
 ---
 
-# /clear-safe — Pre-flight verified context clear
+# /clear-safe — Safe context handoff
 
-Verifies workspace state is captured, shows exactly what survives the clear, and
-saves the active workspace so the next session restores only the relevant context.
-Does NOT run /clear itself — you confirm and type /clear.
+Saves workspace state, writes the restore flag, and opens a new terminal tab with
+claude already running and context injected automatically on the first message.
 
 ## Instructions
 
@@ -95,11 +94,12 @@ Write `$CLAUDEBOOST_HOME/state/handoff-latest.json` directly using the Write too
   "timestamp": "[current UTC ISO timestamp]",
   "trigger": "SessionEnd(clear)",
   "active_workspace": "[task-id]",
+  "handoff_message": "[extract the exact text from the 'Next Step' section of context.md — this is what the new session will see as its first directive, so make it specific and actionable]",
   "workspace_memo": "# Clear Handoff Memo\nSession: manual-clear-safe\nTime: [timestamp]\n\n## Active Workspaces\n### [task-id]\n[full content of context.md read in Step 2]\n\n## Recovery Instructions\nRead workspace/[task-id]/context.md for full task detail.\nContinue from the last documented next step."
 }
 ```
 
-Use the actual context.md content in `workspace_memo`. This is what `session-primer.py` injects after `/clear`.
+Use the actual context.md content in `workspace_memo`. The `handoff_message` field becomes a bold **HANDOFF TASK** block in the new session's injected context — it must be specific enough that the new Claude knows exactly what to do without reading anything else.
 
 Then write `$CLAUDEBOOST_HOME/state/clear-pending.json` with the current UTC timestamp:
 
@@ -123,14 +123,33 @@ For `session_name`: scan the current conversation for the most recent occurrence
 
 This flag is consumed by `auto-clear.py` (Stop hook) — in tmux, it injects `/clear` automatically and restores the session name. On Windows (no tmux), the hook is a no-op; type `/clear` manually.
 
-**Step 5 — Confirm and hand off**
+**Step 5 — Launch new terminal and hand off**
 
-Tell the user:
+Run this Bash command to open a new Windows Terminal tab in the current project directory
+with claude already running and "continue" pre-submitted as the first prompt, which triggers
+the UserPromptSubmit hook and injects the saved handoff context automatically:
 
-> Pre-flight complete. State saved to `state/handoff-latest.json`.
-> **In tmux:** `/clear` will fire automatically when I stop responding.
-> **Windows:** Type `/clear` manually — the restore will work automatically on your first message in the new session.
-> The next session will restore only **[task-id]** context.
+```bash
+python -c "
+import subprocess, os, sys, json, time
+from pathlib import Path
+home = Path(os.environ['CLAUDEBOOST_HOME'])
+cwd = os.getcwd()
+if sys.platform == 'win32':
+    subprocess.Popen(['wt.exe', '-w', '-1', 'new-tab', '-d', cwd, 'cmd.exe', '/k', 'claude', 'continue'], creationflags=512, start_new_session=True)
+    print('New terminal opened in', cwd)
+    (home / 'state' / 'lt-terminal-signal.json').write_text(json.dumps({'cwd': cwd, 'timestamp': time.time()}), encoding='utf-8')
+    print('Kill signal written — this session will close after responding')
+else:
+    print('Open a new terminal in', cwd, 'and run: claude')
+"
+```
 
-If the user says anything other than confirming (asks a question, requests a change):
-answer them and do NOT proceed — the auto-clear flag has a 5-minute expiry, so if they ask something first, write a fresh flag before finishing your final response.
+The `lt-terminal-signal.json` is picked up by `auto-clear.py` (Stop hook) which kills this Claude process after the response finishes — so this session closes automatically without any extra steps.
+
+Then tell the user:
+
+> Done. New terminal is open with context already loaded. This session is closing now.
+
+If the user asks something before this step runs: answer them first, then re-write `clear-pending.json`
+with a fresh timestamp before launching the terminal (the flag has a 10-minute window).

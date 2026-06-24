@@ -134,6 +134,9 @@ def _find_claude_pid_windows() -> int | None:
 
 
 def _get_instance_id() -> str:
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        return f"session-{session_id}"
     node_pid = _find_claude_pid_windows()
     if node_pid:
         return f"node-{node_pid}"
@@ -600,17 +603,45 @@ def _consume_clear_pending(home: Path) -> str:
             next_section = rest.find("\n### ")
             workspace_memo = rest[:next_section].strip() if next_section != -1 else rest.strip()
 
+    # Restore the ws-instance binding for this new session so the status bar
+    # and workspace dashboard pick up the right workspace automatically.
+    ws_restored_note = ""
+    if active_ws:
+        try:
+            reg_path = home / "state" / "workspaces.json"
+            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+            if active_ws in reg:
+                cwd = os.getcwd().replace("\\", "/").rstrip("/")
+                instance_id = _get_instance_id()
+                inst_dir = home / "state" / "ws-instance"
+                inst_dir.mkdir(parents=True, exist_ok=True)
+                inst_path = inst_dir / f"{instance_id}.json"
+                try:
+                    existing = json.loads(inst_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+                existing[cwd] = active_ws
+                inst_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+                ws_restored_note = f"\nWorkspace restored: {active_ws} (set automatically from handoff)"
+        except Exception:
+            pass
+
+    handoff_msg = handoff.get("handoff_message", "").strip()
+
     return (
         "POST-CLEAR CONTEXT RESTORATION\n"
         "===============================\n\n"
-        "You just returned from a /clear. Below is your saved working state "
-        "(written by /clear-safe immediately before the clear).\n\n"
+        "You just returned from a /clear or a Low Token Mode terminal switch. "
+        "Below is your saved working state.\n\n"
         + workspace_memo
+        + (f"\n\nHANDOFF TASK:\n{handoff_msg}" if handoff_msg else "")
+        + ws_restored_note
         + "\n\nRESUME INSTRUCTIONS:\n"
         "- Read workspace context.md files above for full detail\n"
         "- Continue from the last documented next step\n"
         "- Keep workspace context.md files updated as you work\n"
         "- If the user gave you a task before the clear, pick it back up\n"
+        "- If there is a HANDOFF TASK above, start on it immediately\n"
     )
 
 
