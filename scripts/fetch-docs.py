@@ -106,6 +106,7 @@ def main():
     parser.add_argument("--queue", help="Path to JSON queue file (default: {kb_dir}/pending-urls.json)")
     parser.add_argument("--kb-dir", help="KB directory (default: {project_path}/.claudeboost/knowledge/)")
     parser.add_argument("--date", default="", help="Fetch date string to embed in file headers")
+    parser.add_argument("--batch-size", type=int, default=30, help="Number of URLs to fetch before reporting progress (default: 30)")
     args = parser.parse_args()
 
     project = pathlib.Path(args.project_path)
@@ -125,11 +126,14 @@ def main():
 
     fetched_date = args.date or time.strftime("%Y-%m-%d")
     ok, fail, skip = 0, 0, 0
+    batch_size = args.batch_size
 
-    for item in urls:
+    print(f"Fetching {len(urls)} URLs (batch size: {batch_size})...\n")
+
+    for idx, item in enumerate(urls):
         url = item.get("url", "")
         topic = item.get("topic", "misc")
-        print(f"\n[{topic}] {url}")
+        print(f"[{idx+1}/{len(urls)}] [{topic}] {url}")
         result = fetch_one(item, kb_dir, fetched_date)
         if result:
             filename = kb_dir / make_slug(url, topic)
@@ -139,6 +143,9 @@ def main():
                 skip += 1
         else:
             fail += 1
+
+        if (idx + 1) % batch_size == 0:
+            print(f"\n  Progress: {ok} saved, {fail} failed, {skip} skipped (total: {idx+1}/{len(urls)})\n")
 
     print(f"\n{'=' * 60}")
     print(f"Done: {ok} saved, {skip} skipped (already existed), {fail} failed")

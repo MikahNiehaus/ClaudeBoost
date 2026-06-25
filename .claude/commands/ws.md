@@ -34,6 +34,14 @@ Display the output to the user exactly as printed.
 local folder names from `./workspace/` in the current directory. If the match is
 ambiguous, it lists what matched. Pass `off` to clear the active workspace.
 
+**After a successful switch:** If the script output says "Switched to:", read the
+`context.md` file for that workspace and summarize the current status and next step
+for the user. The path is either:
+- `./workspace/<workspace-id>/context.md` (project-local), or
+- `${CLAUDEBOOST_HOME}/workspace/<workspace-id>/context.md` (global)
+
+Check the project-local path first. If neither exists, just tell the user no context file was found yet.
+
 **Listing:** When no argument is given, shows all workspaces for the current project,
 including local folders found in `./workspace/` that aren't in the global registry
 (marked with `(local)`). ✎ marks the most recently edited.
