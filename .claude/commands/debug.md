@@ -355,7 +355,7 @@ xUnit 2.x DLLs are class libraries — `start_debugging` on the DLL exits immedi
 
 **Step 1 — Run the helper script:**
 ```bash
-python "C:/Development/ClaudeBoost/scripts/debug-dotnet-tests.py" \
+python "$CLAUDEBOOST_HOME/scripts/debug-dotnet-tests.py" \
   --project-path "<path-to-test.csproj>" \
   --filter "FullyQualifiedName~<TestMethodName>" \
   [--no-build]

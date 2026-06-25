@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 25 specialist agents (architect, security, performance, test, debug, and more), 106 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 27 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 23 specialist agents (architect, security, performance, test, debug, and more), 108 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 35 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -14,7 +14,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 ## 2. Getting started
 
-Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 27 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
+Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 35 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
 Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 
@@ -52,7 +52,7 @@ Most slash commands are used internally by agents — you rarely call them direc
 |---------|---------------|
 | `/boost` | Start of every session |
 | `/workspace` | Any complex task, multi-file feature, or ticket |
-| `/review` | Quick A-F grade; add `--deep` for the full 15-pass parallel review |
+| `/xray` | Quick A-F grade; add `--deep` for the full 16-pass parallel review |
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
 | `/qa` | Full QA session — browser testing with screenshot evidence (auto-detects server), or general code/artifact QA with `--code` / file path / workspace ID. Both modes write a report with explicit coverage gaps. |
@@ -67,8 +67,11 @@ Everything else in the tables below is available, but most of it runs automatica
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `/boost` | Connects RAG, primes the session, and restores workspace context automatically if you ran `/clear-safe` in the last session. Run this first every time. | `/boost` |
+| `/rag` | Starts or reconnects the RAG server mid-session. Use this if RAG disconnects or if you skipped `/boost`. | `/rag` |
+| `/rag-health [scope]` | Detailed health check on a specific RAG collection. Every check produces PASS, WARN, or FAIL. Scope options: `project`, `knowledge`, `agents`, `task`, `all`. | `/rag-health project` |
 | `/clear-safe` | Saves current workspace context before you clear. Prevents losing mid-task state. | `/clear-safe` |
 | `/handoff` | Saves session state and prepares for a fresh context. Good for long-running tasks that need a clean start. | `/handoff` |
+| `/low-token [on\|off\|status]` | Toggles Low Token Mode. When on: the status bar shows context pressure, and at compaction a new terminal opens automatically in the same directory so the new session picks up where the old one left off. | `/low-token on` |
 
 ### Planning & Workspace
 
@@ -77,23 +80,33 @@ Everything else in the tables below is available, but most of it runs automatica
 | `/workspace` | Creates a `workspace/[task-id]/` folder and produces a step-by-step implementation plan with agent routing. | `/workspace add OAuth login to the API` |
 | `/explore` | Full ticket deep-dive: reads the ticket, explores the codebase, and builds an implementation plan. | `/explore` (paste ticket first) |
 | `/create-prd` | Generates a PRD and task checklist for large features or new subsystems (>15 source files or a new subsystem). | `/create-prd new notifications system` |
+| `/ws [id]` | Shows all workspaces for the current project with status and last-edited time. Pass a workspace ID or partial name to switch the active workspace. Pass `off` to clear the active workspace. | `/ws` or `/ws add-auth` |
+| `/graph [task-id]` | Builds a "Files in Scope" map by running both vector and graph RAG seeded from ticket entities. Vector search finds semantically similar files; graph search finds structural neighbors. Use at task start to get a navigation map before agents begin. | `/graph add-auth-2026-06-01` |
+| `/research-project [path] [urls]` | Reads the project's dependency files, discovers the full tech stack, and builds a deep indexed knowledge base for every technology found. Agents can then search through hundreds of authoritative docs instead of guessing. Run once at project start, then again after major tech additions. | `/research-project` or `/research-project /path/to/app https://docs.example.com` |
 
 
 ### Code Quality
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/review` | Quick A-F grade by default. Add `--deep` for the full 15-pass parallel review: logic, security, performance, tests, patterns, and more. Supports `--staged`, `--branch`, `--pr <url>`. | `/review --deep` |
+| `/xray` | Quick A-F grade by default. Add `--deep` for the full 16-pass parallel review: logic, security, performance, tests, patterns, and more. Supports `--staged`, `--branch`, `--pr <url>`. | `/xray --deep` |
 | `/security-review` | Security-focused review of pending branch changes, or a full project audit with `--full`. | `/security-review --full` |
 | `/audit` | Breaks input into dimensions, spawns parallel auditors, synthesizes a verdict. Good for reviewing docs, architecture, or requirements. | `/audit` |
 | `/self-improve` | Runs ClaudeBoost's own self-improvement audit — finds gaps in the config, agents, or knowledge files. | `/self-improve` |
 | `/simplify` | Reviews recent code changes for reuse opportunities, quality issues, and efficiency. | `/simplify` |
+
+### Debugging
+
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `/debug [target]` | Full debugging session in one command. Pass an error message, a `file:line`, or describe what's broken. It classifies the mode automatically: static analysis for logic issues, live step-through with mcp-debugger for runtime failures. Supports Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust. Also handles test-runner attach workflows (xUnit, pytest, Jest, JUnit). Outputs a Bug Analysis Report. | `/debug "NullReferenceException in OrdersController"` or `/debug app.py:42` |
 
 ### Testing
 
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `/qa` | Dual-mode QA session. **Browser mode** (default): auto-detects or starts the dev server, builds a full app inventory via RAG + graph traversal, writes a risk-prioritized test plan, and executes browser tests with screenshot evidence. **General mode**: charter-based code/artifact QA — runs the existing test suite, writes edge case tests, and produces a session report with findings. | `/qa` or `/qa http://localhost:3000 auth` or `/qa --code` or `/qa scripts/my-hook.py` |
+| `/test-hooks` | Runs the ClaudeBoost hook test suite to verify all hook scripts behave correctly. Run this after any hook change, after setup, or any time you pull ClaudeBoost updates that touch scripts. | `/test-hooks` |
 
 ### RAG & Indexing
 
@@ -117,6 +130,7 @@ Everything else in the tables below is available, but most of it runs automatica
 | `/done` | Submits completed work to the merge queue. | `/done` |
 | `/pr-description` | Generates a PR title and description following project conventions. | `/pr-description` |
 | `/changes` | Opens an interactive explorer showing what changed and why. | `/changes` |
+| `/ticket-handoff [ticket-id] [handoff-to]` | Generates a filled handoff document using the team Confluence template and copies it to the clipboard as rich HTML so it pastes correctly into Confluence. Includes current status, branch, next steps, and outstanding blockers. | `/ticket-handoff ASC-1175 sarah` |
 
 ### Configuration
 
@@ -125,13 +139,18 @@ Everything else in the tables below is available, but most of it runs automatica
 | `/auto` | Switches to AUTO mode — Claude acts without consulting on architectural decisions. | `/auto prototyping a new feature` |
 | `/consult` | Returns to CONSULT mode (the default). Claude will propose before acting on architectural changes. | `/consult` |
 | `/speak` | Toggles text-to-speech on or off. | `/speak on` |
+| `/bash-guard [on\|off\|status]` | Toggles the Bash safety guard. The guard blocks command shapes that trip Claude Code's permission prompts (compound `cd &&`, multiline `python -c`, heredocs, bare `$VAR` expansion). Turn it off when those blocks get in the way; turn it back on to restore the safety net. | `/bash-guard off` |
+| `/better-permissions [--check\|--install]` | Audits all ClaudeBoost hooks in `~/.claude/settings.json` and installs any that are missing. Default (no flag): audit and install. `--check`: report only, no changes. Run after pulling updates or if hooks seem to not be firing. | `/better-permissions --check` |
+| `/edit-state [key] [value]` | Shows all ClaudeBoost state values (mode, RAG enforcement, TTS, active workspace, intent override). Pass a key and value to update one. Useful for debugging unexpected behavior or manually overriding state. | `/edit-state` or `/edit-state mode auto` |
+| `/telemetry` | Shows per-session telemetry stats for the active workspace: tool calls by type, RAG search calls, DB breakdown, and latency percentiles. Useful for understanding what Claude spent time on during a session. | `/telemetry` |
+| `/uninstall [--purge] [--dry-run]` | Reverses everything `/setup` installed: hooks, env vars, statusLine, symlinks, and the RAG server MCP registration. Always shows a dry-run preview first and asks for confirmation. Add `--purge` to also pip-uninstall the RAG server, delete indexes, and strip PATH edits. | `/uninstall --dry-run` |
 
 
 ---
 
 ## 5. Agents
 
-All 25 agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
+All 23 specialist agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
 
 | Agent | What it does | Best for | Model |
 |-------|-------------|----------|-------|
@@ -151,7 +170,6 @@ All 25 agents are spawned automatically based on task type. You can request a sp
 | observability-agent | Logging strategy, tracing, metrics setup | Adding structured logging to a service or setting up distributed tracing | Sonnet |
 | docs-agent | Documentation, README, API docs | Writing a README, API reference, or inline documentation | Sonnet |
 | research-agent | Web research, library comparison, investigation | Comparing two libraries before picking one | Sonnet |
-| research-rag-agent | Builds a persistent research RAG from URLs and PDFs | Deep research into an external API's docs before implementing | Sonnet |
 | explore-agent | Codebase discovery, file mapping, dependency tracing | Mapping an unfamiliar codebase before starting work | Sonnet |
 | workflow-agent | Multi-step task orchestration | Coordinating a sequence of dependent sub-tasks | Sonnet |
 | compliance-agent | Standards compliance, rule enforcement | Verifying a feature against regulatory or internal standards | Sonnet |
@@ -321,14 +339,14 @@ For simple bugs where the cause is obvious, Claude handles it directly without s
 ### 2. Review code or a PR
 
 ```
-/review
-/review --deep
-/review --staged
-/review --branch feature-branch
-/review --pr https://github.com/org/repo/pull/42
+/xray
+/xray --deep
+/xray --staged
+/xray --branch feature-branch
+/xray --pr https://github.com/org/repo/pull/42
 ```
 
-`/review` gives you a quick A-F grade by default. Add `--deep` for the full 15-pass parallel review: 14 agents run in parallel batches, each covering a specific dimension — simplicity, dead code, debug leftovers, project patterns, common-pattern violations, fresh eyes, ticket alignment, spec precision, schema migrations, platform footguns, banned dependencies, and test coverage/logging. A 15th evaluator agent (Opus) classifies every finding: BLOCKER, WARNING, NIT, or FALSE POSITIVE.
+`/xray` gives you a quick A-F grade by default. Add `--deep` for the full 16-pass parallel review: 15 agents run in parallel batches, each covering a specific dimension — simplicity, dead code, debug leftovers, project patterns, common-pattern violations, fresh eyes, ticket alignment, spec precision, schema migrations, platform footguns, banned dependencies, and test coverage/logging. A 16th evaluator agent (Opus) classifies every finding: BLOCKER, WARNING, NIT, or FALSE POSITIVE.
 
 **Grade scale:**
 - A: no blockers, no warnings
@@ -561,9 +579,9 @@ You will not see most of these. They run silently unless there is a problem, in 
 
 ## Appendix: Knowledge base coverage
 
-The 106 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
+The 108 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
 
-**Domain bases (52 files)** cover: api-design, architecture, branching-strategy, code-critique, code-exploration, coding-standards, consult-mode, context-engineering, database, debugging, devops, documentation, e2e-testing, error-handling, human-voice, memory-management, model-selection, observability, performance, playwright, pr-review, refactoring, research, security, testing, ticket-understanding, tool-design, ui-implementation, verify-gate, workflow, and more.
+**Domain bases (54 files)** cover: api-design, architecture, branching-strategy, code-critique, code-exploration, coding-standards, consult-mode, context-engineering, database, debugging, devops, documentation, e2e-testing, error-handling, human-voice, memory-management, model-selection, observability, performance, playwright, pr-review, refactoring, research, security, testing, ticket-understanding, tool-design, ui-implementation, verify-gate, workflow, and more.
 
 **Language guides (21 files, `lang-*.xml`)** cover C#, Go, Java, JavaScript, Kotlin, Python, Rust, Swift, TypeScript, and others — each with idioms, common pitfalls, and language-specific standards. These load when the language appears in the task description or in the files being edited.
 

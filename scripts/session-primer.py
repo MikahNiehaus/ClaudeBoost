@@ -255,6 +255,19 @@ def _find_best_workspace(home: Path, user_message: str = '') -> tuple:
     except Exception:
         pass
 
+    # Fallback: active-workspace.json (written by /clear-safe and older setups)
+    try:
+        data = json.loads((home / 'state' / 'active-workspace.json').read_text(encoding='utf-8'))
+        ws_id = data.get('workspace', '')
+        if ws_id and isinstance(ws_id, str):
+            entry = reg.get(ws_id, {})
+            ws_path = entry.get('workspace_path', '')
+            project_path = entry.get('project_path', '')
+            if ws_path:
+                return ws_id, ws_path, project_path, []
+    except Exception:
+        pass
+
     cutoff = datetime.now(timezone.utc).timestamp() - 48 * 3600
     user_tokens = _tokenize(user_message) if user_message else set()
 

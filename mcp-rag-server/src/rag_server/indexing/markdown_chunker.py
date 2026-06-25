@@ -19,22 +19,25 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def chunk_markdown(
+def chunk_markdown_text(
     text: str,
-    source_file: str,
-    max_tokens: int = 500,
-    min_tokens: int = 50,
+    source_id: str,
+    max_tokens: int = 512,
+    min_tokens: int = 40,
     chunk_overlap: int = 0,
 ) -> list[RawChunk]:
-    """Split markdown into chunks based on section headers.
+    """Split a markdown string into chunks at heading boundaries.
 
-    Strategy:
-    - Split on ## and ### headers
-    - Target 200-500 tokens per chunk
-    - If a section exceeds max_tokens, split at paragraph boundaries
-    - Merge very small sections with the next section
-    - chunk_overlap carries the last paragraph of each split chunk into the next,
-      so concepts at chunk boundaries don't get lost entirely.
+    Shared implementation used by both chunk_markdown (local files) and
+    url_chunker (HTML pages converted to markdown). Splits on H1, H2, and H3;
+    overflows to paragraph splits when a section is too large.
+
+    Args:
+        text: Markdown text to chunk.
+        source_id: File path or URL — for logging only; not stored in chunks.
+        max_tokens: Approximate max tokens per chunk (4 chars per token).
+        min_tokens: Drop chunks below this size as noise.
+        chunk_overlap: If > 0, carry the last paragraph of each chunk into the next.
     """
     lines = text.split("\n")
     sections = _split_into_sections(lines)
@@ -44,7 +47,7 @@ def chunk_markdown(
         section_chunks = _process_section(section, max_tokens, min_tokens, chunk_overlap)
         chunks.extend(section_chunks)
 
-    # Merge trailing small chunks
+    # Merge trailing small chunks into the previous one
     if len(chunks) > 1 and chunks[-1].token_count_approx < min_tokens:
         last = chunks.pop()
         chunks[-1] = RawChunk(
@@ -56,6 +59,20 @@ def chunk_markdown(
         )
 
     return chunks
+
+
+def chunk_markdown(
+    text: str,
+    source_file: str,
+    max_tokens: int = 500,
+    min_tokens: int = 50,
+    chunk_overlap: int = 0,
+) -> list[RawChunk]:
+    """Split a local markdown file into chunks based on section headers.
+
+    Delegates to chunk_markdown_text with local-file defaults.
+    """
+    return chunk_markdown_text(text, source_file, max_tokens, min_tokens, chunk_overlap)
 
 
 @dataclass
@@ -74,7 +91,7 @@ def _split_into_sections(lines: list[str]) -> list[_Section]:
     current_start = 1  # 1-indexed
 
     for i, line in enumerate(lines):
-        if re.match(r"^#{2,3}\s+", line):
+        if re.match(r"^#{1,3}\s+", line):
             # Save previous section
             if current_lines or sections == []:
                 content = "\n".join(current_lines).strip()
@@ -85,7 +102,7 @@ def _split_into_sections(lines: list[str]) -> list[_Section]:
                         line_start=current_start,
                         line_end=i,  # line before this header
                     ))
-            current_heading = re.sub(r"^#{2,3}\s+", "", line).strip()
+            current_heading = re.sub(r"^#{1,3}\s+", "", line).strip()
             current_lines = []
             current_start = i + 1  # 1-indexed
         else:

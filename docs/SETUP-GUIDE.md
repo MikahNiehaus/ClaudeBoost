@@ -42,7 +42,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 27 slash commands | `~/.claude/commands/` |
+| 4 | Links 35 slash commands | `~/.claude/commands/` |
 | 5 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
 The installer output should show all steps completing:
@@ -71,9 +71,9 @@ GET http://127.0.0.1:8612/status
 Should return `{"status":"ready"}` with collection chunk counts.
 
 That's it. Every Claude Code session now has:
-- Semantic search over 106 knowledge files (52 domain, 21 language, 33 framework) and 25 agent XML files
+- Semantic search over 108 knowledge files (54 domain, 21 language, 33 framework) and 24 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 27 slash commands for task management
+- 35 slash commands for task management
 
 ### How RAG works after install
 
@@ -86,7 +86,7 @@ The RAG MCP server starts automatically when Claude Code opens any project.
 ### Re-indexing manually
 
 If you need to force a full re-index:
-- From Claude Code: call `rag_index` with `force: true`
+- From Claude Code: `POST http://127.0.0.1:8612/index` with `{"force": true}`
 - From terminal: re-run `install.bat` (rebuilds the index from scratch)
 
 Only changed files get re-indexed normally (incremental via SHA-256 hash comparison).
@@ -95,8 +95,8 @@ Only changed files get re-indexed normally (incremental via SHA-256 hash compari
 
 | Scope | Source files | What's in them |
 |-------|------------|----------------|
-| knowledge | `knowledge/*.xml` (106 files: 52 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
-| agents | `agents/*.xml` (25 files) | Agent definitions with capabilities, guidelines, output formats |
+| knowledge | `knowledge/*.xml` (108 files: 54 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
+| agents | `agents/*.xml` (24 files) | Agent definitions with capabilities, guidelines, output formats |
 
 ## Verification Checklist
 
@@ -112,6 +112,6 @@ cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
 As of 2026-06-04:
 - **Python**: 3.11+
 - **Claude Code**: v2.1.88
-- **Model**: Claude Opus 4.8 (1M context)
-- **sentence-transformers**: 3.0+ (all-MiniLM-L6-v2, 384 dimensions)
+- **Model**: claude-opus-4-6
+- **sentence-transformers**: 3.0+ (BAAI/bge-base-en-v1.5, 768 dimensions)
 - **ChromaDB**: 0.5+ (embedded SQLite mode)

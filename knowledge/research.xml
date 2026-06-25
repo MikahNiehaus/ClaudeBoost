@@ -96,6 +96,27 @@
   <section name="Full Citations">Complete list with URLs</section>
 </report-structure>
 
+<technology-research>
+  <description>
+    For researching specific technologies, libraries, or frameworks, use the structured
+    approach in /research-task and /research-project instead of open-ended WebSearch.
+    The structured approach is faster, cheaper, and more consistent.
+  </description>
+  <preferred-order>
+    <step order="1">Source map — knowledge/research-source-map.xml has pre-verified canonical
+    URLs for 80+ technologies. Check it before searching the web.</step>
+    <step order="2">Context7 — for libraries with a context7-id, call Context7 before WebSearch.
+    Returns current official docs with no fetch cost.</step>
+    <step order="3">WebSearch smart angles — 3 angles per entity based on tech role, 1 phrasing
+    each. Target 15-20 sources total. Tier C (medium, blogs) excluded entirely.</step>
+  </preferred-order>
+  <when-to-use-open-research>
+    Use the general research methodology in this file for: compliance/legal questions,
+    market research, academic papers, architectural decisions without a specific library,
+    or anything not covered by the source map.
+  </when-to-use-open-research>
+</technology-research>
+
 <common-failures>
   <category name="Search">
     <failure problem="Overly broad results" cause="Generic query" fix="Use specific terms + context"/>

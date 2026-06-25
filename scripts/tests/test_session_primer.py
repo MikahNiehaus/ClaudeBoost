@@ -633,6 +633,10 @@ class TestActiveWorkspaceReminderWithRagStatus:
             }
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-codebase", "workspace_path": str(ws), "project_path": str(tmp_path)}),
+            encoding="utf-8",
+        )
 
         proj_norm = str(tmp_path).replace("\\", "/")
         rag_status = {
@@ -658,6 +662,10 @@ class TestActiveWorkspaceReminderWithRagStatus:
             }
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-notindexed", "workspace_path": str(ws), "project_path": str(tmp_path)}),
+            encoding="utf-8",
+        )
 
         rag_status = {"indexed_projects": []}
 
@@ -682,6 +690,10 @@ class TestActiveWorkspaceReminderWithRagStatus:
             }
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-kb", "workspace_path": str(ws), "project_path": str(tmp_path)}),
+            encoding="utf-8",
+        )
 
         mod = _load_session_primer()
         result = mod._active_workspace_reminder(boost_home, None, "fix the kb task")
@@ -763,6 +775,10 @@ class TestActiveWorkspaceReminderPermissionError:
             }
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
+        (boost_home / "state" / "active-workspace.json").write_text(
+            json.dumps({"workspace": "task-perm", "workspace_path": str(ws), "project_path": str(tmp_path)}),
+            encoding="utf-8",
+        )
 
         mod = _load_session_primer()
 

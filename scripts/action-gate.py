@@ -142,6 +142,7 @@ def main() -> int:
         f"    Project KB      (indexed research, search only via POST /search — if needed but not indexed, run /research-task first): [searched | not needed — why | not indexed — running /research-task]\n"
         f"    Codebase        (existing implementations/patterns to follow): [searched | not needed — why]\n"
         f"    Workspace KB    (prior session research for this task): [searched | not needed — why | does not exist]\n"
+        f"  research: [workspace KB covers this | /research-task needed first | not applicable — no new tech]\n"
         f"  impact : [what will change and what it might affect]\n"
         f"  safe   : [yes — why it is safe, or no — what the risk is]\n"
         f"  aligned: [quote or describe the user message that authorized this — never assume consent]\n\n"

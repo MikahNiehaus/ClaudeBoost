@@ -441,6 +441,40 @@ def build_context(
             logger.error("Tier 4: codebase search failed for project %r: %s", project_path, e)
             tier_errors.append({"tier": "codebase", "error": str(e)})
 
+    # Tier 4d: Project docs (README, CONTRIBUTING, docs/ markdown)
+    # Runs independently of whether a codebase index exists. Capped at 300 tokens
+    # so it doesn't crowd out code results.
+    if project_path:
+        _docs_chroma = Path(project_path).resolve() / ".rag-index" / "docs" / "chroma"
+        if _docs_chroma.exists():
+            _ds = None
+            try:
+                from rag_server.core.store import ChromaStore as _DocsStore
+                _ds = _DocsStore(persist_dir=str(_docs_chroma))
+                if _ds.collection_exists("project-docs") and _ds.count("project-docs") > 0:
+                    _doc_emb = _pre_embeddings.get(task_description) or embedder.embed_query(task_description)
+                    _doc_results = _ds.search("project-docs", _doc_emb, limit=5, min_score=0.40)
+                    _doc_budget = 300
+                    _doc_tokens = 0
+                    for _dr in _doc_results:
+                        _dt = _dr.metadata.get("token_count", estimate_tokens(_dr.content))
+                        if _doc_tokens > 0 and _doc_tokens + _dt > _doc_budget:
+                            break
+                        tier4_chunks.append({
+                            "source": _dr.metadata.get("source_file", ""),
+                            "section": _dr.metadata.get("section", ""),
+                            "content": _dr.content,
+                            "score": _dr.score,
+                            "tier": "project_docs",
+                        })
+                        _doc_tokens += _dt
+                        tier4_tokens += _dt
+            except Exception as _e4d:
+                logger.debug("Tier 4d: project docs search failed: %s", _e4d)
+            finally:
+                if _ds is not None:
+                    _ds.close()
+
     all_knowledge = tier1_chunks + tier2_chunks + tier3_chunks + tier3c_chunks + tier4_chunks
     total_tokens = agent_tokens + tier1_tokens + tier2_tokens + tier3_tokens + tier3c_tokens + tier4_tokens
 

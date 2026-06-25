@@ -115,6 +115,9 @@ def rag_search(
     if scope == "research" and not workspace_path:
         return {"error": "workspace_path is required when scope='research'"}
 
+    if scope == "project-docs" and not project_path:
+        return {"error": "project_path is required when scope='project-docs'"}
+
     start = time.time()
 
     # Guard: if the model hasn't finished loading yet, kick off a warmup thread
@@ -176,6 +179,37 @@ def rag_search(
                 warnings.append(f"Research search failed: {e}")
         else:
             warnings.append("Research collection is empty — run rag_index_research first.")
+
+    # project-docs search uses a per-project docs store
+    elif scope == "project-docs":
+        from rag_server.core.store import ChromaStore
+
+        docs_chroma = Path(project_path).resolve() / ".rag-index" / "docs" / "chroma"
+        if not docs_chroma.exists():
+            return {
+                "results": [],
+                "total_found": 0,
+                "query_time_ms": 0,
+                "error": "Docs index not found. Run POST /index_docs first.",
+            }
+
+        docs_store = ChromaStore(persist_dir=str(docs_chroma))
+        docs_store.create_collection("project-docs")
+        if docs_store.count("project-docs") > 0:
+            try:
+                results = docs_store.search(
+                    collection="project-docs",
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    min_score=min_score,
+                )
+                all_results.extend(results)
+            except Exception as e:
+                logger.error("Docs store search failed: %s", e)
+                warnings.append(f"Docs search failed: {e}")
+        else:
+            warnings.append("Docs collection is empty. Run POST /index_docs first.")
+        docs_store.close()
 
     # Codebase search uses a separate per-project store
     elif scope == "codebase":

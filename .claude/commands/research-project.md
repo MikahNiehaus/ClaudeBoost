@@ -126,49 +126,110 @@ Cap at **6 technologies per run**. If the project has more, note which will be c
 
 ---
 
-## Phase 2 — Multi-Angle Web Research (Parallel Agents)
+## Phase 2 — Research (Source Map + Context7 + Smart Angles)
 
-Spawn **one research agent per technology in parallel** — all run concurrently. Each agent is responsible for one technology and all its search angles.
+Run sequentially per technology — no parallel agents for search.
 
-For each technology, run up to 6 search angles with multiple query phrasings per angle:
+### Step 1: Classify tech role
 
-1. **Official docs** — `[tech] [version] official documentation reference`, `[tech] [version] API reference site:docs.[domain].com`, `[tech] [version] guide tutorial site:github.com`
-2. **Security** — `[tech] security vulnerabilities CVE OWASP`, `[tech] [version] CVE NVD`, `[tech] security best practices NIST`
-3. **Performance** — `[tech] performance optimization best practices scaling`, `[tech] [version] benchmark profiling`, `[tech] performance tuning production`
-4. **Migration/upgrade** — `[tech] [version] migration guide upgrade breaking changes`, `[tech] changelog site:github.com`, `[tech] release notes`
-5. **Integration patterns** — `[tech] integration patterns examples production usage`, `[tech] [version] tutorial example site:github.com`, `[tech] cookbook patterns`
-6. **Pitfalls** — `[tech] common mistakes pitfalls troubleshooting`, `[tech] [version] known issues bugs site:github.com`, `[tech] anti-patterns`
-7. **Best practices** — `[tech] best practices recommended patterns`, `[tech] idiomatic usage examples site:github.com`, `[tech] production usage guide`
-8. **Testing** — `[tech] testing patterns unit test`, `[tech] mocking test utilities site:github.com`, `[tech] how to test [tech] integration`
-9. **Debugging** — `[tech] debugging common errors troubleshooting`, `[tech] error messages diagnosis`, `[tech] logging diagnostics production`
-10. **Configuration/deployment** — `[tech] configuration deployment production`, `[tech] pool sizing timeout settings`, `[tech] environment variables dangerous defaults`
-11. **Real-world usage** — `[tech] site:github.com production example`, `[tech] open source project example`, `[tech] real world implementation patterns`
+Map each technology to a role using its dependency group and name:
 
-Source tier scoring:
-- **Tier A** (official docs, github.com, arxiv.org, MDN, OWASP, NIST, ietf.org): auto-include
-- **Tier B** (stackoverflow.com, vendor engineering blogs, dev.to, freecodecamp): include if clearly relevant
-- **Tier C** (medium.com, hashnode, personal blogs): only if no Tier A/B found for this angle
-- **Skip** (paywalled, social media, SEO aggregators): exclude silently
+| Role | Examples |
+|------|---------|
+| framework | React, Django, Rails, Express, ASP.NET, FastAPI, Next.js |
+| database | PostgreSQL, SQLite, MongoDB, Redis, SQLAlchemy, Prisma |
+| auth | Auth0, NextAuth, Passport, OAuth, JWT, Devise |
+| utility/library | lodash, axios, httpx, numpy, boto3, date-fns |
+| testing | Jest, pytest, RSpec, Cypress, Playwright |
+| devops/infra | Docker, Kubernetes, Terraform, Nginx, GitHub Actions |
+| unknown | anything else |
 
-Each agent returns collected URLs with tier, angle, and technology labels. After all parallel agents complete, merge and deduplicate the full URL pool. Add approved SEED_URLS to the pool.
+Log: `Tech role: [tech] → [role]`
 
-### Phase 2b — Low-source angle retry
+### Step 2: For each technology (run sequentially)
 
-If an angle returns fewer than 20 Tier A sources:
-1. Refine and expand: add version number, try alternate phrasing, use site-specific operators
-2. Run additional searches — no hard cap; keep going until 20 Tier A sources are found or queries are exhausted
-3. Log: "Expanded search for [angle] / [tech] with: '[refined query]' → N sources found (total: M)"
+**Project KB pre-check**
 
-### Phase 2c — Minimum Source Gate
+Before running WebSearch for this technology, check if the project KB already covers it from a prior run:
 
-Count total Tier A + Tier B sources across all technologies and angles. **Target: 50-100 sources. Minimum to proceed: 30.**
+```bash
+curl -s -X POST http://127.0.0.1:8612/search \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"codebase","project_path":"$KB_DIR","query":"[technology]","limit":5}'
+```
 
-If total < 30:
-1. Log: "Minimum source gate: collected N sources — target 50-100. Running expansion pass."
-2. For each technology and angle with the fewest hits, run one more search with a different query
-3. If still < 30 after one expansion: log "Source gate: N sources (below 30) — proceeding anyway."
+Count results with score ≥ 0.55. If 2 or more: set `has_kb_coverage = true`.
+Log: `KB pre-check: [technology] — N cached docs (score ≥ 0.55) — [covered | not covered]`
 
-Do not spawn additional agents in a loop trying to hit 300+. One expansion pass is enough.
+If the search errors (project not indexed, server error): set `has_kb_coverage = false` and continue normally.
+
+**2a. Source map lookup**
+
+Read `$CLAUDEBOOST_HOME/knowledge/research-source-map.xml`.
+
+Match in order: (1) exact `id`, (2) case-insensitive `<name>`, (3) tech in `<tags>`, (4) tech is substring of name or any tag.
+
+If found: add all `<source>` entries to URL queue at their declared tier. Note `<context7-id>` if present. Log: `Source map hit: [tech] → N URLs`
+
+If not found: log `Source map miss: [tech] — using WebSearch`. Set `has_context7 = false`.
+
+**2b. Context7 (library/framework entities with a context7-id only)**
+
+Skip if: `has_context7` is false, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+
+If applicable:
+1. Use `<context7-id>` from source map as `library_id`, or call `mcp__claude_ai_Context7__resolve-library-id(libraryName=tech)` if no source map entry
+2. Call `mcp__claude_ai_Context7__query-docs(libraryId=library_id, query="[angle-2 query for this tech role]")`
+3. Write result to `$KB_DIR/context7-[tech-slug].md`
+4. Log: `Context7: [tech] → N snippets written`
+
+Tech is now covered — run only angle 2 (role-specific) via WebSearch. Skip angles 1 and 3.
+
+Fallback: if Context7 returns 0 results or is unavailable — fall through to 2c normally (run all 3 angles).
+
+**2c. Smart angles via WebSearch**
+
+Skip entirely if `has_kb_coverage = true` (technology already covered in project KB from a prior run).
+
+Select 3 angles by tech role. If Context7 covered this tech: run only angle 2.
+
+| Tech role | Angle 1 | Angle 2 | Angle 3 |
+|-----------|---------|---------|---------|
+| framework | official-docs | best-practices | integration-patterns |
+| database | official-docs | performance | configuration |
+| auth | security | official-docs | best-practices |
+| utility/library | official-docs | integration-patterns | pitfalls |
+| testing | official-docs | best-practices | integration-patterns |
+| devops/infra | official-docs | configuration | real-world-usage |
+| unknown | official-docs | best-practices | integration-patterns |
+
+Use 1 query phrasing per angle:
+
+| Angle | Query |
+|-------|-------|
+| official-docs | `[tech] [version] official documentation` |
+| security | `[tech] security vulnerabilities best practices` |
+| performance | `[tech] performance optimization production` |
+| integration-patterns | `[tech] integration patterns tutorial` |
+| pitfalls | `[tech] common mistakes gotchas` |
+| best-practices | `[tech] best practices recommended patterns` |
+| configuration | `[tech] configuration deployment settings` |
+| real-world-usage | `[tech] production example site:github.com` |
+
+### Tier Scoring
+
+- **Tier A** — official sources, gov, academic (arxiv, ietf), github.com, MDN, OWASP, NIST: auto-include
+- **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp): include if clearly relevant
+- **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index
+- **Skip** — paywalled, social media, SEO farms: exclude silently
+
+### Step 3: Dedup and tier filter
+
+Merge URLs from source map (2a), Context7 .md files (2b), and WebSearch (2c). Deduplicate. Add approved SEED_URLS. Remove Tier C.
+
+**Target: 15–20 sources per technology (Tier A + Tier B). Minimum to proceed: 15 total.**
+
+If below 15: log a coverage warning and continue — do not run additional searches.
 
 ---
 
@@ -187,7 +248,7 @@ Write all collected URLs to `$KB_DIR/pending-urls.json`:
 ]
 ```
 
-Prioritize: all Tier A first, then Tier B (cap at 40), then Tier C (cap at 5).
+Prioritize: all Tier A first, then Tier B (cap at 20). Tier C is never included.
 
 **Step 2 — Run the local downloader.**
 

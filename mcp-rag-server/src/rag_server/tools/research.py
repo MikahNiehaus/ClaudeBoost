@@ -199,11 +199,12 @@ def _index_single_source(
                         fmt = "pdf"
                 else:
                     # HTML page — re-use fetched content
-                    from rag_server.indexing.url_chunker import extract_text, _chunk_markdown_text
+                    from rag_server.indexing.url_chunker import extract_text
+                    from rag_server.indexing.markdown_chunker import chunk_markdown_text
                     if isinstance(raw_content, bytes):
                         raw_content = raw_content.decode("utf-8", errors="replace")
                     title, markdown = extract_text(raw_content, source)
-                    raw_chunks = _chunk_markdown_text(markdown, source_url=source, title=title)
+                    raw_chunks = chunk_markdown_text(markdown, source_id=source)
                     fmt = "html"
         else:
             # Local file path

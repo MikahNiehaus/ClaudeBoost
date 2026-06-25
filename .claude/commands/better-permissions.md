@@ -203,6 +203,12 @@ If any hooks are still missing after setup.py runs: list them explicitly and tel
 - To toggle state values (RAG enforcement, CONSULT/AUTO mode, intent override): use `/edit-state`.
 - If install.bat or install.sh haven't been run recently, setup.py also installs the RAG server, mcp-debugger, Playwright MCP, and edge-tts.
 
+### CONSULT Gate
+
+The CONSULT gate (`consult-gate.py`) blocks Edit, Write, and MultiEdit when the target file is not listed in `state/spec-sheet.json`. Before starting any task, Claude must produce a spec sheet (plain-language summary + per-file change table), get user approval, and write `state/spec-sheet.json`. The hook then allows only files in `approved_files` to be edited. Files under `workspace/`, `state/`, `.claudeboost/`, `plans/`, and `docs/` are always exempt. AUTO mode (`state/claudeboost-mode.json`) bypasses the gate entirely.
+
+This replaced the old task-plan.json model, which gated only Write to new files and let Claude edit existing files freely once a vague task description was logged.
+
 ### Action Gate Form Format
 
 The action form gate (`action-gate.py`) blocks Edit, Write, and MultiEdit until this block appears in the response:

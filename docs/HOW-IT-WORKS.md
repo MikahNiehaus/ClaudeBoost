@@ -1,19 +1,19 @@
 # ClaudeBoost — How It Works
 
-ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 25 specialist
-agents, 106 knowledge files, a local semantic RAG + GraphRAG server, and 27 slash
+ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 23 specialist
+agents, 108 knowledge files, a local semantic RAG + GraphRAG server, and 35 slash
 commands — all wired together through hooks.
 
 ## Directory Layout
 
 ```
 ClaudeBoost/
-├── agents/              25 specialist agent definitions (XML)
-├── knowledge/           106 knowledge files (XML)
+├── agents/              24 agent definitions (XML)
+├── knowledge/           108 knowledge files (XML)
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    27 slash commands
+├── .claude/commands/    35 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── docs/                Reference documentation
 └── CLAUDE.md            Orchestration rules loaded globally
@@ -54,7 +54,7 @@ exists, graph mode falls back to vector results.
 
 ## Agents
 
-25 specialist agents, each defined as an XML file in `agents/`. They are not scripts —
+23 specialist agents (plus one internal orchestrator), each defined as an XML file in `agents/`. They are not scripts —
 they are prompt definitions that the RAG server loads and injects via `POST /context`
 when an agent is spawned.
 
@@ -69,8 +69,8 @@ when an agent is spawned.
 
 ## Knowledge Files
 
-106 XML files in `knowledge/`, organized as:
-- **Domain bases** (52): coding standards, security, architecture, debugging, testing,
+108 XML files in `knowledge/`, organized as:
+- **Domain bases** (54): coding standards, security, architecture, debugging, testing,
   observability, performance, refactoring, UI implementation, API design, context
   engineering, verify gate, scope governance, rule enforcement, human voice standard,
   and more
@@ -103,23 +103,28 @@ reading, not reading blindly.
 
 ## Slash Commands
 
-27 commands in `.claude/commands/`. Key ones:
+35 commands in `.claude/commands/`. Key ones:
 
 | Command | Purpose |
 |---------|---------|
 | `/boost` | Start a session — RAG up, hooks verified, mode set, workspaces restored |
 | `/rag` | Start or reconnect the RAG server |
+| `/rag-health` | Diagnose RAG health for a specific collection or scope |
 | `/index-project <path>` | Index a project's codebase for vector + graph search |
 | `/index-boost` | Reindex ClaudeBoost agents and knowledge |
 | `/graph <task>` | Build a Files in Scope map using vector + graph RAG |
 | `/workspace <task>` | Create a workspace and implementation plan |
-| `/review` | Quick A-F grade by default; add `--deep` for full 15-pass parallel review |
-| `/end-to-end-test <url>` | Browser E2E tests with screenshot evidence |
+| `/xray` | Quick A-F code grade by default; add `--deep` for full 16-pass parallel review |
+| `/debug` | Step-through debugging via mcp-debugger integration |
 | `/security-review` | OWASP-grounded security audit |
 | `/self-improve` | ClaudeBoost self-audit — finds config, agent, and knowledge gaps |
 | `/done` | Push completed work to remote |
 | `/handoff` | Save session state for a fresh context |
 | `/clear-safe` | Save state before clearing context (restored automatically on next `/boost`) |
+| `/ticket-handoff` | Generate a Confluence handoff document for a completed ticket |
+| `/telemetry` | Show per-session tool call and RAG usage stats |
+| `/better-permissions` | Audit and install all ClaudeBoost hooks |
+| `/low-token` | Toggle Low Token Mode — auto-opens a new terminal when context fills up |
 
 ## Session Flow
 

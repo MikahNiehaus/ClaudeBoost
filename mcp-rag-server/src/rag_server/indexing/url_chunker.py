@@ -8,7 +8,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from rag_server.indexing.markdown_chunker import RawChunk, estimate_tokens
+from rag_server.indexing.markdown_chunker import RawChunk, chunk_markdown_text
 
 logger = logging.getLogger(__name__)
 
@@ -146,87 +146,13 @@ def chunk_url(url: str, max_tokens: int = 512) -> list[RawChunk]:
         logger.warning("Insufficient content extracted from %s (%d chars)", url, len(markdown))
         return []
 
-    return _chunk_markdown_text(markdown, source_url=url, title=title, max_tokens=max_tokens)
+    chunks = chunk_markdown_text(markdown, source_id=url, max_tokens=max_tokens)
 
-
-def _chunk_markdown_text(
-    text: str,
-    source_url: str,
-    title: str,
-    max_tokens: int = 512,
-    min_tokens: int = 40,
-) -> list[RawChunk]:
-    """Split markdown text into chunks at H2/H3 heading boundaries."""
-    # Split on ## or ### headings
-    pattern = re.compile(r"^(#{2,3} .+)$", re.MULTILINE)
-    positions = [0] + [m.start() for m in pattern.finditer(text)]
-    positions.append(len(text))
-
-    sections: list[tuple[str, str]] = []  # (heading, content)
-    for i in range(len(positions) - 1):
-        section_text = text[positions[i]:positions[i + 1]].strip()
-        if not section_text:
-            continue
-        # Extract heading from section text
-        first_line = section_text.split("\n", 1)[0].strip()
-        heading = re.sub(r"^#{2,3}\s*", "", first_line) if first_line.startswith("#") else title
-        sections.append((heading, section_text))
-
-    if not sections:
-        # No headings found — treat whole text as one section
-        sections = [(title, text)]
-
-    chunks: list[RawChunk] = []
-    chunk_index = 0
-
-    for heading, section_text in sections:
-        section_tokens = estimate_tokens(section_text)
-
-        if section_tokens <= max_tokens:
-            if estimate_tokens(section_text) >= min_tokens:
-                chunks.append(RawChunk(
-                    content=section_text,
-                    section=heading,
-                    line_start=chunk_index,
-                    line_end=chunk_index,
-                    token_count_approx=section_tokens,
-                ))
-                chunk_index += 1
-        else:
-            # Section too large — split at paragraph boundaries
-            paragraphs = re.split(r"\n\n+", section_text)
-            current_parts: list[str] = []
-            current_tokens = 0
-
-            for para in paragraphs:
-                para_tokens = estimate_tokens(para)
-                if current_tokens + para_tokens > max_tokens and current_parts:
-                    combined = "\n\n".join(current_parts)
-                    if estimate_tokens(combined) >= min_tokens:
-                        chunks.append(RawChunk(
-                            content=combined,
-                            section=heading,
-                            line_start=chunk_index,
-                            line_end=chunk_index,
-                            token_count_approx=estimate_tokens(combined),
-                        ))
-                        chunk_index += 1
-                    current_parts = [para]
-                    current_tokens = para_tokens
-                else:
-                    current_parts.append(para)
-                    current_tokens += para_tokens
-
-            if current_parts:
-                combined = "\n\n".join(current_parts)
-                if estimate_tokens(combined) >= min_tokens:
-                    chunks.append(RawChunk(
-                        content=combined,
-                        section=heading,
-                        line_start=chunk_index,
-                        line_end=chunk_index,
-                        token_count_approx=estimate_tokens(combined),
-                    ))
-                    chunk_index += 1
+    # Pages with no headings produce chunks with empty section names.
+    # Fall back to the page title so search metadata is never blank.
+    if title:
+        for chunk in chunks:
+            if not chunk.section:
+                chunk.section = title
 
     return chunks

@@ -92,6 +92,7 @@ def main() -> int:
     # Normalize for case-insensitive substring checks
     prompt_lower = prompt.lower()
 
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
     nudges: list[str] = []
 
     # Primary check: does the spawn prompt instruct the agent to call
@@ -130,6 +131,22 @@ def main() -> int:
             ws_path = _gaw.resolve().get("workspace_path", "")
         except Exception:
             pass
+        # Fallback: per-instance file missing (e.g. test env, old schema).
+        # Read active-workspace.json for the workspace ID, then look up the
+        # path in workspaces.json.
+        if not ws_path:
+            try:
+                state_dir = boost_home / "state"
+                ws_id = json.loads(
+                    (state_dir / "active-workspace.json").read_text(encoding="utf-8")
+                ).get("workspace", "")
+                if ws_id:
+                    reg = json.loads(
+                        (state_dir / "workspaces.json").read_text(encoding="utf-8")
+                    )
+                    ws_path = reg.get(ws_id, {}).get("workspace_path", "")
+            except Exception:
+                pass
         if ws_path:
             nudges.append(
                 "[agent-spawn nudge] Active workspace detected but workspace_path is not in the spawn prompt. "
@@ -167,7 +184,6 @@ def main() -> int:
     # block any spawn that isn't an evaluator-agent. Clear the flag on
     # evaluator spawn so normal work can resume immediately after.
     # Exception: bypass during active parallel batch runs (audit-in-progress.json).
-    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
     flag = boost_home / "state" / "needs-verification.json"
     audit_active = (boost_home / "state" / "audit-in-progress.json").exists()
     if flag.exists() and not audit_active:

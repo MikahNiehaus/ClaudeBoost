@@ -42,9 +42,13 @@ def _run_ensure_setup(tmp_home: Path, env_overrides: dict | None = None) -> subp
 
 class TestSetupAlreadyDone:
     def test_silent_when_claudeboost_home_set_via_env(self, tmp_path):
+        # Create a minimal stub so the stale-path check in _needs_setup() passes
+        fake_boost = tmp_path / "claudeboost"
+        (fake_boost / "scripts").mkdir(parents=True)
+        (fake_boost / "scripts" / "setup.py").write_text("# stub", encoding="utf-8")
         result = _run_ensure_setup(
             tmp_path,
-            env_overrides={"CLAUDEBOOST_HOME": "C:/some/path"},
+            env_overrides={"CLAUDEBOOST_HOME": str(fake_boost)},
         )
         assert result.returncode == 0
         assert result.stdout.strip() == b""

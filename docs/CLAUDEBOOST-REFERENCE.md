@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08 (counts updated 2026-06-12)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 106 knowledge XMLs (52 domain + 21 lang + 33 framework), 27 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 24 agent XMLs (including _orchestrator), 108 knowledge XMLs (54 domain + 21 lang + 33 framework), 35 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -120,17 +120,16 @@
 
 **Behavior:**
 1. Reads `state/claudeboost-mode.json`
-2. If mode is not CONSULT, exits 0 (no-op)
-3. Only fires on `Write` tool calls — Edit, MultiEdit, and Bash exit 0 immediately (intentional design: Edit bypass is by design, self-enforcement via CLAUDE.md covers those cases)
-4. For `Write`, checks the file path against exempt fragments:
-   - `/workspace/`, `/knowledge/`, `/plans/`, `/docs/` (note: `/.claude/` is NOT exempt)
-5. If the path is exempt, exits 0
-6. Checks `state/task-plan.json` for existing task approval
-7. If path is non-exempt AND no task-plan exists: outputs `{"permissionDecision":"ask","permissionDenialReason":"..."}` JSON to stdout — triggers a live user permission prompt
-8. If task-plan.json exists, exits 0 (task already approved)
+2. If mode is AUTO, exits 0 (no-op)
+3. Fires on `Edit`, `Write`, and `MultiEdit` — Bash and all read-only tools exit 0 immediately
+4. Checks the file path(s) against exempt fragments: `workspace/`, `state/`, `.claudeboost/`, `plans/`, `docs/` (note: `/.claude/` is NOT exempt)
+5. If all targets are exempt, exits 0
+6. Loads `state/spec-sheet.json` and reads `approved_files` (relative paths, suffix-matched against incoming absolute paths)
+7. If spec-sheet.json does not exist: outputs `{"permissionDecision":"ask","reason":"No spec sheet found..."}` — prompts Claude to produce a spec sheet first
+8. If any non-exempt target is not in `approved_files`: outputs `{"permissionDecision":"ask","reason":"'<file>' is not in the approved spec sheet..."}` — blocks until the spec is extended and approved
 
-**Exit codes:** `0` (pass) or triggers ask permission dialog  
-**Files read:** `state/claudeboost-mode.json`, `state/task-plan.json`  
+**Exit codes:** `0` always (pass or triggers ask permission dialog)  
+**Files read:** `state/claudeboost-mode.json`, `state/spec-sheet.json`  
 
 ---
 
@@ -447,29 +446,41 @@ Claude receives checkpoint nudge reminding it to update context.md
 ### 2.3 CONSULT Gate
 
 ```
-Architectural trigger detected (new endpoint, class, table, dep, middleware, etc.)
+Claude receives a task (any Edit|Write|MultiEdit on a non-exempt path)
     │
     ▼
-User or orchestrator attempts Edit|Write|MultiEdit on non-exempt path
+Before touching any file, Claude produces a spec sheet:
+    ├── What This Does (2-3 plain-language sentences)
+    └── Approved Changes table (file | operation | specific change description)
     │
     ▼
-PreToolUse fires:
+Claude stops and waits for user approval
+    │
+    ▼
+User approves → Claude writes state/spec-sheet.json:
+    {
+      "task": "...",
+      "approved_files": ["path/to/file.py", ...],
+      "changes": [...]
+    }
+    │
+    ▼
+Claude implements — on every Edit|Write|MultiEdit, PreToolUse fires:
     └── command hook: consult-gate.py
         ├── Reads state/claudeboost-mode.json
         ├── If AUTO: exits 0 (no-op)
         ├── If CONSULT:
-        │   ├── Checks path against exempt fragments
-        │   ├── Checks state/session-approvals.json
-        │   └── If non-exempt and no approval: writes stderr nudge
-        └── Always exits 0 (never blocks)
+        │   ├── Checks path(s) against exempt fragments (workspace/, state/, plans/, docs/, .claudeboost/)
+        │   ├── Loads state/spec-sheet.json → approved_files list
+        │   ├── If no spec-sheet.json: permissionDecision:ask → "produce a spec sheet first"
+        │   └── If file not in approved_files: permissionDecision:ask → "extend the spec first"
+        └── Always exits 0
     │
     ▼
-Orchestrator (alerted by nudge) should:
-    1. rag_search(feature keywords) + read 2-3 project files
-    2. Spawn architect-agent (Opus) with PROPOSAL_ONLY + file:line citations
-    3. Present options via AskUserQuestion
-    4. Log approval to state/session-approvals.json
-    5. Implement approved design
+If a new file is needed mid-implementation:
+    1. Claude stops before editing it
+    2. Tells user: "I need to also change <file> because <reason>. Should I add it to the spec?"
+    3. User approves → Claude updates approved_files in spec-sheet.json → proceeds
 ```
 
 ---
@@ -674,7 +685,7 @@ Slash command consult.md:
     3. Confirm to user
     │
     ▼
-consult-gate.py resumes checking all non-exempt writes
+consult-gate.py resumes checking all non-exempt edits and writes against spec-sheet.json
 ```
 
 ---
@@ -1127,9 +1138,9 @@ Agent reads and internalizes before taking any action
 ---
 
 ### 4.9 consult-mode.xml
-**Triggers:** CONSULT, AUTO, architect, proposal, approval, consult gate  
+**Triggers:** CONSULT, AUTO, spec sheet, spec-sheet, approval gate, collaborative, propose before coding, ask before implementing  
 **Domain:** Collaborative mode protocol  
-**Content:** CONSULT = default (missing file = CONSULT); 8 architectural triggers; not-triggers list; 5-step consultation protocol; additive-not-gatekeeping principle; session-approvals.json format; `state/claudeboost-mode.json` as state store
+**Content:** CONSULT = default (missing file = CONSULT); spec-sheet trigger conditions; 5-step consultation protocol (produce spec → wait for approval → write spec-sheet.json → implement listed files only → extend spec for new files); two-level spec format (plain-language summary + per-file change table); additive-not-gatekeeping principle; `state/spec-sheet.json` as approved-file-list store; `state/claudeboost-mode.json` as mode store
 
 ---
 
@@ -1462,9 +1473,9 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.7 /review [--deep] [--staged | --branch | --pr <url>]
-**File:** `.claude/commands/review.md`  
-**Description:** Quick A-F grade code review by default; add `--deep` for the full 15-pass parallel review  
+### 5.7 /xray [--deep] [--staged | --branch | --pr <url>]
+**File:** `.claude/commands/xray.md`  
+**Description:** Quick A-F grade code review by default; add `--deep` for the full 16-pass parallel review with deterministic pre-scan, test execution, and Opus evaluator  
 **Tools:** Bash(git diff, gh pr diff), Task (--deep mode)  
 **Steps (default):**
 1. Resolve diff source (uncommitted+staged / staged only / branch diff / PR diff)
@@ -1473,7 +1484,7 @@ Agent reads and internalizes before taking any action
 4. Output structured review with file:line for each issue
 
 **Steps (--deep):**
-1-4 as above, then additionally: 13 parallel passes batched 3-at-a-time covering logic, security, performance, tests, dead code, debug artifacts, banned patterns, pattern consistency, caller impact (graph search), and ticket alignment; Evaluator Opus agent (pass 14) classifies every finding (BLOCKER/WARNING/NIT/FALSE POSITIVE)  
+1-4 as above, then additionally: deterministic pre-scan grep checks, then 15 parallel passes batched covering logic, security, performance, tests, dead code, debug artifacts, banned patterns, pattern consistency, caller impact (graph search), ticket alignment, async patterns, and more; Evaluator Opus agent (always last) classifies every finding (BLOCKER/WARNING/NIT/FALSE POSITIVE)  
 **Output:** Grade (A-F), BLOCKERS, WARNINGS, NITS, FALSE POSITIVES
 
 ---
@@ -1683,7 +1694,6 @@ Agent reads and internalizes before taking any action
 
 - Cleared by `/boost` at session start
 - Written when user approves an architectural decision via AskUserQuestion
-- Read by `consult-gate.py` to check for existing approvals
 
 ### 7.5 state/speak-state.json
 
@@ -1820,7 +1830,7 @@ not run in time.
 
 | Setting | Value |
 |---------|-------|
-| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` |
 | `CHROMA_DIR` | `PROJECT_ROOT/mcp-rag-server/.rag-index/chroma` |
 | `SCOPES` | `knowledge` (knowledge/*.md + *.xml → "knowledge" collection), `agents` (agents/*.md + *.xml → "agents" collection) |
 

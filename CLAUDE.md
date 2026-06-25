@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 25 agents (`agents/*.xml`) and 106 knowledge files (`knowledge/*.xml`) — 52 domain bases, 21 language guides (`lang-*.xml`), 33 framework guides (`fw-*.xml`).
+You have 24 agents (`agents/*.xml`) and 108 knowledge files (`knowledge/*.xml`) — 54 domain bases, 21 language guides (`lang-*.xml`), 33 framework guides (`fw-*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
@@ -84,24 +84,38 @@ Hooks remind you of this: PreToolUse nudges agents to call POST http://127.0.0.1
 
 ## Collaborative Mode (CONSULT / AUTO)
 
-Default: **CONSULT**. Before starting any task that creates new things or makes choices with visible impact on the outcome: describe in 2-3 sentences what it will look/work like from the user's perspective, note any meaningful choice where different approaches produce different results, stop and wait for yes. Once confirmed, log to `state/task-plan.json` and grind freely through the whole task without asking again.
+Default: **CONSULT**. Before touching any file, produce a spec sheet: a plain-language summary of what the task does, then a table listing every file and the specific change planned. The user approves the spec. Claude can only edit files listed in the approved spec. Anything outside the spec requires a new spec sheet first.
 
-This is a task-level gate, not a file-level gate. One check before work starts, then done. The hook (`consult-gate.py`) enforces it mechanically: Write to a new file with no task-plan.json on record triggers a permission dialog.
+This is a per-file gate, not a one-time task-level check. The hook (`consult-gate.py`) enforces it mechanically: every Edit, Write, and MultiEdit is checked against `state/spec-sheet.json`. If no spec exists, or the target file isn't listed in `approved_files`, the hook blocks with a dialog explaining what to do.
 
-**Hook coverage gap — self-enforce for Edit:** The mechanical hook only catches Write calls to new files. Edit calls on existing files pass through silently. For any edit triggered by an ambiguous user request (e.g. "something seems off" or "I don't know if it's working"), Claude must self-enforce the consult step — describe what you found and what you're about to change, wait for yes — before reaching for Edit.
+**Spec sheet format:**
 
-**Vision check format** — plain language, user-visible outcomes, concrete:
-- Good: "I'll make a yellow bird that flies through green pipes. Score counter at the top. Want sound effects too?"
-- Bad: "I'll implement a Canvas-based physics engine with requestAnimationFrame loop..."
+```
+## Spec Sheet: [task name]
 
-**What fires the gate**: any request to build, add, or create something new.
-**What doesn't**: bugfixes the user explicitly asked for, typos, tests, docs, formatting, renames, edits to existing files within an already-approved task, anything under `workspace/`/`knowledge/`/`plans/`/`docs/`. AUTO mode bypasses everything.
+### What This Does
+[2-3 sentences. What the user will see or experience. Concrete, not technical.]
 
-**Bugfix exemption boundary**: "bugfix" means the user said fix/repair/correct this — not a bug Claude diagnosed on its own from a vague complaint. If Claude identifies a bug the user didn't explicitly name, it must describe the finding and proposed fix and wait for confirmation before editing.
+### Approved Changes
+| # | File | Operation | What Changes |
+|---|------|-----------|--------------|
+| 1 | path/to/file.py | modify | Specific function and exactly what changes |
+| 2 | path/to/new.py  | create | New file — what it contains and why |
 
-Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically throughout — not up for debate.
+### Out of Scope
+[files explicitly excluded from this spec]
+```
+
+Stop after producing the spec. Don't write code or files. Wait for the user's approval before writing `state/spec-sheet.json` and starting work. If you discover a new file needs changing during implementation, stop, tell the user why, wait for approval, then update the spec before proceeding.
+
+**What fires the gate**: any Edit, Write, or MultiEdit on a file not in `approved_files`.
+**What doesn't**: reads, Bash, Glob, Grep; files under `workspace/`, `state/`, `.claudeboost/`, `plans/`, `docs/`; AUTO mode bypasses everything.
+
+**Bugfix exemption boundary**: "bugfix" means the user said fix/repair/correct this — not a bug Claude diagnosed on its own. If Claude identifies a bug the user didn't name, describe the finding and proposed fix and wait for confirmation before editing.
+
+Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically throughout — never listed in the spec, never up for debate.
 Approvals logged to `state/session-approvals.json` (session-scoped).
-Task approval logged to `state/task-plan.json` (overwritten per task).
+Approved file list logged to `state/spec-sheet.json` (overwritten per task).
 State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 `/auto [reason]` = AUTO. `/consult` = restore. Full protocol: `knowledge/consult-mode.xml`.
 
@@ -158,6 +172,38 @@ When fixing a label, field name, or string inconsistency:
 3. Default: update ALL of them in one commit.
 4. Exception: if a location is genuinely out of scope (e.g. a migration filename, a historical comment), state it explicitly and justify the skip.
 Never silently leave occurrences untouched because the bug report only mentioned a subset of surfaces.
+
+### Research Grounded Decisions (not negotiable)
+When working on a task that has a workspace KB (Tier 3c exists), every implementation decision, pattern choice, and architecture recommendation must be grounded in indexed research — not in training-data recall.
+
+Before answering "which approach should I use", "what pattern fits here", or "how should this be structured", query the workspace KB first:
+
+```bash
+POST http://127.0.0.1:8612/search
+  scope="codebase"
+  project_path="[WORKSPACE_ABS]/knowledge"
+  query="[the specific decision question]"
+  limit=3
+```
+
+If a result comes back with score ≥ 0.55: base the decision on what the indexed docs say. Cite the source.
+If score < 0.55 or no results: flag it explicitly — "no research coverage for this decision" — then proceed from code context. Never silently answer from memory.
+
+Log every grounded decision: `Decision: [what] — grounded by [source title] (score N)`
+
+This applies to spawned agents too. Include this mandate in every agent spawn prompt when a workspace_path is set.
+
+**Decision points that require a query:**
+- Choosing between two implementation approaches
+- Picking a library API method not already used in the codebase
+- Recommending a security pattern or auth flow
+- Handling an edge case the ticket leaves open
+- Any architectural choice where multiple valid options exist
+
+**Not required for:**
+- Reading or explaining existing code
+- Trivial one-line fixes with no approach choice
+- Tasks with no workspace KB (Tier 3c not built)
 
 ## Human Voice Standard
 
@@ -238,7 +284,7 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 | New codebase / first time in repo | `/index-project <path>` to enable semantic search, then `/research-project` for stack overview |
 | New subsystem or >15 files | `/create-prd` before `/workspace` — locks down scope and acceptance criteria |
 | Explaining architecture or flow | `/visualize` — interactive board in browser |
-| Code just changed | `/review` to check quality, then `/qa --code` to run tests + edge cases, then `/qa <url>` for browser verification if there's a UI |
+| Code just changed | `/xray` to check quality, then `/qa --code` to run tests + edge cases, then `/qa <url>` for browser verification if there's a UI |
 | Security concern | `/security-review` — OWASP-aware review of pending branch changes |
 | Something feels off after changes | `/audit` — parallel multi-angle assessment with Opus verdict |
 | Code review | Spawn reviewer-agent (Opus) with verify gate |

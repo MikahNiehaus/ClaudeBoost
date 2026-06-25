@@ -42,8 +42,8 @@
       </domains>
     </tier>
 
-    <tier name="C" label="show-ask">
-      <description>Variable quality. Show to user with label; do not auto-select.</description>
+    <tier name="C" label="excluded">
+      <description>EXCLUDED — never index, regardless of content. Tier C sources are banned from /research-task and /research-project.</description>
       <domains>
         medium.com, hashnode.dev, substack.com, personal blogs, dev.to posts by unknown authors,
         reddit.com (r/programming etc.), hackernoon.com
@@ -81,6 +81,42 @@
       </level>
     </acceptance-criteria>
   </source-quality-tiers>
+
+  <source-discovery>
+    <description>
+      /research-task and /research-project use a 3-step preferred order for finding sources.
+      Follow this order — do NOT jump straight to WebSearch.
+    </description>
+
+    <step order="1" name="Source Map">
+      Read knowledge/research-source-map.xml first. It contains pre-verified canonical URLs
+      for 80+ common technologies (React, Django, PostgreSQL, OWASP, etc.) with tier and
+      angle annotations. Match by id, name, tags, or substring. If found, use those URLs
+      directly — no WebSearch needed for this technology.
+      Log: "Source map hit: [tech] → N URLs"
+    </step>
+
+    <step order="2" name="Context7">
+      For library and framework entities that have a context7-id in the source map (or resolve
+      via mcp__claude_ai_Context7__resolve-library-id), call Context7 BEFORE WebSearch.
+      Context7 returns current official docs with zero token cost for fetching.
+      Write results to workspace knowledge/ as context7-[slug].md.
+      Skip: non-library concepts (OWASP, JWT, HTTP), missing context7-id.
+    </step>
+
+    <step order="3" name="WebSearch smart angles">
+      Only run WebSearch when steps 1 and 2 did not cover the entity.
+      Use 3 angles per entity (not 11) based on tech role or task type.
+      Use 1 query phrasing per angle. Target 15-20 total sources per run.
+      See /research-task and /research-project skill files for the full angle tables.
+    </step>
+
+    <tier-c-ban>
+      Tier C sources (medium, hashnode, personal blogs) are EXCLUDED at all steps.
+      Do not add them to pending-urls.json. Do not fetch them. Do not index them.
+      "No Tier A/B source found" is the correct outcome for angles with no authoritative coverage.
+    </tier-c-ban>
+  </source-discovery>
 
   <pdf-vs-url>
     <decision-tree>
@@ -185,6 +221,59 @@
       <rule>Never retry more than once. If the refined query still returns no Tier A/B sources, note the gap in the research brief and continue. "No authoritative source found" is a valid finding.</rule>
     </query-refinement-playbook>
   </query-strategies>
+
+  <decision-point-queries>
+    <description>
+      Query RAG at each decision point during task execution, not just once at startup.
+      Startup context loads broad background. Decision-point queries are narrow and targeted.
+      A query made at the moment you need information gets the right chunk, not the closest
+      chunk from a cold start that happened 20 tool calls ago.
+    </description>
+
+    <when-to-query>
+      <trigger>Choosing between two implementation approaches</trigger>
+      <trigger>About to write a security-sensitive operation (auth, crypto, SQL)</trigger>
+      <trigger>Picking a library API method you haven't used before in this codebase</trigger>
+      <trigger>Hitting an error you don't immediately recognize</trigger>
+      <trigger>Handling an edge case mentioned in the ticket</trigger>
+      <trigger>Writing a test for an unfamiliar framework or pattern</trigger>
+    </when-to-query>
+
+    <query-pattern>
+      At a decision point: stop and query both sources before choosing.
+
+      1. POST http://127.0.0.1:8612/search scope="knowledge" query="[decision question]" limit=3
+         — ClaudeBoost patterns and standards for this topic
+
+      2. POST http://127.0.0.1:8612/search scope="codebase" project_path="$WORKSPACE_ABS/knowledge"
+            query="[decision question]" limit=3
+         — Task-specific research fetched for this workspace
+
+      If both return score below 0.55: make the decision from code context, not from inference.
+      Log: "Decision: [what you decided] — grounded by [source title] (score N)"
+    </query-pattern>
+
+    <examples>
+      <example>
+        <decision>Should I use async or sync for this DB call?</decision>
+        <query>async database connection pattern [framework name]</query>
+      </example>
+      <example>
+        <decision>Which JWT validation approach matches our auth setup?</decision>
+        <query>JWT token validation signature verification</query>
+      </example>
+      <example>
+        <decision>How should this endpoint handle partial failures?</decision>
+        <query>partial failure error handling idempotency [framework name]</query>
+      </example>
+    </examples>
+
+    <what-not-to-do>
+      <item>Do not rely on training-data knowledge for API signatures — always verify against indexed docs</item>
+      <item>Do not skip the query because it seems obvious — obvious things have subtle gotchas in the research</item>
+      <item>Do not re-run the startup context call — write a narrow, decision-specific query instead</item>
+    </what-not-to-do>
+  </decision-point-queries>
 
   <workspace-scoping>
     <rule>

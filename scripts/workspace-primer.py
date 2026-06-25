@@ -176,6 +176,18 @@ def main() -> int:
         except Exception:
             pass
 
+    # 3. Fallback: active-workspace.json (written by /clear-safe and older setups)
+    if not workspace_id:
+        try:
+            data = json.loads((home / "state" / "active-workspace.json").read_text(encoding="utf-8"))
+            workspace_id = data.get("workspace", "")
+            if not workspace_path:
+                workspace_path = data.get("workspace_path", "")
+            if not project_path:
+                project_path = data.get("project_path", "")
+        except Exception:
+            pass
+
     if not workspace_id:
         return 0
 

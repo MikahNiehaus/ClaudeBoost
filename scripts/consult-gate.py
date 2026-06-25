@@ -1,24 +1,23 @@
 """
-ClaudeBoost CONSULT gate — command-type PreToolUse hook.
+ClaudeBoost spec-sheet gate — PreToolUse hook.
 
-Replaces the prompt-type hook in scripts/setup.ps1. Prompt hooks are pure LLM
-judgments without tool access, so they can't actually read the mode file or
-session-approvals.json. This script reads them directly and makes a deterministic call.
+Enforces that every Edit, MultiEdit, and Write tool call targets a file
+that was explicitly approved in state/spec-sheet.json before work started.
 
 Behavior:
-  - AUTO mode    → exit 0 silently
-  - Exempt paths → exit 0 silently (workspace/, knowledge/, plans/, docs/)
-  - Edit/MultiEdit/Bash → exit 0 silently (grinding existing files is fine)
-  - Write to existing file → exit 0 silently (still grinding)
-  - Write to NEW file with task-plan.json present → exit 0 silently (plan approved)
-  - Write to NEW file with NO task-plan.json → permissionDecision:"ask"
+  - AUTO mode              → exit 0 silently
+  - Bash / read-only tools → exit 0 silently
+  - Exempt paths           → exit 0 silently (workspace/, state/, .claudeboost/, plans/, docs/)
+  - File in approved_files → exit 0 (go ahead)
+  - No spec-sheet.json     → permissionDecision:"ask" with instructions to make a spec sheet
+  - File not in spec       → permissionDecision:"ask" with instructions to extend the spec
 
-This is a task-level gate, not action-level. The pattern: before starting new work
-that creates files, describe what you're building and wait for yes. Once approved,
-write task-plan.json and grind freely through the whole task.
+Replaces the old task-plan.json gate. The old model gated only Write to new files and
+let Claude edit anything freely once a vague task description was logged. The new model:
+produce a spec sheet with a per-file change table, get user approval, then Claude can
+only touch files listed in the approved_files array. Anything else requires a new spec.
 
-See research-brief in workspace/consult-mode-improvement-2026-06-16/ for why
-task-level beats per-file nudges.
+See workspace/consult-spec-sheet-approval-2026-06-24/plan.md for full design rationale.
 """
 from __future__ import annotations
 import json
@@ -26,11 +25,14 @@ import os
 import sys
 from pathlib import Path
 
+GATED_TOOLS = {"Write", "Edit", "MultiEdit"}
+
 EXEMPT_FRAGMENTS = [
     "/workspace/", "\\workspace\\",
-    "/knowledge/", "\\knowledge\\",
-    "/plans/", "\\plans\\",
-    "/docs/", "\\docs\\",
+    "/state/",     "\\state\\",
+    "/.claudeboost/", "\\.claudeboost\\",
+    "/plans/",     "\\plans\\",
+    "/docs/",      "\\docs\\",
 ]
 
 
@@ -41,17 +43,48 @@ def read_json(path: str | os.PathLike, default):
         return default
 
 
+def normalize(path: str) -> str:
+    """Normalize to forward slashes and lowercase for comparison."""
+    return path.replace("\\", "/").lower()
+
+
+def file_in_spec(file_path: str, approved_files: list[str]) -> bool:
+    """
+    Check whether file_path matches any approved entry.
+    Approved entries are relative paths like 'scripts/foo.py'.
+    We check whether the normalized path ends with the entry (with a
+    separator before it) to handle absolute incoming paths gracefully.
+    """
+    norm = normalize(file_path)
+    for entry in approved_files:
+        norm_entry = normalize(entry.strip("/\\"))
+        if norm == norm_entry or norm.endswith("/" + norm_entry):
+            return True
+    return False
+
+
+def get_file_paths(tool_name: str, tool_input: dict) -> list[str]:
+    """Extract target file path(s) from the tool input."""
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits") or []
+        return [
+            e.get("file_path", "").replace("\\", "/")
+            for e in edits
+            if e.get("file_path")
+        ]
+    fp = (tool_input.get("file_path") or tool_input.get("path") or "").replace("\\", "/")
+    return [fp] if fp else []
+
+
 def main() -> int:
     home = os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     )
     mode = read_json(Path(home) / "state" / "claudeboost-mode.json", {}).get("mode", "CONSULT")
 
-    # AUTO: always pass silently
     if mode == "AUTO":
         return 0
 
-    # Read hook payload from stdin
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     try:
         payload = json.loads(raw) if raw else {}
@@ -61,40 +94,56 @@ def main() -> int:
     tool_name = payload.get("tool_name", "") or ""
     tool_input = payload.get("tool_input", {}) or {}
 
-    # Only gate Write tool calls. Edit/MultiEdit are on existing files (grinding).
-    # Bash redirects are low-signal and over-fire — skip them.
-    if tool_name != "Write":
+    if tool_name not in GATED_TOOLS:
         return 0
 
-    file_path = (tool_input.get("file_path") or tool_input.get("path") or "").replace("\\", "/")
-    if not file_path:
+    file_paths = get_file_paths(tool_name, tool_input)
+    if not file_paths:
         return 0
 
-    # Exempt paths: workspace, knowledge, plans, docs are low-stakes
-    if any(frag.replace("\\", "/") in file_path for frag in EXEMPT_FRAGMENTS):
+    def is_exempt(fp: str) -> bool:
+        return any(frag.replace("\\", "/") in fp for frag in EXEMPT_FRAGMENTS)
+
+    if all(is_exempt(fp) for fp in file_paths):
         return 0
 
-    # Writing to an existing file is grinding, not starting new work
-    if Path(file_path).exists():
+    # Load the approved spec sheet
+    spec_path = Path(home) / "state" / "spec-sheet.json"
+    if not spec_path.exists():
+        first = Path(file_paths[0]).name
+        print(json.dumps({
+            "permissionDecision": "ask",
+            "reason": (
+                f"No spec sheet found at state/spec-sheet.json. "
+                f"Before editing '{first}', produce a spec sheet: "
+                f"a high-level summary of what the task does, then a table listing every "
+                f"file and the specific change planned. Wait for user approval, then write "
+                f"state/spec-sheet.json with the approved_files list."
+            )
+        }))
         return 0
 
-    # New file creation — check if a task plan has been approved
-    task_plan = Path(home) / "state" / "task-plan.json"
-    if task_plan.exists():
-        return 0  # Plan logged — grind freely
+    spec = read_json(spec_path, {})
+    approved_files = spec.get("approved_files", [])
+    task = spec.get("task", "current task")
 
-    # No plan on record. Pause and ask the user.
-    print(json.dumps({
-        "permissionDecision": "ask",
-        "reason": (
-            f"About to create '{Path(file_path).name}' but no task plan is logged. "
-            "Before writing new files, describe in 2-3 sentences what you're building "
-            "(what it will look/work like from the user's perspective, plus any meaningful "
-            "choices where different approaches produce different outcomes). "
-            "Once the user approves, write state/task-plan.json and then grind freely."
-        )
-    }))
-    return 0
+    # Block if any target that is not exempt is also not in the approved list
+    for fp in file_paths:
+        if is_exempt(fp):
+            continue
+        if not file_in_spec(fp, approved_files):
+            print(json.dumps({
+                "permissionDecision": "ask",
+                "reason": (
+                    f"'{Path(fp).name}' is not in the approved spec sheet for: {task}. "
+                    f"To change this file, extend the spec sheet with a new entry describing "
+                    f"the specific change, get user approval, then update state/spec-sheet.json "
+                    f"before proceeding."
+                )
+            }))
+            return 0
+
+    return 0  # All files approved
 
 
 if __name__ == "__main__":

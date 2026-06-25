@@ -120,93 +120,115 @@ And stop.
 
 ---
 
-## Phase 3: Multi-Angle Search (Parallel Agents)
+## Phase 3: Research (Source Map + Context7 + Smart Angles)
 
-Spawn **one search agent per entity in parallel** — all run concurrently.
+### Step 1: Detect task type (code domain only)
 
-Each agent handles its own entity across 6 angles with 3 query phrasings per angle.
+Classify the ticket using the first matching signal:
 
-### Domain-Specific Angles
+| Signal in ticket | Task type |
+|------------------|-----------|
+| "bug", "error", "broken", "fix", "crash", "exception", "fails" | `bugfix` |
+| "integrate", "connect", "wire up", "add support for", "plugin", "setup", "configure" | `integration` |
+| "security", "vulnerability", "OWASP", "CVE", "auth", "permissions" | `security` |
+| "slow", "performance", "latency", "optimize", "memory", "scale", "throughput" | `performance` |
+| "migrate", "upgrade", "breaking change", "version", "deprecat" | `migration` |
+| anything else | `general` |
 
-**code:**
-1. Official docs — `[entity] official documentation`, `[entity] API reference site:github.com`, `[entity] guide site:docs.[domain].com`
-2. Security — `[entity] security vulnerabilities OWASP`, `[entity] CVE NVD`, `[entity] security best practices NIST`
-3. Performance — `[entity] performance optimization`, `[entity] benchmark profiling`, `[entity] scaling production`
-4. Migration/upgrade — `[entity] migration guide breaking changes`, `[entity] changelog site:github.com`, `[entity] upgrade guide`
-5. Integration patterns — `[entity] integration examples tutorial`, `[entity] cookbook site:github.com`, `[entity] production patterns`
-6. Pitfalls — `[entity] common mistakes gotchas`, `[entity] anti-patterns known issues site:github.com`, `[entity] troubleshooting`
-7. Best practices — `[entity] best practices recommended patterns`, `[entity] idiomatic usage examples site:github.com`, `[entity] production usage guide`
-8. Testing — `[entity] testing patterns unit test`, `[entity] mocking test utilities site:github.com`, `[entity] how to test [entity] integration`
-9. Debugging — `[entity] debugging common errors troubleshooting`, `[entity] error messages diagnosis`, `[entity] logging diagnostics production`
-10. Configuration/deployment — `[entity] configuration deployment production`, `[entity] pool sizing timeout settings`, `[entity] environment variables dangerous defaults`
-11. Real-world usage — `[entity] site:github.com production example`, `[entity] open source project example`, `[entity] real world implementation patterns`
+Log: `Task type: [type]`
 
-**legal:**
-1. Primary legislation — `[entity] legislation statute text`, `[entity] act law site:gov`, `[entity] regulation official text`
-2. Case law — `[entity] case law court decision`, `[entity] legal precedent ruling`, `[entity] court judgment`
-3. Regulatory guidance — `[entity] regulatory guidance official`, `[entity] compliance guidance site:gov`, `[entity] regulatory FAQ`
-4. Compliance requirements — `[entity] compliance requirements checklist`, `[entity] legal obligations`, `[entity] penalties enforcement`
-5. Jurisdiction specifics — `[entity] specific rules`, `[entity] state federal differences`, `[entity] international variation`
-6. Recent changes — `[entity] recent amendments 2024 2025`, `[entity] law update changes`, `[entity] proposed regulations`
+### Step 2: For each entity (run sequentially — no parallel agents for search)
 
-**design:**
-1. Design standards — `[entity] design system guidelines`, `[entity] UI component patterns`, `[entity] design specification`
-2. Accessibility — `[entity] accessibility WCAG`, `[entity] a11y requirements`, `[entity] screen reader support`
-3. User research — `[entity] user research findings`, `[entity] usability study`, `[entity] UX research data`
-4. Pattern libraries — `[entity] UI pattern library`, `[entity] component library examples`, `[entity] design pattern`
-5. Best practices — `[entity] UX best practices`, `[entity] design principles`, `[entity] interface design guidelines`
-6. Case studies — `[entity] design case study`, `[entity] before after redesign`, `[entity] UX improvement results`
+**Workspace KB pre-check**
 
-**market:**
-1. Industry reports — `[entity] industry report 2024 2025`, `[entity] market size statistics`, `[entity] market analysis`
-2. Competitor analysis — `[entity] competitor comparison`, `[entity] competitive landscape`, `[entity] vs alternatives`
-3. Market trends — `[entity] market trends 2024 2025`, `[entity] growth forecast`, `[entity] emerging trends`
-4. Consumer behavior — `[entity] consumer behavior research`, `[entity] user survey data`, `[entity] customer insights`
-5. Business strategy — `[entity] strategy framework`, `[entity] business model`, `[entity] go to market`
-6. Data and statistics — `[entity] statistics data`, `[entity] survey results`, `[entity] site:statista.com OR site:pewresearch.org`
+Before running WebSearch for this entity, check if the workspace KB already covers it from a prior run:
 
-**science:**
-1. Primary research — `[entity] research paper arxiv`, `[entity] study findings site:pubmed.ncbi.nlm.nih.gov`, `[entity] academic paper`
-2. Reviews — `[entity] systematic review`, `[entity] meta-analysis`, `[entity] literature review`
-3. Specifications/standards — `[entity] technical specification`, `[entity] standard IEEE ISO`, `[entity] RFC ietf.org`
-4. Data sets — `[entity] dataset open data`, `[entity] benchmark data`, `[entity] experimental results`
-5. Expert consensus — `[entity] expert consensus`, `[entity] scientific consensus`, `[entity] position statement`
-6. Recent developments — `[entity] recent research 2024 2025`, `[entity] new findings`, `[entity] latest study`
+```bash
+curl -s -X POST http://127.0.0.1:8612/search \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"codebase","project_path":"$WORKSPACE_ABS/knowledge","query":"[entity]","limit":5}'
+```
 
-**general:**
-1. Overview — `[entity] overview guide`, `[entity] introduction explained`, `[entity] what is [entity]`
-2. Best practices — `[entity] best practices`, `[entity] recommended approach`, `[entity] how to`
-3. Case studies — `[entity] case study example`, `[entity] real world example`, `[entity] success story`
-4. Expert opinion — `[entity] expert opinion analysis`, `[entity] in depth guide`
-5. Data/evidence — `[entity] data statistics evidence`, `[entity] research findings`, `[entity] survey results`
-6. Pitfalls — `[entity] common mistakes pitfalls`, `[entity] what to avoid`, `[entity] lessons learned`
+Count results with score ≥ 0.55. If 2 or more: set `has_kb_coverage = true`.
+Log: `KB pre-check: [entity] — N cached docs (score ≥ 0.55) — [covered | not covered]`
+
+If the search errors (project not indexed, server error): set `has_kb_coverage = false` and continue normally.
+
+**2a. Source map lookup**
+
+Read `$CLAUDEBOOST_HOME/knowledge/research-source-map.xml`.
+
+Match in order: (1) exact `id`, (2) case-insensitive `<name>`, (3) entity in `<tags>`, (4) entity is substring of name or any tag.
+
+If found: add all `<source>` entries to URL queue at their declared tier. Note `<context7-id>` if present. Log: `Source map hit: [entity] → N URLs`
+
+If not found: log `Source map miss: [entity] — using WebSearch`. Set `has_context7 = false`.
+
+**2b. Context7 (code domain + library entities with a context7-id only)**
+
+Skip if: domain is not `code`, or `has_context7` is false, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+
+If applicable:
+1. Use `<context7-id>` from source map as `library_id`, or call `mcp__claude_ai_Context7__resolve-library-id(libraryName=entity)` if no source map entry
+2. Call `mcp__claude_ai_Context7__query-docs(libraryId=library_id, query="[angle-2 query for this task type]")`
+3. Write result to `$WORKSPACE_ABS/knowledge/context7-[entity-slug].md`
+4. Log: `Context7: [entity] → N snippets written`
+
+Entity is now covered — run only angle 2 (task-specific) via WebSearch. Skip angles 1 and 3.
+
+Fallback: if Context7 returns 0 results or is unavailable — fall through to 2c normally (run all 3 angles).
+
+**2c. Smart angles via WebSearch**
+
+Skip entirely if `has_kb_coverage = true` (entity already covered in workspace KB from a prior run).
+
+Select 3 angles by task type. If Context7 covered this entity: run only angle 2.
+
+| Task type | Angle 1 | Angle 2 | Angle 3 |
+|-----------|---------|---------|---------|
+| bugfix | debugging | pitfalls | official-docs |
+| integration | official-docs | integration-patterns | best-practices |
+| security | security | best-practices | official-docs |
+| performance | performance | configuration | real-world-usage |
+| migration | migration-upgrade | official-docs | pitfalls |
+| general | official-docs | best-practices | integration-patterns |
+
+Use 1 query phrasing per angle:
+
+| Angle | Query |
+|-------|-------|
+| official-docs | `[entity] official documentation` |
+| security | `[entity] security vulnerabilities best practices` |
+| performance | `[entity] performance optimization production` |
+| migration-upgrade | `[entity] migration guide breaking changes` |
+| integration-patterns | `[entity] integration patterns tutorial` |
+| pitfalls | `[entity] common mistakes gotchas` |
+| best-practices | `[entity] best practices recommended patterns` |
+| debugging | `[entity] debugging common errors troubleshooting` |
+| configuration | `[entity] configuration deployment settings` |
+| real-world-usage | `[entity] production example site:github.com` |
+
+**Non-code domains** — 3 angles per entity, 1 phrasing each:
+- legal: `[entity] legislation statute text` · `[entity] compliance requirements checklist` · `[entity] recent amendments 2025`
+- design: `[entity] design system guidelines` · `[entity] accessibility WCAG` · `[entity] UX best practices`
+- market: `[entity] industry report 2025` · `[entity] market trends 2025` · `[entity] competitor comparison`
+- science: `[entity] research paper arxiv` · `[entity] technical specification standard` · `[entity] recent research 2025`
+- general: `[entity] overview guide` · `[entity] best practices` · `[entity] common mistakes pitfalls`
 
 ### Tier Scoring
 
-- **Tier A** — official sources, gov sites, academic (arxiv, pubmed, ietf), github.com, MDN, OWASP, NIST, WHO, ISO, IEEE: auto-include
-- **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp, established news, industry publications): include if clearly relevant
-- **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index regardless of availability
+- **Tier A** — official sources, gov, academic (arxiv, pubmed, ietf), github.com, MDN, OWASP, NIST: auto-include
+- **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp, industry publications): include if clearly relevant
+- **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index
 - **Skip** — paywalled, social media, SEO farms: exclude silently
 
-If no Tier A or B source exists for an angle, log it as a coverage gap — do NOT fall back to Tier C.
+### Step 3: Dedup and tier filter
 
-Each agent returns collected URLs with tier, angle, and entity labels. Merge and deduplicate across all agents. Add any `SEED_URLS` from arguments.
+Merge URLs from source map (2a), Context7 .md files (2b), and WebSearch (2c). Deduplicate. Add any `SEED_URLS` from arguments. Remove Tier C.
 
-**Target: 50-100 sources (Tier A + Tier B combined). Minimum to proceed: 50.**
+**Target: 15–20 sources (Tier A + Tier B). Minimum to proceed: 15.**
 
-### Phase 3b: Gap Detection Retry
-
-If any angle returned 0 Tier A/B sources for any entity: spawn a retry agent. Refine the query — alternate phrasing, more specifics, different site operators.
-
-Log each retry: `Retried [entity] [angle] with: "[refined query]" → N sources found`
-
-### Phase 3c: Minimum Source Gate
-
-If total Tier A + Tier B < 50:
-1. Log: "Minimum source gate: collected N sources — target 50-100. Running expansion."
-2. Spawn additional search agents targeting entities and angles with the fewest hits
-3. Keep expanding until total >= 50 or query space is exhausted
-4. If still < 50: log "Source gate: collected N sources (below 50 target) — query space exhausted. Proceeding."
+If below 15: log a coverage warning and continue — do not run additional WebSearch calls.
 
 ---
 
@@ -248,7 +270,7 @@ Write all approved URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
 ]
 ```
 
-Prioritize: all Tier A first, then Tier B (cap at 40). Tier C is never included.
+Prioritize: all Tier A first, then Tier B (cap at 20). Tier C is never included.
 
 **Step 2 — Run the local downloader.**
 
@@ -308,6 +330,10 @@ Research complete for workspace/[WORKSPACE_ID]
     ✓ [entity 1]  — N sources
     ✓ [entity 2]  — N sources
     ⚠ [entity 3]  — no authoritative source found
+
+  Coverage gaps (entities with < 2 Tier A sources — treat agent decisions here as less certain):
+    • [entity 3] — 0 Tier A sources
+    [none — all entities have 2+ Tier A sources]
 
   Agents get this research automatically when spawned with
   workspace_path="[WORKSPACE_ABS]"

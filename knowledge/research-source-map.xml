@@ -1,0 +1,851 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  research-source-map.xml — Pre-verified canonical sources for common technologies.
+
+  Used by /research-task (Phase 3, Step 2a) and /research-project (Phase 2, Step 2a).
+  When a technology matches an entry here, use these URLs directly — skip WebSearch for
+  angles already covered. Saves search tokens and ensures authoritative sources.
+
+  Match order: (1) exact id, (2) case-insensitive name, (3) tech in tags, (4) substring.
+
+  Attributes on <source>:
+    tier="A|B"         — source quality tier (Tier C never included)
+    angle="..."        — which research angle this URL covers
+
+  context7-id is optional. When present, /research-task and /research-project call
+  Context7 for live docs before falling back to WebSearch.
+
+  verified: date this entry was last checked for accuracy.
+-->
+<source-map version="1.0" verified="2026-06-24">
+
+  <!-- =====================================================================
+       FRONTEND FRAMEWORKS
+       ===================================================================== -->
+
+  <entry id="react" verified="2026-06-24">
+    <name>React</name>
+    <tags>react, react.js, reactjs, jsx, tsx</tags>
+    <context7-id>/facebook/react</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://react.dev/</source>
+      <source tier="A" angle="official-docs">https://react.dev/reference/react</source>
+      <source tier="A" angle="integration-patterns">https://github.com/facebook/react</source>
+      <source tier="A" angle="best-practices">https://react.dev/learn/thinking-in-react</source>
+    </sources>
+  </entry>
+
+  <entry id="nextjs" verified="2026-06-24">
+    <name>Next.js</name>
+    <tags>next.js, nextjs, next, vercel framework</tags>
+    <context7-id>/vercel/next.js</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://nextjs.org/docs</source>
+      <source tier="A" angle="official-docs">https://nextjs.org/docs/app/api-reference</source>
+      <source tier="A" angle="integration-patterns">https://github.com/vercel/next.js</source>
+      <source tier="A" angle="best-practices">https://nextjs.org/docs/app/building-your-application</source>
+    </sources>
+  </entry>
+
+  <entry id="vue" verified="2026-06-24">
+    <name>Vue</name>
+    <tags>vue, vue.js, vuejs, vue3, vue 3</tags>
+    <context7-id>/vuejs/core</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://vuejs.org/guide/introduction.html</source>
+      <source tier="A" angle="official-docs">https://vuejs.org/api/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/vuejs/core</source>
+    </sources>
+  </entry>
+
+  <entry id="angular" verified="2026-06-24">
+    <name>Angular</name>
+    <tags>angular, angularjs, ng, @angular</tags>
+    <context7-id>/angular/angular</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://angular.dev/overview</source>
+      <source tier="A" angle="official-docs">https://angular.dev/api</source>
+      <source tier="A" angle="integration-patterns">https://github.com/angular/angular</source>
+    </sources>
+  </entry>
+
+  <entry id="svelte" verified="2026-06-24">
+    <name>Svelte</name>
+    <tags>svelte, sveltekit, svelte kit</tags>
+    <context7-id>/sveltejs/svelte</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://svelte.dev/docs/svelte/overview</source>
+      <source tier="A" angle="official-docs">https://kit.svelte.dev/docs/introduction</source>
+      <source tier="A" angle="integration-patterns">https://github.com/sveltejs/svelte</source>
+    </sources>
+  </entry>
+
+  <entry id="vite" verified="2026-06-24">
+    <name>Vite</name>
+    <tags>vite, vitejs, vite build</tags>
+    <context7-id>/vitejs/vite</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://vitejs.dev/guide/</source>
+      <source tier="A" angle="configuration">https://vitejs.dev/config/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/vitejs/vite</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       BACKEND FRAMEWORKS — JavaScript / TypeScript
+       ===================================================================== -->
+
+  <entry id="express" verified="2026-06-24">
+    <name>Express</name>
+    <tags>express, express.js, expressjs</tags>
+    <context7-id>/expressjs/express</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://expressjs.com/en/4x/api.html</source>
+      <source tier="A" angle="best-practices">https://expressjs.com/en/advanced/best-practice-performance.html</source>
+      <source tier="A" angle="security">https://expressjs.com/en/advanced/best-practice-security.html</source>
+      <source tier="A" angle="integration-patterns">https://github.com/expressjs/express</source>
+    </sources>
+  </entry>
+
+  <entry id="fastify" verified="2026-06-24">
+    <name>Fastify</name>
+    <tags>fastify, fastify.js</tags>
+    <context7-id>/fastify/fastify</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://fastify.dev/docs/latest/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/fastify/fastify</source>
+      <source tier="A" angle="best-practices">https://fastify.dev/docs/latest/Guides/Getting-Started/</source>
+    </sources>
+  </entry>
+
+  <entry id="nestjs" verified="2026-06-24">
+    <name>NestJS</name>
+    <tags>nestjs, nest.js, nest js, @nestjs</tags>
+    <context7-id>/nestjs/nest</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.nestjs.com/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/nestjs/nest</source>
+      <source tier="A" angle="best-practices">https://docs.nestjs.com/fundamentals/dependency-injection</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       BACKEND FRAMEWORKS — Python
+       ===================================================================== -->
+
+  <entry id="django" verified="2026-06-24">
+    <name>Django</name>
+    <tags>django, django rest framework, drf, django orm</tags>
+    <context7-id>/django/django</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.djangoproject.com/en/stable/</source>
+      <source tier="A" angle="security">https://docs.djangoproject.com/en/stable/topics/security/</source>
+      <source tier="A" angle="best-practices">https://docs.djangoproject.com/en/stable/misc/design-philosophies/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/django/django</source>
+    </sources>
+  </entry>
+
+  <entry id="fastapi" verified="2026-06-24">
+    <name>FastAPI</name>
+    <tags>fastapi, fast api</tags>
+    <context7-id>/tiangolo/fastapi</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://fastapi.tiangolo.com/</source>
+      <source tier="A" angle="official-docs">https://fastapi.tiangolo.com/reference/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/tiangolo/fastapi</source>
+      <source tier="A" angle="best-practices">https://fastapi.tiangolo.com/deployment/</source>
+    </sources>
+  </entry>
+
+  <entry id="flask" verified="2026-06-24">
+    <name>Flask</name>
+    <tags>flask, flask python</tags>
+    <context7-id>/pallets/flask</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://flask.palletsprojects.com/en/stable/</source>
+      <source tier="A" angle="official-docs">https://flask.palletsprojects.com/en/stable/api/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/pallets/flask</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       BACKEND FRAMEWORKS — Other Languages
+       ===================================================================== -->
+
+  <entry id="rails" verified="2026-06-24">
+    <name>Ruby on Rails</name>
+    <tags>rails, ruby on rails, ror, activerecord, activesupport</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://guides.rubyonrails.org/</source>
+      <source tier="A" angle="official-docs">https://api.rubyonrails.org/</source>
+      <source tier="A" angle="security">https://guides.rubyonrails.org/security.html</source>
+      <source tier="A" angle="integration-patterns">https://github.com/rails/rails</source>
+    </sources>
+  </entry>
+
+  <entry id="aspnet-core" verified="2026-06-24">
+    <name>ASP.NET Core</name>
+    <tags>asp.net core, aspnetcore, asp.net, dotnet web, .net core web, microsoft.aspnetcore</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/aspnet/core/</source>
+      <source tier="A" angle="security">https://learn.microsoft.com/en-us/aspnet/core/security/</source>
+      <source tier="A" angle="best-practices">https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices</source>
+      <source tier="A" angle="integration-patterns">https://github.com/dotnet/aspnetcore</source>
+    </sources>
+  </entry>
+
+  <entry id="spring-boot" verified="2026-06-24">
+    <name>Spring Boot</name>
+    <tags>spring boot, springboot, spring framework, org.springframework.boot</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://spring.io/projects/spring-boot</source>
+      <source tier="A" angle="official-docs">https://docs.spring.io/spring-boot/docs/current/reference/html/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/spring-projects/spring-boot</source>
+    </sources>
+  </entry>
+
+  <entry id="gin" verified="2026-06-24">
+    <name>Gin</name>
+    <tags>gin, gin-gonic, gin go, github.com/gin-gonic/gin</tags>
+    <context7-id>/gin-gonic/gin</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://gin-gonic.com/docs/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/gin-gonic/gin</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       DATABASES
+       ===================================================================== -->
+
+  <entry id="postgresql" verified="2026-06-24">
+    <name>PostgreSQL</name>
+    <tags>postgresql, postgres, psql, pg</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.postgresql.org/docs/current/</source>
+      <source tier="A" angle="performance">https://www.postgresql.org/docs/current/performance-tips.html</source>
+      <source tier="A" angle="configuration">https://www.postgresql.org/docs/current/runtime-config.html</source>
+      <source tier="A" angle="integration-patterns">https://github.com/postgres/postgres</source>
+    </sources>
+  </entry>
+
+  <entry id="mysql" verified="2026-06-24">
+    <name>MySQL</name>
+    <tags>mysql, mariadb, mysql server</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://dev.mysql.com/doc/refman/8.0/en/</source>
+      <source tier="A" angle="performance">https://dev.mysql.com/doc/refman/8.0/en/optimization.html</source>
+      <source tier="A" angle="security">https://dev.mysql.com/doc/refman/8.0/en/security.html</source>
+    </sources>
+  </entry>
+
+  <entry id="mongodb" verified="2026-06-24">
+    <name>MongoDB</name>
+    <tags>mongodb, mongo, bson, mongoose</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.mongodb.com/docs/manual/</source>
+      <source tier="A" angle="performance">https://www.mongodb.com/docs/manual/core/query-optimization/</source>
+      <source tier="A" angle="security">https://www.mongodb.com/docs/manual/security/</source>
+    </sources>
+  </entry>
+
+  <entry id="redis" verified="2026-06-24">
+    <name>Redis</name>
+    <tags>redis, redis cache, ioredis, redis-py</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://redis.io/docs/</source>
+      <source tier="A" angle="configuration">https://redis.io/docs/management/config/</source>
+      <source tier="A" angle="performance">https://redis.io/docs/management/optimization/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/redis/redis</source>
+    </sources>
+  </entry>
+
+  <entry id="sqlite" verified="2026-06-24">
+    <name>SQLite</name>
+    <tags>sqlite, sqlite3, better-sqlite3</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.sqlite.org/docs.html</source>
+      <source tier="A" angle="performance">https://www.sqlite.org/speed.html</source>
+      <source tier="A" angle="best-practices">https://www.sqlite.org/lang.html</source>
+    </sources>
+  </entry>
+
+  <entry id="elasticsearch" verified="2026-06-24">
+    <name>Elasticsearch</name>
+    <tags>elasticsearch, elastic search, opensearch, lucene</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.elastic.co/guide/en/elasticsearch/reference/current/</source>
+      <source tier="A" angle="performance">https://www.elastic.co/guide/en/elasticsearch/reference/current/tune-for-search-speed.html</source>
+      <source tier="A" angle="configuration">https://www.elastic.co/guide/en/elasticsearch/reference/current/settings.html</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       ORM / QUERY BUILDERS
+       ===================================================================== -->
+
+  <entry id="prisma" verified="2026-06-24">
+    <name>Prisma</name>
+    <tags>prisma, prisma client, prisma orm, @prisma/client</tags>
+    <context7-id>/prisma/prisma</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.prisma.io/docs/</source>
+      <source tier="A" angle="official-docs">https://www.prisma.io/docs/reference/api-reference/prisma-client-reference</source>
+      <source tier="A" angle="integration-patterns">https://github.com/prisma/prisma</source>
+      <source tier="A" angle="best-practices">https://www.prisma.io/docs/guides/performance-and-optimization</source>
+    </sources>
+  </entry>
+
+  <entry id="sqlalchemy" verified="2026-06-24">
+    <name>SQLAlchemy</name>
+    <tags>sqlalchemy, sqlalchemy orm, alembic</tags>
+    <context7-id>/sqlalchemy/sqlalchemy</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.sqlalchemy.org/en/20/</source>
+      <source tier="A" angle="official-docs">https://docs.sqlalchemy.org/en/20/orm/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/sqlalchemy/sqlalchemy</source>
+      <source tier="A" angle="best-practices">https://docs.sqlalchemy.org/en/20/orm/session_basics.html</source>
+    </sources>
+  </entry>
+
+  <entry id="typeorm" verified="2026-06-24">
+    <name>TypeORM</name>
+    <tags>typeorm, type orm</tags>
+    <context7-id>/typeorm/typeorm</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://typeorm.io/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/typeorm/typeorm</source>
+    </sources>
+  </entry>
+
+  <entry id="drizzle" verified="2026-06-24">
+    <name>Drizzle ORM</name>
+    <tags>drizzle, drizzle-orm, drizzle orm</tags>
+    <context7-id>/drizzle-team/drizzle-orm</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://orm.drizzle.team/docs/overview</source>
+      <source tier="A" angle="integration-patterns">https://github.com/drizzle-team/drizzle-orm</source>
+    </sources>
+  </entry>
+
+  <entry id="sequelize" verified="2026-06-24">
+    <name>Sequelize</name>
+    <tags>sequelize, sequelize-typescript</tags>
+    <context7-id>/sequelize/sequelize</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://sequelize.org/docs/v6/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/sequelize/sequelize</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       AUTH / SECURITY
+       ===================================================================== -->
+
+  <entry id="nextauth" verified="2026-06-24">
+    <name>NextAuth.js</name>
+    <tags>nextauth, next-auth, authjs, auth.js</tags>
+    <context7-id>/nextauthjs/next-auth</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://authjs.dev/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/nextauthjs/next-auth</source>
+      <source tier="A" angle="security">https://authjs.dev/concepts/security</source>
+    </sources>
+  </entry>
+
+  <entry id="passport" verified="2026-06-24">
+    <name>Passport</name>
+    <tags>passport, passport.js, passportjs</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.passportjs.org/docs/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/jaredhanson/passport</source>
+    </sources>
+  </entry>
+
+  <entry id="jwt" verified="2026-06-24">
+    <name>JWT</name>
+    <tags>jwt, json web token, jsonwebtoken, jose, jws, jwe</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://jwt.io/introduction</source>
+      <source tier="A" angle="security">https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html</source>
+      <source tier="A" angle="official-docs">https://datatracker.ietf.org/doc/html/rfc7519</source>
+    </sources>
+  </entry>
+
+  <entry id="oauth2" verified="2026-06-24">
+    <name>OAuth 2.0</name>
+    <tags>oauth2, oauth 2.0, oauth, openid connect, oidc</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://oauth.net/2/</source>
+      <source tier="A" angle="official-docs">https://datatracker.ietf.org/doc/html/rfc6749</source>
+      <source tier="A" angle="security">https://datatracker.ietf.org/doc/html/rfc9700</source>
+      <source tier="A" angle="best-practices">https://cheatsheetseries.owasp.org/cheatsheets/OAuth2_Cheat_Sheet.html</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       SECURITY STANDARDS
+       ===================================================================== -->
+
+  <entry id="owasp" verified="2026-06-24">
+    <name>OWASP</name>
+    <tags>owasp, owasp top 10, owasp top ten, web security, application security</tags>
+    <sources>
+      <source tier="A" angle="security">https://owasp.org/www-project-top-ten/</source>
+      <source tier="A" angle="security">https://cheatsheetseries.owasp.org/</source>
+      <source tier="A" angle="best-practices">https://owasp.org/www-project-cheat-sheets/</source>
+    </sources>
+  </entry>
+
+  <entry id="nist-cybersecurity" verified="2026-06-24">
+    <name>NIST Cybersecurity</name>
+    <tags>nist, nist csf, nist cybersecurity framework, nist sp 800</tags>
+    <sources>
+      <source tier="A" angle="security">https://www.nist.gov/cyberframework</source>
+      <source tier="A" angle="official-docs">https://csrc.nist.gov/publications/sp800</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       TESTING
+       ===================================================================== -->
+
+  <entry id="jest" verified="2026-06-24">
+    <name>Jest</name>
+    <tags>jest, jest testing, jest js</tags>
+    <context7-id>/jestjs/jest</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://jestjs.io/docs/getting-started</source>
+      <source tier="A" angle="official-docs">https://jestjs.io/docs/api</source>
+      <source tier="A" angle="integration-patterns">https://github.com/jestjs/jest</source>
+    </sources>
+  </entry>
+
+  <entry id="vitest" verified="2026-06-24">
+    <name>Vitest</name>
+    <tags>vitest, vitest testing</tags>
+    <context7-id>/vitest-dev/vitest</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://vitest.dev/guide/</source>
+      <source tier="A" angle="official-docs">https://vitest.dev/api/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/vitest-dev/vitest</source>
+    </sources>
+  </entry>
+
+  <entry id="pytest" verified="2026-06-24">
+    <name>pytest</name>
+    <tags>pytest, py.test, pytest fixtures</tags>
+    <context7-id>/pytest-dev/pytest</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.pytest.org/en/stable/</source>
+      <source tier="A" angle="best-practices">https://docs.pytest.org/en/stable/explanation/goodpractices.html</source>
+      <source tier="A" angle="integration-patterns">https://github.com/pytest-dev/pytest</source>
+    </sources>
+  </entry>
+
+  <entry id="playwright" verified="2026-06-24">
+    <name>Playwright</name>
+    <tags>playwright, playwright testing, @playwright/test, playwright python</tags>
+    <context7-id>/microsoft/playwright</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://playwright.dev/docs/intro</source>
+      <source tier="A" angle="official-docs">https://playwright.dev/docs/api/class-playwright</source>
+      <source tier="A" angle="best-practices">https://playwright.dev/docs/best-practices</source>
+      <source tier="A" angle="integration-patterns">https://github.com/microsoft/playwright</source>
+    </sources>
+  </entry>
+
+  <entry id="cypress" verified="2026-06-24">
+    <name>Cypress</name>
+    <tags>cypress, cypress.io, cypress testing</tags>
+    <context7-id>/cypress-io/cypress</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.cypress.io/guides/overview/why-cypress</source>
+      <source tier="A" angle="official-docs">https://docs.cypress.io/api/table-of-contents</source>
+      <source tier="A" angle="integration-patterns">https://github.com/cypress-io/cypress</source>
+    </sources>
+  </entry>
+
+  <entry id="xunit" verified="2026-06-24">
+    <name>xUnit</name>
+    <tags>xunit, xunit.net, nunit, mstest, dotnet test</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://xunit.net/docs/getting-started/netcore/cmdline</source>
+      <source tier="A" angle="integration-patterns">https://github.com/xunit/xunit</source>
+      <source tier="A" angle="best-practices">https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-with-dotnet-test</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       STATE MANAGEMENT
+       ===================================================================== -->
+
+  <entry id="redux-toolkit" verified="2026-06-24">
+    <name>Redux Toolkit</name>
+    <tags>redux, redux toolkit, @reduxjs/toolkit, redux thunk, redux saga</tags>
+    <context7-id>/reduxjs/redux-toolkit</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://redux-toolkit.js.org/introduction/getting-started</source>
+      <source tier="A" angle="official-docs">https://redux-toolkit.js.org/api/configureStore</source>
+      <source tier="A" angle="best-practices">https://redux.js.org/style-guide/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/reduxjs/redux-toolkit</source>
+    </sources>
+  </entry>
+
+  <entry id="zustand" verified="2026-06-24">
+    <name>Zustand</name>
+    <tags>zustand, pmndrs zustand</tags>
+    <context7-id>/pmndrs/zustand</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.pmnd.rs/zustand/getting-started/introduction</source>
+      <source tier="A" angle="integration-patterns">https://github.com/pmndrs/zustand</source>
+    </sources>
+  </entry>
+
+  <entry id="pinia" verified="2026-06-24">
+    <name>Pinia</name>
+    <tags>pinia, vue store, vuex</tags>
+    <context7-id>/vuejs/pinia</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://pinia.vuejs.org/introduction.html</source>
+      <source tier="A" angle="official-docs">https://pinia.vuejs.org/api/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/vuejs/pinia</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       TYPESCRIPT / JAVASCRIPT UTILITIES
+       ===================================================================== -->
+
+  <entry id="zod" verified="2026-06-24">
+    <name>Zod</name>
+    <tags>zod, zod schema, zod validation</tags>
+    <context7-id>/colinhacks/zod</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://zod.dev/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/colinhacks/zod</source>
+    </sources>
+  </entry>
+
+  <entry id="axios" verified="2026-06-24">
+    <name>axios</name>
+    <tags>axios, axios http, axios.js</tags>
+    <context7-id>/axios/axios</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://axios-http.com/docs/intro</source>
+      <source tier="A" angle="official-docs">https://axios-http.com/docs/api_intro</source>
+      <source tier="A" angle="integration-patterns">https://github.com/axios/axios</source>
+    </sources>
+  </entry>
+
+  <entry id="tanstack-query" verified="2026-06-24">
+    <name>TanStack Query</name>
+    <tags>tanstack query, react query, @tanstack/react-query, @tanstack/query</tags>
+    <context7-id>/tanstack/query</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://tanstack.com/query/latest/docs/framework/react/overview</source>
+      <source tier="A" angle="best-practices">https://tanstack.com/query/latest/docs/framework/react/guides/best-practices</source>
+      <source tier="A" angle="integration-patterns">https://github.com/TanStack/query</source>
+    </sources>
+  </entry>
+
+  <entry id="trpc" verified="2026-06-24">
+    <name>tRPC</name>
+    <tags>trpc, @trpc/server, @trpc/client</tags>
+    <context7-id>/trpc/trpc</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://trpc.io/docs/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/trpc/trpc</source>
+    </sources>
+  </entry>
+
+  <entry id="date-fns" verified="2026-06-24">
+    <name>date-fns</name>
+    <tags>date-fns, date fns, datefns</tags>
+    <context7-id>/date-fns/date-fns</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://date-fns.org/docs/Getting-Started</source>
+      <source tier="A" angle="integration-patterns">https://github.com/date-fns/date-fns</source>
+    </sources>
+  </entry>
+
+  <entry id="lodash" verified="2026-06-24">
+    <name>lodash</name>
+    <tags>lodash, underscore, lodash-es</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://lodash.com/docs/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/lodash/lodash</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       PYTHON LIBRARIES
+       ===================================================================== -->
+
+  <entry id="pydantic" verified="2026-06-24">
+    <name>Pydantic</name>
+    <tags>pydantic, pydantic v2, pydantic models</tags>
+    <context7-id>/pydantic/pydantic</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.pydantic.dev/latest/</source>
+      <source tier="A" angle="official-docs">https://docs.pydantic.dev/latest/api/main/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/pydantic/pydantic</source>
+    </sources>
+  </entry>
+
+  <entry id="celery" verified="2026-06-24">
+    <name>Celery</name>
+    <tags>celery, celery worker, celery beat, celery redis</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.celeryq.dev/en/stable/</source>
+      <source tier="A" angle="configuration">https://docs.celeryq.dev/en/stable/userguide/configuration.html</source>
+      <source tier="A" angle="integration-patterns">https://github.com/celery/celery</source>
+      <source tier="A" angle="best-practices">https://docs.celeryq.dev/en/stable/userguide/tasks.html</source>
+    </sources>
+  </entry>
+
+  <entry id="httpx" verified="2026-06-24">
+    <name>httpx</name>
+    <tags>httpx, httpx python, httpx async</tags>
+    <context7-id>/encode/httpx</context7-id>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.python-httpx.org/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/encode/httpx</source>
+    </sources>
+  </entry>
+
+  <entry id="numpy" verified="2026-06-24">
+    <name>NumPy</name>
+    <tags>numpy, numpy arrays, np</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://numpy.org/doc/stable/</source>
+      <source tier="A" angle="official-docs">https://numpy.org/doc/stable/reference/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/numpy/numpy</source>
+    </sources>
+  </entry>
+
+  <entry id="pandas" verified="2026-06-24">
+    <name>pandas</name>
+    <tags>pandas, dataframe, pd</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://pandas.pydata.org/docs/</source>
+      <source tier="A" angle="official-docs">https://pandas.pydata.org/docs/reference/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/pandas-dev/pandas</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       DEVOPS / INFRASTRUCTURE
+       ===================================================================== -->
+
+  <entry id="docker" verified="2026-06-24">
+    <name>Docker</name>
+    <tags>docker, dockerfile, docker compose, docker-compose, containers</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.docker.com/</source>
+      <source tier="A" angle="best-practices">https://docs.docker.com/develop/develop-images/dockerfile_best-practices/</source>
+      <source tier="A" angle="security">https://docs.docker.com/engine/security/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/docker/docs</source>
+    </sources>
+  </entry>
+
+  <entry id="kubernetes" verified="2026-06-24">
+    <name>Kubernetes</name>
+    <tags>kubernetes, k8s, kubectl, helm, kustomize</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://kubernetes.io/docs/home/</source>
+      <source tier="A" angle="best-practices">https://kubernetes.io/docs/concepts/configuration/overview/</source>
+      <source tier="A" angle="security">https://kubernetes.io/docs/concepts/security/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/kubernetes/kubernetes</source>
+    </sources>
+  </entry>
+
+  <entry id="github-actions" verified="2026-06-24">
+    <name>GitHub Actions</name>
+    <tags>github actions, github ci, github workflow, .github/workflows</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.github.com/en/actions</source>
+      <source tier="A" angle="security">https://docs.github.com/en/actions/security-for-github-actions</source>
+      <source tier="A" angle="best-practices">https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does</source>
+    </sources>
+  </entry>
+
+  <entry id="terraform" verified="2026-06-24">
+    <name>Terraform</name>
+    <tags>terraform, hashicorp terraform, tf, hcl, infrastructure as code</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://developer.hashicorp.com/terraform/docs</source>
+      <source tier="A" angle="best-practices">https://developer.hashicorp.com/terraform/language/style</source>
+      <source tier="A" angle="integration-patterns">https://github.com/hashicorp/terraform</source>
+    </sources>
+  </entry>
+
+  <entry id="nginx" verified="2026-06-24">
+    <name>Nginx</name>
+    <tags>nginx, nginx server, nginx config, nginx proxy</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://nginx.org/en/docs/</source>
+      <source tier="A" angle="configuration">https://nginx.org/en/docs/ngx_core_module.html</source>
+      <source tier="A" angle="best-practices">https://www.nginx.com/blog/nginx-best-practices/</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       GRAPHQL
+       ===================================================================== -->
+
+  <entry id="graphql" verified="2026-06-24">
+    <name>GraphQL</name>
+    <tags>graphql, gql, apollo graphql, graphql-js</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://graphql.org/learn/</source>
+      <source tier="A" angle="official-docs">https://spec.graphql.org/</source>
+      <source tier="A" angle="best-practices">https://graphql.org/learn/best-practices/</source>
+    </sources>
+  </entry>
+
+  <entry id="apollo-graphql" verified="2026-06-24">
+    <name>Apollo GraphQL</name>
+    <tags>apollo, apollo server, apollo client, @apollo/server, @apollo/client</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.apollographql.com/docs/apollo-server/</source>
+      <source tier="A" angle="official-docs">https://www.apollographql.com/docs/react/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/apollographql/apollo-server</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       MESSAGE QUEUES / STREAMING
+       ===================================================================== -->
+
+  <entry id="kafka" verified="2026-06-24">
+    <name>Apache Kafka</name>
+    <tags>kafka, apache kafka, confluent kafka, kafka streams, kafkajs</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://kafka.apache.org/documentation/</source>
+      <source tier="A" angle="configuration">https://kafka.apache.org/documentation/#configuration</source>
+      <source tier="A" angle="best-practices">https://kafka.apache.org/documentation/#design</source>
+    </sources>
+  </entry>
+
+  <entry id="rabbitmq" verified="2026-06-24">
+    <name>RabbitMQ</name>
+    <tags>rabbitmq, rabbit mq, amqp, celery rabbitmq</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://www.rabbitmq.com/docs</source>
+      <source tier="A" angle="best-practices">https://www.rabbitmq.com/docs/production-checklist</source>
+      <source tier="A" angle="configuration">https://www.rabbitmq.com/docs/configure</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       OBSERVABILITY / MONITORING
+       ===================================================================== -->
+
+  <entry id="opentelemetry" verified="2026-06-24">
+    <name>OpenTelemetry</name>
+    <tags>opentelemetry, otel, otlp, tracing, distributed tracing</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://opentelemetry.io/docs/</source>
+      <source tier="A" angle="integration-patterns">https://opentelemetry.io/docs/languages/</source>
+      <source tier="A" angle="best-practices">https://opentelemetry.io/docs/concepts/</source>
+    </sources>
+  </entry>
+
+  <entry id="sentry" verified="2026-06-24">
+    <name>Sentry</name>
+    <tags>sentry, sentry sdk, @sentry/node, sentry-sdk</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.sentry.io/</source>
+      <source tier="A" angle="integration-patterns">https://docs.sentry.io/platforms/</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       PAYMENT / EXTERNAL SERVICES
+       ===================================================================== -->
+
+  <entry id="stripe" verified="2026-06-24">
+    <name>Stripe</name>
+    <tags>stripe, stripe api, stripe payments, stripe.js</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.stripe.com/</source>
+      <source tier="A" angle="security">https://docs.stripe.com/security</source>
+      <source tier="A" angle="integration-patterns">https://docs.stripe.com/sdks</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       CLOUD SDKs
+       ===================================================================== -->
+
+  <entry id="aws-sdk" verified="2026-06-24">
+    <name>AWS SDK</name>
+    <tags>aws sdk, aws-sdk, @aws-sdk, boto3, aws</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://docs.aws.amazon.com/</source>
+      <source tier="A" angle="security">https://docs.aws.amazon.com/security/</source>
+      <source tier="A" angle="best-practices">https://docs.aws.amazon.com/whitepapers/latest/aws-security-best-practices/welcome.html</source>
+    </sources>
+  </entry>
+
+  <entry id="azure-sdk" verified="2026-06-24">
+    <name>Azure SDK</name>
+    <tags>azure sdk, @azure, azure dotnet, azure python sdk</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/azure/</source>
+      <source tier="A" angle="security">https://learn.microsoft.com/en-us/azure/security/</source>
+      <source tier="A" angle="best-practices">https://learn.microsoft.com/en-us/azure/architecture/best-practices/</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       .NET ECOSYSTEM
+       ===================================================================== -->
+
+  <entry id="dotnet" verified="2026-06-24">
+    <name>.NET</name>
+    <tags>.net, dotnet, c#, csharp, .net 8, .net 9, microsoft.extensions</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/dotnet/</source>
+      <source tier="A" angle="security">https://learn.microsoft.com/en-us/dotnet/core/security/</source>
+      <source tier="A" angle="best-practices">https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/dotnet/dotnet</source>
+    </sources>
+  </entry>
+
+  <entry id="entity-framework" verified="2026-06-24">
+    <name>Entity Framework Core</name>
+    <tags>entity framework, ef core, efcore, microsoft.entityframeworkcore</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/ef/core/</source>
+      <source tier="A" angle="performance">https://learn.microsoft.com/en-us/ef/core/performance/</source>
+      <source tier="A" angle="integration-patterns">https://github.com/dotnet/efcore</source>
+    </sources>
+  </entry>
+
+  <!-- =====================================================================
+       MDN WEB STANDARDS
+       ===================================================================== -->
+
+  <entry id="web-apis" verified="2026-06-24">
+    <name>Web APIs</name>
+    <tags>fetch api, web workers, service worker, websocket, indexeddb, web crypto, web storage</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://developer.mozilla.org/en-US/docs/Web/API</source>
+      <source tier="A" angle="security">https://developer.mozilla.org/en-US/docs/Web/Security</source>
+      <source tier="A" angle="best-practices">https://developer.mozilla.org/en-US/docs/Learn</source>
+    </sources>
+  </entry>
+
+  <entry id="css" verified="2026-06-24">
+    <name>CSS</name>
+    <tags>css, tailwind, tailwindcss, css modules, sass, scss, styled-components</tags>
+    <sources>
+      <source tier="A" angle="official-docs">https://developer.mozilla.org/en-US/docs/Web/CSS</source>
+      <source tier="A" angle="official-docs">https://tailwindcss.com/docs</source>
+      <source tier="A" angle="best-practices">https://developer.mozilla.org/en-US/docs/Learn/CSS</source>
+    </sources>
+  </entry>
+
+</source-map>

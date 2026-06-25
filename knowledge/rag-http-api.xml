@@ -63,7 +63,8 @@ print(r.json()["status"])  # "ready" or 503
           "agents" (agents/*.xml files),
           "memories" (user memory files),
           "codebase" (project source code, requires project_path),
-          "research" (indexed URLs/PDFs, requires workspace_path)
+          "research" (indexed URLs/PDFs, requires workspace_path),
+          "project-docs" (project markdown/rst docs indexed via POST /index_docs, requires project_path)
         </field>
         <field name="project_path" required="false" type="string">
           Absolute path to the project root. Required when scope="codebase".
@@ -190,7 +191,7 @@ curl -s -X POST http://127.0.0.1:8612/context \
     "agent": "workflow",
     "task_description": "implement email notifications for address changes",
     "project_path": "C:/Development/MyApp",
-    "workspace_path": "C:/Development/ClaudeBoost/workspace/TASK-1234",
+    "workspace_path": "C:/YourClaudeBoostPath/workspace/TASK-1234",
     "max_tokens": 8000
   }'
       </example-curl>
@@ -217,7 +218,7 @@ ctx = get_context(
     "workflow-agent",
     "implement address change email notifications in ASP.NET Core",
     project_path="C:/Development/MyApp",
-    workspace_path="C:/Development/ClaudeBoost/workspace/TASK-1234",
+    workspace_path="C:/YourClaudeBoostPath/workspace/TASK-1234",
 )
 print(f"{ctx['total_tokens_approx']} tokens | tiers: {ctx['tier_summary']}")
       </example-python>
@@ -276,6 +277,78 @@ if data.get("errors"):
       <note>
         files_failed > 0 is the signal that something went wrong. Zero failures = healthy index.
         Retry failed embed_error entries once with force=true before escalating.
+      </note>
+    </endpoint>
+
+    <endpoint method="POST" path="/index_docs">
+      <description>
+        Index (or reindex) a project's markdown and reStructuredText documentation files
+        into a per-project docs collection. After indexing, the docs are searchable via
+        POST /search with scope="project-docs" and are automatically injected as Tier 4d
+        in POST /context calls when a project is provided.
+
+        The docs index is separate from the codebase index (POST /index). It covers
+        .md and .rst files only, excluding build dirs, node_modules, venv, .git, etc.
+        Incremental: files are skipped if their content hash hasn't changed.
+      </description>
+      <request-fields>
+        <field name="project_path" required="true" type="string">
+          Absolute path to the project root to scan for docs.
+        </field>
+        <field name="paths" required="false" type="array">
+          Optional list of specific file paths to index. When provided, only those files
+          are indexed instead of scanning the full project tree.
+        </field>
+        <field name="force" required="false" type="bool" default="false">
+          When true, re-embeds all docs even if content is unchanged. Use after switching
+          embedding models.
+        </field>
+      </request-fields>
+      <response-fields>
+        <field name="files_indexed">number of doc files embedded and stored</field>
+        <field name="files_skipped">number of files skipped (hash unchanged or empty)</field>
+        <field name="files_failed">number of files that errored</field>
+        <field name="chunks_created">total chunks added to the collection</field>
+        <field name="files_scanned">total .md/.rst files found in the project</field>
+        <field name="collection_path">absolute path to the ChromaDB store for this project's docs</field>
+        <field name="elapsed_ms">total indexing time in milliseconds</field>
+      </response-fields>
+      <example-curl>
+curl -s -X POST http://127.0.0.1:8612/index_docs \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "/home/user/myproject"}'
+
+# Force rebuild (after model upgrade)
+curl -s -X POST http://127.0.0.1:8612/index_docs \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "/home/user/myproject", "force": true}'
+      </example-curl>
+      <example-python>
+import requests
+
+resp = requests.post("http://127.0.0.1:8612/index_docs", json={
+    "project_path": "/home/user/myproject",
+})
+data = resp.json()
+print(f"Docs: {data['files_indexed']} indexed, {data['files_skipped']} skipped, "
+      f"{data['chunks_created']} chunks in {data['elapsed_ms']}ms")
+
+# Then search project docs
+resp = requests.post("http://127.0.0.1:8612/search", json={
+    "query": "authentication setup guide",
+    "scope": "project-docs",
+    "project_path": "/home/user/myproject",
+    "limit": 5,
+})
+for r in resp.json()["results"]:
+    print(f"{r['score']:.2f}  {r['source']}")
+      </example-python>
+      <note>
+        The docs index lives at &lt;project&gt;/.rag-index/docs/chroma/. It is built and queried
+        independently of the codebase index (&lt;project&gt;/workspace/.rag-index/). Running
+        POST /index does NOT build the docs index — you must call POST /index_docs separately.
+        POST /context injects docs results automatically as Tier 4d (up to 300 tokens)
+        when project_path is provided and a docs index exists.
       </note>
     </endpoint>
 

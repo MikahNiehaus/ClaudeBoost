@@ -91,7 +91,12 @@ def fetch_one(item: dict, kb_dir: pathlib.Path, fetched_date: str) -> bool:
             f"Topic: {topic} | Fetched: {fetched_date} -->\n\n"
         )
         out_path.write_text(header + md, encoding="utf-8")
-        size_kb = out_path.stat().st_size // 1024
+        file_size = out_path.stat().st_size
+        if file_size < 500:
+            out_path.unlink()
+            print(f"  FAIL (too small, likely error page): {url}")
+            return False
+        size_kb = file_size // 1024
         print(f"  OK ({size_kb}KB): {filename}")
         return True
 

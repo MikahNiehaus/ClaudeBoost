@@ -4,7 +4,7 @@
 
 Claude knows how to code. ClaudeBoost knows how to do it right.
 
-It loads security standards, testing methodology, and 107 domain guides into every
+It loads security standards, testing methodology, and 108 knowledge files into every
 session. When something's missing, it researches and indexes it on the fly. Whatever
 you're building, whatever stack you're on — ClaudeBoost makes sure Claude behaves like
 a senior engineer who already knows your domain.
@@ -75,12 +75,12 @@ Microsoft's full GraphRAG synthesizes graph edges from unstructured text using L
 
 ```
 ClaudeBoost/
-├── agents/              24 specialist agent definitions (XML)
-├── knowledge/           106 knowledge files (XML)
+├── agents/              24 agent definitions (XML)
+├── knowledge/           108 knowledge files (XML)
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    29 slash commands
+├── .claude/commands/    35 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── CLAUDE.md            Orchestration rules (loaded globally)
 └── docs/                Reference documentation
@@ -291,9 +291,9 @@ the default.
 
 ### Knowledge Bases
 
-106 XML files loaded automatically by the RAG server:
+108 XML files loaded automatically by the RAG server:
 
-- **52 domain bases**: coding standards, security (OWASP), architecture, debugging,
+- **54 domain bases**: coding standards, security (OWASP), architecture, debugging,
   testing, observability, performance, refactoring, API design, context engineering,
   scope governance, rule enforcement, and more
 - **21 language guides**: Python, TypeScript, C#, Go, SQL, Rust, Swift, Kotlin, Java,
@@ -364,7 +364,6 @@ when one is detected.
 | ui-agent | Frontend, accessibility | Sonnet |
 | docs-agent | Documentation | Sonnet |
 | research-agent | Web and codebase investigation | Sonnet |
-| research-rag-agent | Build persistent research RAG from URLs/PDFs | Sonnet |
 | explore-agent | Code exploration, fast file/symbol search | Sonnet |
 | browser-agent | Playwright browser automation | Sonnet |
 | e2e-agent | Structured E2E testing with screenshot evidence | Sonnet |
@@ -380,10 +379,10 @@ when one is detected.
 
 ## Slash Commands
 
-30 commands organized by workflow:
+Commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/setup` `/uninstall` `/index-project` `/index-boost`
+`/boost` `/rag` `/rag-health` `/uninstall` `/index-project` `/index-boost` `/low-token`
 
 **Planning & Workspace**
 `/ws` `/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
@@ -391,14 +390,17 @@ when one is detected.
 **Code Quality**
 `/xray` `/security-review` `/audit` `/self-improve` `/simplify`
 
+**Debugging**
+`/debug`
+
 **Testing**
 `/qa` `/test-hooks`
 
 **Git & Workflow**
-`/done` `/pr-description` `/changes` `/handoff` `/clear-safe`
+`/done` `/pr-description` `/changes` `/handoff` `/clear-safe` `/ticket-handoff`
 
 **Configuration**
-`/auto` `/consult` `/bash-guard` `/speak`
+`/auto` `/consult` `/bash-guard` `/speak` `/better-permissions` `/edit-state` `/telemetry`
 
 **Documentation & Visualization**
 `/visualize` `/init`
