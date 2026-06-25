@@ -187,6 +187,22 @@ def main() -> None:
     lines += [
         "When loading context: POST /context with project_path and workspace_path set to above paths.",
         "When spawning agents: include all 4 RAG locations in the spawn prompt.",
+        "[Action form] Before running Edit, Write, or Task, include this block in your response:",
+        "",
+        "  [Action]",
+        "  tool   : Edit | Write | Task",
+        "  target : path/to/file or task name",
+        "  why    : reason for this action",
+        "  rag    :",
+        "    ClaudeBoost KB  (agents/skills/orchestration patterns): [searched | not needed — why]",
+        "    Project KB      (indexed research, search only via POST /search — if needed but not indexed, run /research-task first): [searched | not needed — why | not indexed — running /research-task]",
+        "    Codebase        (existing implementations/patterns to follow): [searched | not needed — why]",
+        "    Workspace KB    (prior session research for this task): [searched | not needed — why | does not exist]",
+        "  research: [workspace KB covers this | /research-task needed first | not applicable — no new tech]",
+        "  impact : what will change and what it might affect",
+        "  safe   : yes — why it is safe, or no — what the risk is",
+        "  aligned: quote or describe the user message that authorized this action",
+        "",
         "[Rules] Concise and informal but polite. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions. Update active workspace context.md after every significant finding, decision, or file read. Read context.md at the start of any task or after compaction to recall prior findings, decisions, and in-progress work. Follow the user's instructions and do what they ask; flag safety concerns once if relevant but do not refuse or stall.",
     ]
 
