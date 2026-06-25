@@ -15,6 +15,14 @@
   context7-id is optional. When present, /research-task and /research-project call
   Context7 for live docs before falling back to WebSearch.
 
+  github-docs is optional. When present, clone-docs.py uses git sparse-checkout
+  to grab the docs folder directly. This is Layer 1 (highest quality).
+  Attributes: repo="owner/name" path="docs/folder" branch="main"
+
+  doc-root is optional. When present, fetch-docs.py --crawl uses BFS crawl
+  starting from this URL. This is Layer 3.
+  Attributes: url="https://..." max-pages="200"
+
   verified: date this entry was last checked for accuracy.
 -->
 <source-map version="1.0" verified="2026-06-24">
@@ -23,10 +31,11 @@
        FRONTEND FRAMEWORKS
        ===================================================================== -->
 
-  <entry id="react" verified="2026-06-24">
+  <entry id="react" verified="2026-06-25">
     <name>React</name>
     <tags>react, react.js, reactjs, jsx, tsx</tags>
     <context7-id>/facebook/react</context7-id>
+    <github-docs repo="reactjs/react.dev" path="src/content" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://react.dev/</source>
       <source tier="A" angle="official-docs">https://react.dev/reference/react</source>
@@ -35,10 +44,11 @@
     </sources>
   </entry>
 
-  <entry id="nextjs" verified="2026-06-24">
+  <entry id="nextjs" verified="2026-06-25">
     <name>Next.js</name>
     <tags>next.js, nextjs, next, vercel framework</tags>
     <context7-id>/vercel/next.js</context7-id>
+    <github-docs repo="vercel/next.js" path="docs" branch="canary" />
     <sources>
       <source tier="A" angle="official-docs">https://nextjs.org/docs</source>
       <source tier="A" angle="official-docs">https://nextjs.org/docs/app/api-reference</source>
@@ -47,10 +57,11 @@
     </sources>
   </entry>
 
-  <entry id="vue" verified="2026-06-24">
+  <entry id="vue" verified="2026-06-25">
     <name>Vue</name>
     <tags>vue, vue.js, vuejs, vue3, vue 3</tags>
     <context7-id>/vuejs/core</context7-id>
+    <github-docs repo="vuejs/docs" path="src" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://vuejs.org/guide/introduction.html</source>
       <source tier="A" angle="official-docs">https://vuejs.org/api/</source>
@@ -58,10 +69,11 @@
     </sources>
   </entry>
 
-  <entry id="angular" verified="2026-06-24">
+  <entry id="angular" verified="2026-06-25">
     <name>Angular</name>
     <tags>angular, angularjs, ng, @angular</tags>
     <context7-id>/angular/angular</context7-id>
+    <github-docs repo="angular/angular" path="adev/src/content" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://angular.dev/overview</source>
       <source tier="A" angle="official-docs">https://angular.dev/api</source>
@@ -69,10 +81,11 @@
     </sources>
   </entry>
 
-  <entry id="svelte" verified="2026-06-24">
+  <entry id="svelte" verified="2026-06-25">
     <name>Svelte</name>
     <tags>svelte, sveltekit, svelte kit</tags>
     <context7-id>/sveltejs/svelte</context7-id>
+    <github-docs repo="sveltejs/svelte" path="documentation/docs" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://svelte.dev/docs/svelte/overview</source>
       <source tier="A" angle="official-docs">https://kit.svelte.dev/docs/introduction</source>
@@ -133,10 +146,11 @@
        BACKEND FRAMEWORKS — Python
        ===================================================================== -->
 
-  <entry id="django" verified="2026-06-24">
+  <entry id="django" verified="2026-06-25">
     <name>Django</name>
     <tags>django, django rest framework, drf, django orm</tags>
     <context7-id>/django/django</context7-id>
+    <github-docs repo="django/django" path="docs" branch="main" extensions=".txt" />
     <sources>
       <source tier="A" angle="official-docs">https://docs.djangoproject.com/en/stable/</source>
       <source tier="A" angle="security">https://docs.djangoproject.com/en/stable/topics/security/</source>
@@ -145,10 +159,12 @@
     </sources>
   </entry>
 
-  <entry id="fastapi" verified="2026-06-24">
+  <entry id="fastapi" verified="2026-06-25">
     <name>FastAPI</name>
     <tags>fastapi, fast api</tags>
     <context7-id>/tiangolo/fastapi</context7-id>
+    <github-docs repo="fastapi/fastapi" path="docs/en/docs" branch="master" />
+    <doc-root url="https://fastapi.tiangolo.com/tutorial/" max-pages="200" />
     <sources>
       <source tier="A" angle="official-docs">https://fastapi.tiangolo.com/</source>
       <source tier="A" angle="official-docs">https://fastapi.tiangolo.com/reference/</source>
@@ -157,10 +173,11 @@
     </sources>
   </entry>
 
-  <entry id="flask" verified="2026-06-24">
+  <entry id="flask" verified="2026-06-25">
     <name>Flask</name>
     <tags>flask, flask python</tags>
     <context7-id>/pallets/flask</context7-id>
+    <github-docs repo="pallets/flask" path="docs" branch="main" extensions=".rst" />
     <sources>
       <source tier="A" angle="official-docs">https://flask.palletsprojects.com/en/stable/</source>
       <source tier="A" angle="official-docs">https://flask.palletsprojects.com/en/stable/api/</source>
@@ -172,9 +189,10 @@
        BACKEND FRAMEWORKS — Other Languages
        ===================================================================== -->
 
-  <entry id="rails" verified="2026-06-24">
+  <entry id="rails" verified="2026-06-25">
     <name>Ruby on Rails</name>
     <tags>rails, ruby on rails, ror, activerecord, activesupport</tags>
+    <github-docs repo="rails/rails" path="guides/source" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://guides.rubyonrails.org/</source>
       <source tier="A" angle="official-docs">https://api.rubyonrails.org/</source>
@@ -183,9 +201,10 @@
     </sources>
   </entry>
 
-  <entry id="aspnet-core" verified="2026-06-24">
+  <entry id="aspnet-core" verified="2026-06-25">
     <name>ASP.NET Core</name>
     <tags>asp.net core, aspnetcore, asp.net, dotnet web, .net core web, microsoft.aspnetcore</tags>
+    <github-docs repo="dotnet/AspNetCore.Docs" path="aspnetcore" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/aspnet/core/</source>
       <source tier="A" angle="security">https://learn.microsoft.com/en-us/aspnet/core/security/</source>
@@ -284,10 +303,11 @@
        ORM / QUERY BUILDERS
        ===================================================================== -->
 
-  <entry id="prisma" verified="2026-06-24">
+  <entry id="prisma" verified="2026-06-25">
     <name>Prisma</name>
     <tags>prisma, prisma client, prisma orm, @prisma/client</tags>
     <context7-id>/prisma/prisma</context7-id>
+    <github-docs repo="prisma/docs" path="content" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://www.prisma.io/docs/</source>
       <source tier="A" angle="official-docs">https://www.prisma.io/docs/reference/api-reference/prisma-client-reference</source>
@@ -443,10 +463,11 @@
     </sources>
   </entry>
 
-  <entry id="playwright" verified="2026-06-24">
+  <entry id="playwright" verified="2026-06-25">
     <name>Playwright</name>
     <tags>playwright, playwright testing, @playwright/test, playwright python</tags>
     <context7-id>/microsoft/playwright</context7-id>
+    <github-docs repo="microsoft/playwright" path="docs/src" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://playwright.dev/docs/intro</source>
       <source tier="A" angle="official-docs">https://playwright.dev/docs/api/class-playwright</source>
@@ -582,10 +603,11 @@
        PYTHON LIBRARIES
        ===================================================================== -->
 
-  <entry id="pydantic" verified="2026-06-24">
+  <entry id="pydantic" verified="2026-06-25">
     <name>Pydantic</name>
     <tags>pydantic, pydantic v2, pydantic models</tags>
     <context7-id>/pydantic/pydantic</context7-id>
+    <github-docs repo="pydantic/pydantic" path="docs" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://docs.pydantic.dev/latest/</source>
       <source tier="A" angle="official-docs">https://docs.pydantic.dev/latest/api/main/</source>
@@ -638,9 +660,11 @@
        DEVOPS / INFRASTRUCTURE
        ===================================================================== -->
 
-  <entry id="docker" verified="2026-06-24">
+  <entry id="docker" verified="2026-06-25">
     <name>Docker</name>
     <tags>docker, dockerfile, docker compose, docker-compose, containers</tags>
+    <github-docs repo="docker/docs" path="content" branch="main" />
+    <doc-root url="https://docs.docker.com/" max-pages="300" />
     <sources>
       <source tier="A" angle="official-docs">https://docs.docker.com/</source>
       <source tier="A" angle="best-practices">https://docs.docker.com/develop/develop-images/dockerfile_best-practices/</source>
@@ -649,9 +673,10 @@
     </sources>
   </entry>
 
-  <entry id="kubernetes" verified="2026-06-24">
+  <entry id="kubernetes" verified="2026-06-25">
     <name>Kubernetes</name>
     <tags>kubernetes, k8s, kubectl, helm, kustomize</tags>
+    <github-docs repo="kubernetes/website" path="content/en/docs" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://kubernetes.io/docs/home/</source>
       <source tier="A" angle="best-practices">https://kubernetes.io/docs/concepts/configuration/overview/</source>
@@ -803,9 +828,10 @@
        .NET ECOSYSTEM
        ===================================================================== -->
 
-  <entry id="dotnet" verified="2026-06-24">
+  <entry id="dotnet" verified="2026-06-25">
     <name>.NET</name>
     <tags>.net, dotnet, c#, csharp, .net 8, .net 9, microsoft.extensions</tags>
+    <github-docs repo="dotnet/docs" path="docs" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/dotnet/</source>
       <source tier="A" angle="security">https://learn.microsoft.com/en-us/dotnet/core/security/</source>
@@ -814,9 +840,10 @@
     </sources>
   </entry>
 
-  <entry id="entity-framework" verified="2026-06-24">
+  <entry id="entity-framework" verified="2026-06-25">
     <name>Entity Framework Core</name>
     <tags>entity framework, ef core, efcore, microsoft.entityframeworkcore</tags>
+    <github-docs repo="dotnet/EntityFramework.Docs" path="entity-framework/core" branch="main" />
     <sources>
       <source tier="A" angle="official-docs">https://learn.microsoft.com/en-us/ef/core/</source>
       <source tier="A" angle="performance">https://learn.microsoft.com/en-us/ef/core/performance/</source>

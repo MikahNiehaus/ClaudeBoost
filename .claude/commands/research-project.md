@@ -1,6 +1,6 @@
 ---
 argument-hint: [project-path] [url1 url2 ...]
-description: Build a deep indexed knowledge base for every technology the project uses — reads dependency files, runs multi-angle web research, fetches every source, indexes everything so agents can search it.
+description: Four-layer research waterfall (GitHub clone, llms.txt, BFS crawl, WebSearch) that acquires hundreds to thousands of documents per project technology with zero AI tokens, indexes everything into RAG so agents query via embedding instead of reading.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch
 ---
 
@@ -8,10 +8,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch
 
 Arguments: `[project-path] [url1 url2 ...]`
 
-Reads the project's dependency files to discover the full tech stack, then runs deep
-multi-angle web research on each technology. Every source gets fetched, converted to
-clean markdown, and indexed into RAG. The expertise comes from having hundreds of real
-authoritative documents that agents can search through — not from summaries.
+Reads the project's dependency files to discover the full tech stack, then runs a
+four-layer document acquisition waterfall on each technology. Every source gets
+fetched, converted to clean markdown, and indexed into RAG. The expertise comes
+from having hundreds of real authoritative documents that agents can search
+through, not from summaries. Embedding replaces reading.
 
 Run this:
 - When starting work on a project for the first time
@@ -58,7 +59,7 @@ Check if `$KB_DIR` exists:
 - **Yes** → announce "Expanding project KB at `$KB_DIR`"
 - **No** → announce "Initializing project KB at `$KB_DIR`", then `mkdir -p "$KB_DIR"`
 
-### Seed URL gate (Phase 0b) — only if SEED_URLS is non-empty
+### Seed URL gate (Phase 0b) — only if SEED_URLS is not empty
 
 Show the seed source table:
 
@@ -122,13 +123,22 @@ After reading all manifests: deduplicate, group by role:
 
 Log: "Extracted N technologies from dependency manifests: [list grouped by role]"
 
-Cap at **6 technologies per run**. If the project has more, note which will be covered in subsequent runs.
+No cap on technologies. Layers 1-3 of the waterfall handle each technology with zero AI tokens. Layer 4 (WebSearch) is only used as a fallback for technologies not covered by earlier layers.
 
 ---
 
-## Phase 2 — Research (Source Map + Context7 + Smart Angles)
+## Phase 2 — Research (Four Layer Waterfall)
 
-Run sequentially per technology — no parallel agents for search.
+This phase runs a four layer document acquisition waterfall for each technology. Earlier layers produce hundreds of documents with zero AI tokens. Later layers fill gaps.
+
+| Layer | Tool | What it does | Typical yield |
+|-------|------|-------------|---------------|
+| 1 | `clone-docs.py` | Git sparse checkout of docs folder | 50-500 markdown files |
+| 2 | `fetch-docs.py --llms-txt` | Check for llms.txt / llms-full.txt | 1 file (full content) or URL index |
+| 3 | `fetch-docs.py --crawl` | BFS crawl of documentation site | 50-200 pages |
+| 4 | WebSearch | Targeted angle queries (fallback) | 3-9 URLs per technology |
+
+Each layer marks the technology as "covered" if it produces 5+ files. Covered technologies skip later layers.
 
 ### Step 1: Classify tech role
 
@@ -150,7 +160,7 @@ Log: `Tech role: [tech] → [role]`
 
 **Project KB pre-check**
 
-Before running WebSearch for this technology, check if the project KB already covers it from a prior run:
+Before acquiring docs for this technology, check if the project KB already covers it from a prior run:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8612/search \
@@ -158,10 +168,12 @@ curl -s -X POST http://127.0.0.1:8612/search \
   -d '{"scope":"codebase","project_path":"$KB_DIR","query":"[technology]","limit":5}'
 ```
 
-Count results with score ≥ 0.55. If 2 or more: set `has_kb_coverage = true`.
-Log: `KB pre-check: [technology] — N cached docs (score ≥ 0.55) — [covered | not covered]`
+Count results with score >= 0.55. If 5 or more: set `has_kb_coverage = true`.
+Log: `KB pre-check: [technology] — N cached docs (score >= 0.55) — [covered | not covered]`
 
 If the search errors (project not indexed, server error): set `has_kb_coverage = false` and continue normally.
+
+Skip the entire technology if `has_kb_coverage = true`.
 
 **2a. Source map lookup**
 
@@ -169,29 +181,82 @@ Read `$CLAUDEBOOST_HOME/knowledge/research-source-map.xml`.
 
 Match in order: (1) exact `id`, (2) case-insensitive `<name>`, (3) tech in `<tags>`, (4) tech is substring of name or any tag.
 
-If found: add all `<source>` entries to URL queue at their declared tier. Note `<context7-id>` if present. Log: `Source map hit: [tech] → N URLs`
+If found: note `<github-docs>`, `<doc-root>`, `<context7-id>`, and all `<source>` entries. Log: `Source map hit: [tech] → github-docs=[yes|no], doc-root=[yes|no], context7=[yes|no], N source URLs`
 
-If not found: log `Source map miss: [tech] — using WebSearch`. Set `has_context7 = false`.
+If not found: log `Source map miss: [tech] — falling through to Layer 4 (WebSearch)`.
 
-**2b. Context7 (library/framework entities with a context7-id only)**
+**2b. Layer 1: GitHub Sparse Checkout**
 
-Skip if: `has_context7` is false, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+Skip if: no `<github-docs>` in source map for this technology.
 
-If applicable:
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/clone-docs.py \
+  --repo "[github-docs repo]" \
+  --path "[github-docs path]" \
+  --branch "[github-docs branch, default main]" \
+  --kb-dir "$KB_DIR" \
+  --topic "[tech-slug]" \
+  --extensions "[github-docs extensions, default .md,.mdx,.rst]"
+```
+
+Read the script output. If `files_copied >= 5`: set `layer1_covered = true`.
+Log: `Layer 1 (GitHub): [tech] — [N] files cloned from [repo]`
+
+**2c. Layer 2: llms.txt Check**
+
+Skip if: `layer1_covered = true`.
+
+Determine the documentation domain for this technology:
+- If source map has `<source>` entries: extract the domain from the first Tier A URL
+- If no source map: skip this layer
+
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
+  --project-path "PROJECT_PATH" \
+  --llms-txt "[doc-domain]" \
+  --kb-dir "$KB_DIR" \
+  --topic "[tech-slug]"
+```
+
+If the script finds and downloads llms-full.txt or indexes llms.txt URLs: set `layer2_covered = true`.
+Log: `Layer 2 (llms.txt): [tech] — [found llms-full.txt | found llms.txt with N URLs | not found]`
+
+**2d. Layer 3: BFS Crawl**
+
+Skip if: `layer1_covered = true` OR `layer2_covered = true`.
+
+Use `<doc-root>` from source map if present, otherwise derive from the first Tier A documentation URL.
+
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
+  --project-path "PROJECT_PATH" \
+  --crawl "[doc-root url or first Tier A URL]" \
+  --kb-dir "$KB_DIR" \
+  --topic "[tech-slug]" \
+  --max-pages "[doc-root max-pages, default 200]" \
+  --depth 3 \
+  --delay 0.5
+```
+
+If pages fetched >= 5: set `layer3_covered = true`.
+Log: `Layer 3 (crawl): [tech] — [N] pages crawled from [url]`
+
+**2e. Context7 (library/framework entities with context7-id)**
+
+Skip if: no `<context7-id>`, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+
+This runs alongside any layer, not instead of. It adds role-specific snippets.
+
 1. Use `<context7-id>` from source map as `library_id`, or call `mcp__claude_ai_Context7__resolve-library-id(libraryName=tech)` if no source map entry
 2. Call `mcp__claude_ai_Context7__query-docs(libraryId=library_id, query="[angle-2 query for this tech role]")`
 3. Write result to `$KB_DIR/context7-[tech-slug].md`
-4. Log: `Context7: [tech] → N snippets written`
+4. Log: `Context7: [tech] — N snippets written`
 
-Tech is now covered — run only angle 2 (role-specific) via WebSearch. Skip angles 1 and 3.
+**2f. Layer 4: WebSearch Fallback**
 
-Fallback: if Context7 returns 0 results or is unavailable — fall through to 2c normally (run all 3 angles).
+Run ONLY if: none of layers 1-3 produced 5+ files for this technology. This is the fallback for niche libraries and technologies without source map entries.
 
-**2c. Smart angles via WebSearch**
-
-Skip entirely if `has_kb_coverage = true` (technology already covered in project KB from a prior run).
-
-Select 3 angles by tech role. If Context7 covered this tech: run only angle 2.
+Select 3 angles by tech role:
 
 | Tech role | Angle 1 | Angle 2 | Angle 3 |
 |-----------|---------|---------|---------|
@@ -216,69 +281,82 @@ Use 1 query phrasing per angle:
 | configuration | `[tech] configuration deployment settings` |
 | real-world-usage | `[tech] production example site:github.com` |
 
-### Tier Scoring
+Add all discovered URLs (from WebSearch and source map `<source>` entries) to the URL queue for Phase 3 fetching.
+
+### Tier Scoring (Layer 4 URLs only)
+
+Layers 1-3 produce files directly. Tier scoring applies only to Layer 4 WebSearch results and source map `<source>` URLs.
 
 - **Tier A** — official sources, gov, academic (arxiv, ietf), github.com, MDN, OWASP, NIST: auto-include
 - **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp): include if clearly relevant
 - **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index
 - **Skip** — paywalled, social media, SEO farms: exclude silently
 
-### Step 3: Dedup and tier filter
+### Step 3: Collect results and dedup
 
-Merge URLs from source map (2a), Context7 .md files (2b), and WebSearch (2c). Deduplicate. Add approved SEED_URLS. Remove Tier C.
+After all technologies complete, tally:
+- Files produced by layers 1-3 (already saved to `$KB_DIR`)
+- URLs queued from Layer 4 WebSearch and source map `<source>` entries
 
-**Target: 15–20 sources per technology (Tier A + Tier B). Minimum to proceed: 15 total.**
+Merge the Layer 4 URL list. Deduplicate. Add approved SEED_URLS. Remove Tier C.
 
-If below 15: log a coverage warning and continue — do not run additional searches.
+No cap on total files. Layers 1-3 can produce hundreds of files per technology and that's the goal.
 
 ---
 
-## Phase 3 — Build URL Queue and Fetch Locally
+## Phase 3 — Fetch Layer 4 URLs
 
-No AI agents fetch pages. Pages are downloaded by a local Python script using `httpx` + `html2text`. This avoids burning tokens on content conversion.
+Layers 1-3 already saved their files directly. This phase fetches the remaining Layer 4 URLs (WebSearch results + source map `<source>` entries that weren't covered by earlier layers).
+
+No AI agents fetch pages. Pages are downloaded by `fetch-docs.py` using `httpx` + `html2text`.
 
 **Step 1 — Write the URL queue.**
 
-Write all collected URLs to `$KB_DIR/pending-urls.json`:
+Write all Layer 4 URLs to `$KB_DIR/pending-urls.json`:
 ```json
 [
   {"url": "https://...", "topic": "playwright-python", "tier": "A", "title": "Page title"},
-  {"url": "https://...", "topic": "praw-reddit",       "tier": "A", "title": "..."},
   ...
 ]
 ```
 
-Prioritize: all Tier A first, then Tier B (cap at 20). Tier C is never included.
+Prioritize: all Tier A first, then Tier B. Tier C is never included.
 
 **Step 2 — Run the local downloader.**
 
 ```bash
-"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/fetch-docs.py" --project-path "PROJECT_PATH"
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
+  --project-path "PROJECT_PATH" \
+  --queue "$KB_DIR/pending-urls.json" \
+  --kb-dir "$KB_DIR"
 ```
 
-This reads `pending-urls.json` from the KB dir, downloads each URL with `httpx`, converts HTML to markdown with `html2text`, and saves the result as `$KB_DIR/[topic]-[slug].md`. Files that already exist are skipped.
+This downloads each URL with `httpx`, converts HTML to markdown with `html2text`, and saves to `$KB_DIR/`. Files that already exist are skipped.
 
-Check the output for any 403/404 failures and note them. No AI used — just HTTP.
-
-If the script is unavailable (missing deps), install them:
-```bash
-pip install httpx html2text
-```
+If the script is unavailable: `pip install httpx html2text`
 
 **Step 3 — Write the discovery log.**
 
 Append to `$KB_DIR/discovery-log.md`:
 ```markdown
-## [YYYY-MM-DD] — [technology] [version]
-- Role: [framework|database|auth|API client|utility]
-- Angles searched: official docs, security, performance, migration, integration, pitfalls
-- Sources found: N (Tier A: N, Tier B: N)
-- Files fetched: N saved, N failed
-- Retried angles: [list or "none"]
-- No source found for: [list or "none"]
+## [YYYY-MM-DD] — Research Run
+
+### Per-Technology Results
+| Technology | Layer Used | Files Acquired | Source |
+|-----------|-----------|----------------|--------|
+| [tech] | 1 (GitHub) | N | [repo] |
+| [tech] | 3 (crawl) | N | [url] |
+| [tech] | 4 (WebSearch) | N | [angles run] |
+
+### Layer 4 Fetch Results
+- URLs queued: N
+- Files fetched: N saved, N skipped (existing), N failed
+- Failed URLs: [list or "none"]
 ```
 
 `discovery-log.md` is NOT indexed — audit trail only.
+
+If more than 30% of Layer 4 URLs failed: warn the user and list the failed ones.
 
 ---
 
@@ -304,28 +382,34 @@ After the index completes, confirm success by checking the `indexed_projects` en
 ```
 Project KB updated at <PROJECT_PATH>/.claudeboost/knowledge/
 
-Technologies researched this run:
-  ✓ [tech 1] ([version]) — [role]   — N docs indexed (Tier A: N, Tier B: N)
-  ✓ [tech 2] ([version]) — [role]   — N docs indexed (Tier A: N, Tier B: N)
-  ⚠ [tech 3] ([version]) — [role]   — security angle: no authoritative source found
+  Total files     : N in knowledge/
 
-Deferred for next run:
-  - [tech 4] ([version]) — [role]
-  - [tech 5] ([version]) — [role]
+  Acquisition:
+    Layer 1 (GitHub clone) : N files across M technologies
+    Layer 2 (llms.txt)     : N files across M technologies
+    Layer 3 (BFS crawl)    : N files across M technologies
+    Layer 4 (WebSearch)    : N files across M technologies
 
-Total: N documents indexed across M technologies.
+  Per-Technology:
+    ✓ [tech 1] ([version]) — [role] — Layer 1: N files (repo)
+    ✓ [tech 2] ([version]) — [role] — Layer 3: N pages crawled
+    ✓ [tech 3] ([version]) — [role] — Layer 4: N URLs fetched
+    ⚠ [tech 4] ([version]) — [role] — Layer 4: 2 URLs (low coverage)
 
-Agents search this KB via POST /search scope=codebase project_path=<PROJECT_PATH>.
-Run /research-project again to cover deferred technologies or after adding new dependencies.
+  Total: N documents indexed across M technologies.
+
+  Agents search this KB via POST /search scope=codebase project_path=<PROJECT_PATH>.
+  Run /research-project again after adding new dependencies.
 ```
 
 ---
 
 ## Notes
 
+- **Four layer waterfall**: Layer 1 (GitHub clone) > Layer 2 (llms.txt) > Layer 3 (BFS crawl) > Layer 4 (WebSearch). Each technology stops at the first layer that produces 5+ files.
+- **No cap on files or technologies.** Layers 1-3 can produce hundreds of files per technology. That's the goal. Embedding replaces reading.
 - This skill reads **dependency manifests first** to determine what to research.
-- Cap of 6 technologies per run is intentional — deep coverage of 6 beats shallow coverage of 20.
-- Run `/research-project` again after the first batch to cover deferred technologies.
+- Re-running `/research-project` is incremental. `clone-docs.py` skips existing files. `fetch-docs.py` skips existing files. The KB pre-check skips fully covered technologies.
 - For ticket-specific research (task-scoped): use `/research-task` instead.
 - The `.claudeboost/` folder should be committed to git so other machines get the same KB.
 - Never store secrets or credentials in KB files.

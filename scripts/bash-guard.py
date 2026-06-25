@@ -314,6 +314,69 @@ def check_curl_external(command: str) -> str | None:
     )
 
 
+def check_db_mutation(command: str) -> str | None:
+    """Block commands that make irreversible changes to a database.
+
+    These commands alter schema or data in ways that cannot be undone by the
+    AI alone (no git revert, no undo). The user must run them manually so they
+    can confirm the target environment first.
+
+    Covered patterns:
+    - EF Core:   dotnet ef database update
+    - Alembic:   alembic upgrade
+    - Flyway:    flyway migrate
+    - Liquibase: liquibase update
+    - Raw SQL:   sqlcmd -i / psql -f / mysql < (file based execution)
+    """
+    unquoted = _strip_quoted(command)
+
+    if re.search(r"\bdotnet\b.*\bef\b.*\bdatabase\s+update\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `dotnet ef database update` makes irreversible schema changes. "
+            "Run this yourself in the terminal after confirming the target environment "
+            "(dev / test / staging / prod). "
+            "Never let the AI apply database migrations autonomously."
+        )
+
+    if re.search(r"\balembic\s+upgrade\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `alembic upgrade` makes irreversible schema changes. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    if re.search(r"\bflyway\s+migrate\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `flyway migrate` makes irreversible schema changes. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    if re.search(r"\bliquibase\s+update\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `liquibase update` makes irreversible schema changes. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    if re.search(r"\bsqlcmd\b.*-i\s+\S+\.sql\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `sqlcmd -i <file.sql>` executes SQL directly against the database. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    if re.search(r"\bpsql\b.*-f\s+\S+\.sql\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `psql -f <file.sql>` executes SQL directly against the database. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    if re.search(r"\bmysql\b.*<\s*\S+\.sql\b", unquoted, re.IGNORECASE):
+        return (
+            "BLOCKED: `mysql < <file.sql>` executes SQL directly against the database. "
+            "Run this yourself in the terminal after confirming the target environment."
+        )
+
+    return None
+
+
 def check_backslash_spaces(command: str) -> str | None:
     """Detect backslash-escaped spaces in paths."""
     # Match backslash-space that looks like path escaping, not inside quotes
@@ -349,7 +412,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_db_mutation, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

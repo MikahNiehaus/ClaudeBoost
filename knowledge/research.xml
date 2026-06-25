@@ -98,18 +98,27 @@
 
 <technology-research>
   <description>
-    For researching specific technologies, libraries, or frameworks, use the structured
-    approach in /research-task and /research-project instead of open-ended WebSearch.
-    The structured approach is faster, cheaper, and more consistent.
+    For researching specific technologies, libraries, or frameworks, use the four-layer
+    document acquisition waterfall in /research-task and /research-project instead of
+    open-ended WebSearch. The waterfall acquires hundreds to thousands of documents per
+    run with zero AI tokens, indexes everything into RAG, and agents query via embedding
+    instead of reading.
   </description>
-  <preferred-order>
-    <step order="1">Source map — knowledge/research-source-map.xml has pre-verified canonical
-    URLs for 80+ technologies. Check it before searching the web.</step>
-    <step order="2">Context7 — for libraries with a context7-id, call Context7 before WebSearch.
-    Returns current official docs with no fetch cost.</step>
-    <step order="3">WebSearch smart angles — 3 angles per entity based on tech role, 1 phrasing
-    each. Target 15-20 sources total. Tier C (medium, blogs) excluded entirely.</step>
-  </preferred-order>
+  <waterfall>
+    <layer order="1">GitHub Sparse Checkout (clone-docs.py) — clones only the docs folder
+    from GitHub repos. Produces 50 to 500 markdown files. Requires a github-docs entry in
+    knowledge/research-source-map.xml.</layer>
+    <layer order="2">llms.txt (fetch-docs.py --llms-txt) — checks for llms-full.txt or
+    llms.txt at the documentation domain root. Single file or URL index.</layer>
+    <layer order="3">BFS Crawl (fetch-docs.py --crawl) — breadth-first crawl of the
+    documentation site. Produces 50 to 200 pages. Uses httpx + html2text.</layer>
+    <layer order="4">WebSearch Fallback — only runs when layers 1 through 3 produced fewer
+    than 5 files. 3 targeted angles per entity. Tier C excluded entirely.</layer>
+  </waterfall>
+  <coverage-rule>
+    Each entity or technology stops at the first layer that produces 5+ files. No cap on
+    total files or technologies. Context7 runs alongside any layer when a context7-id exists.
+  </coverage-rule>
   <when-to-use-open-research>
     Use the general research methodology in this file for: compliance/legal questions,
     market research, academic papers, architectural decisions without a specific library,

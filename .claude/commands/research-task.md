@@ -1,6 +1,6 @@
 ---
 argument-hint: [workspace-id] [--approve] [url1 url2 ...]
-description: Run deep multi-angle web research for a specific task — finds hundreds of sources, fetches every one, indexes them all so agents have expert context automatically.
+description: Four-layer research waterfall (GitHub clone, llms.txt, BFS crawl, WebSearch) that acquires hundreds to thousands of documents per task with zero AI tokens, indexes everything into RAG so agents query via embedding instead of reading.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebSearch, WebFetch
 ---
 
@@ -120,7 +120,18 @@ And stop.
 
 ---
 
-## Phase 3: Research (Source Map + Context7 + Smart Angles)
+## Phase 3: Research (Four Layer Waterfall)
+
+This phase runs a four layer document acquisition waterfall for each entity. Earlier layers produce hundreds of documents with zero AI tokens. Later layers fill gaps.
+
+| Layer | Tool | What it does | Typical yield |
+|-------|------|-------------|---------------|
+| 1 | `clone-docs.py` | Git sparse checkout of docs folder | 50-500 markdown files |
+| 2 | `fetch-docs.py --llms-txt` | Check for llms.txt / llms-full.txt | 1 file (full content) or URL index |
+| 3 | `fetch-docs.py --crawl` | BFS crawl of documentation site | 50-200 pages |
+| 4 | WebSearch | Targeted angle queries (fallback) | 3-9 URLs per entity |
+
+Each layer marks the entity as "covered" if it produces 5+ files. Covered entities skip later layers.
 
 ### Step 1: Detect task type (code domain only)
 
@@ -137,11 +148,11 @@ Classify the ticket using the first matching signal:
 
 Log: `Task type: [type]`
 
-### Step 2: For each entity (run sequentially — no parallel agents for search)
+### Step 2: For each entity (run sequentially)
 
 **Workspace KB pre-check**
 
-Before running WebSearch for this entity, check if the workspace KB already covers it from a prior run:
+Before acquiring docs for this entity, check if the workspace KB already covers it from a prior run:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8612/search \
@@ -149,10 +160,12 @@ curl -s -X POST http://127.0.0.1:8612/search \
   -d '{"scope":"codebase","project_path":"$WORKSPACE_ABS/knowledge","query":"[entity]","limit":5}'
 ```
 
-Count results with score ≥ 0.55. If 2 or more: set `has_kb_coverage = true`.
-Log: `KB pre-check: [entity] — N cached docs (score ≥ 0.55) — [covered | not covered]`
+Count results with score >= 0.55. If 5 or more: set `has_kb_coverage = true`.
+Log: `KB pre-check: [entity] — N cached docs (score >= 0.55) — [covered | not covered]`
 
 If the search errors (project not indexed, server error): set `has_kb_coverage = false` and continue normally.
+
+Skip the entire entity if `has_kb_coverage = true`.
 
 **2a. Source map lookup**
 
@@ -160,29 +173,84 @@ Read `$CLAUDEBOOST_HOME/knowledge/research-source-map.xml`.
 
 Match in order: (1) exact `id`, (2) case-insensitive `<name>`, (3) entity in `<tags>`, (4) entity is substring of name or any tag.
 
-If found: add all `<source>` entries to URL queue at their declared tier. Note `<context7-id>` if present. Log: `Source map hit: [entity] → N URLs`
+If found: note `<github-docs>`, `<doc-root>`, `<context7-id>`, and all `<source>` entries. Log: `Source map hit: [entity] → github-docs=[yes|no], doc-root=[yes|no], context7=[yes|no], N source URLs`
 
-If not found: log `Source map miss: [entity] — using WebSearch`. Set `has_context7 = false`.
+If not found: log `Source map miss: [entity] — falling through to Layer 4 (WebSearch)`.
 
-**2b. Context7 (code domain + library entities with a context7-id only)**
+**2b. Layer 1: GitHub Sparse Checkout** (code domain only)
 
-Skip if: domain is not `code`, or `has_context7` is false, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+Skip if: domain is not `code`, or no `<github-docs>` in source map for this entity.
 
 If applicable:
+
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/clone-docs.py \
+  --repo "[github-docs repo]" \
+  --path "[github-docs path]" \
+  --branch "[github-docs branch, default main]" \
+  --kb-dir "$WORKSPACE_ABS/knowledge" \
+  --topic "[entity-slug]" \
+  --extensions "[github-docs extensions, default .md,.mdx,.rst]"
+```
+
+Read the script output. If `files_copied >= 5`: set `layer1_covered = true`.
+Log: `Layer 1 (GitHub): [entity] — [N] files cloned from [repo]`
+
+**2c. Layer 2: llms.txt Check**
+
+Skip if: `layer1_covered = true` (already have enough docs).
+
+Determine the documentation domain for this entity:
+- If source map has `<source>` entries: extract the domain from the first Tier A URL (e.g. `https://fastapi.tiangolo.com/` becomes `https://fastapi.tiangolo.com`)
+- If no source map: skip this layer
+
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
+  --project-path "PROJECT_PATH" \
+  --llms-txt "[doc-domain]" \
+  --kb-dir "$WORKSPACE_ABS/knowledge" \
+  --topic "[entity-slug]"
+```
+
+If the script finds and downloads llms-full.txt or indexes llms.txt URLs: set `layer2_covered = true`.
+Log: `Layer 2 (llms.txt): [entity] — [found llms-full.txt | found llms.txt with N URLs | not found]`
+
+**2d. Layer 3: BFS Crawl**
+
+Skip if: `layer1_covered = true` OR `layer2_covered = true`.
+
+Use `<doc-root>` from source map if present, otherwise derive from the first Tier A documentation URL.
+
+```bash
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
+  --project-path "PROJECT_PATH" \
+  --crawl "[doc-root url or first Tier A URL]" \
+  --kb-dir "$WORKSPACE_ABS/knowledge" \
+  --topic "[entity-slug]" \
+  --max-pages "[doc-root max-pages, default 200]" \
+  --depth 3 \
+  --delay 0.5
+```
+
+If pages fetched >= 5: set `layer3_covered = true`.
+Log: `Layer 3 (crawl): [entity] — [N] pages crawled from [url]`
+
+**2e. Context7 (code domain + library entities with context7-id)**
+
+Skip if: domain is not `code`, or no `<context7-id>`, or `mcp__claude_ai_Context7__resolve-library-id` is not in the tool list.
+
+This runs alongside any layer, not instead of. It adds task-specific snippets.
+
 1. Use `<context7-id>` from source map as `library_id`, or call `mcp__claude_ai_Context7__resolve-library-id(libraryName=entity)` if no source map entry
 2. Call `mcp__claude_ai_Context7__query-docs(libraryId=library_id, query="[angle-2 query for this task type]")`
 3. Write result to `$WORKSPACE_ABS/knowledge/context7-[entity-slug].md`
-4. Log: `Context7: [entity] → N snippets written`
+4. Log: `Context7: [entity] — N snippets written`
 
-Entity is now covered — run only angle 2 (task-specific) via WebSearch. Skip angles 1 and 3.
+**2f. Layer 4: WebSearch Fallback**
 
-Fallback: if Context7 returns 0 results or is unavailable — fall through to 2c normally (run all 3 angles).
+Run ONLY if: none of layers 1-3 produced 5+ files for this entity. This is the fallback for niche topics, non-code domains, and entities without source map entries.
 
-**2c. Smart angles via WebSearch**
-
-Skip entirely if `has_kb_coverage = true` (entity already covered in workspace KB from a prior run).
-
-Select 3 angles by task type. If Context7 covered this entity: run only angle 2.
+Select 3 angles by task type:
 
 | Task type | Angle 1 | Angle 2 | Angle 3 |
 |-----------|---------|---------|---------|
@@ -208,27 +276,33 @@ Use 1 query phrasing per angle:
 | configuration | `[entity] configuration deployment settings` |
 | real-world-usage | `[entity] production example site:github.com` |
 
-**Non-code domains** — 3 angles per entity, 1 phrasing each:
-- legal: `[entity] legislation statute text` · `[entity] compliance requirements checklist` · `[entity] recent amendments 2025`
-- design: `[entity] design system guidelines` · `[entity] accessibility WCAG` · `[entity] UX best practices`
-- market: `[entity] industry report 2025` · `[entity] market trends 2025` · `[entity] competitor comparison`
-- science: `[entity] research paper arxiv` · `[entity] technical specification standard` · `[entity] recent research 2025`
-- general: `[entity] overview guide` · `[entity] best practices` · `[entity] common mistakes pitfalls`
+**Non-code domains** always use Layer 4 (no github-docs or doc-root for legal, design, etc.):
+- legal: `[entity] legislation statute text` / `[entity] compliance requirements checklist` / `[entity] recent amendments 2025`
+- design: `[entity] design system guidelines` / `[entity] accessibility WCAG` / `[entity] UX best practices`
+- market: `[entity] industry report 2025` / `[entity] market trends 2025` / `[entity] competitor comparison`
+- science: `[entity] research paper arxiv` / `[entity] technical specification standard` / `[entity] recent research 2025`
+- general: `[entity] overview guide` / `[entity] best practices` / `[entity] common mistakes pitfalls`
 
-### Tier Scoring
+Add all discovered URLs (from WebSearch and source map `<source>` entries) to the URL queue for Phase 4 fetching.
+
+### Tier Scoring (Layer 4 URLs only)
+
+Layers 1-3 produce files directly. Tier scoring applies only to Layer 4 WebSearch results and source map `<source>` URLs.
 
 - **Tier A** — official sources, gov, academic (arxiv, pubmed, ietf), github.com, MDN, OWASP, NIST: auto-include
 - **Tier B** — reputable secondary (stackoverflow, dev.to, vendor blogs, freecodecamp, industry publications): include if clearly relevant
 - **Tier C** — personal blogs, medium, hashnode: **EXCLUDED** — never index
 - **Skip** — paywalled, social media, SEO farms: exclude silently
 
-### Step 3: Dedup and tier filter
+### Step 3: Collect results and dedup
 
-Merge URLs from source map (2a), Context7 .md files (2b), and WebSearch (2c). Deduplicate. Add any `SEED_URLS` from arguments. Remove Tier C.
+After all entities complete, tally:
+- Files produced by layers 1-3 (already saved to `$WORKSPACE_ABS/knowledge/`)
+- URLs queued from Layer 4 WebSearch and source map `<source>` entries
 
-**Target: 15–20 sources (Tier A + Tier B). Minimum to proceed: 15.**
+Merge the Layer 4 URL list. Deduplicate. Add any `SEED_URLS` from arguments. Remove Tier C.
 
-If below 15: log a coverage warning and continue — do not run additional WebSearch calls.
+No cap on total files. Layers 1-3 can produce hundreds of files per entity and that's the goal.
 
 ---
 
@@ -236,19 +310,27 @@ If below 15: log a coverage warning and continue — do not run additional WebSe
 
 **Trigger**: `SEED_URLS` is non-empty OR `--approve` flag was passed.
 
-Show the full source table BEFORE fetching or indexing:
+Show the acquisition summary BEFORE fetching Layer 4 URLs:
 
 ```
-# Sources to Index
+# Research Acquisition Summary
 
-| # | Title | URL | Tier | Domain | Angle |
-|---|-------|-----|------|--------|-------|
-| 1 | ...   | ... | A    | legal  | Primary legislation |
-| 2 | ...   | ... | A    | manual | — |
+## Layers 1-3 (already complete)
+| Entity | Layer | Files | Source |
+|--------|-------|-------|--------|
+| react  | 1 (GitHub) | 312 | reactjs/react.dev |
+| fastapi | 1 (GitHub) | 89 | fastapi/fastapi |
+| ...    | ...   | ...   | ...    |
+
+## Layer 4 URLs (pending fetch)
+| # | Title | URL | Tier | Angle |
+|---|-------|-----|------|-------|
+| 1 | ...   | ... | A    | official-docs |
+| 2 | ...   | ... | B    | best-practices |
 ```
 
 Ask:
-> Type **all** to fetch and index everything, **skip N,M** to exclude by number, or paste more URLs.
+> Layers 1-3 produced **N** files. **M** Layer 4 URLs pending. Type **all** to fetch remaining, **skip N,M** to exclude by number, or paste more URLs.
 
 Wait for response before proceeding.
 
@@ -256,13 +338,15 @@ Wait for response before proceeding.
 
 ---
 
-## Phase 4: Build URL Queue and Fetch Locally
+## Phase 4: Fetch Layer 4 URLs
 
-No AI agents fetch pages. Pages are downloaded by a local Python script using `httpx` + `html2text`. This avoids burning tokens on content conversion.
+Layers 1-3 already saved their files directly. This phase fetches the remaining Layer 4 URLs (WebSearch results + source map `<source>` entries that weren't covered by earlier layers).
+
+No AI agents fetch pages. Pages are downloaded by `fetch-docs.py` using `httpx` + `html2text`.
 
 **Step 1 — Write the URL queue.**
 
-Write all approved URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
+Write all Layer 4 URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
 ```json
 [
   {"url": "https://...", "topic": "entity-name", "tier": "A", "title": "Page title"},
@@ -270,17 +354,15 @@ Write all approved URLs to `$WORKSPACE_ABS/knowledge/pending-urls.json`:
 ]
 ```
 
-Prioritize: all Tier A first, then Tier B (cap at 20). Tier C is never included.
+Prioritize: all Tier A first, then Tier B. Tier C is never included.
 
 **Step 2 — Run the local downloader.**
 
-Determine project path from the workspace registry (`state/workspaces.json`).
-
 ```bash
-"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/fetch-docs.py" \
+"${CLAUDEBOOST_PYTHON}" C:/Development/ClaudeBoost/scripts/fetch-docs.py \
   --project-path "PROJECT_PATH" \
-  --queue "WORKSPACE_ABS/knowledge/pending-urls.json" \
-  --kb-dir "WORKSPACE_ABS/knowledge"
+  --queue "$WORKSPACE_ABS/knowledge/pending-urls.json" \
+  --kb-dir "$WORKSPACE_ABS/knowledge"
 ```
 
 This downloads each URL with `httpx`, converts HTML to markdown with `html2text`, and saves to `$WORKSPACE_ABS/knowledge/`. Files that already exist are skipped.
@@ -291,18 +373,24 @@ If the script is unavailable: `pip install httpx html2text`
 
 Append to `$WORKSPACE_ABS/discovery-log.md`:
 ```markdown
-## [YYYY-MM-DD] — [entity]
-- Domain: [domain]
-- Angles run: [list]
-- Sources found: N (Tier A: N, Tier B: N)
-- Files fetched: N saved, N failed
-- Retried angles: [list or "none"]
-- No source found for: [list or "none"]
+## [YYYY-MM-DD] — Research Run
+
+### Per-Entity Results
+| Entity | Layer Used | Files Acquired | Source |
+|--------|-----------|----------------|--------|
+| [entity] | 1 (GitHub) | N | [repo] |
+| [entity] | 3 (crawl) | N | [url] |
+| [entity] | 4 (WebSearch) | N | [angles run] |
+
+### Layer 4 Fetch Results
+- URLs queued: N
+- Files fetched: N saved, N skipped (existing), N failed
+- Failed URLs: [list or "none"]
 ```
 
 `discovery-log.md` is NOT indexed — audit trail only.
 
-If more than 30% of URLs failed: warn the user and list the failed ones.
+If more than 30% of Layer 4 URLs failed: warn the user and list the failed ones.
 
 ---
 
@@ -323,17 +411,19 @@ Research complete for workspace/[WORKSPACE_ID]
 
   Domain          : [detected domain]
   Topics          : [entity list]
-  Sources indexed : N (Tier A: N, Tier B: N, N failed)
-  Files saved     : knowledge/ ([N] files)
+  Total files     : N in knowledge/
 
-  Coverage:
-    ✓ [entity 1]  — N sources
-    ✓ [entity 2]  — N sources
-    ⚠ [entity 3]  — no authoritative source found
+  Acquisition:
+    Layer 1 (GitHub clone) : N files across M entities
+    Layer 2 (llms.txt)     : N files across M entities
+    Layer 3 (BFS crawl)    : N files across M entities
+    Layer 4 (WebSearch)    : N files across M entities
 
-  Coverage gaps (entities with < 2 Tier A sources — treat agent decisions here as less certain):
-    • [entity 3] — 0 Tier A sources
-    [none — all entities have 2+ Tier A sources]
+  Per-Entity:
+    ✓ [entity 1]  — Layer 1: 312 files (reactjs/react.dev)
+    ✓ [entity 2]  — Layer 3: 89 pages crawled
+    ✓ [entity 3]  — Layer 4: 6 URLs fetched
+    ⚠ [entity 4]  — Layer 4: 2 URLs (low coverage)
 
   Agents get this research automatically when spawned with
   workspace_path="[WORKSPACE_ABS]"
@@ -353,9 +443,12 @@ Discovery log: [WORKSPACE_ABS]/discovery-log.md
 
 ## Notes
 
-- All collected URLs are logged to `$WORKSPACE_ABS/discovery-log.md` for audit purposes only.
-- Re-running `/research-task` on the same workspace is incremental — unchanged sources are skipped automatically.
+- **Four layer waterfall**: Layer 1 (GitHub clone) > Layer 2 (llms.txt) > Layer 3 (BFS crawl) > Layer 4 (WebSearch). Each entity stops at the first layer that produces 5+ files.
+- **No cap on files.** Layers 1-3 can produce hundreds of files per entity. That's the goal. Embedding replaces reading.
+- Re-running `/research-task` on the same workspace is incremental. `clone-docs.py` skips existing files. `fetch-docs.py` skips existing files. The KB pre-check skips fully covered entities.
+- Non-code domains (legal, design, market, science) go straight to Layer 4 since there are no GitHub repos or doc sites to clone/crawl.
 - Domain detection is automatic but you can override it by stating the domain in the ticket.
-- For cross-domain tasks, note both domains in the ticket — primary drives angle selection, secondary adds supplementary angles.
-- `mode=graph` only works on `scope=codebase` — research scope always uses vector internally.
-- Passing URLs directly: `/research-task my-workspace https://example.com/doc.pdf` — URLs trigger manual approval mode.
+- For cross-domain tasks, note both domains in the ticket. Primary drives angle selection, secondary adds supplementary angles.
+- `mode=graph` only works on `scope=codebase`. Research scope always uses vector internally.
+- Passing URLs directly: `/research-task my-workspace https://example.com/doc.pdf` triggers manual approval mode.
+- All results are logged to `$WORKSPACE_ABS/discovery-log.md` for audit purposes only.

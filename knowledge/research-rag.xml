@@ -84,35 +84,62 @@
 
   <source-discovery>
     <description>
-      /research-task and /research-project use a 3-step preferred order for finding sources.
-      Follow this order — do NOT jump straight to WebSearch.
+      /research-task and /research-project use a four-layer document acquisition waterfall.
+      Each layer produces files directly with zero AI tokens. A technology or entity is
+      "covered" when any layer produces 5+ files, and later layers are skipped.
+      Embedding replaces reading.
     </description>
 
-    <step order="1" name="Source Map">
-      Read knowledge/research-source-map.xml first. It contains pre-verified canonical URLs
-      for 80+ common technologies (React, Django, PostgreSQL, OWASP, etc.) with tier and
-      angle annotations. Match by id, name, tags, or substring. If found, use those URLs
-      directly — no WebSearch needed for this technology.
-      Log: "Source map hit: [tech] → N URLs"
-    </step>
+    <layer order="1" name="GitHub Sparse Checkout" script="clone-docs.py">
+      Clones only the docs folder from a GitHub repo using git sparse-checkout with
+      --filter=blob:none. Produces 50 to 500 markdown files per technology. Requires a
+      github-docs entry in knowledge/research-source-map.xml. Zero network overhead
+      beyond the git fetch. Highest quality: official docs already in markdown, no
+      HTML conversion needed.
+    </layer>
 
-    <step order="2" name="Context7">
-      For library and framework entities that have a context7-id in the source map (or resolve
-      via mcp__claude_ai_Context7__resolve-library-id), call Context7 BEFORE WebSearch.
-      Context7 returns current official docs with zero token cost for fetching.
-      Write results to workspace knowledge/ as context7-[slug].md.
-      Skip: non-library concepts (OWASP, JWT, HTTP), missing context7-id.
-    </step>
+    <layer order="2" name="llms.txt" script="fetch-docs.py --llms-txt">
+      Checks for llms.txt or llms-full.txt at the documentation domain root (proposed
+      standard by Jeremy Howard / Answer.AI). llms-full.txt is a single file with the
+      full documentation content. llms.txt is an index of URLs to fetch. Either way,
+      produces authoritative content with minimal requests.
+    </layer>
 
-    <step order="3" name="WebSearch smart angles">
-      Only run WebSearch when steps 1 and 2 did not cover the entity.
-      Use 3 angles per entity (not 11) based on tech role or task type.
-      Use 1 query phrasing per angle. Target 15-20 total sources per run.
-      See /research-task and /research-project skill files for the full angle tables.
-    </step>
+    <layer order="3" name="BFS Crawl" script="fetch-docs.py --crawl">
+      Breadth-first crawl of a documentation site, scoped to same-domain + path-prefix.
+      Uses httpx + html2text to convert pages to markdown. Produces 50 to 200 pages.
+      Uses doc-root from the source map when available, otherwise derives from the
+      first Tier A documentation URL.
+    </layer>
+
+    <layer order="4" name="WebSearch Fallback">
+      Only runs when layers 1 through 3 produced fewer than 5 files. Uses 3 targeted
+      angle queries per entity based on tech role. URLs are fetched by fetch-docs.py
+      in a separate phase. This is the fallback for niche libraries and technologies
+      without source map entries.
+    </layer>
+
+    <context7 note="runs alongside any layer">
+      For entities with a context7-id in the source map (or resolvable via
+      mcp__claude_ai_Context7__resolve-library-id), Context7 runs in parallel with
+      whatever layer covers the entity. It adds role-specific snippets to the KB.
+      Skip for non-library concepts (OWASP, JWT, HTTP).
+    </context7>
+
+    <source-map>
+      knowledge/research-source-map.xml contains pre-verified entries for 80+ technologies
+      with github-docs paths, doc-root URLs, context7-ids, and source URLs. The waterfall
+      consults it before each layer to determine what to clone, crawl, or fetch.
+    </source-map>
+
+    <no-caps>
+      There is no cap on files or technologies. Layers 1 through 3 can produce hundreds
+      of files per technology and that is the goal. The RAG embedding index handles scale;
+      agents query via cosine similarity instead of reading.
+    </no-caps>
 
     <tier-c-ban>
-      Tier C sources (medium, hashnode, personal blogs) are EXCLUDED at all steps.
+      Tier C sources (medium, hashnode, personal blogs) are EXCLUDED at all layers.
       Do not add them to pending-urls.json. Do not fetch them. Do not index them.
       "No Tier A/B source found" is the correct outcome for angles with no authoritative coverage.
     </tier-c-ban>
@@ -297,12 +324,16 @@
       to verify the chunk is accurate and not truncated mid-thought.
     </anti-pattern>
     <anti-pattern name="over-indexing">
-      Do not index more than 20 URLs without user consent. Broad scrapes slow indexing
-      and dilute search quality with irrelevant content.
+      Layers 1 through 3 of the waterfall intentionally produce hundreds of files per
+      technology. That volume is expected and correct for official documentation. This
+      anti-pattern applies only to Layer 4 WebSearch results and manually added URLs:
+      do not queue more than 30 Layer 4 URLs per entity without user consent.
     </anti-pattern>
     <anti-pattern name="single-domain-bias">
-      Do not index 10+ pages from the same site without considering breadth. A single vendor's
-      docs may not represent the full solution space.
+      Layers 1 and 3 clone or crawl a single authoritative domain (the official docs).
+      That is expected and correct. This anti-pattern applies only to Layer 4 WebSearch
+      results: do not index 10+ pages from the same non-official site without considering
+      breadth across sources.
     </anti-pattern>
     <anti-pattern name="skip-chunk-quality-check">
       Always check sources_failed and whether any source returned fewer than 5 chunks.

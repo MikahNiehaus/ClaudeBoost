@@ -1834,6 +1834,70 @@ Record any failures by file and line. A lint failure is not a FAIL unless it ind
 
 ---
 
+### G3.5: Code Coverage Audit (MANDATORY — NEVER SKIP)
+
+> **You do not know whether untested code works. You must KNOW, not assume. A passing test suite with no coverage of the new code proves nothing about the new code.**
+
+**G3.5a — Map every public symbol to tests.**
+
+For every file in scope, list all public functions, methods, handlers, and entry points (name + line). Then search for each symbol in the test project:
+```bash
+grep -rl "<SymbolName>" "$PROJECT_PATH" --include="*Test*" --include="*Spec*" 2>/dev/null
+```
+
+Build a coverage table in `$WORKSPACE_ABS/coverage-map.md`:
+```markdown
+# Coverage Map
+
+| Symbol | File:Line | Covered? | Test File |
+|--------|-----------|----------|-----------|
+| OnPostCreateTableauDashboard | ReportsSettings.cshtml.cs:396 | UNCOVERED | none |
+```
+
+**G3.5b — Write tests for every UNCOVERED symbol.**
+
+For every UNCOVERED symbol: write at least one test using the project's established pattern (extract logic into a local helper, test in isolation — no live DI or DB needed). Each auth/validation branch is a separate test case — one test covering the happy path is insufficient.
+
+If a symbol genuinely cannot be unit tested in isolation (requires live DB, live session, etc.): document it as INTEGRATION_REQUIRED, explain why, and describe what would be needed to test it with a running server.
+
+Run the new tests immediately. Record results in `coverage-map.md`.
+
+---
+
+### G3.6: Logging Verification (MANDATORY — NEVER SKIP)
+
+> **Structured logs are the evidence that a handler actually ran the branch you think it ran. Without them you are guessing. Every handler under test must have logging — verify it is there and correct before moving on.**
+
+**What counts as a GOOD permanent log:**
+- `LogInformation` on successful mutations only — include resource ID and key discriminating fields (type, regionId, flag state). Nothing else.
+  - GOOD: `_logger.LogInformation("Tableau dashboard created — id={Id}, regionId={RegionId}", id, regionId)`
+  - BAD: `_logger.LogInformation("Created: {DisplayText}", body.DisplayText)` — logs user-controlled input
+- `LogWarning` on auth rejections and validation failures — include which check failed, no raw input values, no user-supplied strings, no URLs
+  - GOOD: `_logger.LogWarning("CreateTableauDashboard: validation failed — bodyNull={BodyNull}, validUri={ValidUri}", ...)`
+  - BAD: `_logger.LogWarning("Invalid URL: {Url}", body.ResourceUrl)` — logs user input
+- `LogError` in every catch block — include the exception and method context
+- NO logging on pure read handlers (GET handlers that do not mutate state)
+- NEVER log: session keys, JWT values, tokens, emails, API keys, base64 content, raw user-supplied strings
+
+**What counts as a TEMPORARY log:**
+- A `LogDebug` / `LogTrace` call added specifically to trace an unclear path during this QA session
+- Must have a `// TODO: remove after QA` comment on the same line — visible in code review
+- Must appear in a removal checklist in `$WORKSPACE_ABS/temp-log-removal.md` — QA session is not complete until this file is written and each temp log confirmed removed or tracked
+- Only valid for async flows where a debugger cannot easily attach — NOT a substitute for setting a breakpoint
+
+**G3.6a — Audit every in-scope handler.** Use Grep to find existing log calls. Document in `$WORKSPACE_ABS/logging-audit.md`:
+```markdown
+# Logging Audit
+
+| Handler | LogInfo on success? | LogWarning on failures? | LogError in catch? | Sensitive data in params? |
+|---------|--------------------|-----------------------|--------------------|--------------------------|
+| OnPostCreateTableauDashboard | yes | yes | no catch block | no |
+```
+
+**G3.6b — Add missing log calls.** For any handler missing required calls: add them now following the GOOD log patterns above. Then run a build to confirm no compile errors.
+
+---
+
 ### G4: Exploratory Pass
 
 Write targeted tests for things the existing suite does not cover.
@@ -1857,13 +1921,17 @@ Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
 
 ---
 
-### G4d: Debugger-Assisted Verification (mandatory code proof)
+### G4d: Debugger-Assisted Verification (MANDATORY — ALWAYS — NEVER SKIP)
 
-Running tests tells you pass/fail. The debugger tells you *why* — and whether the code actually does what the comments claim at runtime.
+> **THIS IS NOT OPTIONAL. IT IS ALWAYS REQUIRED. USE BREAKPOINTS HEAVILY.**
+>
+> Tests tell you pass or fail. The debugger tells you **what actually happened** — which branch ran, what the variables held, whether the comment is accurate. Without breakpoints you are **assuming**. With breakpoints you **know**. There is no acceptable substitute for knowing.
+>
+> "The tests passed" is not enough. "I can read the logic" is not enough. "It looks correct" is not enough. You must step through the actual running code, inspect actual variable values at actual decision points, and confirm the actual branch taken. Every handler. Every meaningful branch. Every null check that matters.
+>
+> **The only valid skip condition is `--no-debug` explicitly passed by the user.** Skipping for any other reason produces an incomplete session — write `INCOMPLETE: debugger skipped — [reason]` in the report and surface it to the user.
 
-This is not optional polish. It is the code proof that the logic runs correctly. A general mode QA session without debugger evidence only proves the tests pass — it does not prove the runtime behavior matches expectations. The debug log is the equivalent of the screenshot in browser mode: it is the evidence.
-
-**Skip this step only if `--no-debug` was passed.** If you are skipping it for any other reason, you are producing an incomplete session.
+Running tests tells you pass/fail. The debugger tells you *why* — and whether the code does what the comments claim at runtime. The debug log is the equivalent of a screenshot in browser mode: it is the evidence that the path actually executed.
 
 Set `DEBUG_PROOF_DIR = $WORKSPACE_ABS/debug-proof` and create it if it does not exist.
 

@@ -100,6 +100,27 @@ def _get_instance_id() -> str:
     return f"ppid-{os.getppid()}"
 
 
+def _ws_from_inst_file(inst_path: Path, cwd: str) -> str:
+    """Extract workspace ID for cwd from a ws-instance file. Returns "" on miss."""
+    try:
+        data = json.loads(inst_path.read_text(encoding="utf-8"))
+        cwd_lower = cwd.lower()
+        if "workspace_id" not in data:
+            ws = data.get(cwd)
+            if ws is None:
+                for key, val in data.items():
+                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
+                        ws = val
+                        break
+            return str(ws) if ws else ""
+        stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
+        if stored.lower() == cwd_lower:
+            return str(data.get("workspace_id", "") or "")
+        return ""
+    except Exception:
+        return ""
+
+
 def resolve() -> dict:
     """Return workspace info for this Claude instance."""
     home = _get_home()
@@ -108,28 +129,44 @@ def resolve() -> dict:
 
     cwd = os.getcwd().replace("\\", "/").rstrip("/")
 
-    # 1. Per-instance file — CWD-keyed map (matches the blue statusline indicator)
+    # 1. Per-instance file keyed by this process's Claude instance ID
     instance_id = _get_instance_id()
     inst_path = state_dir / "ws-instance" / f"{instance_id}.json"
-    try:
-        data = json.loads(inst_path.read_text(encoding="utf-8"))
-        if "workspace_id" not in data:
-            # New format: {cwd: workspace_id}
-            ws = data.get(cwd)
-            if ws is None:
-                cwd_lower = cwd.lower()
-                for key, val in data.items():
-                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
-                        ws = val
-                        break
-        else:
-            # Old format: only use if stored CWD matches
-            stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
-            ws = data.get("workspace_id") if stored.lower() == cwd.lower() else None
-        if ws and isinstance(ws, str):
-            workspace_id = ws
-    except Exception:
-        pass
+    workspace_id = _ws_from_inst_file(inst_path, cwd)
+
+    # 2. Fallback: scan all ws-instance files for this CWD, most recently modified wins
+    if not workspace_id:
+        inst_dir = state_dir / "ws-instance"
+        candidates: list[tuple[float, str]] = []
+        try:
+            for f in inst_dir.iterdir():
+                if f.suffix != ".json":
+                    continue
+                ws = _ws_from_inst_file(f, cwd)
+                if ws:
+                    candidates.append((f.stat().st_mtime, ws))
+        except Exception:
+            pass
+        if candidates:
+            candidates.sort(reverse=True)
+            workspace_id = candidates[0][1]
+
+    # 3. Fallback: most recently modified workspace in <cwd>/workspace/ that has context.md
+    if not workspace_id:
+        ws_dir = Path(cwd) / "workspace"
+        try:
+            best_mtime = 0.0
+            for d in ws_dir.iterdir():
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                ctx = d / "context.md"
+                if ctx.exists():
+                    mtime = ctx.stat().st_mtime
+                    if mtime > best_mtime:
+                        best_mtime = mtime
+                        workspace_id = d.name
+        except Exception:
+            pass
 
     if not workspace_id:
         return {"workspace_id": "", "workspace_path": "", "project_path": ""}
