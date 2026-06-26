@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import pathlib
 import re
@@ -20,6 +21,8 @@ import tempfile
 import time
 
 from server.config import KNOWLEDGE_DIR
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_EXTENSIONS = {".md", ".mdx", ".rst"}
 GITHUB_BASE = "https://github.com/"
@@ -83,6 +86,7 @@ def clone_docs(
     tmp_dir = tempfile.mkdtemp(prefix="crag_clone_")
 
     try:
+        logger.info("Cloning %s (sparse, branch: %s) -> %s", repo, branch, kb_dir)
         print(f"Cloning {repo} (sparse, branch: {branch})...")
         t0 = time.time()
 

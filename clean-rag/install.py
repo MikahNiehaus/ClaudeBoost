@@ -146,15 +146,17 @@ def register_session_prompt() -> None:
 
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
     prompt_text = (
-        "CLEAN-RAG ENFORCEMENT: Every Edit/Write/MultiEdit on source code "
-        "requires verified proof. Before editing:\n"
-        "1. Search via POST http://127.0.0.1:{port}/search\n"
-        "2. Spawn a Haiku verification agent (model='haiku') with your proof\n"
-        "3. Use write_pending_proof() to write a keyed proof file with "
-        "content_hash (SHA-256 of edit) and min_score (>= 0.5)\n"
-        "4. Retry the edit. The gate verifies: verdict==VERIFIED, "
-        "content_hash matches, min_score >= 0.5, timestamp is timezone-aware "
-        "and under 120s old.\n"
+        "CLEAN-RAG ENFORCEMENT: Everything you say or do must be grounded "
+        "in indexed research. Before responding, editing, or deciding:\n"
+        "1. Check the topic tree (injected every turn by rag-enforce.py)\n"
+        "2. Search via POST http://127.0.0.1:{port}/search with your question\n"
+        "3. If no topic exists or scores < 0.5: acquire-topic to auto-research, "
+        "or research the specific question directly while a parallel agent "
+        "handles broader indexing\n"
+        "4. For edits: write proof with write_pending_proof() including "
+        "content_hash (SHA-256) and min_score (>= 0.5), then retry\n"
+        "5. The proof gate mechanically blocks edits without proof. "
+        "The rag-enforce hook reminds you every turn to search RAG.\n"
         "Exempt: workspace/, knowledge/, .md, .txt files. "
         "NOT exempt: .json, .yaml, .toml, .xml, clean-rag/ files."
     ).format(port=port)
@@ -191,6 +193,48 @@ def register_session_prompt() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5b: Register rag-enforce UserPromptSubmit hook
+# ---------------------------------------------------------------------------
+def register_rag_enforce_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.setdefault("hooks", {})
+
+    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/rag-enforce.py"'
+    sentinel = "rag-enforce.py"
+
+    hook_entry = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": hook_command,
+            }
+        ],
+    }
+
+    # Check if already registered
+    prompt_hooks = hooks.get("UserPromptSubmit", [])
+    if not isinstance(prompt_hooks, list):
+        prompt_hooks = []
+
+    for existing in prompt_hooks:
+        for h in existing.get("hooks", []):
+            cmd = h.get("command", "")
+            if sentinel in cmd:
+                if cmd != hook_command:
+                    h["command"] = hook_command
+                    _ok("rag-enforce hook path refreshed")
+                else:
+                    _ok("rag-enforce hook already registered")
+                write_json(SETTINGS_PATH, settings)
+                return
+
+    prompt_hooks.append(hook_entry)
+    hooks["UserPromptSubmit"] = prompt_hooks
+    write_json(SETTINGS_PATH, settings)
+    _ok("rag-enforce hook registered (UserPromptSubmit)")
+
+
+# ---------------------------------------------------------------------------
 # Step 6: Pre-seed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
@@ -209,27 +253,94 @@ def seed_topics(topic_filter: list[str] | None = None) -> None:
         _warn("No matching seed topics found")
         return
 
-    _say(f"Pre-seeding {len(topics_to_seed)} topics from GitHub...")
-
+    # Group by category for organized output
+    by_category: dict[str, list] = {}
     for entry in topics_to_seed:
-        topic = entry["topic"]
-        repo = entry["repo"]
-        path = entry["path"]
-        extensions = entry.get("extensions", ".md,.mdx,.rst")
-        kb_dir = CLEAN_RAG_HOME / "knowledge" / topic
+        cat = entry.get("category", "uncategorized")
+        by_category.setdefault(cat, []).append(entry)
 
-        _say(f"  Cloning {repo} -> knowledge/{topic}/")
+    total = len(topics_to_seed)
+    _say(f"Pre-seeding {total} topics across {len(by_category)} categories...")
 
-        try:
-            from research.clone_docs import clone_docs
-            extensions_set = {e.strip() for e in extensions.split(",")}
-            stats = clone_docs(
-                repo=repo, docs_path=path, topic=topic,
-                extensions=extensions_set, kb_dir=kb_dir,
-            )
-            _ok(f"{topic}: {stats['files_copied']} files")
-        except Exception as e:
-            _warn(f"{topic}: {e}")
+    seeded = 0
+    indexed = 0
+    failed = 0
+    for cat, entries in sorted(by_category.items()):
+        _say(f"\n  [{cat}/] ({len(entries)} topics)")
+        for entry in entries:
+            topic = entry["topic"]
+            repo = entry["repo"]
+            path = entry["path"]
+            extensions = entry.get("extensions", ".md,.mdx,.rst")
+            category = entry.get("category", "uncategorized")
+
+            # Tree path: knowledge/<category>/<topic>/
+            kb_dir = CLEAN_RAG_HOME / "knowledge" / category / topic
+
+            # Check if already cloned (has 5+ files)
+            already_cloned = False
+            if kb_dir.exists():
+                existing = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
+                if existing >= 5:
+                    already_cloned = True
+                    seeded += 1
+
+            # Clone if needed
+            if not already_cloned:
+                _say(f"    {topic} <- {repo}")
+                try:
+                    from research.clone_docs import clone_docs
+                    extensions_set = {e.strip() for e in extensions.split(",")}
+                    branch = entry.get("branch", "main")
+                    stats = clone_docs(
+                        repo=repo, docs_path=path, topic=topic,
+                        branch=branch, extensions=extensions_set, kb_dir=kb_dir,
+                    )
+                    seeded += 1
+                    _ok(f"    {topic}: {stats['files_copied']} files -> knowledge/{category}/{topic}/")
+                    if stats["errors"]:
+                        for err in stats["errors"][:3]:
+                            _warn(f"      {err}")
+                except Exception as e:
+                    failed += 1
+                    _warn(f"    {topic}: {e}")
+                    continue
+
+            # Index into ChromaDB (skip if already indexed)
+            chroma_dir = CLEAN_RAG_HOME / "databases" / category / topic / "chroma"
+            if chroma_dir.exists():
+                if already_cloned:
+                    _ok(f"    {topic}: already seeded and indexed")
+                else:
+                    _ok(f"    {topic}: already indexed")
+                indexed += 1
+                continue
+
+            # Only index if knowledge dir has files
+            if not kb_dir.exists():
+                continue
+            file_count = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
+            if file_count < 1:
+                continue
+
+            try:
+                from server.indexing import index_topic
+                # Load embedding model once on first index
+                if not hasattr(seed_topics, '_embedder'):
+                    _say("    Loading embedding model (one-time)...")
+                    from server.embedding import SentenceTransformerEmbedding
+                    from server.config import EMBEDDING_MODEL
+                    seed_topics._embedder = SentenceTransformerEmbedding(EMBEDDING_MODEL)
+                    _ok("    Embedding model loaded")
+                _say(f"    {topic}: indexing {file_count} files...")
+                result = index_topic(topic, embedder=seed_topics._embedder, category=category)
+                chunks = result.get("chunks_created", 0)
+                indexed += 1
+                _ok(f"    {topic}: indexed ({chunks} chunks)")
+            except Exception as e:
+                _warn(f"    {topic}: indexing failed: {e}")
+
+    _say(f"\n  Seeding complete: {seeded} cloned, {indexed} indexed, {failed} failed out of {total}")
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +383,10 @@ def main():
     # Step 5
     print("\nStep 5: Registering session prompt...")
     register_session_prompt()
+
+    # Step 5b
+    print("\nStep 5b: Registering rag-enforce hook...")
+    register_rag_enforce_hook()
 
     # Step 6
     if not args.no_seed:

@@ -2,8 +2,8 @@
 """clean-rag proof gate: PreToolUse hook on Edit|Write|MultiEdit.
 
 Blocks file edits unless a verified proof exists in a keyed proof file.
-The hook itself does NO AI work. It checks a state file that Claude writes
-after spawning a Haiku verification agent.
+The hook does NO AI work. It checks a state file that Claude writes
+after searching RAG and passing mechanical verification checks.
 
 Exit codes:
   0 = pass (proof verified or path exempt)
@@ -141,18 +141,51 @@ Before editing, you must:
    POST http://127.0.0.1:{port}/search
    {{"query": "<what you need to know>", "sources": ["all_topics", "project:<path>"]}}
 
-2. SPAWN a Haiku verification agent with your proof:
-   Agent(model="haiku", prompt="CLEAN-RAG VERIFICATION REQUEST\\n\\nFile: {file}\\nProposed change: <describe>\\n\\nRAG results: <paste results>\\n\\nHow I know how to make this change: <explain>\\n\\nVerify this proof is sufficient. Respond with ONLY:\\n- VERIFIED: [why]\\n- RESEARCH_MORE: [what topic]\\n- INSUFFICIENT: [what is missing]")
+   You need at least one result with score >= {min_score}.
+   If search returns NO results or all scores are below {min_score}:
+   go to step 1b to auto-research the topic first.
 
-3. WRITE the verification to a keyed proof file using write_pending_proof():
-   Include content_hash and min_score in the proof.
-   The proof file is keyed per target file, not a single shared file.
+1b. AUTO-RESEARCH (only when step 1 found nothing usable):
+   POST http://127.0.0.1:{port}/acquire-topic
+   {{"topic": "<technology-slug>"}}
 
-4. RETRY the edit. The gate will pass if:
+   This runs the 4-layer waterfall automatically: GitHub sparse checkout,
+   llms.txt check, BFS doc crawl, then indexes the results into a new
+   topic database. After it completes, re-run step 1.
+
+   If acquire-topic returns needs_websearch:true, use WebSearch to find
+   authoritative docs, save them to clean-rag/knowledge/<category>/<topic>/,
+   then index:
+   POST http://127.0.0.1:{port}/index-topic {{"topic": "<name>", "category": "<category>"}}
+
+2. WRITE proof to a keyed proof file using write_pending_proof():
+   from clean_rag.verifier.log import write_pending_proof
+
+   write_pending_proof(
+       state_dir="clean-rag/state",
+       file_path="<path to file being edited>",
+       verdict="VERIFIED",
+       verifier_response="<summary of RAG results that justify the edit>",
+       rag_results_count=<number of RAG results used>,
+       topics_cited=["<topic1>", "<topic2>"],
+       project_cited=<True if project codebase was searched>,
+       content_hash="<SHA-256 of the edit content>",
+       min_score=<best RAG result score, must be >= {min_score}>,
+   )
+
+   content_hash: compute SHA-256 of the edit content (old_string + new_string
+   for Edit, content for Write, edits array for MultiEdit).
+   min_score: the highest score from your RAG search results.
+
+3. RETRY the edit. The gate will pass if:
    - verdict == VERIFIED
-   - content_hash matches the proposed edit
+   - content_hash matches the proposed edit (prevents proof reuse)
    - min_score >= {min_score}
    - timestamp is within {window}s and timezone-aware
+
+The research you acquire is permanently saved. Next time you edit code
+using the same technology, the search in step 1 will find it instantly.
+No re-research, no re-downloading. Proof comes from local search.
 ===================================================================
 """
 

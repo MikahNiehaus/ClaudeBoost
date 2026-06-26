@@ -152,6 +152,7 @@ async def handle_index_topic(request: web.Request) -> web.Response:
         return _json_response({"error": err}, 400)
 
     force = body.get("force", False)
+    category = body.get("category", None)
 
     if not _embedder:
         return _json_response({"error": "Server not initialized"}, 503)
@@ -165,7 +166,7 @@ async def handle_index_topic(request: web.Request) -> web.Response:
             return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
 
     result = await loop.run_in_executor(
-        None, partial(index_topic, topic, _embedder, force=force)
+        None, partial(index_topic, topic, _embedder, force=force, category=category)
     )
 
     status = 200 if "error" not in result else 400
@@ -277,6 +278,8 @@ async def handle_acquire_topic(request: web.Request) -> web.Response:
     if err:
         return _json_response({"error": err}, 400)
 
+    category = body.get("category", None)
+
     try:
         from research.acquire import acquire_topic
     except ImportError:
@@ -287,7 +290,9 @@ async def handle_acquire_topic(request: web.Request) -> web.Response:
 
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(None, partial(acquire_topic, topic))
+        result = await loop.run_in_executor(
+            None, partial(acquire_topic, topic, category=category)
+        )
     except Exception as e:
         logger.error("acquire_topic(%s) failed: %s", topic, e)
         return _json_response({"error": f"Acquisition failed: {e}"}, 500)

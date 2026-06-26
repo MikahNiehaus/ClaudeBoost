@@ -333,21 +333,79 @@ def scan_project(project_path: str) -> list[str]:
 # Topic indexing
 # ---------------------------------------------------------------------------
 
+def _resolve_topic_paths(
+    topic: str, category: str | None = None,
+) -> tuple[Path, Path, Path]:
+    """Resolve knowledge dir, chroma dir, and manifest path for a topic.
+
+    If category is provided, uses category tree: knowledge/<cat>/<topic>/.
+    Otherwise looks up from topics.json registry, then falls back to flat.
+    """
+    if category is None:
+        # Try registry lookup
+        reg = _read_topic_registry()
+        category = reg.get(topic, {}).get("category")
+
+    if category is None:
+        # Try source map
+        try:
+            from research.source_map import get_category
+            cat = get_category(topic)
+            if cat != "uncategorized":
+                category = cat
+        except (ImportError, Exception):
+            pass
+
+    if category is None:
+        # Scan knowledge dir for category/<topic>/ as final fallback
+        if KNOWLEDGE_DIR.exists():
+            for subdir in KNOWLEDGE_DIR.iterdir():
+                if subdir.is_dir() and (subdir / topic).is_dir():
+                    category = subdir.name
+                    break
+
+    if category:
+        topic_dir = KNOWLEDGE_DIR / category / topic
+        chroma_dir = DATABASES_DIR / category / topic / "chroma"
+        manifest_path = DATABASES_DIR / category / topic / "manifest.json"
+    else:
+        # Flat fallback for topics not in any category
+        topic_dir = KNOWLEDGE_DIR / topic
+        chroma_dir = DATABASES_DIR / topic / "chroma"
+        manifest_path = DATABASES_DIR / topic / "manifest.json"
+
+    return topic_dir, chroma_dir, manifest_path
+
+
+def _read_topic_registry() -> dict:
+    """Read topics.json registry."""
+    registry_path = STATE_DIR / "topics.json"
+    if registry_path.exists():
+        try:
+            return json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
 def index_topic(
     topic: str,
     embedder,
     force: bool = False,
+    category: str | None = None,
 ) -> dict:
-    """Index all files in knowledge/<topic>/ into databases/<topic>/chroma/.
+    """Index all files in knowledge/[category/]<topic>/ into databases/[category/]<topic>/chroma/.
+
+    If category is provided, uses the tree structure. Otherwise looks up
+    the category from the topics.json registry or source_map.
 
     Returns stats dict with files_indexed, chunks_created, etc.
     """
-    topic_dir = KNOWLEDGE_DIR / topic
-    if not topic_dir.exists():
-        return {"error": f"Topic directory not found: {topic_dir}"}
+    topic_dir, chroma_dir, manifest_path = _resolve_topic_paths(topic, category)
 
-    chroma_dir = DATABASES_DIR / topic / "chroma"
-    manifest_path = DATABASES_DIR / topic / "manifest.json"
+    if not topic_dir.exists():
+        logger.error("Topic directory not found: %s", topic_dir)
+        return {"error": f"Topic directory not found: {topic_dir}"}
 
     # Load existing manifest for incremental indexing
     manifest: dict = {}
@@ -442,8 +500,17 @@ def index_topic(
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # Update topic registry
-    _update_topic_registry(topic, store.count("docs"), store.count_sources("docs"))
+    # Update topic registry (include category for tree lookup)
+    resolved_cat = category
+    if resolved_cat is None:
+        try:
+            from research.source_map import get_category
+            cat = get_category(topic)
+            if cat != "uncategorized":
+                resolved_cat = cat
+        except ImportError:
+            pass
+    _update_topic_registry(topic, store.count("docs"), store.count_sources("docs"), resolved_cat)
 
     elapsed = round(time.time() - start_time, 1)
     return {
@@ -456,8 +523,10 @@ def index_topic(
     }
 
 
-def _update_topic_registry(topic: str, chunk_count: int, file_count: int) -> None:
-    """Update state/topics.json with current topic stats."""
+def _update_topic_registry(
+    topic: str, chunk_count: int, file_count: int, category: str | None = None,
+) -> None:
+    """Update state/topics.json with current topic stats and category."""
     registry_path = STATE_DIR / "topics.json"
     registry: dict = {}
     if registry_path.exists():
@@ -466,14 +535,20 @@ def _update_topic_registry(topic: str, chunk_count: int, file_count: int) -> Non
         except Exception:
             registry = {}
 
-    registry[topic] = {
+    entry = {
         "chunks": chunk_count,
         "files": file_count,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
     }
+    if category:
+        entry["category"] = category
+
+    registry[topic] = entry
 
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    logger.info("Registry updated: %s (category=%s, chunks=%d, files=%d)",
+                topic, category or "flat", chunk_count, file_count)
 
 
 # ---------------------------------------------------------------------------

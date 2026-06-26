@@ -7,6 +7,117 @@ Covers languages, frameworks, libraries, best practices, cloud services,
 databases, testing, DevOps, and security across all major tech stacks.
 """
 
+# Category tree: maps each topic to its parent category folder.
+# knowledge/ and databases/ mirror this structure:
+#   knowledge/<category>/<topic>/...docs...
+#   databases/<category>/<topic>/chroma/
+TOPIC_CATEGORIES = {
+    # Languages
+    "python": "languages", "typescript": "languages", "javascript": "languages",
+    "csharp": "languages", "rust": "languages", "go": "languages",
+    "java": "languages", "kotlin": "languages", "swift": "languages",
+    "php": "languages", "ruby": "languages", "dart": "languages",
+    "lua": "languages", "sql": "languages", "html": "languages",
+    "css": "languages", "powershell": "languages", "bash": "languages",
+
+    # .NET / C# Ecosystem
+    "dotnet": "dotnet", "aspnet": "dotnet", "aspnet-mvc": "dotnet",
+    "razor-pages": "dotnet", "minimal-apis": "dotnet", "blazor": "dotnet",
+    "efcore": "dotnet", "signalr": "dotnet", "dotnet-identity": "dotnet",
+    "maui": "dotnet", "xunit": "dotnet", "nunit": "dotnet",
+
+    # Frontend / JavaScript Frameworks
+    "react": "frontend", "react-native": "frontend", "expo": "frontend",
+    "nextjs": "frontend", "vue": "frontend", "angular": "frontend",
+    "svelte": "frontend", "astro": "frontend", "deno": "frontend",
+    "htmx": "frontend", "redux": "frontend", "react-query": "frontend",
+    "react-router": "frontend", "react-navigation": "frontend",
+    "zustand": "frontend",
+
+    # Node.js Server Frameworks
+    "express": "node-frameworks", "nestjs": "node-frameworks",
+    "fastify": "node-frameworks", "nodejs": "node-frameworks",
+
+    # Python Frameworks
+    "django": "python-frameworks", "fastapi": "python-frameworks",
+    "flask": "python-frameworks", "sqlalchemy": "python-frameworks",
+    "celery": "python-frameworks", "pydantic": "python-frameworks",
+
+    # Databases
+    "postgresql": "databases", "sqlserver": "databases", "mongodb": "databases",
+    "redis": "databases", "sqlite": "databases", "prisma": "databases",
+    "supabase": "databases", "firebase": "databases",
+    "elasticsearch": "databases", "chromadb": "databases",
+
+    # Cloud / Azure / AWS / GCP
+    "azure": "cloud", "azure-functions": "cloud", "azure-storage": "cloud",
+    "azure-openai": "cloud", "azure-devops": "cloud", "aws": "cloud",
+    "gcp": "cloud", "vercel": "cloud", "cloudflare": "cloud",
+
+    # Infrastructure / DevOps
+    "docker": "infrastructure", "kubernetes": "infrastructure",
+    "terraform": "infrastructure", "nginx": "infrastructure",
+    "github-actions": "infrastructure", "git": "infrastructure",
+
+    # Testing
+    "playwright": "testing", "pytest": "testing", "jest": "testing",
+    "vitest": "testing", "cypress": "testing", "testing-library": "testing",
+    "selenium": "testing", "storybook": "testing",
+
+    # Security
+    "owasp": "security", "jwt": "security", "oauth": "security",
+    "auth0": "security",
+
+    # UI / CSS / Design
+    "tailwindcss": "ui", "bootstrap": "ui", "sass": "ui",
+    "accessibility": "ui",
+
+    # AI / ML
+    "langchain": "ai", "pytorch": "ai", "openai-api": "ai",
+    "anthropic-api": "ai", "huggingface": "ai",
+
+    # Build Tools / Package Managers
+    "vite": "tools", "webpack": "tools", "eslint": "tools",
+    "prettier": "tools", "nuget": "tools",
+
+    # API / Communication
+    "graphql": "api", "rest-api": "api", "grpc": "api",
+    "websockets": "api", "openapi": "api",
+
+    # Message Queues
+    "rabbitmq": "messaging",
+
+    # Best Practices / Patterns
+    "clean-architecture": "patterns", "design-patterns": "patterns",
+    "solid-principles": "patterns", "microservices": "patterns",
+    "web-performance": "patterns", "seo": "patterns",
+
+    # Mobile
+    "expo-router": "mobile", "lottie": "mobile", "i18next": "mobile",
+
+    # Payments / Services
+    "stripe": "services", "sendgrid": "services", "google-maps": "services",
+
+    # Ruby Frameworks
+    "rails": "ruby-frameworks", "sinatra": "ruby-frameworks",
+
+    # PHP Frameworks
+    "laravel": "php-frameworks", "symfony": "php-frameworks",
+
+    # Java Frameworks
+    "spring-boot": "java-frameworks",
+
+    # .NET Libraries (not core framework)
+    "telerik": "dotnet", "kendo-react": "dotnet", "closedxml": "dotnet",
+    "quartz-net": "dotnet", "odata": "dotnet", "dapr": "dotnet",
+}
+
+
+def get_category(topic: str) -> str:
+    """Get the category for a topic. Returns 'uncategorized' if not found."""
+    return TOPIC_CATEGORIES.get(topic, "uncategorized")
+
+
 SOURCE_MAP = {
     # =====================================================================
     # Languages
@@ -669,109 +780,108 @@ SOURCE_MAP = {
 
 # Topics to pre-seed during install (subset of SOURCE_MAP with GitHub repos).
 # Each entry must have a working github repo + docs_path for Layer 1 clone.
+# Category field matches TOPIC_CATEGORIES and determines the tree location.
 SEED_TOPICS = [
-    # === Languages ===
-    {"topic": "python", "repo": "python/cpython", "path": "Doc", "extensions": ".rst"},
-    {"topic": "typescript", "repo": "microsoft/TypeScript-Website", "path": "packages/documentation/copy/en"},
-    {"topic": "csharp", "repo": "dotnet/docs", "path": "docs/csharp"},
-    {"topic": "rust", "repo": "rust-lang/book", "path": "src"},
-    {"topic": "go", "repo": "golang/website", "path": "_content"},
-    {"topic": "kotlin", "repo": "JetBrains/kotlin-web-site", "path": "docs/topics"},
-    {"topic": "swift", "repo": "apple/swift-book", "path": "TSPL.docc"},
-    {"topic": "dart", "repo": "dart-lang/site-www", "path": "src/language"},
-    {"topic": "powershell", "repo": "MicrosoftDocs/PowerShell-Docs", "path": "reference/7.5"},
+    # === languages/ ===
+    {"topic": "python", "category": "languages", "repo": "python/cpython", "path": "Doc", "extensions": ".rst"},
+    {"topic": "typescript", "category": "languages", "repo": "microsoft/TypeScript-Website", "path": "packages/documentation/copy/en", "branch": "v2"},
+    {"topic": "csharp", "category": "languages", "repo": "dotnet/docs", "path": "docs/csharp"},
+    {"topic": "rust", "category": "languages", "repo": "rust-lang/book", "path": "src"},
+    {"topic": "go", "category": "languages", "repo": "golang/website", "path": "_content"},
+    {"topic": "kotlin", "category": "languages", "repo": "JetBrains/kotlin-web-site", "path": "docs/topics"},
+    {"topic": "swift", "category": "languages", "repo": "apple/swift-book", "path": "TSPL.docc"},
+    {"topic": "dart", "category": "languages", "repo": "dart-lang/site-www", "path": "src/language"},
+    {"topic": "powershell", "category": "languages", "repo": "MicrosoftDocs/PowerShell-Docs", "path": "reference/7.5"},
 
-    # === .NET / C# Ecosystem ===
-    {"topic": "dotnet", "repo": "dotnet/docs", "path": "docs"},
-    {"topic": "aspnet", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore"},
-    {"topic": "efcore", "repo": "dotnet/EntityFramework.Docs", "path": "entity-framework/core"},
-    {"topic": "blazor", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore/blazor"},
-    {"topic": "signalr", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore/signalr"},
-    {"topic": "maui", "repo": "dotnet/docs-maui", "path": "docs"},
-    {"topic": "xunit", "repo": "xunit/xunit", "path": "docs"},
-    {"topic": "nunit", "repo": "nunit/docs", "path": "docs"},
+    # === dotnet/ ===
+    {"topic": "dotnet", "category": "dotnet", "repo": "dotnet/docs", "path": "docs"},
+    {"topic": "aspnet", "category": "dotnet", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore"},
+    {"topic": "efcore", "category": "dotnet", "repo": "dotnet/EntityFramework.Docs", "path": "entity-framework/core"},
+    {"topic": "blazor", "category": "dotnet", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore/blazor"},
+    {"topic": "signalr", "category": "dotnet", "repo": "dotnet/AspNetCore.Docs", "path": "aspnetcore/signalr"},
+    {"topic": "maui", "category": "dotnet", "repo": "dotnet/docs-maui", "path": "docs"},
+    {"topic": "xunit", "category": "dotnet", "repo": "xunit/xunit", "path": "docs"},
+    {"topic": "nunit", "category": "dotnet", "repo": "nunit/docs", "path": "docs"},
 
-    # === JavaScript / Frontend ===
-    {"topic": "react", "repo": "reactjs/react.dev", "path": "src/content"},
-    {"topic": "react-native", "repo": "facebook/react-native-website", "path": "docs"},
-    {"topic": "expo", "repo": "expo/expo", "path": "docs/pages"},
-    {"topic": "nextjs", "repo": "vercel/next.js", "path": "docs"},
-    {"topic": "vue", "repo": "vuejs/docs", "path": "src"},
-    {"topic": "angular", "repo": "angular/angular", "path": "adev/src/content"},
-    {"topic": "svelte", "repo": "sveltejs/svelte", "path": "documentation/docs"},
-    {"topic": "astro", "repo": "withastro/docs", "path": "src/content/docs/en"},
-    {"topic": "express", "repo": "expressjs/expressjs.com", "path": "en"},
-    {"topic": "nestjs", "repo": "nestjs/docs.nestjs.com", "path": "content"},
-    {"topic": "deno", "repo": "denoland/docs", "path": "runtime"},
-    {"topic": "htmx", "repo": "bigskysoftware/htmx", "path": "www/content/docs"},
-    {"topic": "redux", "repo": "reduxjs/redux", "path": "docs"},
-    {"topic": "react-query", "repo": "TanStack/query", "path": "docs"},
-    {"topic": "react-router", "repo": "remix-run/react-router", "path": "docs"},
-    {"topic": "react-navigation", "repo": "react-navigation/react-navigation.github.io", "path": "docs"},
+    # === frontend/ ===
+    {"topic": "react", "category": "frontend", "repo": "reactjs/react.dev", "path": "src/content"},
+    {"topic": "react-native", "category": "frontend", "repo": "facebook/react-native-website", "path": "docs"},
+    {"topic": "expo", "category": "frontend", "repo": "expo/expo", "path": "docs/pages"},
+    {"topic": "nextjs", "category": "frontend", "repo": "vercel/next.js", "path": "docs", "branch": "canary"},
+    {"topic": "vue", "category": "frontend", "repo": "vuejs/docs", "path": "src"},
+    {"topic": "angular", "category": "frontend", "repo": "angular/angular", "path": "adev/src/content"},
+    {"topic": "svelte", "category": "frontend", "repo": "sveltejs/svelte", "path": "documentation/docs"},
+    {"topic": "astro", "category": "frontend", "repo": "withastro/docs", "path": "src/content/docs/en"},
+    {"topic": "express", "category": "frontend", "repo": "expressjs/expressjs.com", "path": "en"},
+    {"topic": "nestjs", "category": "frontend", "repo": "nestjs/docs.nestjs.com", "path": "content"},
+    {"topic": "deno", "category": "frontend", "repo": "denoland/docs", "path": "runtime"},
+    {"topic": "htmx", "category": "frontend", "repo": "bigskysoftware/htmx", "path": "www/content/docs"},
+    {"topic": "redux", "category": "frontend", "repo": "reduxjs/redux", "path": "docs"},
+    {"topic": "react-query", "category": "frontend", "repo": "TanStack/query", "path": "docs"},
+    {"topic": "react-router", "category": "frontend", "repo": "remix-run/react-router", "path": "docs"},
+    {"topic": "react-navigation", "category": "frontend", "repo": "react-navigation/react-navigation.github.io", "path": "docs"},
 
-    # === Python Frameworks ===
-    {"topic": "django", "repo": "django/django", "path": "docs", "extensions": ".txt,.rst"},
-    {"topic": "fastapi", "repo": "fastapi/fastapi", "path": "docs/en/docs"},
-    {"topic": "flask", "repo": "pallets/flask", "path": "docs", "extensions": ".rst"},
-    {"topic": "pydantic", "repo": "pydantic/pydantic", "path": "docs"},
+    # === python-frameworks/ ===
+    {"topic": "django", "category": "python-frameworks", "repo": "django/django", "path": "docs", "extensions": ".txt,.rst"},
+    {"topic": "fastapi", "category": "python-frameworks", "repo": "fastapi/fastapi", "path": "docs/en/docs"},
+    {"topic": "flask", "category": "python-frameworks", "repo": "pallets/flask", "path": "docs", "extensions": ".rst"},
+    {"topic": "pydantic", "category": "python-frameworks", "repo": "pydantic/pydantic", "path": "docs"},
 
-    # === Databases ===
-    {"topic": "postgresql", "repo": "postgres/postgres", "path": "doc/src/sgml", "extensions": ".sgml"},
-    {"topic": "mongodb", "repo": "mongodb/docs", "path": "source", "extensions": ".txt,.rst"},
-    {"topic": "redis", "repo": "redis/redis-doc", "path": "docs"},
-    {"topic": "prisma", "repo": "prisma/docs", "path": "content"},
-    {"topic": "chromadb", "repo": "chroma-core/docs", "path": "docs"},
+    # === databases/ ===
+    {"topic": "postgresql", "category": "databases", "repo": "postgres/postgres", "path": "doc/src/sgml", "extensions": ".sgml"},
+    {"topic": "mongodb", "category": "databases", "repo": "mongodb/docs", "path": "source", "extensions": ".txt,.rst"},
+    {"topic": "redis", "category": "databases", "repo": "redis/redis-doc", "path": "docs"},
+    {"topic": "prisma", "category": "databases", "repo": "prisma/docs", "path": "content"},
+    {"topic": "chromadb", "category": "databases", "repo": "chroma-core/docs", "path": "docs"},
 
-    # === Cloud / Azure ===
-    {"topic": "azure-functions", "repo": "MicrosoftDocs/azure-docs", "path": "articles/azure-functions"},
-    {"topic": "cloudflare", "repo": "cloudflare/cloudflare-docs", "path": "src/content/docs"},
+    # === cloud/ ===
+    {"topic": "azure-functions", "category": "cloud", "repo": "MicrosoftDocs/azure-docs", "path": "articles/azure-functions"},
+    {"topic": "cloudflare", "category": "cloud", "repo": "cloudflare/cloudflare-docs", "path": "src/content/docs"},
 
-    # === Infrastructure / DevOps ===
-    {"topic": "docker", "repo": "docker/docs", "path": "content"},
-    {"topic": "kubernetes", "repo": "kubernetes/website", "path": "content/en/docs"},
-    {"topic": "terraform", "repo": "hashicorp/terraform", "path": "website/docs"},
-    {"topic": "github-actions", "repo": "github/docs", "path": "content/actions"},
-    {"topic": "git", "repo": "git/git", "path": "Documentation", "extensions": ".txt"},
+    # === infrastructure/ ===
+    {"topic": "docker", "category": "infrastructure", "repo": "docker/docs", "path": "content"},
+    {"topic": "kubernetes", "category": "infrastructure", "repo": "kubernetes/website", "path": "content/en/docs"},
+    {"topic": "terraform", "category": "infrastructure", "repo": "hashicorp/terraform", "path": "website/docs"},
+    {"topic": "github-actions", "category": "infrastructure", "repo": "github/docs", "path": "content/actions"},
+    {"topic": "git", "category": "infrastructure", "repo": "git/git", "path": "Documentation", "extensions": ".txt"},
 
-    # === Testing ===
-    {"topic": "playwright", "repo": "microsoft/playwright", "path": "docs/src"},
-    {"topic": "pytest", "repo": "pytest-dev/pytest", "path": "doc/en", "extensions": ".rst"},
-    {"topic": "jest", "repo": "jestjs/jest", "path": "website/docs"},
-    {"topic": "vitest", "repo": "vitest-dev/vitest", "path": "docs"},
-    {"topic": "cypress", "repo": "cypress-io/cypress-documentation", "path": "docs"},
-    {"topic": "testing-library", "repo": "testing-library/testing-library-docs", "path": "docs"},
-    {"topic": "selenium", "repo": "SeleniumHQ/seleniumhq.github.io", "path": "website_and_docs/content/documentation"},
-    {"topic": "storybook", "repo": "storybookjs/storybook", "path": "docs"},
+    # === testing/ ===
+    {"topic": "playwright", "category": "testing", "repo": "microsoft/playwright", "path": "docs/src"},
+    {"topic": "pytest", "category": "testing", "repo": "pytest-dev/pytest", "path": "doc/en", "extensions": ".rst"},
+    {"topic": "jest", "category": "testing", "repo": "jestjs/jest", "path": "website/docs"},
+    {"topic": "vitest", "category": "testing", "repo": "vitest-dev/vitest", "path": "docs"},
+    {"topic": "cypress", "category": "testing", "repo": "cypress-io/cypress-documentation", "path": "docs"},
+    {"topic": "testing-library", "category": "testing", "repo": "testing-library/testing-library-docs", "path": "docs"},
+    {"topic": "selenium", "category": "testing", "repo": "SeleniumHQ/seleniumhq.github.io", "path": "website_and_docs/content/documentation"},
+    {"topic": "storybook", "category": "testing", "repo": "storybookjs/storybook", "path": "docs"},
 
-    # === Security ===
-    {"topic": "owasp", "repo": "OWASP/CheatSheetSeries", "path": "cheatsheets"},
+    # === security/ ===
+    {"topic": "owasp", "category": "security", "repo": "OWASP/CheatSheetSeries", "path": "cheatsheets"},
 
-    # === UI / CSS ===
-    {"topic": "tailwindcss", "repo": "tailwindlabs/tailwindcss.com", "path": "src/pages/docs"},
-    {"topic": "bootstrap", "repo": "twbs/bootstrap", "path": "site/content/docs/5.3"},
-    {"topic": "sass", "repo": "sass/sass-site", "path": "source/documentation"},
+    # === ui/ ===
+    {"topic": "tailwindcss", "category": "ui", "repo": "tailwindlabs/tailwindcss.com", "path": "src/pages/docs"},
+    {"topic": "bootstrap", "category": "ui", "repo": "twbs/bootstrap", "path": "site/content/docs/5.3"},
+    {"topic": "sass", "category": "ui", "repo": "sass/sass-site", "path": "source/documentation"},
 
-    # === AI / ML ===
-    {"topic": "langchain", "repo": "langchain-ai/langchain", "path": "docs/docs"},
-    {"topic": "huggingface", "repo": "huggingface/transformers", "path": "docs/source/en"},
+    # === ai/ ===
+    {"topic": "langchain", "category": "ai", "repo": "langchain-ai/langchain", "path": "docs"},
+    {"topic": "huggingface", "category": "ai", "repo": "huggingface/transformers", "path": "docs/source/en"},
 
-    # === Build Tools ===
-    {"topic": "vite", "repo": "vitejs/vite", "path": "docs"},
-    {"topic": "eslint", "repo": "eslint/eslint", "path": "docs/src/rules"},
+    # === tools/ ===
+    {"topic": "vite", "category": "tools", "repo": "vitejs/vite", "path": "docs"},
+    {"topic": "eslint", "category": "tools", "repo": "eslint/eslint", "path": "docs/src/rules"},
 
-    # === API / Communication ===
-    {"topic": "graphql", "repo": "graphql/graphql.github.io", "path": "src/content/learn"},
-    {"topic": "grpc", "repo": "grpc/grpc.io", "path": "content/en/docs"},
+    # === api/ ===
+    {"topic": "graphql", "category": "api", "repo": "graphql/graphql-spec", "path": "spec"},
+    {"topic": "grpc", "category": "api", "repo": "grpc/grpc.io", "path": "content/en/docs"},
 
-    # === Best Practices ===
-    {"topic": "design-patterns", "repo": "kamranahmedse/design-patterns-for-humans", "path": "."},
+    # === patterns/ ===
+    {"topic": "design-patterns", "category": "patterns", "repo": "kamranahmedse/design-patterns-for-humans", "path": ".", "extensions": ".md"},
 
-    # === Other frameworks (from user projects) ===
-    {"topic": "dapr", "repo": "dapr/docs", "path": "daprdocs/content/en"},
-    {"topic": "i18next", "repo": "i18next/i18next", "path": "docs"},
-
-    # === Ruby / PHP / Java ===
-    {"topic": "rails", "repo": "rails/rails", "path": "guides/source"},
-    {"topic": "laravel", "repo": "laravel/docs", "path": "."},
-    {"topic": "spring-boot", "repo": "spring-projects/spring-boot", "path": "spring-boot-project/spring-boot-docs/src/docs"},
+    # === other/ ===
+    {"topic": "dapr", "category": "other", "repo": "dapr/docs", "path": "daprdocs/content/en"},
+    {"topic": "i18next", "category": "other", "repo": "i18next/i18next", "path": "docs"},
+    {"topic": "rails", "category": "other", "repo": "rails/rails", "path": "guides/source"},
+    {"topic": "laravel", "category": "other", "repo": "laravel/docs", "path": "."},
+    {"topic": "spring-boot", "category": "other", "repo": "spring-projects/spring-boot", "path": "spring-boot-project/spring-boot-docs/src/docs"},
 ]

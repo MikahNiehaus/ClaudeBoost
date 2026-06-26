@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -20,6 +21,8 @@ if _root not in sys.path:
 import re
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -49,10 +52,11 @@ def cmd_list(args):
         if not topics:
             print("No topics indexed.")
             return
-        print(f"{'Topic':<25} {'Chunks':<10} {'Files':<10} {'Indexed'}")
-        print("-" * 70)
+        print(f"{'Topic':<25} {'Category':<20} {'Chunks':<10} {'Files':<10} {'Indexed'}")
+        print("-" * 90)
         for name, info in sorted(topics.items()):
-            print(f"{name:<25} {info.get('chunks', 0):<10} "
+            cat = info.get("category", "")
+            print(f"{name:<25} {cat:<20} {info.get('chunks', 0):<10} "
                   f"{info.get('files', 0):<10} {info.get('indexed_at', '')[:10]}")
     except httpx.ConnectError:
         print("clean-rag server not running. Start it first.")
@@ -65,9 +69,19 @@ def cmd_create(args):
         print(f"Error: {err}")
         sys.exit(1)
     from server.config import KNOWLEDGE_DIR
-    topic_dir = KNOWLEDGE_DIR / args.name
+    try:
+        from research.source_map import get_category
+        category = get_category(args.name)
+    except ImportError:
+        category = "uncategorized"
+    if category and category != "uncategorized":
+        topic_dir = KNOWLEDGE_DIR / category / args.name
+    else:
+        topic_dir = KNOWLEDGE_DIR / args.name
     topic_dir.mkdir(parents=True, exist_ok=True)
     print(f"Created topic directory: {topic_dir}")
+    if category and category != "uncategorized":
+        print(f"  Category: {category}")
     print(f"Add documentation files to this directory, then run:")
     print(f"  python clean-rag/cli/topic.py index {args.name}")
 
@@ -167,6 +181,7 @@ def main():
 
     p_create = sub.add_parser("create", help="Create a topic directory")
     p_create.add_argument("name", help="Topic name (lowercase slug)")
+    p_create.add_argument("--category", default="", help="Category (auto-detected from source map if omitted)")
 
     p_index = sub.add_parser("index", help="Index a topic")
     p_index.add_argument("name", help="Topic name")

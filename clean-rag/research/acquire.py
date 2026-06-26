@@ -16,7 +16,7 @@ import os
 import pathlib
 from typing import Any
 
-from .source_map import SOURCE_MAP
+from .source_map import SOURCE_MAP, get_category
 from server.config import KNOWLEDGE_DIR
 
 logger = logging.getLogger(__name__)
@@ -28,18 +28,31 @@ def acquire_topic(
     topic: str,
     max_pages: int = 200,
     crawl_depth: int = 3,
+    category: str | None = None,
 ) -> dict[str, Any]:
     """Run the four-layer waterfall for a single topic.
 
     Returns a summary dict with layer results and files_acquired count.
     Layer 4 (WebSearch) is not run here since it requires Claude's WebSearch tool.
     """
-    kb_dir = KNOWLEDGE_DIR / topic
+    # Resolve category from source_map if not provided
+    if not category:
+        category = get_category(topic)
+    if category == "uncategorized":
+        category = None
+
+    # Place in category subdirectory if known
+    if category:
+        kb_dir = KNOWLEDGE_DIR / category / topic
+    else:
+        kb_dir = KNOWLEDGE_DIR / topic
     kb_dir.mkdir(parents=True, exist_ok=True)
 
     source = SOURCE_MAP.get(topic, {})
     result: dict[str, Any] = {
         "topic": topic,
+        "category": category,
+        "kb_dir": str(kb_dir),
         "source_map_hit": bool(source),
         "layers": {},
         "files_acquired": 0,

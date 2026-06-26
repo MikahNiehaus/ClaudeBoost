@@ -17,6 +17,7 @@ CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
 HOOK_SENTINEL = "proof-gate.py"
+RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 
 
@@ -99,6 +100,35 @@ def remove_session_prompt() -> None:
         _skip("clean-rag SessionStart prompt not found")
 
 
+def remove_rag_enforce_hook() -> None:
+    """Remove the rag-enforce.py UserPromptSubmit hook from settings.json."""
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.get("hooks", {})
+    prompt_hooks = hooks.get("UserPromptSubmit", [])
+
+    if not isinstance(prompt_hooks, list):
+        _skip("UserPromptSubmit hooks not a list")
+        return
+
+    original_len = len(prompt_hooks)
+    filtered = []
+    for entry in prompt_hooks:
+        keep = True
+        for h in entry.get("hooks", []):
+            if RAG_ENFORCE_SENTINEL in h.get("command", ""):
+                keep = False
+                break
+        if keep:
+            filtered.append(entry)
+
+    if len(filtered) < original_len:
+        hooks["UserPromptSubmit"] = filtered
+        write_json(SETTINGS_PATH, settings)
+        _ok("Removed rag-enforce hook from UserPromptSubmit")
+    else:
+        _skip("rag-enforce hook not found in UserPromptSubmit")
+
+
 def remove_env_var() -> None:
     """Remove CLEAN_RAG_HOME from settings.json env."""
     settings = read_json(SETTINGS_PATH)
@@ -165,6 +195,9 @@ def main():
 
     print("\nStep 3: Removing SessionStart prompt...")
     remove_session_prompt()
+
+    print("\nStep 3b: Removing rag-enforce hook...")
+    remove_rag_enforce_hook()
 
     print("\nStep 4: Removing CLEAN_RAG_HOME env var...")
     remove_env_var()
