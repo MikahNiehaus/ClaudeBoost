@@ -1,0 +1,56 @@
+<!-- Source: github.com/dotnet/docs/docs/core\compatibility\windows-forms\10.0\insertadjacentelement-orientation.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: "Breaking change: Renamed parameter in HtmlElement.InsertAdjacentElement"
+description: Learn about the breaking change in Windows Forms where the parameter `orient` was renamed to `orientation`.
+ms.date: 01/30/2025
+ai-usage: ai-assisted
+---
+
+# Renamed parameter in HtmlElement.InsertAdjacentElement
+
+<xref:System.Windows.Forms.HtmlElement.InsertAdjacentElement(System.Windows.Forms.HtmlElementInsertionOrientation,System.Windows.Forms.HtmlElement)?displayProperty=nameWithType> parameter `orient` was renamed to `orientation`.
+
+## Previous behavior
+
+Previously, calls to <xref:System.Windows.Forms.HtmlElement.InsertAdjacentElement(System.Windows.Forms.HtmlElementInsertionOrientation,System.Windows.Forms.HtmlElement)?displayProperty=nameWithType> included the `orient` parameter:
+
+```csharp
+element.InsertAdjacentElement(orient: HtmlElementInsertionOrientation.AfterEnd, newElement);
+```
+
+## New behavior
+
+The new parameter name is `orientation`.
+
+```csharp
+element.InsertAdjacentElement(orientation: HtmlElementInsertionOrientation.AfterEnd, newElement);
+```
+
+## Version introduced
+
+.NET 10
+
+## Type of breaking change
+
+This change can affect [source compatibility](../../categories.md#source-compatibility).
+
+## Reason for change
+
+The parameter name was changed to provide a more descriptive name.
+
+## Recommended action
+
+Edit any calls with a named argument to use the new parameter name or remove the parameter name:
+
+```csharp
+element.InsertAdjacentElement(orientation: HtmlElementInsertionOrientation.AfterEnd, newElement);
+```
+
+```csharp
+element.InsertAdjacentElement(HtmlElementInsertionOrientation.AfterEnd, newElement);
+```
+
+## Affected APIs
+
+- <xref:System.Windows.Forms.HtmlElement.InsertAdjacentElement(System.Windows.Forms.HtmlElementInsertionOrientation,System.Windows.Forms.HtmlElement)?displayProperty=fullName>

@@ -1,0 +1,217 @@
+<!-- Source: github.com/dotnet/docs/docs/core\testing\mutation-testing.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: Mutation testing
+author: sigmade
+description: Learn about the Stryker.net tool for mutation testing, to evaluate the quality of your unit tests.
+ms.date: 03/11/2025
+---
+
+# Mutation testing
+
+Mutation testing is a way to evaluate the quality of our unit tests. For mutation testing, the **Stryker.NET** tool automatically performs mutations in your code, runs tests, and generates a detailed report with the results.
+
+## Example test scenario
+
+Consider a sample _PriceCalculator.cs_ class with a `Calculate` method that calculates the price, taking into account the discount.
+
+```csharp
+public class PriceCalculator
+{
+    public decimal CalculatePrice(decimal price, decimal discountPercent)
+    {
+        if (price <= 0)
+        {
+            throw new ArgumentException("Price must be greater than zero.");
+        }
+
+        if (discountPercent < 0 || discountPercent > 100)
+        {
+            throw new ArgumentException("Discount percent must be between 0 and 100.");
+        }
+
+        var discount = price * (discountPercent / 100);
+        var discountedPrice = price - discount;
+
+        return Math.Round(discountedPrice, 2);
+    }
+}
+```
+
+The preceding method is covered by the following unit tests:
+
+```csharp
+[Fact]
+public void ApplyDiscountCorrectly()
+{
+    decimal price = 100;
+    decimal discountPercent = 10;
+
+    var calculator = new PriceCalculator();
+
+    var result = calculator.CalculatePrice(price, discountPercent);
+
+    Assert.Equal(90.00m, result);
+}
+
+[Fact]
+public void InvalidDiscountPercent_ShouldThrowException()
+{
+    var calculator = new PriceCalculator();
+
+    Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(100, -1));
+    Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(100, 101));
+}
+
+[Fact]
+public void InvalidPrice_ShouldThrowException()
+{
+    var calculator = new PriceCalculator();
+
+    Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(-10, 10));
+}
+```
+
+The preceding code highlights two projects, one for the service that acts as a `PriceCalculator` and the other is the test project.
+
+## Install the global tool
+
+First, install **Stryker.NET**.
+To do this, you need to execute the command:
+
+```dotnetcli
+dotnet tool install -g dotnet-stryker
+```
+
+To run `stryker`, invoke it from the command line in the directory where the unit test project is located:
+
+```dotnetcli
+dotnet stryker
+```
+
+After the tests have run, a report is displayed in the console.
+
+:::image type="content" source="media/stryker-console-report.png" lightbox="media/stryker-console-report.png" alt-text="Stryker console report":::
+
+**Stryker.NET** saves a detailed HTML report in the StrykerOutput directory.
+
+:::image type="content" source="media/stryker-first-report.png" lightbox="media/stryker-first-report.png" alt-text="Stryker first report":::
+
+Now, consider what mutants are and what 'survived' and 'killed' mean. A mutant is a small change in your code that Stryker makes on purpose. The idea is simple: if your tests are good, they should catch the change and fail. If they still pass, your tests might not be strong enough.
+
+In our example, a mutant will be the replacement of the expression `price <= 0`, for example, with `price < 0`, after which unit tests are run.
+
+Stryker supports several types of mutations:
+
+| Type | Description |
+|--|--|
+| Equivalent | The equivalent operator is used to replace an operator with its equivalent. For example, `x < y` becomes `x <= y`. |
+| Arithmetic | The arithmetic operator is used to replace an arithmetic operator with its equivalent. For example, `x + y` becomes `x - y`. |
+| String | The string operator is used to replace a string with its equivalent. For example, `"text"` becomes `""`. |
+| Logical | The logical operator is used to replace a logical operator with its equivalent. For example, `x && y` becomes `x \|\| y`. |
+
+For additional mutation types, see the [Stryker.NET: Mutations](https://stryker-mutator.io/docs/stryker-net/mutations) documentation.
+
+## Interpret mutation testing results
+
+After running Stryker.NET, you'll receive a report that categorizes mutants as **killed**, **survived**, or **timeout**. Here's how to interpret and act on these results:
+
+- **Killed**: These are changes that your tests successfully caught. A high number of killed mutants indicates that your test suite effectively detects logic errors.
+- **Survived**: These changes weren't caught by your tests. Review them to identify gaps in test coverage or assertions that are too weak. Focus on adding targeted unit tests that would fail if the mutant were real.
+- **Timeout**: These mutations caused your code to hang or exceed the allowed time. This can happen with infinite loops or unoptimized paths. Investigate the code logic or increase the timeout threshold if needed.
+
+> [!NOTE]
+> Don't chase a 100% mutation score. Instead, focus on high risk or business critical areas where undetected bugs would be most costly.
+
+## Adding mutation testing to your CI/CD workflow
+
+You can seamlessly integrate mutation testing into your continuous integration and delivery workflows. For instance, Stryker.NET can be configured to run within your Azure Pipelines or GitHub Actions setup, allowing you to enforce quality thresholds as part of your automated testing process.
+
+## Customization
+
+Besides setting thresholds for your pipeline, Stryker.NET offers the possibility of having different configurations for each of your project needs. You can customize behavior using the _stryker-config.json_ file.
+
+```json
+{
+  "stryker-config": {
+    "ignore-mutations": [
+      "string",
+      "logical"
+    ],
+    "ignore-methods": [
+      "*Logs"
+    ],
+    "mutate": [
+      "!**/Migrations/*",
+      "!**/*.Designer.cs"
+    ]
+  }
+}
+```
+
+- **ignore-mutations**: Mutation types to exclude from testing because they are noisy or not relevant to your application logic. They will show up in your reports as `Ignored`.
+- **ignore-methods**: You can use this to skip entire methods based on their signatures. These also appear in your reports as `Ignored`. In the preceding example, all methods ending in "Logs" are ignored.
+- **mutate**: Without this option, Stryker will try to mutate all the files in your project. With this, you can ignore files or entire folders. In the preceding example, everything inside a _Migrations_ folder and all _.Designer.cs_ files (which are usually autogenerated) are ignored.
+
+For more information, see [Stryker: Configuration](https://stryker-mutator.io/docs/stryker-net/configuration/).
+
+## Incremental improvement
+
+If, after changing your code, the unit tests pass successfully, then they aren't sufficiently robust, and the mutant survived.
+After mutation testing, five mutants survive.
+
+Let's add test data for boundary values and run mutation testing again.
+
+```csharp
+[Fact]
+public void InvalidPrice_ShouldThrowException()
+{
+    var calculator = new PriceCalculator();
+
+    // changed price from -10 to 0
+    Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(0, 10));
+}
+
+[Fact] // Added test for 0 and 100 discount
+public void NoExceptionForZeroAnd100Discount()
+{
+    var calculator = new PriceCalculator();
+
+    var exceptionWhen0 = Record.Exception(() => calculator.CalculatePrice(100, 0));
+    var exceptionWhen100 = Record.Exception(() => calculator.CalculatePrice(100, 100));
+
+    Assert.Null(exceptionWhen0);
+    Assert.Null(exceptionWhen100);
+}
+```
+
+:::image type="content" source="media/stryker-second-report.png" lightbox="media/stryker-second-report.png" alt-text="Stryker second report":::
+
+As you can see, after correcting the equivalent mutants, we only have string mutations left, which we can easily 'kill' by checking the text of the exception message.
+
+```csharp
+[Fact]
+public void InvalidDiscountPercent_ShouldThrowExceptionWithCorrectMessage()
+{
+    var calculator = new PriceCalculator();
+
+    var ex1 = Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(100, -1));
+    Assert.Equal("Discount percent must be between 0 and 100.", ex1.Message);
+
+    var ex2 = Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(100, 101));
+    Assert.Equal("Discount percent must be between 0 and 100.", ex2.Message);
+}
+
+[Fact]
+public void InvalidPrice_ShouldThrowExceptionWithCorrectMessage()
+{
+    var calculator = new PriceCalculator();
+
+    var ex = Assert.Throws<ArgumentException>(() => calculator.CalculatePrice(0, 10));
+    Assert.Equal("Price must be greater than zero.", ex.Message);
+}
+```
+
+:::image type="content" source="media/stryker-final-report.png" lightbox="media/stryker-final-report.png" alt-text="Stryker final report":::
+
+Mutation testing helps to find opportunities to improve tests that make them more reliable. It forces you to check not only the 'happy path', but also complex boundary cases, reducing the likelihood of bugs in production.

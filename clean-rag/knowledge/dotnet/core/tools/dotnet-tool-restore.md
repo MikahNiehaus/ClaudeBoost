@@ -1,0 +1,69 @@
+<!-- Source: github.com/dotnet/docs/docs/core\tools\dotnet-tool-restore.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: dotnet tool restore command
+description: The dotnet tool restore command installs on your machine the .NET local tools that are in scope for the current directory.
+ms.date: 10/28/2025
+---
+# dotnet tool restore
+
+**This article applies to:** ✔️ .NET 6 SDK and later versions
+
+## Name
+
+`dotnet tool restore` - Installs the .NET local tools that are in scope for the current directory.
+
+## Synopsis
+
+```dotnetcli
+dotnet tool restore
+    [--configfile <FILE>] [--add-source <SOURCE>]
+    [--tool-manifest <PATH_TO_MANIFEST_FILE>] [--disable-parallel]
+    [--ignore-failed-sources] [--no-cache] [--interactive]
+    [-v|--verbosity <LEVEL>]
+
+dotnet tool restore -h|--help
+```
+
+## Description
+
+The `dotnet tool restore` command finds the tool manifest file that is in scope for the current directory and installs the tools that are listed in it. For information about manifest files, see [Install a local tool](global-tools.md#install-a-local-tool) and [Invoke a local tool](global-tools.md#invoke-a-local-tool).
+
+For information about where local tools are stored, see [dotnet tool install](dotnet-tool-install.md#local-tools).
+
+## Options
+
+- [!INCLUDE [configfile](includes/cli-configfile.md)]
+
+- [!INCLUDE [add-source](includes/cli-add-source.md)]
+
+- **`--tool-manifest <PATH>`**
+
+  Path to the manifest file.
+
+- [!INCLUDE [disable-parallel](includes/cli-disable-parallel.md)]
+
+- **`--ignore-failed-sources`**
+
+  Treat package source failures as warnings.
+
+- **`--no-cache`**
+
+  Do not cache packages and http requests.
+
+- [!INCLUDE [interactive](includes/cli-interactive.md)]
+
+- [!INCLUDE [help](includes/cli-help.md)]
+
+- [!INCLUDE [verbosity](includes/cli-verbosity.md)]
+
+## Example
+
+- **`dotnet tool restore`**
+
+  Restores local tools for the current directory.
+
+## See also
+
+- [.NET tools](global-tools.md)
+- [Tutorial: Install and use a .NET local tool using the .NET CLI](local-tools-how-to-use.md)

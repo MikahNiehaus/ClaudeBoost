@@ -1,0 +1,221 @@
+<!-- Source: github.com/dotnet/docs/docs/core\deploying\native-aot\index.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: Native AOT deployment overview
+description: Learn what Native AOT deployments are and why you should consider using it as part of the publishing your app with .NET 7 and later.
+author: lakshanf
+ms.date: 10/22/2025
+ai-usage: ai-assisted
+---
+
+# Native AOT deployment
+
+Publishing your app as *Native AOT* produces an app that's [self-contained](../index.md#self-contained-deployment) and that has been ahead-of-time (AOT) compiled to native code. Native AOT apps have faster startup time and smaller memory footprints. These apps can run on machines that don't have the .NET runtime installed.
+
+The benefit of Native AOT is most significant for workloads with a high number of deployed instances, such as cloud infrastructure and hyper-scale services. .NET 8 adds [ASP.NET Core support for native AOT](/aspnet/core/fundamentals/native-aot).
+
+The Native AOT deployment model uses an ahead-of-time compiler to compile IL to native code at the time of publish. Native AOT apps don't use a just-in-time (JIT) compiler when the application runs. Native AOT apps can run in restricted environments where a JIT isn't allowed. Native AOT applications target a specific runtime environment, such as Linux x64 or Windows x64, just like publishing a [self-contained app](../index.md#self-contained-deployment).
+
+## Prerequisites
+
+# [Windows](#tab/windows)
+
+[Visual Studio 2022 or later](https://visualstudio.microsoft.com/vs/), including the **Desktop development with C++** workload with all default components.
+
+# [Alpine](#tab/linux-alpine)
+
+- The compiler toolchain and developer packages for libraries that the .NET runtime depends on.
+- Alpine (3.15+)
+
+  ```sh
+  sudo apk add clang build-base zlib-dev
+  ```
+
+# [Fedora](#tab/linux-fedora)
+
+- The compiler toolchain and developer packages for libraries that the .NET runtime depends on.
+- Fedora (39+)
+
+  ```sh
+  sudo dnf install clang zlib-devel zlib-ng-devel zlib-ng-compat-devel
+  ```
+
+# [RHEL](#tab/linux-rhel)
+
+- The compiler toolchain and developer packages for libraries that the .NET runtime depends on.
+- RHEL (8+)
+
+  ```sh
+  sudo dnf install clang zlib-devel zlib-ng-devel zlib-ng-compat-devel
+  ```
+
+# [Ubuntu](#tab/linux-ubuntu)
+
+- The compiler toolchain and developer packages for libraries that the .NET runtime depends on.
+- Ubuntu (18.04+)
+
+  ```sh
+  sudo apt-get install clang zlib1g-dev
+  ```
+
+# [macOS](#tab/macOS)
+
+The latest [Command Line Tools for XCode](https://developer.apple.com/download/). Supported on .NET 8 and later versions.
+
+---
+
+## Publish Native AOT using the CLI
+
+1. Add `<PublishAot>true</PublishAot>` to your project file.
+
+    This property enables Native AOT compilation during publish. It also enables dynamic code-usage analysis during build and editing. It's preferable to put this setting in the project file rather than passing it on the command line, since it controls behaviors outside publish.
+
+    ```xml
+    <PropertyGroup>
+        <PublishAot>true</PublishAot>
+    </PropertyGroup>
+    ```
+
+1. Publish the app for a specific runtime identifier using `dotnet publish -r <RID>`.
+
+    The following example publishes the app for Windows as a Native AOT application on a machine with the required prerequisites installed.
+
+    `dotnet publish -r win-x64 -c Release`
+
+    The following example publishes the app for Linux as a Native AOT application. A Native AOT binary produced on Linux machine is only going to work on same or newer Linux version. For example, Native AOT binary produced on Ubuntu 20.04 is going to run on Ubuntu 20.04 and later, but it isn't going to run on Ubuntu 18.04.
+
+    `dotnet publish -r linux-arm64 -c Release`
+
+The app is available in the publish directory and contains all the code needed to run in it, including a stripped-down version of the coreclr runtime.
+
+Check out the [Native AOT samples](https://github.com/dotnet/samples/tree/main/core/nativeaot) available in the dotnet/samples repository on GitHub. The samples include [Linux](https://github.com/dotnet/samples/blob/main/core/nativeaot/HelloWorld/Dockerfile) and [Windows](https://github.com/dotnet/samples/blob/main/core/nativeaot/HelloWorld/Dockerfile.windowsservercore-x64) Dockerfiles that demonstrate how to automate installation of prerequisites and publish .NET projects with Native AOT using containers.
+
+## AOT-compatibility analyzers
+
+The `IsAotCompatible` property is used to indicate whether a library is compatible with Native AOT. Consider when a library sets the `IsAotCompatible` property to `true`, for example:
+
+```xml
+<PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+</PropertyGroup>
+```
+
+The preceding configuration assigns a default of `true` to the following properties:
+
+- `IsTrimmable`
+- `EnableTrimAnalyzer`
+- `EnableSingleFileAnalyzer`
+- `EnableAotAnalyzer`
+
+These analyzers help to ensure that a library is compatible with Native AOT.
+
+### Target framework requirements
+
+When preparing libraries for AOT compatibility, target the latest supported TFM. This helps you benefit from the latest analyzer improvements. At a minimum, target `net8.0` or later. This version is required for AOT analysis warnings.
+
+If your library also targets frameworks earlier than `net8.0` (such as `netstandard2.0`, or `net472`), multi-target to include `net8.0`. This ensures that apps targeting `net8.0` or later get a version of your library that supports AOT analysis.
+
+Use the `IsTargetFrameworkCompatible` MSBuild function to conditionally enable `IsAotCompatible` for `net8.0` and later:
+
+```xml
+<PropertyGroup>
+  <TargetFrameworks>netstandard2.0;net8.0;net10.0</TargetFrameworks>
+  <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
+</PropertyGroup>
+```
+
+For more information, see [Trimming may not be used with .NET Standard or .NET Framework](../../compatibility/sdk/8.0/trimming-unsupported-targetframework.md).
+
+### Verify referenced assemblies are AOT-compatible
+
+When you enable AOT analysis for a library, you can optionally enable verification that all referenced assemblies are also annotated for AOT compatibility by setting the `VerifyReferenceAotCompatibility` property to `true`:
+
+```xml
+<PropertyGroup>
+  <IsAotCompatible>true</IsAotCompatible>
+  <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
+</PropertyGroup>
+```
+
+When this property is enabled, the analyzer warns about any referenced assemblies that don't have the `IsAotCompatible` metadata. This helps ensure that all dependencies in your project are annotated for Native AOT compatibility. The warning that's emitted is [IL3058](warnings/il3058.md).
+
+This verification is opt-in because:
+
+- Not all AOT-compatible libraries have been updated to include the `IsAotCompatible` metadata.
+- The warning can be noisy if you have many dependencies that work correctly with Native AOT but aren't explicitly marked as such.
+
+> [!NOTE]
+> The `IsAotCompatible` assembly metadata was introduced in .NET 10. Libraries that were published targeting earlier versions of .NET won't have this attribute, even if they were built with `<IsAotCompatible>true</IsAotCompatible>`.
+
+Consider enabling this verification when you want to ensure that all your dependencies are explicitly marked as AOT-compatible by their authors.
+
+## Native debug information
+
+By default, Native AOT publishing produces debug information in a separate file:
+
+- Linux: *.dbg*
+- Windows: *.pdb*
+- macOS: *.dSYM* folder
+
+The debug file is necessary for running the app under the [debugger or inspecting crash dumps](./diagnostics.md#importance-of-the-symbol-file). On Unix-like platforms, set the `StripSymbols` property to `false` to include the debug information in the native binary. Including debug information makes the native binary larger.
+
+```xml
+<PropertyGroup>
+    <StripSymbols>false</StripSymbols>
+</PropertyGroup>
+```
+
+## Limitations of Native AOT deployment
+
+Native AOT apps have the following limitations:
+
+- No dynamic loading, for example, `Assembly.LoadFile`.
+- No runtime code generation, for example, `System.Reflection.Emit`.
+- No C++/CLI.
+- Windows: No built-in COM.
+- Requires trimming, which has [limitations](../trimming/incompatibilities.md).
+- Implies compilation into a single file, which has known [incompatibilities](../single-file/overview.md#api-incompatibility).
+- Apps include required runtime libraries (just like [self-contained apps](../index.md#self-contained-deployment), increasing their size as compared to framework-dependent apps).
+- <xref:System.Linq.Expressions> always use their interpreted form, which is slower than runtime generated compiled code.
+- Generic parameters substituted with struct type arguments have specialized code generated for each instantiation. In the dynamic runtime, many instantiations are generated on-demand. In Native AOT, all instantiations are pre-generated. This can have significant impact to the disk size of the application. Generic virtual methods and generic instance methods will also have an instantiation for every implementing or overriding type.
+- Not all the runtime libraries are fully annotated to be Native AOT compatible. That is, some warnings in the runtime libraries aren't actionable by end developers.
+- [Diagnostic support for debugging and profiling](./diagnostics.md) with some limitations.
+- Support for some ASP.NET Core features. For more information, see [ASP.NET Core support for Native AOT](/aspnet/core/fundamentals/native-aot/).
+
+The publish process analyzes the entire project and its dependencies for possible limitations. Warnings are issued for each limitation the published app might encounter at runtime.
+
+## Platform/architecture restrictions
+
+The following table shows supported compilation targets.
+
+### [.NET 8](#tab/net8)
+
+| Platform | Supported architecture |  Notes               |
+|----------|------------------------|----------------------|
+| Windows  | x64, Arm64             |                      |
+| Linux    | x64, Arm64             |                      |
+| macOS   | x64, Arm64 |                                        |
+| [iOS](./ios-like-platforms/index.md)     | Arm64 | Experimental support                   |
+| [iOSSimulator](./ios-like-platforms/index.md)     | x64, Arm64 | Experimental support                   |
+| [tvOS](./ios-like-platforms/index.md)     | Arm64 | Experimental support                   |
+| [tvOSSimulator](./ios-like-platforms/index.md)     | x64, Arm64 | Experimental support                   |
+| [MacCatalyst](./ios-like-platforms/index.md)     | x64, Arm64 | Experimental support                   |
+| Android | x64, Arm64 | Experimental, no built-in Java interop |
+
+### [.NET 9+](#tab/net9plus)
+
+| Platform | Supported architecture |  Notes               |
+|----------|------------------------|----------------------|
+| Windows  | x64, Arm64, x86        |                      |
+| Linux    | x64, Arm64, Arm        |                      |
+| macOS   | x64, Arm64 |                                        |
+| [iOS](./ios-like-platforms/index.md)     | Arm64 |                   |
+| [iOSSimulator](./ios-like-platforms/index.md)     | x64, Arm64 |                   |
+| [tvOS](./ios-like-platforms/index.md)     | Arm64 |                    |
+| [tvOSSimulator](./ios-like-platforms/index.md)     | x64, Arm64 |                    |
+| [MacCatalyst](./ios-like-platforms/index.md)     | x64, Arm64 |                   |
+| Android | x64, Arm64, Arm | Experimental, no built-in Java interop |
+
+---
+
+For more information about how specific platform is supported with Native AOT, follow the link from the table.

@@ -1,0 +1,103 @@
+<!-- Source: github.com/dotnet/docs/docs/core\tools\dotnet-store.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: dotnet store command
+description: The 'dotnet store' command stores the specified assemblies in the runtime package store.
+ms.date: 02/04/2026
+ai-usage: ai-assisted
+---
+# dotnet store
+
+**This article applies to:** ✔️ .NET 6 SDK and later versions
+
+> [!WARNING]
+> The `dotnet store` command and the runtime package store feature are **deprecated and no longer supported**. This command has known issues with .NET 6 and later versions and **is not recommended for use**. The .NET team plans to eventually stop shipping this command. For more information, see [GitHub issue #24752](https://github.com/dotnet/sdk/issues/24752).
+
+## Name
+
+`dotnet store` - Stores the specified assemblies in the [runtime package store](../deploying/runtime-store.md).
+
+## Synopsis
+
+```dotnetcli
+dotnet store [-m|--manifest <PATH_TO_MANIFEST_FILE>]
+  [-f|--framework <FRAMEWORK_VERSION>] [--disable-build-servers]
+  [--framework-version <FRAMEWORK_VERSION>]
+  [--output <OUTPUT_DIRECTORY>] [-r|--runtime <RUNTIME_IDENTIFIER>] 
+  [--skip-optimization] [--skip-symbols]
+  [--ucr|--use-current-runtime] [-v|--verbosity <LEVEL>]
+  [--working-dir <WORKING_DIRECTORY>]
+
+dotnet store -h|--help
+```
+
+## Description
+
+> [!CAUTION]
+> The runtime package store feature is deprecated and no longer functional on .NET 6+. This command might fail with crossgen-related errors. Even when using the `--skip-optimization` workaround, the generated stores might not work correctly.
+
+`dotnet store` stores the specified assemblies in the [runtime package store](../deploying/runtime-store.md). By default, assemblies are optimized for the target runtime and framework. For more information, see the [runtime package store](../deploying/runtime-store.md) topic.
+
+## Required options
+
+- **`-f|--framework <FRAMEWORK>`**
+
+  Specifies the [target framework](../../standard/frameworks.md). The target framework has to be specified in the project file.
+
+- [!INCLUDE [disable-build-servers](includes/cli-disable-build-servers.md)]
+
+- **`-m|--manifest <PATH_TO_MANIFEST_FILE>`**
+
+  The *package store manifest file* is an XML file that contains the list of packages to store. The format of the manifest file is compatible with the SDK-style project format. So, a project file that references the desired packages can be used with the `-m|--manifest` option to store assemblies in the runtime package store. To specify multiple manifest files, repeat the option and path for each file. For example: `--manifest packages1.csproj --manifest packages2.csproj`.
+
+- **`-r|--runtime <RUNTIME_IDENTIFIER>`**
+
+  The [runtime identifier](../rid-catalog.md) to target.
+
+## Optional options
+
+- **`--framework-version <FRAMEWORK_VERSION>`**
+
+  Specifies the .NET SDK version. This option enables you to select a specific framework version beyond the framework specified by the `-f|--framework` option.
+
+- **`-o|--output <OUTPUT_DIRECTORY>`**
+
+  Specifies the path to the runtime package store. If not specified, it defaults to the *store* subdirectory of the user profile .NET installation directory.
+
+- **`--skip-optimization`**
+
+  Skips the optimization phase. For more information about optimization, see [Preparing a runtime environment](../deploying/runtime-store.md#preparing-a-runtime-environment).
+
+- **`--skip-symbols`**
+
+  Skips symbol generation. Currently, you can only generate symbols on Windows and Linux.
+
+- **`--ucr|--use-current-runtime`**
+
+  Use current runtime as the target runtime. The default is `false`.
+
+- [!INCLUDE [verbosity](includes/cli-verbosity.md)]
+
+- **`-w|--working-dir <WORKING_DIRECTORY>`**
+
+  The working directory used by the command. If not specified, it uses the *obj* subdirectory of the current directory.
+
+- [!INCLUDE [help](includes/cli-help.md)]
+
+## Examples
+
+- Store the packages specified in the *packages.csproj* project file for .NET 6.0.1:
+
+  ```dotnetcli
+  dotnet store --manifest packages.csproj --framework-version 6.0.1 --framework net6.0 --runtime win-x64
+  ```
+
+- Store the packages specified in the *packages.csproj* without optimization:
+
+  ```dotnetcli
+  dotnet store --manifest packages.csproj --skip-optimization --framework net6.0 --runtime linux-x64
+  ```
+
+## See also
+
+- [Runtime package store](../deploying/runtime-store.md)

@@ -1,0 +1,253 @@
+<!-- Source: github.com/dotnet/docs/docs/core\tools\dotnet-run.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: dotnet run command
+description: The dotnet run command provides a convenient option to run your application from the source code.
+ms.date: 06/05/2026
+---
+# dotnet run
+
+**This article applies to:** ✔️ .NET 6 SDK and later versions
+
+## Name
+
+`dotnet run` - Runs source code without any explicit compile or launch commands.
+
+## Synopsis
+
+```dotnetcli
+dotnet run [<applicationArguments>]
+  [-a|--arch <ARCHITECTURE>] [--artifacts-path <ARTIFACTS_DIR>]
+  [-c|--configuration <CONFIGURATION>] [--disable-build-servers]
+  [-e|--environment <KEY=VALUE>] [--file <FILE_PATH>]
+  [-f|--framework <FRAMEWORK>] [--force] [--interactive]
+  [-lp|--launch-profile <NAME>] [--no-build] [--no-cache]
+  [--no-dependencies] [--no-launch-profile] [--no-restore] [--os <OS>]
+  [-p|--property:<PROPERTYNAME>=<VALUE>]
+  [--project <PATH>] [-r|--runtime <RUNTIME_IDENTIFIER>]
+  [--sc|--self-contained] [--tl:[auto|on|off]] [-v|--verbosity <LEVEL>]
+  [[--] [application arguments]]
+
+dotnet run -h|--help
+```
+
+## Description
+
+The `dotnet run` command provides a convenient option to run your application from the source code with one command. It's useful for fast iterative development from the command line. The command depends on the [`dotnet build`](dotnet-build.md) command to build the code. Any requirements for the build apply to `dotnet run` as well.
+
+Output files are written into the default location, which is `bin/<configuration>/<target>`. For example if you have a `netcoreapp2.1` application and you run `dotnet run`, the output is placed in `bin/Debug/netcoreapp2.1`. Files are overwritten as needed. Temporary files are placed in the `obj` directory.
+
+If the project specifies multiple frameworks, executing `dotnet run` results in an error unless the `-f|--framework <FRAMEWORK>` option is used to specify the framework.
+
+The `dotnet run` command is used in the context of projects, not built assemblies. If you're trying to run a framework-dependent application DLL instead, you must use [dotnet](dotnet.md) without a command. For example, to run `myapp.dll`, use:
+
+```dotnetcli
+dotnet myapp.dll
+```
+
+For more information on the `dotnet` driver, see [.NET CLI overview](index.md).
+
+To run the application, the `dotnet run` command resolves the dependencies of the application that are outside of the shared runtime from the NuGet cache. Because it uses cached dependencies, it's not recommended to use `dotnet run` to run applications in production. Instead, [create a deployment](../deploying/index.md) using the [`dotnet publish`](dotnet-publish.md) command and deploy the published output.
+
+### Implicit restore
+
+[!INCLUDE[dotnet restore note + options](includes/dotnet-restore-note-options.md)]
+
+[!INCLUDE [cli-advertising-manifests](includes/cli-advertising-manifests.md)]
+
+## Arguments
+
+  `<applicationArguments>`
+  
+  Arguments passed to the application that is being run.
+  
+  Any arguments that aren't recognized by `dotnet run` are passed to the application. To separate arguments for `dotnet run` from arguments for the application, use the `--` option.
+
+## Forward arguments to the application
+
+`dotnet run` forwards any token it doesn't recognize to the application. The forwarded tokens keep their original order, but `dotnet run` first removes the options it understands. When a recognized option appears between an unrecognized option name and its value, removing the recognized option can change the meaning of the leftover tokens.
+
+For example, the following command interleaves the recognized option `--project` between tokens the application is meant to receive:
+
+```dotnetcli
+dotnet run --app-flag --app-name --project ConsoleApp.csproj A.txt
+```
+
+After `dotnet run` consumes `--project ConsoleApp.csproj`, the application receives `--app-flag --app-name A.txt`. The application then treats `A.txt` as the value of `--app-name`, which doesn't match the original command line.
+
+To avoid this ambiguity, place application arguments after a literal `--`:
+
+```dotnetcli
+dotnet run --project ConsoleApp.csproj -- --app-flag --app-name A.txt
+```
+
+The `--` separator marks every following token as an application argument, so `dotnet run` doesn't reorder or reinterpret them. The separator also future-proofs scripts against new `dotnet run` options that might later match a token previously forwarded to the application.
+
+> [!NOTE]
+> The same behavior applies to `dotnet build` and to `dotnet test` in Microsoft.Testing.Platform (MTP) mode, which forward unrecognized tokens to MSBuild or to the test application respectively. For more information about `dotnet test`, see [Forward arguments to the test application](dotnet-test-mtp.md#forward-arguments-to-the-test-application).
+
+## Options
+
+- **`--`**
+
+  Delimits arguments to `dotnet run` from arguments for the application being run. All arguments after this delimiter are passed to the application run.
+
+- [!INCLUDE [arch](includes/cli-arch.md)]
+
+- [!INCLUDE [artifacts-path](includes/cli-artifacts-path.md)]
+
+- [!INCLUDE [configuration](includes/cli-configuration.md)]
+
+- [!INCLUDE [disable-build-servers](includes/cli-disable-build-servers.md)]
+
+- **`-e|--environment <KEY=VALUE>`**
+
+  Sets the specified environment variable in the process that will be run by the command. The specified environment variable is *not* applied to the `dotnet run` process.
+
+  Environment variables passed through this option take precedence over ambient environment variables, System.CommandLine `env` directives, and `environmentVariables` from the chosen launch profile. For more information, see [Environment variables](#environment-variables).
+
+  (This option was added in .NET SDK 9.0.200.)
+
+- **`-f|--framework <FRAMEWORK>`**
+
+  Builds and runs the app using the specified [framework](../../standard/frameworks.md). The framework must be specified in the project file.
+
+- **`--file <FILE_PATH>`**
+
+  The path to the file-based app to run. If a path isn't specified, the current directory is used to find and run the file. For more information on file-based apps, see [Build file-based C# apps](../../csharp/fundamentals/tutorials/file-based-programs.md).
+  
+  On Unix, execute file-based apps directly using the filename by adding a shebang (`#!`) directive and setting the execute permission. For more information, see [Unix shebang (`#!`) support](../../csharp/fundamentals/tutorials/file-based-programs.md#unix-shebang--support).
+
+  Introduced in .NET SDK 10.0.100.
+
+- **`--force`**
+
+  Forces all dependencies to be resolved even if the last restore was successful. Specifying this flag is the same as deleting the *project.assets.json* file.
+
+- [!INCLUDE [interactive](includes/cli-interactive.md)]
+
+- **`-lp|--launch-profile <NAME>`**
+
+  The name of the launch profile (if any) to use when launching the application. Launch profiles are defined in the *launchSettings.json* file and are typically called `Development`, `Staging`, and `Production`. For more information, see [Working with multiple environments](/aspnet/core/fundamentals/environments).
+
+- **`--no-build`**
+
+  Doesn't build the project before running. It also implicitly sets the `--no-restore` flag.
+
+- **`--no-cache`**
+
+  Skip up to date checks and always build the program before running.
+
+- **`--no-dependencies`**
+
+  When restoring a project with project-to-project (P2P) references, restores the root project and not the references.
+
+- **`--no-launch-profile`**
+
+  Doesn't try to use *launchSettings.json* to configure the application.
+
+- **`--no-restore`**
+
+  Doesn't execute an implicit restore when running the command.
+
+- [!INCLUDE [no-self-contained](includes/cli-no-self-contained.md)]
+
+- [!INCLUDE [os](includes/cli-os.md)]
+
+- **`--project <PATH>`**
+
+  Specifies the path of the project file to run (folder name or full path). If not specified, it defaults to the current directory.
+
+  The [`-p` abbreviation for `--project` is deprecated](../compatibility/sdk/6.0/deprecate-p-option-dotnet-run.md) starting in .NET 6 SDK. For a limited time, `-p` can still be used for `--project` despite the deprecation warning. If the argument provided for the option doesn't contain `=`, the command accepts `-p` as short for `--project`. Otherwise, the command assumes that `-p` is short for `--property`. This flexible use of `-p` for `--project` will be phased out in .NET 7.
+
+- **`--property:<NAME>=<VALUE>`**
+
+  Sets one or more MSBuild properties. Specify multiple properties delimited by semicolons or by repeating the option:
+
+  ```dotnetcli
+  --property:<NAME1>=<VALUE1>;<NAME2>=<VALUE2>
+  --property:<NAME1>=<VALUE1> --property:<NAME2>=<VALUE2>
+  ```
+
+  The short form `-p` can be used for `--property`. If the argument provided for the option contains `=`, `-p` is accepted as short for `--property`. Otherwise, the command assumes that `-p` is short for `--project`.
+
+  To pass `--property` to the application rather than set an MSBuild property, provide the option after the `--` syntax separator, for example:
+
+  ```dotnetcli
+  dotnet run -- --property name=value
+  ```
+
+- **`-r|--runtime <RUNTIME_IDENTIFIER>`**
+
+  Specifies the target runtime to restore packages for. For a list of Runtime Identifiers (RIDs), see the [RID catalog](../rid-catalog.md).
+
+- [!INCLUDE [self-contained](includes/cli-self-contained.md)]
+
+- [!INCLUDE [tl](includes/cli-tl.md)]
+
+- [!INCLUDE [verbosity](includes/cli-verbosity-minimal.md)]
+
+- [!INCLUDE [help](includes/cli-help.md)]
+
+## Environment variables
+
+There are four mechanisms by which environment variables can be applied to the launched application:
+
+1. Ambient environment variables from the operating system when the command is run.
+1. System.CommandLine `env` directives, like `[env:key=value]`. These apply to the entire `dotnet run` process, not just the project being run by `dotnet run`.
+1. `environmentVariables` from the chosen launch profile (`-lp`) in the project's [launchSettings.json file](/aspnet/core/fundamentals/environments#lsj), if any. These apply to the project being run by `dotnet run`.
+1. `-e|--environment` CLI option values (added in .NET SDK version 9.0.200). These apply to the project being run by `dotnet run`.
+
+The environment is constructed in the same order as this list, so the `-e|--environment` option has the highest precedence.
+
+## Examples
+
+- Run the project in the current directory:
+
+  ```dotnetcli
+  dotnet run
+  ```
+
+- Run the specified file-based app in the current directory:
+
+  ```dotnetcli
+  dotnet run --file ConsoleApp.cs
+  ```
+
+  File-based app support was added in .NET SDK 10.0.100.
+
+- Run the specified project:
+
+  ```dotnetcli
+  dotnet run --project ./projects/proj1/proj1.csproj
+  ```
+
+- Run the project in the current directory, specifying Release configuration:
+
+  ```dotnetcli
+  dotnet run --property:Configuration=Release
+  ```
+
+- Run the project in the current directory (the `--help` argument in this example is passed to the application, since the blank `--` option is used):
+
+  ```dotnetcli
+  dotnet run --configuration Release -- --help
+  ```
+
+- Restore dependencies and tools for the project in the current directory only showing minimal output and then run the project:
+
+  ```dotnetcli
+  dotnet run --verbosity m
+  ```
+
+- Run the project in the current directory using the specified framework and pass arguments to the application:
+
+  ```dotnetcli
+  dotnet run -f net6.0 -- arg1 arg2
+  ```
+
+  In the following example, three arguments are passed to the application. One argument is passed using `-`, and two arguments are passed after `--`:
+
+  ```dotnetcli
+  dotnet run -f net6.0 -arg1 -- arg2 arg3
+  ```

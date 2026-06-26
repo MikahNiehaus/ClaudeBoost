@@ -1,0 +1,55 @@
+<!-- Source: github.com/dotnet/docs/docs/core\tools\dotnet-tool-run.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: dotnet tool run command
+description: The dotnet tool run command invokes a local tool.
+ms.date: 10/28/2025
+---
+# dotnet tool run
+
+**This article applies to:** ✔️ .NET 6 SDK and later versions
+
+## Name
+
+`dotnet tool run` - Invokes a local tool.
+
+## Synopsis
+
+```dotnetcli
+dotnet tool run <COMMAND NAME> [--allow-roll-forward]
+
+dotnet tool run -h|--help
+```
+
+## Description
+
+The `dotnet tool run` command searches tool manifest files that are in scope for the current directory. When it finds a reference to the specified tool, it runs the tool. For more information, see [Invoke a local tool](global-tools.md#invoke-a-local-tool).
+
+## Arguments
+
+- **`COMMAND_NAME`**
+
+  The command name of the tool to run.
+
+## Options
+
+- **`--allow-roll-forward`**
+
+  Available starting with .NET 9.0 SDK. Allow tool to use a newer version of the .NET runtime if the runtime it targets isn't installed.
+
+- [!INCLUDE [help](includes/cli-help.md)]
+
+## Example
+
+- **`dotnet tool run dotnetsay`**
+
+  Runs the `dotnetsay` local tool.
+
+- **`dotnet tool run dotnetsay --allow-roll-forward`**
+
+  Runs the `dotnetsay` local tool and allows it to run on newer .NET versions if the target runtime isn't available.
+
+## See also
+
+- [.NET tools](global-tools.md)
+- [Tutorial: Install and use a .NET local tool using the .NET CLI](local-tools-how-to-use.md)

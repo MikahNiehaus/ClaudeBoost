@@ -1,0 +1,42 @@
+<!-- Source: github.com/dotnet/docs/docs/core\unmanaged-api\debugging\icordebug\icordebugstaticfieldsymbol-getaddress-method.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+description: "Learn more about: ICorDebugStaticFieldSymbol::GetAddress Method"
+title: "ICorDebugStaticFieldSymbol::GetAddress Method"
+ms.date: "03/30/2017"
+---
+# ICorDebugStaticFieldSymbol::GetAddress Method
+
+Gets the address of a static field.
+
+## Syntax
+
+```cpp
+HRESULT GetAddress(
+   [out] CORDB_ADDRESS *pRVA
+);
+```
+
+## Parameters
+
+pRVA
+ [out] A pointer to the relative virtual address (RVA) of the static field.
+
+## Remarks
+
+> [!NOTE]
+> This method is available with .NET Native only.
+
+## Requirements
+
+ **Platforms:** See [.NET supported operating systems](https://github.com/dotnet/core/blob/main/os-lifecycle-policy.md).
+
+ **Header:** CorDebug.idl, CorDebug.h
+
+ **Library:** CorGuids.lib
+
+ **.NET versions:** Available since .NET Framework 4.6
+
+## See also
+
+- [ICorDebugStaticFieldSymbol Interface](icordebugstaticfieldsymbol-interface.md)

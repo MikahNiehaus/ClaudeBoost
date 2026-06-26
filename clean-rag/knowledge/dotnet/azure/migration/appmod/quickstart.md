@@ -1,0 +1,36 @@
+<!-- Source: github.com/dotnet/docs/docs/azure\migration\appmod\quickstart.md | Tier: A | Topic: dotnet | Fetched: 2026-06-26 -->
+
+---
+title: Assess and migrate a .NET project with GitHub Copilot modernization for .NET
+ms.reviewer: alexwolf
+description: Assess and migrate your .NET project with GitHub Copilot. Learn how to evaluate migration readiness and start modernizing your app effectively.
+ms.topic: quickstart
+ms.custom: devx-track-dotnet
+ms.date: 01/26/2026
+zone_pivot_groups: copilot-modernization-migrate
+#customer intent: As a .NET developer, I want to assess my project's migration readiness so that I can identify potential challenges and plan the modernization process effectively.
+---
+
+# Quickstart: Assess and migrate a .NET project with GitHub Copilot modernization for .NET
+
+In this quickstart, you assess and migrate a .NET project by using GitHub Copilot modernization for .NET. You complete the following tasks:
+
+- Assess a sample project (Contoso University)
+- Start the migration process
+
+::: zone pivot="visualstudio"
+[!INCLUDE [quickstart-visual-studio](./includes/quickstart-visual-studio.md)]
+::: zone-end
+
+::: zone pivot="vscode"  
+[!INCLUDE [quickstart-vscode](./includes/quickstart-vscode.md)]
+::: zone-end
+
+::: zone pivot="copilot-cli"
+[!INCLUDE [quickstart-copilot-cli](./includes/quickstart-copilot-cli.md)]
+::: zone-end
+
+## Next Steps
+
+- [Predefined Tasks](predefined-tasks.md)
+- [GitHub Copilot modernization FAQ](../../../core/porting/github-copilot-app-modernization/faq.yml)
