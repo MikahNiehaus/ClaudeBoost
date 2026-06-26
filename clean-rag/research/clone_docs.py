@@ -39,14 +39,16 @@ def run_git(args: list[str], cwd: str | None = None, timeout: int = 120) -> str:
         raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s")
 
 
-def make_slug(filename: str, topic: str) -> str:
-    """Create a KB-friendly filename with topic prefix."""
-    name = filename.replace("\\", "/").strip("/")
-    name = name.replace("/", "-")
-    name = re.sub(r"[^a-z0-9.\-]", "", name.lower())
-    name = re.sub(r"-+", "-", name).strip("-")
-    topic_slug = re.sub(r"[^a-z0-9\-]", "", topic.lower().replace(" ", "-"))[:30]
-    return f"{topic_slug}-{name}"
+def sanitize_path(rel_path: str) -> str:
+    """Sanitize a relative path while preserving directory structure."""
+    parts = rel_path.replace("\\", "/").strip("/").split("/")
+    clean = []
+    for part in parts:
+        part = re.sub(r"[^\w.\-]", "-", part.lower())
+        part = re.sub(r"-+", "-", part).strip("-")
+        if part:
+            clean.append(part)
+    return "/".join(clean) if clean else "unnamed"
 
 
 def clone_docs(
@@ -84,11 +86,25 @@ def clone_docs(
         print(f"Cloning {repo} (sparse, branch: {branch})...")
         t0 = time.time()
 
-        run_git(
-            ["clone", "--filter=blob:none", "--sparse", "--branch", branch,
-             "--single-branch", "--depth", "1", repo_url, tmp_dir],
-            timeout=180,
-        )
+        try:
+            run_git(
+                ["clone", "--filter=blob:none", "--sparse", "--branch", branch,
+                 "--single-branch", "--depth", "1", repo_url, tmp_dir],
+                timeout=180,
+            )
+        except RuntimeError:
+            # Try master if main fails (or vice versa)
+            alt = "master" if branch == "main" else "main"
+            print(f"  Branch '{branch}' not found, trying '{alt}'...")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            tmp_dir = tempfile.mkdtemp(prefix="crag_clone_")
+            run_git(
+                ["clone", "--filter=blob:none", "--sparse", "--branch", alt,
+                 "--single-branch", "--depth", "1", repo_url, tmp_dir],
+                timeout=180,
+            )
+            branch = alt
+
         run_git(["sparse-checkout", "set", docs_path], cwd=tmp_dir)
 
         clone_time = time.time() - t0
@@ -113,8 +129,9 @@ def clone_docs(
         print(f"  Found {len(doc_files)} doc files")
 
         for fpath, rel_path in doc_files:
-            slug = make_slug(rel_path, topic)
-            out_path = kb_dir / slug
+            clean_rel = sanitize_path(rel_path)
+            out_path = kb_dir / clean_rel
+            out_path.parent.mkdir(parents=True, exist_ok=True)
 
             if out_path.exists():
                 stats["files_skipped"] += 1
