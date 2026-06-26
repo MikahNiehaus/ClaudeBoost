@@ -17,9 +17,9 @@ sys.path.insert(0, str(BOOST_HOME / "scripts"))
 
 from telemetry_writer import (  # noqa: E402
     _DISABLED,
-    _get_telemetry_dir,
     now_iso,
     session_id,
+    write_telemetry,
 )
 
 _SKILL_RE = re.compile(r"^/([a-zA-Z][a-zA-Z0-9_-]*)(\s|$)")
@@ -48,10 +48,6 @@ def _run() -> None:
 
     skill_name = match.group(1)
 
-    tel_dir = _get_telemetry_dir()
-    if not tel_dir:
-        return
-
     record = {
         "ts": now_iso(),
         "session_id": session_id(),
@@ -59,12 +55,7 @@ def _run() -> None:
         "prompt_prefix": prompt.strip()[:120],
     }
 
-    try:
-        out = tel_dir / "skill-invocations.jsonl"
-        with out.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
+    write_telemetry(record, "skill-invocations.jsonl")
 
 
 if __name__ == "__main__":

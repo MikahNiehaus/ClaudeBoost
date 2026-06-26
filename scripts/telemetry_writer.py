@@ -57,6 +57,39 @@ def write_telemetry(record: dict[str, Any], filename: str) -> None:
         pass
 
 
+def _acquire_lock(lock_path: Path, timeout_s: float = _LOCK_TIMEOUT_S) -> bool:
+    """Try to acquire an advisory lockfile. Returns True if acquired.
+
+    Handles stale locks: if the lock file is older than 5 seconds, it was
+    left behind by a crashed process and gets cleaned up automatically.
+    """
+    import time
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            lock_path.open("x").close()  # O_EXCL — fails if lock exists
+            return True
+        except FileExistsError:
+            # Check for stale lock (crashed process left it behind)
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+                if age > 5.0:
+                    lock_path.unlink(missing_ok=True)
+                    continue  # retry immediately
+            except Exception:
+                pass
+            time.sleep(0.02)
+    return False
+
+
+def release_lock(lock_path: Path) -> None:
+    """Release an advisory lockfile."""
+    try:
+        lock_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def update_session_json(field: str, delta: int = 1) -> None:
     """Increment a counter field in session.json for the active workspace.
 
@@ -66,7 +99,6 @@ def update_session_json(field: str, delta: int = 1) -> None:
     """
     if _DISABLED:
         return
-    import time
     try:
         tel_dir = _get_telemetry_dir()
         if not tel_dir:
@@ -75,15 +107,7 @@ def update_session_json(field: str, delta: int = 1) -> None:
         if not session_file.exists():
             return
         lock_path = tel_dir / "session.lock"
-        deadline = time.monotonic() + _LOCK_TIMEOUT_S
-        acquired = False
-        while time.monotonic() < deadline:
-            try:
-                lock_path.open("x").close()  # O_EXCL — fails if lock exists
-                acquired = True
-                break
-            except FileExistsError:
-                time.sleep(0.02)
+        acquired = _acquire_lock(lock_path)
         # If we couldn't acquire the lock in time, proceed anyway — telemetry
         # is fire-and-forget; a rare lost increment beats a hung hook.
         try:
@@ -92,10 +116,7 @@ def update_session_json(field: str, delta: int = 1) -> None:
             session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         finally:
             if acquired:
-                try:
-                    lock_path.unlink()
-                except Exception:
-                    pass
+                release_lock(lock_path)
     except Exception:
         pass
 

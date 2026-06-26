@@ -463,6 +463,55 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
     _ok(f"hooks.{hook_type} - appended {label}")
 
 
+# ---------------------------------------------------------------------------
+# clean-rag bundled integration: registers proof-gate hook and SessionStart
+# prompt when clean-rag/ exists alongside ClaudeBoost. Detection is read-only:
+# setup.py never writes into clean-rag/.
+# ---------------------------------------------------------------------------
+def _clean_rag_detected() -> bool:
+    return (BOOST_HOME / "clean-rag" / "install.py").exists()
+
+
+def _clean_rag_home_posix() -> str:
+    return (BOOST_HOME / "clean-rag").as_posix()
+
+
+def _install_clean_rag_hooks(settings: dict) -> None:
+    if not _clean_rag_detected():
+        return
+
+    crag_home = _clean_rag_home_posix()
+    gate_script = f"{crag_home}/hooks/proof-gate.py"
+
+    # proof-gate.py must run standalone (no $CLAUDEBOOST_PYTHON fallback needed,
+    # it uses only stdlib). Use the same Python interpreter chain for consistency.
+    gate_cmd = (
+        f'"$CLAUDEBOOST_PYTHON" "{gate_script}"'
+        f' || python "{gate_script}"'
+        f' || python3 "{gate_script}"'
+        f' || py "{gate_script}"'
+    )
+
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": gate_cmd}],
+    }, sentinel="proof-gate.py", label="clean-rag proof gate (bundled)")
+
+    # SessionStart prompt so sub-agents know about proof enforcement
+    port = os.environ.get("CLEAN_RAG_PORT", "8613")
+    prompt_text = (
+        "CLEAN-RAG ENFORCEMENT: Every Edit/Write/MultiEdit on source code "
+        "requires verified proof. Before editing:\n"
+        f"1. Search via POST http://127.0.0.1:{port}/search\n"
+        "2. Spawn a Haiku verification agent with your proof\n"
+        f"3. Write verification to {crag_home}/state/pending-proof.json\n"
+        "4. Retry the edit. Exempt: workspace/, knowledge/, .md, .json, .yaml files."
+    )
+    _install_hook(settings, "SessionStart", {
+        "hooks": [{"type": "prompt", "prompt": prompt_text}],
+    }, sentinel="CLEAN-RAG ENFORCEMENT", label="clean-rag enforcement prompt")
+
+
 # Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
 # re-running this script never duplicates an entry that the PowerShell
 # version installed previously.
@@ -609,6 +658,11 @@ def _install_all_hooks(settings: dict) -> None:
             "statusMessage": "Enforcing RAG lookup on workspace creation...",
         }],
     }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
+
+    # --- PreToolUse: clean-rag proof gate (bundled mode) ---
+    # Detects clean-rag at BOOST_HOME/clean-rag/. When present, registers the
+    # proof-gate hook BEFORE consult-gate so proof verification fires first.
+    _install_clean_rag_hooks(settings)
 
     # --- PreToolUse: CONSULT gate on Edit/Write/Bash (command-type) ---
     _install_hook(settings, "PreToolUse", {
@@ -911,6 +965,15 @@ def update_settings() -> None:
     env = settings.setdefault("env", {})
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
     env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
+
+    # clean-rag bundled mode: set CLEAN_RAG_HOME when clean-rag/ is present
+    if _clean_rag_detected():
+        env["CLEAN_RAG_HOME"] = _clean_rag_home_posix()
+        _ok(f"CLEAN_RAG_HOME set (bundled mode): {_clean_rag_home_posix()}")
+    elif "CLEAN_RAG_HOME" in env:
+        # clean-rag was removed, clean up the stale env var
+        del env["CLEAN_RAG_HOME"]
+        _ok("CLEAN_RAG_HOME removed (clean-rag not present)")
 
     # Write a stable lookup file so ensure-setup.py can find the repo even when
     # it's running from ~/.claude/ (outside the repo tree).

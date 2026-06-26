@@ -122,7 +122,7 @@ def _setup_permission_sets() -> tuple[list[str], list[str], str]:
 # Hooks installed by setup all run through "$CLAUDEBOOST_PYTHON" / live under
 # "$CLAUDEBOOST_HOME". Prompt-type hooks carry these sentinel phrases. Both lists
 # below identify a hook as ClaudeBoost's so we remove only what setup added.
-_CB_COMMAND_MARKERS = ("CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "ensure-setup.py", "rag-statusline")
+_CB_COMMAND_MARKERS = ("CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "ensure-setup.py", "rag-statusline", "proof-gate.py")
 _CB_PROMPT_SENTINELS = (
     "Quality-first routing",
     "CONSULT vs AUTO",
@@ -130,6 +130,7 @@ _CB_PROMPT_SENTINELS = (
     "WORKSPACE CREATION CHECK",
     "PROCESS KILL SAFETY",
     "CONTEXT PRESERVATION",
+    "CLEAN-RAG ENFORCEMENT",
 )
 
 
@@ -205,7 +206,7 @@ def revert_settings() -> None:
 
     # env vars
     env = settings.get("env") or {}
-    dropped = [k for k in ("CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "CLAUDEBOOST_BASH_GUARD") if k in env]
+    dropped = [k for k in ("CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "CLAUDEBOOST_BASH_GUARD", "CLEAN_RAG_HOME") if k in env]
     for k in dropped:
         env.pop(k, None)
     if env:
