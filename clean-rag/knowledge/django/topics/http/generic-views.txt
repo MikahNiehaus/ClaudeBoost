@@ -1,0 +1,7 @@
+<!-- Source: github.com/django/django/docs/topics\http\generic-views.txt | Tier: A | Topic: django | Fetched: 2026-06-26 -->
+
+=============
+Generic views
+=============
+
+See :doc:`/ref/class-based-views/index`.

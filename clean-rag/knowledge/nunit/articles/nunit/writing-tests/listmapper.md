@@ -1,0 +1,26 @@
+<!-- Source: github.com/nunit/docs/docs/articles\nunit\writing-tests\ListMapper.md | Tier: A | Topic: nunit | Fetched: 2026-06-26 -->
+
+# ListMapper
+
+> [!IMPORTANT]
+> > ListMapper has been deprecated as of NUnit Framework 3.13.2. The functionality was removed in NUnit Framework 4.0.
+
+Unlike Constraint classes, `ListMapper` is used to modify the actual
+value argument to `Assert.That()`. It transforms the actual value, which
+must be a collection, creating a new collection to be tested against the
+supplied constraint. Currently, `ListMapper` supports one transformation: creating
+a collection of property values.
+
+Normally, `ListMapper` will be used through the `List.Map()` syntax helper. The following example
+shows two forms of the same assert.
+
+```csharp
+string[] strings = new string[] { "a", "ab", "abc" };
+int[] lengths = new int[] { 1, 2, 3 };
+
+Assert.That(List.Map(strings).Property("Length"),
+       Is.EqualTo(lengths));
+
+Assert.That(new ListMapper(strings).Property("Length"),
+       Is.EqualTo(lengths));
+```

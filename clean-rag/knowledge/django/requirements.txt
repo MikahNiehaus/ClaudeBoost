@@ -1,0 +1,7 @@
+<!-- Source: github.com/django/django/docs/requirements.txt | Tier: A | Topic: django | Fetched: 2026-06-26 -->
+
+pyenchant
+Sphinx>=4.5.0
+sphinxcontrib-spelling
+blacken-docs
+sphinx-lint

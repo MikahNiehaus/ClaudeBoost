@@ -1,0 +1,15 @@
+<!-- Source: github.com/django/django/docs/releases\3.2.24.txt | Tier: A | Topic: django | Fetched: 2026-06-26 -->
+
+===========================
+Django 3.2.24 release notes
+===========================
+
+*February 6, 2024*
+
+Django 3.2.24 fixes a security issue with severity "moderate" in 3.2.23.
+
+CVE-2024-24680: Potential denial-of-service in ``intcomma`` template filter
+===========================================================================
+
+The ``intcomma`` template filter was subject to a potential denial-of-service
+attack when used with very long strings.

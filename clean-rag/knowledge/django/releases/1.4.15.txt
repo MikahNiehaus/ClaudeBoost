@@ -1,0 +1,15 @@
+<!-- Source: github.com/django/django/docs/releases\1.4.15.txt | Tier: A | Topic: django | Fetched: 2026-06-26 -->
+
+===========================
+Django 1.4.15 release notes
+===========================
+
+*September 2, 2014*
+
+Django 1.4.15 fixes a regression in the 1.4.14 security release.
+
+Bugfixes
+========
+
+* Allowed inherited and m2m fields to be referenced in the admin
+  (:ticket:`22486`)

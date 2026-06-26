@@ -1,0 +1,15 @@
+<!-- Source: github.com/django/django/docs/ref\files\index.txt | Tier: A | Topic: django | Fetched: 2026-06-26 -->
+
+=============
+File handling
+=============
+
+.. module:: django.core.files
+   :synopsis: File handling and storage
+
+.. toctree::
+   :maxdepth: 2
+
+   file
+   storage
+   uploads

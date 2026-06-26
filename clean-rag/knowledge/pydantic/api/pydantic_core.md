@@ -1,0 +1,31 @@
+<!-- Source: github.com/pydantic/pydantic/docs/api\pydantic_core.md | Tier: A | Topic: pydantic | Fetched: 2026-06-26 -->
+
+::: pydantic_core
+    options:
+        allow_inspection: false
+        show_source: false
+        members:
+        - SchemaValidator
+        - SchemaSerializer
+        - ValidationError
+        - ErrorDetails
+        - InitErrorDetails
+        - SchemaError
+        - PydanticCustomError
+        - PydanticKnownError
+        - PydanticOmit
+        - PydanticUseDefault
+        - PydanticSerializationError
+        - PydanticSerializationUnexpectedValue
+        - Url
+        - MultiHostUrl
+        - MultiHostHost
+        - ArgsKwargs
+        - Some
+        - TzInfo
+        - to_json
+        - from_json
+        - to_jsonable_python
+        - list_all_errors
+        - ErrorTypeInfo
+        - __version__

@@ -1,0 +1,745 @@
+<!-- Source: github.com/nunit/docs/docs/articles\vs-test-adapter\AdapterV4-Release-Notes.md | Tier: A | Topic: nunit | Fetched: 2026-06-26 -->
+
+---
+uid: adapterreleasenotes
+---
+
+<!-- markdownlint-disable-file MD013 -->
+<!-- markdownlint-disable-file MD033 -->
+
+# Adapter Release Notes
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 6.2.0 - March 21, 2026
+
+There are 8 issues fixed in this release.
+
+This is primarily a bug-fix release, with one new feature added.
+
+The enhancement is the introduction of filtering for the --list-tests option in dotnet test. All three related issues
+concern this feature. It has now been implemented and works for both standard runs and MTP runs.
+
+### Enhancements
+
+* [1426](https://github.com/nunit/nunit3-vs-adapter/issues/1426) [MTP] --list-tests does not respect --filter, fixed in [PR 1427](https://github.com/nunit/nunit3-vs-adapter/pull/1427)
+* [1227](https://github.com/nunit/nunit3-vs-adapter/issues/1227) Listing the discovered tests doesn't respect the filter, fixed in [PR 1427](https://github.com/nunit/nunit3-vs-adapter/pull/1427)
+* [438](https://github.com/nunit/nunit3-vs-adapter/issues/438) vstest.console's `--TestCaseFilter` is ignored when listing tests, fixed in [PR 1427](https://github.com/nunit/nunit3-vs-adapter/pull/1427)
+
+### Bug fixes
+
+* [1400](https://github.com/nunit/nunit3-vs-adapter/issues/1400) NUnit3TestAdapter 6.1.0 copies unwanted version of Microsoft.Extensions.DependencyModel.dll into output, fixed in [PR 1401](https://github.com/nunit/nunit3-vs-adapter/pull/1401)
+* [1398](https://github.com/nunit/nunit3-vs-adapter/issues/1398) NUnit3TestAdapter >= 6.0.1 requires pinning Microsoft.Extensions.DependencyModel when using Microsoft.Testing.Extensions.CodeCoverage, fixed in [PR 1401](https://github.com/nunit/nunit3-vs-adapter/pull/1401)
+* [1396](https://github.com/nunit/nunit3-vs-adapter/issues/1396) ReSharper test runner fails with NUnit3TestAdapter 6.0.1, fixed in [PR 1401](https://github.com/nunit/nunit3-vs-adapter/pull/1401)
+* [1361](https://github.com/nunit/nunit3-vs-adapter/issues/1361) `dotnet test` using MTP with NUnit3TestAdapter cannot be cancelled on the CLI, fixed in [PR 1412](https://github.com/nunit/nunit3-vs-adapter/pull/1412)
+
+### Refactorings
+
+* [1386](https://github.com/nunit/nunit3-vs-adapter/issues/1386) Get rid of assembly refs, use package refs, fixed in [PR 1401](https://github.com/nunit/nunit3-vs-adapter/pull/1401)
+
+### Internal fixes
+
+None
+
+### Deprecated features
+
+None
+
+### The following issues are marked as breaking changes
+
+None
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/bradford-fisher">Bradford Fisher</a></td>
+<td><a href="https://github.com/davidbarrowsatasos">David Barrows</a></td>
+<td><a href="https://github.com/julealgon">Juliano Leal Goncalves</a></td>
+<td><a href="https://github.com/Lexy2">Lexy</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/BrightLight">Markus Hastreiter</a></td>
+<td><a href="https://github.com/siegfriedpammer">Siegfried Pammer</a></td>
+<td><a href="https://github.com/starosta33">starosta33</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/andrewimcclement">andrewimcclement</a></td>
+<td><a href="https://github.com/bradford-fisher">Bradford Fisher</a></td>
+<td><a href="https://github.com/CharliePoole">CharliePoole</a></td>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/ds-ms2soft">Dave Sweeton</a></td>
+<td><a href="https://github.com/davidbarrowsatasos">David Barrows</a></td>
+<td><a href="https://github.com/julealgon">Juliano Leal Goncalves</a></td>
+<td><a href="https://github.com/MaceWindu">MaceWindu</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/manfred-brands">Manfred Brands</a></td>
+<td><a href="https://github.com/siegfriedpammer">Siegfried Pammer</a></td>
+<td><a href="https://github.com/stevenaw">Steven Weerdenburg</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/thomasdgx">thomasdgx</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 6.1.0 - January 7, 2026
+
+This is a bug-fix release that addresses a series of issues related to assembly loading.
+It also introduces several new settings. One of these, `UseDefaultAssemblyLoadContext`, is crucial for correct assembly loading and is now enabled by default by the adapter.
+
+The remaining settings are intended for development and diagnostics. `DebugEngine` enables debugging of the NUnit Engine, and `InternalTraceLevel` allows the engine’s internal trace level to be configured and is now passed through to the engine.
+
+### Bug fixes
+
+* [1393](https://github.com/nunit/nunit3-vs-adapter/issues/1393) System.IO.FileNotFoundException: Could not load file or assembly 'System.Text.Json, Version=10.0.0.0.
+* [1391](https://github.com/nunit/nunit3-vs-adapter/issues/1391) NUnit3TestAdapter V6.0.1 doesn't work with Resharpers Unit Tests explorer.
+* [1390](https://github.com/nunit/nunit3-vs-adapter/issues/1390) I am getting a System.InvalidCastException when updating from NUnit3TestAdapter Version=5.2.0 to 6.0.1.
+* [1389](https://github.com/nunit/nunit3-vs-adapter/issues/1389) Double loading assemblys NUnit3TestAdapter 6.0.1 with Microsoft Testing Platform (MTP). Fixed by [PR 1395](https://github.com/nunit/nunit3-vs-adapter/pull/1395)
+* [1375](https://github.com/nunit/nunit3-vs-adapter/issues/1375) New failures in dynamic code evaluation in v6. Fixed by [PR 1395](https://github.com/nunit/nunit3-vs-adapter/pull/1395)
+* [1348](https://github.com/nunit/nunit3-vs-adapter/issues/1348) [MTP] AwesomeAssertions throws different NUnit.Framework.AssertionException than expected at runtime.
+
+### Breaking changes
+
+The 6.1 version of the adapter use the NUnit.Engine version 3.22.0. This version introduce a changed way of loading assemblies.
+In order for the adapter to handle MTP (Microsoft test Platform) it needs to use the default loading context, which the engine may not use.
+The introduction of the `UseDefaultAssemblyLoadContext` ensures this works.
+The current versions of Resharper and Rider (2025.3.1) however do not yet support the `UseDefaultAssemblyLoadContext`, and therefore the user **may** experience assembly loading issues.
+
+If you're not using Visual Studio test explorer, but only Rider or Resharper's, they will work if you don't install the adapter.
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/ScarletKuro">Artyom M.</a></td>
+<td><a href="https://github.com/cbersch">Christoph Bersch</a></td>
+<td><a href="https://github.com/glennawatson">Glenn Watson</a></td>
+<td><a href="https://github.com/MJB222398">MJB222398</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Methuselah96">Nathan Bierema</a></td>
+<td><a href="https://github.com/Sveti86">Svetoslav Inkolov</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/ScarletKuro">Artyom M.</a></td>
+<td><a href="https://github.com/bradford-fisher">Bradford Fisher</a></td>
+<td><a href="https://github.com/CharliePoole">CharliePoole</a></td>
+<td><a href="https://github.com/cbersch">Christoph Bersch</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/manfred-brands">Manfred Brands</a></td>
+<td><a href="https://github.com/MJB222398">MJB222398</a></td>
+<td><a href="https://github.com/Methuselah96">Nathan Bierema</a></td>
+<td><a href="https://github.com/nesc58">nesc58</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Sveti86">Svetoslav Inkolov</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 6.0.1 - December 20, 2025
+
+This is a hotfix release for version 6.0.0 to handle issues related to loading assemblies.
+Go here for a [detailed overview](https://github.com/nunit/nunit3-vs-adapter/issues/1376),
+with links to all related issues.
+
+The fixes is mainly in the NUnit.Engine, so this release embeds NUnit.Engine version 3.21.1.
+
+The following adapter issues have been fixed.
+
+* [1382](https://github.com/nunit/nunit3-vs-adapter/issues/1382) NU1109 after update to v6.0.0 when using CPM with transitive pinning enabled (Net8 SDK).
+* [1374](https://github.com/nunit/nunit3-vs-adapter/issues/1374) System.Diagnostics.Trace.Assert crashes the test process after updating to NUnit3TestAdapter 6.0.0.
+* [1372](https://github.com/nunit/nunit3-vs-adapter/issues/1372) `SocketException` ("can't assign requested address") when starting child process on 6.0.0.
+* [1371](https://github.com/nunit/nunit3-vs-adapter/issues/1371) V6 - assembly loading issue.
+* [1367](https://github.com/nunit/nunit3-vs-adapter/issues/1367) V10 of Microsoft.* nugets makes it more difficult to support older nugets and runtime.
+
+The fixes in the adapter is for these three issues:
+
+* [1797](https://github.com/nunit/nunit-console/issues/1797) Issue with assembly load context changes in NUnit3TestAdapter v6 & Microsoft.Build.dll dynamic loading
+* [1796](https://github.com/nunit/nunit-console/issues/1796) Assembly load logic changes in v6
+* [1795](https://github.com/nunit/nunit-console/issues/1795) :test_tube: Assembly loading move to AssemblyLoadContext for net8 and higher
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying the issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/bvst">Bjorn-Vegard Thoresen</a></td>
+<td><a href="https://github.com/DaRosenberg">Daniel Rosenberg</a></td>
+<td><a href="https://github.com/fschmied">Fabian Schmied</a></td>
+<td><a href="https://github.com/perclausen">Per Clausen</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/SimonCropp">Simon Cropp</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/CharliePoole">CharliePoole</a></td>
+<td><a href="https://github.com/cjbush">Chris Bush</a></td>
+<td><a href="https://github.com/DaRosenberg">Daniel Rosenberg</a></td>
+<td><a href="https://github.com/fschmied">Fabian Schmied</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/manfred-brands">Manfred Brands</a></td>
+<td><a href="https://github.com/perclausen">Per Clausen</a></td>
+<td><a href="https://github.com/peter-nguyen-contemi">Peter Nguyen</a></td>
+<td><a href="https://github.com/PhilippNaused">Philipp Naused</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/NightOwl888">Shad Storhaug</a></td>
+<td><a href="https://github.com/SimonCropp">Simon Cropp</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+<td><a href="https://github.com/tonygambone">Tony Gambone</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 6.0.0 - December 6, 2025
+
+This version supports MTP version 2.  Further the lowest .net version is .net 8.0, so netcore 3.1 is no longer supported.
+
+See the migration guide for [MTP v1 to v2](https://learn.microsoft.com/en-us/dotnet/core/testing/microsoft-testing-platform-migration-from-v1-to-v2) for details on moving up to version 2.
+
+There are 6 issues fixed in this release.
+
+### Enhancements
+
+* [1328](https://github.com/nunit/nunit3-vs-adapter/issues/1328) NUnit compatible version for MTP 2.0.0. Thanks to [Youssef Victor](https://github.com/Youssef1313) and NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1329](https://github.com/nunit/nunit3-vs-adapter/pull/1329)
+* [1335](https://github.com/nunit/nunit3-vs-adapter/issues/1335) Update to net 8,  remove netcore 3.1. Thanks to [Youssef Victor](https://github.com/Youssef1313) and NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1329](https://github.com/nunit/nunit3-vs-adapter/pull/1329)
+
+### Bug fixes
+
+* [1347](https://github.com/nunit/nunit3-vs-adapter/issues/1347) Test Cases With Strings That Contain Escaped Double-Quotes are Not Run.
+* [1334](https://github.com/nunit/nunit3-vs-adapter/issues/1334) Attempting to execute a native assembly crashes the runner. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1333](https://github.com/nunit/nunit3-vs-adapter/pull/1333)
+* [1332](https://github.com/nunit/nunit3-vs-adapter/issues/1332) [MTP] OutOfMemoryException in VS Test Explorer from TestFilterConverter.Tokenizer. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1341](https://github.com/nunit/nunit3-vs-adapter/pull/1341)
+* [1241](https://github.com/nunit/nunit3-vs-adapter/issues/1241) VS Test Explorer NUnit error: "TestPlatformFormatException: Filter string ... includes unrecognized escape sequence".
+
+### The following issues are marked as breaking changes
+
+* [1328](https://github.com/nunit/nunit3-vs-adapter/issues/1328) NUnit compatible version for MTP 2.0.0. Thanks to [Youssef Victor](https://github.com/Youssef1313) and NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1329](https://github.com/nunit/nunit3-vs-adapter/pull/1329)
+* [1335](https://github.com/nunit/nunit3-vs-adapter/issues/1335) Update to net 8,  remove netcore 3.1. Thanks to [Youssef Victor](https://github.com/Youssef1313) and NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1329](https://github.com/nunit/nunit3-vs-adapter/pull/1329)
+* [1366](https://github.com/nunit/nunit3-vs-adapter/issues/1366) Assembly loading move to AssemblyLoadContext for net8 and higher
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/Evangelink">Amaury Levé</a></td>
+<td><a href="https://github.com/agray">Andrew Gray</a></td>
+<td><a href="https://github.com/cbersch">Christoph Bersch</a></td>
+<td><a href="https://github.com/JasonBock">Jason Bock</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/cbersch">Christoph Bersch</a></td>
+<td><a href="https://github.com/danstur">Daniel Sturm</a></td>
+<td><a href="https://github.com/RussKie">Igor Velikorossov</a></td>
+<td><a href="https://github.com/JasonBock">Jason Bock</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/joschmo80">joschmo80</a></td>
+<td><a href="https://github.com/lennartb-">Lennart Brüggemann</a></td>
+<td><a href="https://github.com/mikkelbu">Mikkel Nylander Bundgaard</a></td>
+<td><a href="https://github.com/moh-hassan">Mohamed Hassan</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 5.2.0 - October 6, 2025
+
+There are 2 issues fixed in this release.
+
+In addition, the MTP version have been updated to 1.9.0.
+
+### Enhancements
+
+* [1111](https://github.com/nunit/nunit3-vs-adapter/issues/1111) New Mode that completely excludes explicit tests. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1323](https://github.com/nunit/nunit3-vs-adapter/pull/1323)
+
+### Bug fixes
+
+* [1292](https://github.com/nunit/nunit3-vs-adapter/issues/1292) (Apparently) inconsistent version requirements of Microsoft.Testing.Extensions.VSTestBridge and Microsoft.Testing.Platform.MSBuild. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1296](https://github.com/nunit/nunit3-vs-adapter/pull/1296)
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/dmurty">dmurty</a></td>
+<td><a href="https://github.com/lennartb-">Lennart Brggemann</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/dmurty">dmurty</a></td>
+<td><a href="https://github.com/manfred-brands">Manfred Brands</a></td>
+<td><a href="https://github.com/moh-hassan">Mohamed Hassan</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 5.1.0 - August 6, 2025
+
+There are 10 issues fixed in this release.
+
+### Enhancements
+
+* [1266](https://github.com/nunit/nunit3-vs-adapter/issues/1266) Unable to pass test parameters via command line argument when using MTP. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1272](https://github.com/nunit/nunit3-vs-adapter/pull/1272)
+* [1248](https://github.com/nunit/nunit3-vs-adapter/issues/1248) How to completely suppress the Stack Trace in Test Results?. Thanks to NUnit Team member [Terje Sandstrom](https://github.com/OsirisTerje) for [PR 1249](https://github.com/nunit/nunit3-vs-adapter/pull/1249)
+
+### Bug fixes
+
+* [1267](https://github.com/nunit/nunit3-vs-adapter/issues/1267) Incompatibility with MTP mode in .NET 10 SDK. Thanks to [Youssef Victor](https://github.com/Youssef1313) for [PR 1262](https://github.com/nunit/nunit3-vs-adapter/pull/1262)
+* [1261](https://github.com/nunit/nunit3-vs-adapter/issues/1261) Retry extension - no tests discovered with NUnit runner. Thanks to [Youssef Victor](https://github.com/Youssef1313) for [PR 1260](https://github.com/nunit/nunit3-vs-adapter/pull/1260)
+* [1258](https://github.com/nunit/nunit3-vs-adapter/issues/1258) Categories aren't shown in Visual Studio when MTP is on. Thanks to [Youssef Victor](https://github.com/Youssef1313) for [PR 1273](https://github.com/nunit/nunit3-vs-adapter/pull/1273)
+* [1251](https://github.com/nunit/nunit3-vs-adapter/issues/1251) Condition on TestingPlatformBuilderHook doesn't look correct. Thanks to [Youssef Victor](https://github.com/Youssef1313) for [PR 1253](https://github.com/nunit/nunit3-vs-adapter/pull/1253)
+* [1247](https://github.com/nunit/nunit3-vs-adapter/issues/1247) is there any way to treat an unhandled exception in a tear down as an error instead of a warning?. Thanks to [Simon Cropp](https://github.com/SimonCropp) for [PR 1246](https://github.com/nunit/nunit3-vs-adapter/pull/1246)
+* [1170](https://github.com/nunit/nunit3-vs-adapter/issues/1170) Version 5-beta crashes with nullref exception. Thanks to [Amaury Levé](https://github.com/Evangelink) for [PR 1171](https://github.com/nunit/nunit3-vs-adapter/pull/1171)
+
+### Deprecated features
+
+None
+
+### The following issues are marked as breaking changes
+
+None
+
+### Acknowledgements
+
+We want to express our heartfelt gratitude to everyone who has contributed to this release
+by reporting bugs, suggesting enhancements, and providing valuable feedback.
+Your efforts help make NUnit better for the entire community.
+
+A special thank you to the following reporters for identifying issues:
+
+<table>
+<tr>
+<td><a href="https://github.com/Erlifant">Jonas Erler</a></td>
+<td><a href="https://github.com/philipp-naused">Philipp Naused</a></td>
+<td><a href="https://github.com/SimonCropp">Simon Cropp</a></td>
+<td><a href="https://github.com/softworkz">softworkz</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+<td><a href="https://github.com/victorburckel">victorburckel</a></td>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+</table>
+
+and to the commenters who engaged in discussions and offered further insights:
+
+<table>
+<tr>
+<td><a href="https://github.com/Evangelink">Amaury Levé</a></td>
+<td><a href="https://github.com/CharliePoole">CharliePoole</a></td>
+<td><a href="https://github.com/errarr">errarr</a></td>
+<td><a href="https://github.com/nohwnd">Jakub Jares</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/Erlifant">Jonas Erler</a></td>
+<td><a href="https://github.com/viceice">Michael Kriese</a></td>
+<td><a href="https://github.com/philipp-naused">Philipp Naused</a></td>
+<td><a href="https://github.com/SimonCropp">Simon Cropp</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/softworkz">softworkz</a></td>
+<td><a href="https://github.com/OsirisTerje">Terje Sandstrom</a></td>
+<td><a href="https://github.com/victorburckel">victorburckel</a></td>
+<td><a href="https://github.com/Youssef1313">Youssef Victor</a></td>
+</tr>
+</table>
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 5.0.0 - February 7, 2025
+
+This major release introduce support for the new Microsoft Testing Platform.
+
+### Enhancements
+
+* [1152](https://github.com/nunit/nunit3-vs-adapter/issues/1152) Microsoft Testing Platform for NUnit
+
+You can find more information [at this article on NUnit and Microsoft Testing Platform](https://docs.nunit.org/articles/vs-test-adapter/NUnit-And-Microsoft-Test-Platform.html)
+
+### Breaking changes
+
+Althought this is a major version, there is no direct breaking changes when using it without enabling the MTP.
+Using it **with** MTP enabled will change some parts of how to use it, see the documentation for details.
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 4.6.0 - July 26, 2024
+
+There are 10 issues fixed in this release.
+
+### Enhancements
+
+* [1138](https://github.com/nunit/nunit3-vs-adapter/issues/1138) Add partition filter parsing to the adapter.
+* [1114](https://github.com/nunit/nunit3-vs-adapter/issues/1114) Is test result file creation now supported by NUnit
+using dotnet test?.
+* [1188](https://github.com/nunit/nunit3-vs-adapter/issues/1188) Add support for ThrowOnEachFailureUnderDebugger setting
+
+### Bug fixes
+
+* [1186](https://github.com/nunit/nunit3-vs-adapter/issues/1186) Failure during unit test discovery doesn't cause
+entire test suite to fail.
+* [1110](https://github.com/nunit/nunit3-vs-adapter/issues/1110) ConsoleOut=1 should be default.
+* [1109](https://github.com/nunit/nunit3-vs-adapter/issues/1109) ConsoleOut=0 should turn off console output but doesn't.
+
+### Refactorings
+
+* [1115](https://github.com/nunit/nunit3-vs-adapter/issues/1115) Use mutex for file determination in TestOutputXml.
+
+### Internal fixes
+
+* [1163](https://github.com/nunit/nunit3-vs-adapter/issues/1163) Update packages and clean up new warnings.
+* [1159](https://github.com/nunit/nunit3-vs-adapter/issues/1159) Remove azure pipeline and appveyor builds.
+* [1158](https://github.com/nunit/nunit3-vs-adapter/issues/1158) Acceptance tests not working after NUnit 4 was released.
+
+### Deprecated features
+
+None
+
+### Others
+
+* [1122](https://github.com/nunit/nunit3-vs-adapter/issues/1122) testcentric.engine.metadata (vulnerable dependency).
+
+### The following issues are marked as breaking changes
+
+* [1110](https://github.com/nunit/nunit3-vs-adapter/issues/1110) ConsoleOut=1 should be default. Change from former
+where ConsoleOut=2 was default.
+
+## NUnit3 Test Adapter for Visual Studio and Dotnet - Version 4.5.0 - May 30, 2023
+
+This is a version supporting the upcoming NUnit version 4.  It uses a released version of the NUnit.Engine, version
+3.15.4.
+
+* [1080](https://github.com/nunit/nunit3-vs-adapter/issues/1080) Allow the adapter to be used with NUnit version 4
+* [1100](https://github.com/nunit/nunit3-vs-adapter/issues/1100) Allow to debug parallel tests
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.4.2 - Mar 1, 2023
+
+This is a hotfix for the 4.4.0 version.  The 4.4.0 included the NUnit.Engine 3.16.3, which uses an external package for
+loading assemblies.  It turns out the engine fails for certain types of loading, in particular when an assembly is
+loaded by reflection.
+
+In order to fix this, this version have reverted to a version of the NUnit.Engine based on 3.15.2, which does not have
+this way of loading assemblies. The included Engine is not available as a separate package, but if you use anything that
+needs the engine package (like the NUnit.Console), version 3.15.2 should work.
+
+The embedded engine handles the .net 8 the same way as with the 4.4.0 adapter.
+
+The following issues, all related to the same problem, are fixed in this release:
+
+* [1065](https://github.com/nunit/nunit3-vs-adapter/issues/1065) WebHostBuilder.ConfigureServices method not found when
+  using version 4.4.0
+* [1066](https://github.com/nunit/nunit3-vs-adapter/issues/1066) Breaking change for TestAssemblyLoadContext
+* [1069](https://github.com/nunit/nunit3-vs-adapter/issues/1069) Any type loaded from assembly at runtime does not match
+  compile-time type
+* [1070](https://github.com/nunit/nunit3-vs-adapter/issues/1070) NUnit failed to load test assembly after upgrading from
+  4.3.1 to 4.4.0
+
+Thanks to everyone that reported in, and special thanks to everyone that provided repro solutions for the problem.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.4.0 - Feb 26, 2023
+
+**:warning: This version has been unlisted on NuGet, please use version 4.4.2 instead.**
+
+The main focus is the support for .Net 8.  This version of the adapter will accept any higher version of the .net, also
+future higher versions than .net 8.
+
+The following issues are fixed in this release:
+
+* [1049](https://github.com/nunit/nunit3-vs-adapter/issues/1049) .Net Framework tests fails when .Net 8 is present on
+  system
+
+* [1037](https://github.com/nunit/nunit3-vs-adapter/issues/1037) TestContext.Progress shows up as Warning in TFS/Azure
+  Dev Ops. Thanks to [mharwig](https://github.com/mharwig) for the
+  [PR](https://github.com/nunit/nunit3-vs-adapter/pull/1038).
+
+### Beta release
+
+A beta release, Version 4.4.0-beta.1, was released on Feb 23, 2023. There is no changes between this and the previous
+beta release, except for updates of packages for the test projects.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.3.2 - Des 9, 2023
+
+A hotfix release for issue [#1144](https://github.com/nunit/nunit3-vs-adapter/issues/1144).
+
+The adapter could not work running under .net 8 due to the use of an older NUnit.Engine.
+The engine has been updated to version 3.15.5
+
+* [1144](https://github.com/nunit/nunit3-vs-adapter/issues/1144) Fixed by team.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.3.1 - Nov 19, 2022
+
+This is a hotfix release for three major and critical problems:
+
+1) .Net Framework (4.8 and lower) would crash due to InternalTracelog files trying to be written to the Program Files
+   directory.
+2) InternalTracelog files would appear in root of solution
+3) TestOutputXml did not work correctly when specified
+
+In order to get these fixed the support for netcore2.1 had to be dropped.  This version is also now unsupported by
+Microsoft, so the adapter follows that.
+
+* [987](https://github.com/nunit/nunit3-vs-adapter/issues/987) Regression on this issue due to the InternalTracelog
+  files
+* [1026](https://github.com/nunit/nunit3-vs-adapter/issues/1026) Current directory C:\WINDOWS\system32 again
+* [1027](https://github.com/nunit/nunit3-vs-adapter/issues/1027) Test Explorer is finding tests, but not running them
+  after upgrading to NUnit3TestAdapter v4.3.0
+* [1028](https://github.com/nunit/nunit3-vs-adapter/issues/1028) Test discovery emits zero length `internaltrace` log
+  file per project
+* [1030](https://github.com/nunit/nunit3-vs-adapter/issues/1030) Problem if OutputXmlFolderMode setting is not in
+  .runsettings
+* [1031](https://github.com/nunit/nunit3-vs-adapter/issues/1031) TestOutputXml regressions
+
+### Credits
+
+Thanks to [Jan Inge Dalsbø](https://github.com/janid1967), [Taylor Willis](https://github.com/Guitrum), [Kai
+Nadler](https://github.com/smkanadl), [Barnabas Lakner](https://github.com/barnabas90),
+[sandrohanea](https://github.com/sandrohanea), [Elliot Prior](https://github.com/Quogu), [Todd
+Ogin](https://github.com/ojintoad), [Evheniyrz](https://github.com/evheniyrz), [Manfred
+Brands](https://github.com/manfred-brands), [Boris Drajer](https://github.com/bdrajer), [Ken
+V](https://github.com/varnk), [Mike Vorhees](https://github.com/mrvoorhe) for all the help with reporting the issues,
+reproducing them, analysis and diagnostics, and confirming that 4.3.1 resolves the issues.  Your help is really
+appreciated!
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.3.0 - Oct 29, 2022
+
+This version is for support of the .net 7 framework. See an overview of [supported frameworks
+here](/articles/vs-test-adapter/Supported-Frameworks.html).
+
+The support is due to the updated embedded [NUnit.Engine version
+3.15.2](/articles/nunit-engine/release-notes.html#nunit-console--engine-3152---june-30-2022).
+
+* [987](https://github.com/nunit/nunit3-vs-adapter/issues/987)  System.ArgumentException: Unknown framework version 7.0
+
+Other bugs fixed:
+
+* [990](https://github.com/nunit/nunit3-vs-adapter/issues/990) Missing output with failed test stack traces for
+  Assert.Multiple
+* [997](https://github.com/nunit/nunit3-vs-adapter/issues/997) TRX report file folder inconsistent with XML report
+  folder using .runsettings file. Note that a new runsettings flag has been added for supporting this, see
+  [OutputXmlFolderMode](/articles/vs-test-adapter/Tips-And-Tricks.html#OutputXmlFolderMode).
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.2.1 - Jan 21, 2022
+
+This is a hotfix release for
+
+* [941](https://github.com/nunit/nunit3-vs-adapter/issues/941) When running `dotnet test` with filter, all tests are run
+  and all console output is logged.
+
+This fix applies to test projects where all tests are excluded by a test item filter. Previously, as of v4.2.0, all
+tests were unintentionally run. Note that this issue did not affect category filters.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.2.0 - Dec 19, 2021
+
+This is a bug fix release, with the following fixes:
+
+* [818](https://github.com/nunit/nunit3-vs-adapter/issues/818) Known Vulnerability in System.Xml.XPath.XmlDocument
+* [912](https://github.com/nunit/nunit3-vs-adapter/issues/912) Explicit runs when using NUnit-filters 'cat!=FOO'
+* [914](https://github.com/nunit/nunit3-vs-adapter/issues/914) AddTestAttachment does not work anymore in VS2022
+* [918](https://github.com/nunit/nunit3-vs-adapter/issues/918) New DiscoveryMode doesn't play nicely with
+  TestFixtureSource - Missing GenericFixture
+* [919](https://github.com/nunit/nunit3-vs-adapter/issues/919) VSTest test case filter does not work with parentheses
+* [929](https://github.com/nunit/nunit3-vs-adapter/issues/929) Lots of warnings logged when filter matches no tests
+  'cat=BAZ', including other issues in the same.  Thanks to [@runehalfdan](https://github.com/runehalfdan) for a lot of
+  help reproducing and verifying these issues.  Fixing this also improved performance, and cleared out issues with
+  Explicit tests.
+* [934](https://github.com/nunit/nunit3-vs-adapter/issues/934) Console output no longer output by dotnet test -v n.
+
+### Engine update
+
+The NUnit.Engine has been updated to version 3.13 in this release.  See [engine release
+notes](xref:consoleenginereleasenotes) for details.
+
+### Development
+
+The [debugging of an adapter](Debugging.md) has been made simpler, using just a runsetting to enable it.  See [this
+post](http://hermit.no/debugging-the-nunit3testadapter-take-2/) for details on the process.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.1.0 - Nov 8, 2021
+
+This is a bug fix release, with the following fixes:
+
+* [516](https://github.com/nunit/nunit3-vs-adapter/issues/516) ArgumentException when whitespace sent to logger. Thanks
+  to [Matt Jones - mthjones](https://github.com/mthjones) for a very good repro, that helped nail this down!
+
+* [865](https://github.com/nunit/nunit3-vs-adapter/issues/865) Breaking changing in 3.17 on "Exception encountered
+  unloading application domain"
+
+* [869](https://github.com/nunit/nunit3-vs-adapter/issues/869) NUnitTestAdapter - Discovery exception
+
+* [884](https://github.com/nunit/nunit3-vs-adapter/issues/884) NUnit3TestAdapter 4.0.0 - DiscoveryException: Not a
+  TestFixture, SetUpFixture or TestSuite, but ParameterizedFixture
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.0.0 - June 6, 2021
+
+This major release contains a series of changes, and also underlying changes in the adapter.  
+
+This is currently the version that will support Visual Studio 2022.  The earlier versions will initially not support VS
+2022.
+
+(There is a currently unknown issue that blocks the 3.X series for VS 2022.  It is currently unclear if the Visual
+Studio team may be able to fix this issue. Any fix from the adapter side will include an upgrade, and then the 4.X
+series is the solution for that.)
+
+* [**Explicit**](https://github.com/nunit/nunit3-vs-adapter/issues?q=is%3Aissue+is%3Aclosed+project%3Anunit%2Fnunit3-vs-adapter%2F3)
+  works now for all versions of Visual Studio. This is covered by several issues, see below on alpha and beta release
+  notes.  
+
+See the alpha and beta release notes below for more issues and features that have been resolved and is included in this
+major release.
+
+The following additional features have been implemented in the final release.
+
+* [671](https://github.com/nunit/nunit3-vs-adapter/issues/671) Exception in OneTimeSetUp has no stack trace
+
+* [843](https://github.com/nunit/nunit3-vs-adapter/issues/843) Reporting random seed for a test case
+
+* [863](https://github.com/nunit/nunit3-vs-adapter/pull/863) The Test Name is by default added to the console output for
+  tests. It can be turned off by the
+  [UseTestNameInConsoleOutput](/articles/vs-test-adapter/Tips-And-Tricks.html#usetestnameinconsoleoutput) property.
+
+The following additional issue has been resolved:
+
+* [779](https://github.com/nunit/nunit3-vs-adapter/issues/779) Filtering tests with any "PropertyAttribute"
+
+* [852](https://github.com/nunit/nunit3-vs-adapter/issues/852) NullReferenceException in ExtractTestFixture in
+  v4.0.0-beta2.
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.0.0-beta.2 - April 6, 2021
+
+This will be a short beta.2, given we don't hit on any intricate issues.  
+
+A major change in this version is the upgrade of the NUnit.Engine to version 3.12, and thus Mono.Cecil is no longer
+used.  Instead it has a reduced version (based on Mono.Cecil) packed into TestCentric.engine.metadata doing the same job
+with navigation data.  
+
+The following issues have been resolved:
+
+* [824](https://github.com/nunit/nunit3-vs-adapter/issues/824 ) "Not a TestFixture or TestSuite, but SetUpFixture"
+  exception is being thrown in case of more than one SetUpFixture
+* [811](https://github.com/nunit/nunit3-vs-adapter/issues/811) "System.FormatException: The UTC representation of the
+  date falls outside the year range 1-9999" from skipped test in Eastern European time zone.  Thanks to
+  [KalleOlaviNiemitalo](https://github.com/KalleOlaviNiemitalo) for suggesting the fix.
+
+Also a performance improvement was done, thanks to [Pakrym](https://github.com/pakrym) for the [PR
+821](https://github.com/nunit/nunit3-vs-adapter/pull/821)
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.0.0-beta.1 - Nov 20, 2020
+
+This beta is based on the earlier alpha version, and includes new fixes, some reported in the alpha. A great thank you
+to those who reported and checked out the fixes in the alpha!
+
+The alpha has more than 32000 downloads, with only a few issues reported, so we feel safe to move up to a beta.  The
+time for beta will be much shorter, so we might be able to release a final 4.0.0 version before end of 2020.
+
+We have also been able to shoehorn some new features into the release.
+
+* [770](https://github.com/nunit/nunit3-vs-adapter/issues/770)  "Not a TestFixture, but TestSuite" error when using
+  un-namespaced SetupFixture.
+* [774](https://github.com/nunit/nunit3-vs-adapter/issues/774) Tests not executed if Console.WriteLine() is used.
+* [780](https://github.com/nunit/nunit3-vs-adapter/issues/780) NUnit3TestAdapter 3.17.0 empty output file regression?
+* [781](https://github.com/nunit/nunit3-vs-adapter/issues/781) An exception occurred while test discoverer
+  'NUnit3TestDiscoverer' was loading tests. Exception: Object reference not set to an instance of an object, with
+  VS2015.
+* [785](https://github.com/nunit/nunit3-vs-adapter/issues/785) Seemingly redundant dependency on
+  Microsoft.DotNet.InternalAbstractions. Thanks to [teo-tsirpanis](https://github.com/teo-tsirpanis) for [PR
+  790](https://github.com/nunit/nunit3-vs-adapter/pull/790).
+* [786](https://github.com/nunit/nunit3-vs-adapter/issues/786) When using TRX logger, should warn about incompatible
+  test adapter across .NET Framework and .NET Core and/or log where an adapter is located.
+* [788](https://github.com/nunit/nunit3-vs-adapter/issues/788) Documentation: Broken links in user guide
+  [vs-test-adapter/Resources.html].
+* [797](https://github.com/nunit/nunit3-vs-adapter/issues/797) Proprietary licensed files
+* [800](https://github.com/nunit/nunit3-vs-adapter/issues/800) Rerun in azure devops overwrites last test results xml.
+  Thanks to [netcorefactory](https://github.com/netcorefactory) for [PR
+  799](https://github.com/nunit/nunit3-vs-adapter/pull/799).
+
+## NUnit3 Test Adapter for Visual Studio - Version 4.0.0-alpha.1 - July 12, 2020
+
+This is an early pre-release version.  
+
+The code has been rewritten/refactored in order to get some of the more complex issues fixed.  It does pass all the
+automatic tests we have, but there are still more tests we would like to take it through, before we release a beta.  
+
+We would really appreciate it if you give this alpha a spin. and
+[report](https://github.com/nunit/nunit3-vs-adapter/issues) whatever you find back to us.
+
+The major fixes now are Explicit runs are fully back, both in Visual Studio and on command line with dotnet test and
+vstest.console.
+
+Further there has been a significant performance improvement for large test sets, and in particular when you run with
+categories or other filters.
+
+For those interested in details, some of this has been achieved by converting the VSTest type of filters to NUnit native
+filters  (Thanks to [Charlie Poole](https://github.com/CharliePoole) for his excellent contribution here.).
+
+* [497](https://github.com/nunit/nunit3-vs-adapter/issues/497)  Dotnet test with category filter is slow with a lot of
+  tests
+* [545](https://github.com/nunit/nunit3-vs-adapter/issues/545)  Setting `TestCaseSource` to `Explicit` makes other tests
+  in fixture explicit
+* [612](https://github.com/nunit/nunit3-vs-adapter/issues/612)  It is not possible to run an explicit test from Test
+  Explorer
+* [658](https://github.com/nunit/nunit3-vs-adapter/issues/658)  Explicit tests are automatically run in Visual Studio
+  2019
+* [767](https://github.com/nunit/nunit3-vs-adapter/issues/767)  Replace use of VSTest filters with NUnit filters
