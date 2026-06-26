@@ -9,6 +9,9 @@ state/proof-log.jsonl
 state/pending-proof-*.json
 state/pending-proof-*.consumed
 state/server.json
+state/telemetry.jsonl
+state/debug-mode.json
+state/debug-fix-required.json
 
 # Python
 __pycache__/

@@ -1,7 +1,7 @@
 """Auto-research orchestrator for clean-rag.
 
-When the Haiku verifier says RESEARCH_MORE, this module orchestrates
-the four-layer acquisition waterfall for a topic:
+When RAG search returns no results or scores below 0.5, this module
+orchestrates the four-layer acquisition waterfall for a topic:
 
   Layer 1: Git sparse checkout (if source_map has a GitHub entry)
   Layer 2: llms.txt check (if source_map has a doc_root)

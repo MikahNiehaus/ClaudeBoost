@@ -1,7 +1,9 @@
-"""Verification prompt templates for the Haiku agent.
+"""Verification prompt templates for clean-rag.
 
-The main Claude agent uses these templates to construct the prompt
-passed to Agent(model="haiku") for independent proof verification.
+These templates format RAG search results and justifications into
+a structured proof summary for the verifier_response field in
+write_pending_proof(). No separate agent is needed; the mechanical
+checks (score >= 0.5, content hash, freshness) handle verification.
 """
 
 
@@ -38,7 +40,7 @@ def build_verification_prompt(
     rag_results: str,
     justification: str,
 ) -> str:
-    """Build the full verification prompt for a Haiku agent spawn."""
+    """Build a structured proof summary from RAG results and justification."""
     return VERIFICATION_PROMPT.format(
         file_path=file_path,
         proposed_change=proposed_change,

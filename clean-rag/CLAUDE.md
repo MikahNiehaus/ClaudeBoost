@@ -6,7 +6,7 @@ Research-verified editing enforcement for Claude Code. Every source code edit re
 
 clean-rag maintains separate ChromaDB databases organized by topic. Each topic (e.g., `fastapi`, `react-hooks`, `jwt-tokens`) has its own database at `databases/<topic>/chroma/`. Project source code is indexed separately at `databases/_projects/<hash>/chroma/`.
 
-When you try to edit a source file, the `proof-gate.py` hook blocks the edit unless you've already verified your proof through a Haiku verification agent.
+When you try to edit a source file, the `proof-gate.py` hook blocks the edit unless you've searched RAG and written a proof file with mechanical verification checks (score >= 0.5, content hash, freshness).
 
 ## The Proof Cycle
 
@@ -93,7 +93,7 @@ The proof file is keyed per target file (uses a hash of the canonical path), so 
 
 ## Auto-Research (builds knowledge permanently)
 
-When your search in step 1 returns no results or scores below 0.5, OR the Haiku verifier says RESEARCH_MORE, you must acquire docs before retrying. This is not a one-time cost. Every topic you research gets permanently indexed and reused across all future sessions.
+When your search in step 1 returns no results or scores below 0.5, you must acquire docs before retrying. This is not a one-time cost. Every topic you research gets permanently indexed and reused across all future sessions.
 
 ### Flow
 
@@ -110,8 +110,8 @@ When your search in step 1 returns no results or scores below 0.5, OR the Haiku 
      `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}`
 
 3. Re-search with the newly indexed topic
-4. Re-verify with the Haiku agent
-5. Loop until VERIFIED
+4. Write proof and retry the edit
+5. Loop until proof passes the mechanical checks
 
 ### Why this saves tokens
 

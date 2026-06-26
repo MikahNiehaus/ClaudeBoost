@@ -17,6 +17,22 @@ import sys
 import time
 from pathlib import Path
 
+# Add clean-rag root to sys.path for telemetry imports
+_CLEAN_RAG_ROOT = Path(__file__).resolve().parent.parent
+if str(_CLEAN_RAG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CLEAN_RAG_ROOT))
+
+try:
+    from telemetry.events import gate_block as _tel_block
+    from telemetry.events import gate_pass as _tel_pass
+    from telemetry.events import gate_exempt as _tel_exempt
+    from telemetry.events import gate_auto as _tel_auto
+except ImportError:
+    def _tel_block(file, reason): pass
+    def _tel_pass(file, topics, score): pass
+    def _tel_exempt(file, reason): pass
+    def _tel_auto(file): pass
+
 
 def _clean_rag_home() -> Path:
     """Resolve the clean-rag root directory."""
@@ -207,6 +223,7 @@ def main() -> int:
     if not file_path:
         # No file path = suspicious. Block, don't pass.
         print("proof-gate: edit with empty file_path blocked", file=sys.stderr)
+        _tel_block("(empty)", "empty_file_path")
         return 2
 
     canonical = _canonicalize(file_path)
@@ -214,17 +231,20 @@ def main() -> int:
     # 1. Exempt path segments (directory boundary check)
     for seg in EXEMPT_SEGMENTS:
         if _path_has_segment(canonical, seg):
+            _tel_exempt(file_path, f"segment:{seg}")
             return 0
 
     # 2. Exempt extensions (docs only, no structured data formats)
     for ext in EXEMPT_EXTENSIONS:
         if canonical.endswith(ext):
+            _tel_exempt(file_path, f"extension:{ext}")
             return 0
 
     # 3. AUTO mode bypass (logged for audit trail)
     if _read_mode() == "AUTO":
         home = _clean_rag_home()
         _log_auto_bypass(home / "state", file_path)
+        _tel_auto(file_path)
         return 0
 
     # 4. Check for verified proof
@@ -283,6 +303,7 @@ def main() -> int:
 
             if valid:
                 _log_proof(state_dir, file_path, proof, edit_hash)
+                _tel_pass(file_path, proof.get("topics_cited", []), proof.get("min_score", 0))
                 # Clean up consumed file
                 try:
                     consumed_path.unlink()
@@ -291,10 +312,13 @@ def main() -> int:
                 return 0
             else:
                 # Proof was invalid. Log why and block.
+                reason_str = "; ".join(reasons)
                 print(
-                    f"proof-gate: proof rejected: {'; '.join(reasons)}",
+                    f"proof-gate: proof rejected: {reason_str}",
                     file=sys.stderr,
                 )
+                _tel_block(file_path, f"proof_rejected: {reason_str}")
+                _maybe_write_debug_fix(state_dir, file_path, f"proof_rejected: {reason_str}")
                 # Clean up consumed file
                 try:
                     consumed_path.unlink()
@@ -303,6 +327,7 @@ def main() -> int:
 
         except (json.JSONDecodeError, KeyError, OSError) as e:
             print(f"proof-gate: corrupt proof file: {e}", file=sys.stderr)
+            _tel_block(file_path, f"corrupt_proof: {e}")
             # Clean up corrupt consumed file
             try:
                 consumed_path.unlink()
@@ -310,6 +335,8 @@ def main() -> int:
                 pass
 
     # 5. No valid proof. Block.
+    _tel_block(file_path, "no_valid_proof")
+    _maybe_write_debug_fix(state_dir, file_path, "no_valid_proof")
     print(
         BLOCK_MESSAGE.format(
             file=file_path,
@@ -396,6 +423,86 @@ def _log_auto_bypass(state_dir: Path, file_path: str) -> None:
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
+
+
+def _maybe_write_debug_fix(state_dir: Path, file_path: str, reason: str) -> None:
+    """If debug mode is active, write a fix-required file.
+
+    When debug-mode.json exists, every proof-gate block also creates
+    debug-fix-required.json. The debug-gate hook reads this file and
+    blocks all non-clean-rag edits until the enforcement gap is fixed.
+    """
+    debug_mode = state_dir / "debug-mode.json"
+    if not debug_mode.exists():
+        return
+    fix_file = state_dir / "debug-fix-required.json"
+    fix_data = {
+        "ts": _utc_now_iso(),
+        "file_blocked": file_path,
+        "mistake_type": _classify_mistake(reason),
+        "reason": reason,
+        "fix_instruction": _fix_instruction_for(reason),
+    }
+    try:
+        fix_file.write_text(json.dumps(fix_data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _classify_mistake(reason: str) -> str:
+    """Categorize a proof-gate rejection into a mistake type."""
+    if "content_hash" in reason:
+        return "content_hash_mismatch"
+    if "min_score" in reason:
+        return "insufficient_research"
+    if "verdict" in reason:
+        return "protocol_violation"
+    if "timestamp" in reason or "expired" in reason:
+        return "stale_proof"
+    if "corrupt" in reason:
+        return "corrupt_proof"
+    return "missing_proof"
+
+
+def _fix_instruction_for(reason: str) -> str:
+    """Generate a specific fix instruction based on the mistake type."""
+    if "content_hash" in reason:
+        return (
+            "The content hash in the proof didn't match the actual edit. "
+            "This means the proof was written for different content than "
+            "what the tool is sending. Research how the tool serializes "
+            "content and update the hash computation to match."
+        )
+    if "min_score" in reason:
+        return (
+            "The RAG search didn't return strong enough results (score < 0.5). "
+            "The topic may not be indexed, or the query was too vague. "
+            "Run acquire-topic to index docs for this technology, then "
+            "re-search with a more specific query."
+        )
+    if "verdict" in reason:
+        return (
+            "The proof was written without VERIFIED verdict. "
+            "Search RAG, confirm results have score >= 0.5, then "
+            "write proof with verdict='VERIFIED'."
+        )
+    if "timestamp" in reason or "expired" in reason:
+        return (
+            "The proof expired (older than 120s) or had no timezone. "
+            "Write the proof immediately before retrying the edit. "
+            "Use timezone-aware timestamps (UTC with Z suffix)."
+        )
+    if "corrupt" in reason:
+        return (
+            "The proof file was corrupt (invalid JSON or missing fields). "
+            "Use write_pending_proof() from verifier/log.py which handles "
+            "formatting correctly."
+        )
+    return (
+        "No proof file was found for this edit. Search RAG first, "
+        "get results with score >= 0.5, write proof with "
+        "write_pending_proof(), then retry the edit."
+    )
 
 
 def _utc_now_iso() -> str:
