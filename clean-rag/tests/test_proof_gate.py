@@ -39,12 +39,18 @@ def _make_payload(tool_name, file_path, **extra_input):
 
 def _write_proof(state_dir, file_path, verdict="VERIFIED",
                  content_hash="", min_score=0.85, ts=None,
-                 verifier_response="Proof sufficient"):
+                 verifier_response="Proof sufficient",
+                 research_angles=None):
     """Write a keyed proof file the way the gate expects to find it."""
     canonical = proof_gate._canonicalize(file_path)
     proof_path = proof_gate._proof_file_for(Path(state_dir), canonical)
     if ts is None:
         ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if research_angles is None:
+        research_angles = [
+            {"angle": "technology", "query": "test query", "score": 0.85},
+            {"angle": "codebase", "query": "test codebase pattern", "score": 0.80},
+        ]
     proof = {
         "file": file_path,
         "file_canonical": canonical,
@@ -56,19 +62,34 @@ def _write_proof(state_dir, file_path, verdict="VERIFIED",
         "project_cited": False,
         "content_hash": content_hash,
         "min_score": min_score,
+        "research_angles": research_angles,
     }
     Path(state_dir).mkdir(parents=True, exist_ok=True)
     proof_path.write_text(json.dumps(proof), encoding="utf-8")
     return proof_path
 
 
-def _run_gate(payload, env_overrides=None):
-    """Run main() with the given payload on stdin."""
+def _run_gate(payload, env_overrides=None, bypass_location_exemptions=True):
+    """Run main() with the given payload on stdin.
+
+    bypass_location_exemptions: If True (default), mocks _is_temp_path and
+    _is_outside_any_repo to return False so tests exercise the full proof
+    validation path. Set False to test those exemptions specifically.
+    """
+    from contextlib import ExitStack
+
     env = {"CLEAN_RAG_HOME": "", "CLAUDEBOOST_HOME": ""}
     if env_overrides:
         env.update(env_overrides)
-    with patch.dict(os.environ, env, clear=False), \
-         patch("sys.stdin", StringIO(json.dumps(payload))):
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, env, clear=False))
+        stack.enter_context(patch("sys.stdin", StringIO(json.dumps(payload))))
+        if bypass_location_exemptions:
+            stack.enter_context(
+                patch.object(proof_gate, "_is_temp_path", return_value=False))
+            stack.enter_context(
+                patch.object(proof_gate, "_is_outside_any_repo", return_value=False))
         return proof_gate.main()
 
 
@@ -421,7 +442,9 @@ class TestAutoModeLogging:
             "CLEAN_RAG_HOME": str(tmp_path),
             "CLAUDEBOOST_HOME": "",
         }), patch("sys.stdin", StringIO(json.dumps(payload))), \
-             patch.object(proof_gate, "_read_mode", return_value="AUTO"):
+             patch.object(proof_gate, "_read_mode", return_value="AUTO"), \
+             patch.object(proof_gate, "_is_temp_path", return_value=False), \
+             patch.object(proof_gate, "_is_outside_any_repo", return_value=False):
             result = proof_gate.main()
 
         assert result == 0

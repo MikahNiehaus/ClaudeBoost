@@ -29,7 +29,7 @@ Everything Claude says or does must be grounded in indexed research. RAG is not 
 
 1. **Check the topic tree**: Look at indexed topics to find relevant databases.
 2. **Search RAG**: `POST http://127.0.0.1:8613/search` with your specific question.
-3. **If nothing found**: Auto-acquire the topic, then search again.
+3. **If nothing found**: Do direct research (see Fast Path below), then write proof.
 4. **Base your response on RAG results**, not training data. Cite which topic and score backed each claim.
 
 For edits, the proof-gate hook mechanically blocks until you've done this. For responses, the rag-enforce hook reminds you every turn.
@@ -38,9 +38,14 @@ For edits, the proof-gate hook mechanically blocks until you've done this. For r
 
 Before searching all topics, check the topic tree (injected by rag-enforce.py every turn) to find the right database. Search the specific topic first (`topic:<name>`), then fall back to `all_topics` only if the specific topic misses.
 
-When a topic is missing entirely:
-- **You need the answer now**: Research the specific question directly (read the doc, fetch the URL) and use that as your proof. This keeps you unblocked.
-- **Broader coverage needed**: Spawn a parallel research agent to acquire and index the full topic. Do NOT spawn a second agent for a topic already being researched. Do NOT wait for the agent to finish. The agent only acquires and indexes. It does not read or summarize the research (saves tokens). The indexed docs are available for all future queries.
+When a topic is missing or the existing results don't answer your specific question, use the **Fast Path** (seconds, not minutes):
+
+1. **Research the specific question directly** (Grep codebase, read a doc file, WebSearch). This gets you the answer NOW.
+2. **Save what you found** to `clean-rag/knowledge/<category>/<topic>/` (even one file is enough).
+3. **Quick-index**: `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}` (indexes a few files in under 2 seconds).
+4. **Search the new topic** (will return high scores now). Write proof and continue.
+
+**Background enrichment** (parallel, non-blocking): Spawn an Agent to run `POST http://127.0.0.1:8613/acquire-topic {"topic": "<slug>"}` for full topic coverage. Do NOT wait for it. Do NOT spawn a second agent for a topic already being researched. The agent fills the database for future queries while you continue working now.
 
 ## Search API
 
@@ -52,7 +57,8 @@ Content-Type: application/json
     "query": "FastAPI dependency injection with Depends()",
     "sources": ["topic:fastapi", "all_topics", "project:/path/to/project"],
     "limit": 5,
-    "min_score": 0.5
+    "min_score": 0.5,
+    "mode": "vector"
 }
 ```
 
@@ -61,7 +67,12 @@ Source specifiers:
 - `all_topics` searches every topic database and ranks by cosine similarity
 - `project:<path>` searches the project's codebase index
 
-Results include `score`, `file`, `tree_path`, `section`, and `content`. Higher score = better match.
+Mode (applies to project sources only, topics always use vector):
+- `vector` (default) searches by embedding similarity
+- `graph` finds structural neighbors (imports, callers, inheritance) of vector-matched seed files
+- `both` runs vector and graph, deduplicates, returns merged results sorted by score
+
+Results include `score`, `file`, `tree_path`, `section`, and `content`. Higher score = better match. Graph results also include `relation` (edge type) and `seed_file` (the vector match that led to this neighbor).
 
 ## Writing Proof
 
@@ -80,6 +91,10 @@ write_pending_proof(
     project_cited=True,
     content_hash="<sha256 of edit content>",
     min_score=0.87,
+    research_angles=[
+        {"angle": "technology", "query": "FastAPI dependency injection Depends()", "score": 0.87},
+        {"angle": "codebase", "query": "existing DI patterns in project", "score": 0.72},
+    ],
 )
 ```
 
@@ -90,32 +105,56 @@ The proof file is keyed per target file (uses a hash of the canonical path), so 
 - `ts` must be timezone-aware ISO format (Z suffix or +00:00) and within 120 seconds
 - `content_hash` must match the SHA-256 of the actual edit being applied
 - `min_score` must be >= 0.5 (best RAG result score from the search)
+- `research_angles` must have >= 2 entries (multiple search perspectives required)
+
+### Research Angles
+
+Every proof must include at least 2 research angles. Each angle is a search from a different perspective:
+
+| Angle | What to search |
+|-------|---------------|
+| `technology` | How does this tech work? Search the topic docs |
+| `codebase` | What patterns exist in this project already? |
+| `pitfalls` | What commonly goes wrong with this approach? |
+| `security` | Any security implications? (when applicable) |
+| `best_practices` | What is the recommended pattern? |
+
+Each angle entry is `{"angle": "<name>", "query": "<what you searched>", "score": <best_score>}`. The gate rejects proofs with fewer than 2 angles.
 
 ## Auto-Research (builds knowledge permanently)
 
-When your search in step 1 returns no results or scores below 0.5, you must acquire docs before retrying. This is not a one-time cost. Every topic you research gets permanently indexed and reused across all future sessions.
+When your search returns no results, scores below 0.5, or results that don't cover your specific question, use the Fast Path first, then enrich in the background.
 
-### Flow
+### Fast Path (use THIS, not acquire-topic)
 
-1. Call `POST http://127.0.0.1:8613/acquire-topic {"topic": "<technology-slug>"}`
-   This runs the 4-layer waterfall:
-   - Layer 1: GitHub sparse checkout (if source_map has the repo)
-   - Layer 2: llms.txt / llms-full.txt check (if doc_root known)
-   - Layer 3: BFS crawl of documentation site
-   - Layer 4: (you handle this) WebSearch fallback
+1. **Research the specific question directly**: Grep the codebase, read a doc file, or WebSearch. Just enough to answer what you need. This takes seconds.
+2. **Save what you found** to `clean-rag/knowledge/<category>/<topic>/` (even one file works).
+3. **Quick-index**: `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}` (under 2 seconds for a few files).
+4. **Search the new topic** (will return high scores). Write proof and continue.
 
-2. Check the response:
-   - `covered: true` means layers 1-3 got enough docs. The topic is indexed. Go back to search.
-   - `needs_websearch: true` means layers 1-3 found fewer than 5 files. Use WebSearch to find authoritative docs (official docs, GitHub repos, MDN, OWASP). Save them to `clean-rag/knowledge/<category>/<topic>/` then index:
-     `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}`
+### Background Enrichment (parallel, non-blocking)
 
-3. Re-search with the newly indexed topic
-4. Write proof and retry the edit
-5. Loop until proof passes the mechanical checks
+After using the Fast Path, spawn a background Agent to acquire full topic coverage for future queries:
+
+```
+Agent(model="haiku", run_in_background=true, prompt="
+  POST http://127.0.0.1:8613/acquire-topic {\"topic\": \"<slug>\"}
+  This runs the 4-layer waterfall: GitHub sparse checkout, llms.txt,
+  BFS doc crawl. Report what was indexed when done.
+")
+```
+
+Do NOT wait for this agent. Do NOT spawn a second agent for a topic already being researched. The main agent continues working immediately.
+
+The 4-layer waterfall (run by acquire-topic):
+- Layer 1: GitHub sparse checkout (if source_map has the repo)
+- Layer 2: llms.txt / llms-full.txt check (if doc_root known)
+- Layer 3: BFS crawl of documentation site
+- Layer 4: (you handle this) WebSearch fallback
 
 ### Why this saves tokens
 
-First edit touching FastAPI? Research costs ~30 seconds. Every subsequent FastAPI edit hits the local vector index in milliseconds. No re-research, no re-downloading, no re-reading docs. The proof comes from local search, not from Claude reasoning from training data.
+First edit touching FastAPI? Fast Path costs ~5 seconds. Background agent enriches the full topic for future queries. Every subsequent FastAPI edit hits the local vector index in milliseconds. No re-research, no re-downloading. Proof comes from local search, not training data.
 
 ### Categorization Rules
 
@@ -147,13 +186,15 @@ If a technology doesn't fit any category, create a new category with a clear nam
 The proof gate does NOT apply to:
 - Files under directories named: workspace/, knowledge/, plans/, docs/, state/, .claudeboost/, .claude/ (checked at directory boundaries, not substrings)
 - Files with extensions: .md, .mdx, .rst, .txt, .gitignore, .env.example, .csv, .svg
+- Files in the system temp directory ($TEMP, %TMP%, /tmp) including subdirectories
+- Files outside any git repository (not project code, just scratch/output files)
 - When ClaudeBoost AUTO mode is active (logged to proof-log.jsonl for audit trail)
 
 **Deliberately NOT exempt:**
 - `.json`, `.yaml`, `.yml`, `.toml`, `.xml` files require proof (prevents proof file fabrication)
 - Files under `clean-rag/` require proof (the enforcement system does not exempt itself)
 
-Only documentation files and internal workspace artifacts skip the gate.
+Only project source code under version control requires proof. Documentation, temp files, scratch output, and workspace artifacts skip the gate.
 
 ## Database Organization
 
@@ -223,3 +264,31 @@ python clean-rag/cli/topic.py acquire <name>            # Auto-research + index
 python clean-rag/cli/index.py /path/to/project          # Index project code
 python clean-rag/cli/index.py /path/to/project --force   # Full reindex
 ```
+
+Or via the server API:
+```
+POST http://127.0.0.1:8613/index-project
+{"project_path": "/path/to/project"}
+```
+
+### Auto-Index Detection
+
+When the proof gate blocks an edit, it detects the project root (by walking up to find `.git`) and checks whether the project is indexed. The block message includes one of three guidance sections:
+
+- **NOT INDEXED**: tells you to either index the project first (`POST /index-project`) or use Grep as a fallback for the codebase research angle
+- **INDEXED**: reminds you to include `project:<path>` in your search sources
+- **UNKNOWN**: could not detect the project root; use Grep as the codebase angle
+
+This means Claude always knows whether codebase search is available and what to do about it.
+
+## Auto-Reindex After Edits
+
+A PostToolUse hook (`reindex-after-edit.py`) fires after every successful Edit, Write, or MultiEdit. It sends the changed file to the server for incremental reindexing via `POST /reindex-file`. This keeps the project index fresh without full rescans.
+
+The hook runs in a background thread so it never blocks the editing flow. If the server is down or the file isn't in an indexed project, it silently does nothing.
+
+Files that are skipped:
+- Files inside the clean-rag directory (internal, not project code)
+- Documentation extensions (.md, .mdx, .rst, .txt, .gitignore, .env.example)
+
+The single file reindex only re-embeds the changed file (checks content hash against the manifest to skip unchanged files), making it fast enough to run after every edit.

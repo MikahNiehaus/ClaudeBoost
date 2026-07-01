@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""clean-rag installer. Registers the proof gate hook and optionally seeds topics.
+"""clean-rag installer. Registers hooks and optionally seeds topics.
 
 Usage:
   python clean-rag/install.py                    # full install with pre-seeding
@@ -18,8 +18,11 @@ CLEAN_RAG_HOME = Path(__file__).resolve().parent
 CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
-# Hook sentinel: proof-gate.py in the command string
-HOOK_SENTINEL = "proof-gate.py"
+# Hook sentinels: unique strings in hook commands for idempotent registration
+PROOF_GATE_SENTINEL = "proof-gate.py"
+RAG_ENFORCE_SENTINEL = "rag-enforce.py"
+REINDEX_SENTINEL = "reindex-after-edit.py"
+SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 
 
 def _say(msg: str) -> None:
@@ -83,47 +86,77 @@ def install_deps() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Register proof gate hook in settings.json
+# Hook registration helpers
 # ---------------------------------------------------------------------------
-def register_hook() -> None:
-    settings = read_json(SETTINGS_PATH)
+def _register_hook(
+    settings: dict,
+    hook_type: str,
+    sentinel: str,
+    hook_entry: dict,
+    prepend: bool = False,
+    label: str = "",
+) -> None:
+    """Register a hook in settings.json, idempotently.
+
+    If a hook with the sentinel already exists, refresh its command.
+    Otherwise, append (or prepend) the new entry.
+    """
     hooks = settings.setdefault("hooks", {})
+    hook_list = hooks.get(hook_type, [])
+    if not isinstance(hook_list, list):
+        hook_list = []
 
-    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/proof-gate.py"'
-
-    hook_entry = {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-            {
-                "type": "command",
-                "command": hook_command,
-            }
-        ],
-    }
+    new_cmd = ""
+    for h in hook_entry.get("hooks", []):
+        if "command" in h:
+            new_cmd = h["command"]
+            break
 
     # Check if already registered
-    pre_tool_hooks = hooks.get("PreToolUse", [])
-    if not isinstance(pre_tool_hooks, list):
-        pre_tool_hooks = []
-
-    for existing in pre_tool_hooks:
+    for existing in hook_list:
         for h in existing.get("hooks", []):
             cmd = h.get("command", "")
-            if HOOK_SENTINEL in cmd:
-                # Already installed. Refresh the command path.
-                if cmd != hook_command:
-                    h["command"] = hook_command
-                    _ok("proof-gate hook path refreshed")
+            prompt = h.get("prompt", "")
+            if sentinel in cmd or sentinel in prompt:
+                # Refresh
+                if new_cmd and cmd != new_cmd:
+                    h["command"] = new_cmd
+                    _ok(f"{label} hook path refreshed")
+                elif "prompt" in h and sentinel in prompt:
+                    # Refresh prompt text
+                    for new_h in hook_entry.get("hooks", []):
+                        if "prompt" in new_h:
+                            h["prompt"] = new_h["prompt"]
+                    _ok(f"{label} prompt refreshed")
                 else:
-                    _ok("proof-gate hook already registered")
+                    _ok(f"{label} already registered")
+                hooks[hook_type] = hook_list
                 write_json(SETTINGS_PATH, settings)
                 return
 
-    # Prepend (proof gate should fire before ClaudeBoost hooks)
-    pre_tool_hooks.insert(0, hook_entry)
-    hooks["PreToolUse"] = pre_tool_hooks
+    if prepend:
+        hook_list.insert(0, hook_entry)
+    else:
+        hook_list.append(hook_entry)
+    hooks[hook_type] = hook_list
     write_json(SETTINGS_PATH, settings)
-    _ok("proof-gate hook registered (PreToolUse)")
+    _ok(f"{label} registered ({hook_type})")
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Register proof gate hook (PreToolUse)
+# ---------------------------------------------------------------------------
+def register_proof_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/proof-gate.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", PROOF_GATE_SENTINEL,
+        hook_entry, prepend=True, label="proof-gate",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -138,58 +171,38 @@ def set_env_var() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Add SessionStart prompt with enforcement rules
+# Step 5: Register SessionStart prompt with enforcement rules
 # ---------------------------------------------------------------------------
 def register_session_prompt() -> None:
     settings = read_json(SETTINGS_PATH)
-    hooks = settings.setdefault("hooks", {})
-
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
     prompt_text = (
         "CLEAN-RAG ENFORCEMENT: Everything you say or do must be grounded "
         "in indexed research. Before responding, editing, or deciding:\n"
         "1. Check the topic tree (injected every turn by rag-enforce.py)\n"
         "2. Search via POST http://127.0.0.1:{port}/search with your question\n"
-        "3. If no topic exists or scores < 0.5: acquire-topic to auto-research, "
-        "or research the specific question directly while a parallel agent "
-        "handles broader indexing\n"
+        "3. If no topic exists or results don't answer your question:\n"
+        "   a) DIRECT RESEARCH NOW: research the question yourself (Grep, read docs, WebSearch)\n"
+        "   b) PARALLEL AGENT: spawn background agent to acquire-topic for future quality\n"
         "4. For edits: write proof with write_pending_proof() including "
-        "content_hash (SHA-256) and min_score (>= 0.5), then retry\n"
+        "content_hash (SHA-256), min_score (>= 0.5), and research_angles "
+        "(>= 2 different search perspectives), then retry\n"
         "5. The proof gate mechanically blocks edits without proof. "
         "The rag-enforce hook reminds you every turn to search RAG.\n"
+        "6. RESEARCH SUFFICIENCY: search from >= 2 angles before writing proof. "
+        "Angles: technology, codebase, pitfalls, security, best_practices. "
+        "Proofs with < 2 angles are rejected.\n"
         "Exempt: workspace/, knowledge/, .md, .txt files. "
         "NOT exempt: .json, .yaml, .toml, .xml, clean-rag/ files."
     ).format(port=port)
 
-    session_entry = {
-        "hooks": [
-            {
-                "type": "prompt",
-                "prompt": prompt_text,
-            }
-        ],
+    hook_entry = {
+        "hooks": [{"type": "prompt", "prompt": prompt_text}],
     }
-
-    # Check existing SessionStart hooks
-    session_hooks = hooks.get("SessionStart", [])
-    if not isinstance(session_hooks, list):
-        session_hooks = []
-
-    sentinel = "CLEAN-RAG ENFORCEMENT"
-    for existing in session_hooks:
-        for h in existing.get("hooks", []):
-            if sentinel in h.get("prompt", ""):
-                # Already registered. Refresh.
-                h["prompt"] = prompt_text
-                _ok("SessionStart prompt refreshed")
-                hooks["SessionStart"] = session_hooks
-                write_json(SETTINGS_PATH, settings)
-                return
-
-    session_hooks.append(session_entry)
-    hooks["SessionStart"] = session_hooks
-    write_json(SETTINGS_PATH, settings)
-    _ok("SessionStart prompt registered (clean-rag enforcement)")
+    _register_hook(
+        settings, "SessionStart", SESSION_SENTINEL,
+        hook_entry, label="SessionStart prompt",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -197,41 +210,30 @@ def register_session_prompt() -> None:
 # ---------------------------------------------------------------------------
 def register_rag_enforce_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hooks = settings.setdefault("hooks", {})
-
     hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/rag-enforce.py"'
-    sentinel = "rag-enforce.py"
-
     hook_entry = {
-        "hooks": [
-            {
-                "type": "command",
-                "command": hook_command,
-            }
-        ],
+        "hooks": [{"type": "command", "command": hook_command}],
     }
+    _register_hook(
+        settings, "UserPromptSubmit", RAG_ENFORCE_SENTINEL,
+        hook_entry, label="rag-enforce",
+    )
 
-    # Check if already registered
-    prompt_hooks = hooks.get("UserPromptSubmit", [])
-    if not isinstance(prompt_hooks, list):
-        prompt_hooks = []
 
-    for existing in prompt_hooks:
-        for h in existing.get("hooks", []):
-            cmd = h.get("command", "")
-            if sentinel in cmd:
-                if cmd != hook_command:
-                    h["command"] = hook_command
-                    _ok("rag-enforce hook path refreshed")
-                else:
-                    _ok("rag-enforce hook already registered")
-                write_json(SETTINGS_PATH, settings)
-                return
-
-    prompt_hooks.append(hook_entry)
-    hooks["UserPromptSubmit"] = prompt_hooks
-    write_json(SETTINGS_PATH, settings)
-    _ok("rag-enforce hook registered (UserPromptSubmit)")
+# ---------------------------------------------------------------------------
+# Step 5c: Register reindex PostToolUse hook
+# ---------------------------------------------------------------------------
+def register_reindex_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/reindex-after-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", REINDEX_SENTINEL,
+        hook_entry, label="reindex-after-edit",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +337,15 @@ def seed_topics(topic_filter: list[str] | None = None) -> None:
                 _say(f"    {topic}: indexing {file_count} files...")
                 result = index_topic(topic, embedder=seed_topics._embedder, category=category)
                 chunks = result.get("chunks_created", 0)
+                ram = result.get("ram_mb", 0)
                 indexed += 1
-                _ok(f"    {topic}: indexed ({chunks} chunks)")
+                _ok(f"    {topic}: indexed ({chunks} chunks, RAM={ram} MB)")
             except Exception as e:
                 _warn(f"    {topic}: indexing failed: {e}")
+
+            # GC between topics to prevent RAM accumulation
+            import gc
+            gc.collect()
 
     _say(f"\n  Seeding complete: {seeded} cloned, {indexed} indexed, {failed} failed out of {total}")
 
@@ -374,7 +381,7 @@ def main():
 
     # Step 3
     print("\nStep 3: Registering proof gate hook...")
-    register_hook()
+    register_proof_gate_hook()
 
     # Step 4
     print("\nStep 4: Setting environment variables...")
@@ -387,6 +394,10 @@ def main():
     # Step 5b
     print("\nStep 5b: Registering rag-enforce hook...")
     register_rag_enforce_hook()
+
+    # Step 5c
+    print("\nStep 5c: Registering reindex hook...")
+    register_reindex_hook()
 
     # Step 6
     if not args.no_seed:
@@ -401,7 +412,11 @@ def main():
     print("clean-rag installed successfully!")
     print()
     print(f"  Home:    {CLEAN_RAG_HOME}")
-    print(f"  Hook:    proof-gate.py (PreToolUse on Edit|Write|MultiEdit)")
+    print(f"  Hooks:")
+    print(f"    PreToolUse:        proof-gate.py (blocks edits without proof)")
+    print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
+    print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
+    print(f"    SessionStart:      enforcement rules prompt")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
     print()
     print("Start the server, then every code edit will require verified proof.")

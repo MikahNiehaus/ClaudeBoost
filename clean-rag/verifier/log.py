@@ -40,6 +40,7 @@ def write_pending_proof(
     project_cited: bool = False,
     content_hash: str = "",
     min_score: float = 0.0,
+    research_angles: list[dict] | None = None,
 ) -> Path:
     """Write a keyed proof file for the proof gate to read.
 
@@ -67,6 +68,7 @@ def write_pending_proof(
         "project_cited": project_cited,
         "content_hash": content_hash,
         "min_score": min_score,
+        "research_angles": research_angles or [],
     }
 
     fd, tmp_path = tempfile.mkstemp(dir=str(state), suffix=".tmp")

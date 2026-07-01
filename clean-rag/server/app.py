@@ -26,7 +26,7 @@ from .config import (
     EMBEDDING_MODEL,
 )
 from .embedding import SentenceTransformerEmbedding
-from .indexing import index_project, index_topic
+from .indexing import acquire_index_lock, index_project, index_topic, reindex_file, release_index_lock
 from .search import search
 
 # acquire_topic is imported lazily to avoid pulling in research deps at startup
@@ -40,6 +40,16 @@ _start_time: float = 0.0
 
 
 _TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _get_ram_mb() -> float:
+    """Get current process RAM usage in MB."""
+    try:
+        import psutil
+        import os
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024**2, 1)
+    except (ImportError, Exception):
+        return 0.0
 
 
 def _validate_topic_name(name: str) -> str | None:
@@ -86,11 +96,23 @@ async def handle_status(request: web.Request) -> web.Response:
             "entries": projects,
         },
         "clean_rag_home": str(CLEAN_RAG_HOME),
+        "ram_mb": _get_ram_mb(),
     })
 
 
 async def handle_search(request: web.Request) -> web.Response:
-    """POST /search: search across topics and/or projects."""
+    """POST /search: search across topics and/or projects.
+
+    Body fields:
+        query (str): search query text (required)
+        sources (list[str]): source specifiers (default: ["all_topics"])
+        limit (int): max results (default: 5)
+        min_score (float): minimum similarity score (default: 0.3)
+        mode (str): "vector" (default), "graph", or "both"
+            Graph mode finds structural neighbors (imports, callers,
+            inheritance) of vector-matched files. Only applies to
+            project sources; topic sources always use vector.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -103,6 +125,10 @@ async def handle_search(request: web.Request) -> web.Response:
     sources = body.get("sources", ["all_topics"])
     limit = body.get("limit", DEFAULT_SEARCH_LIMIT)
     min_score = body.get("min_score", DEFAULT_MIN_SCORE)
+    mode = body.get("mode", "vector")
+
+    if mode not in ("vector", "graph", "both"):
+        return _json_response({"error": "mode must be 'vector', 'graph', or 'both'"}, 400)
 
     if not _embedder or not _code_embedder:
         return _json_response({"error": "Server not initialized"}, 503)
@@ -133,6 +159,7 @@ async def handle_search(request: web.Request) -> web.Response:
             code_embedder=_code_embedder,
             limit=limit,
             min_score=min_score,
+            mode=mode,
         ),
     )
 
@@ -201,6 +228,46 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     result = await loop.run_in_executor(
         None, partial(index_project, project_path, _code_embedder, force=force)
+    )
+
+    status = 200 if "error" not in result else 400
+    return _json_response(result, status)
+
+
+async def handle_reindex_file(request: web.Request) -> web.Response:
+    """POST /reindex-file: reindex a single changed file within a project.
+
+    Much faster than POST /index-project since it only re-embeds one file.
+    Used by the PostToolUse reindex hook to keep the index fresh after edits.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    file_path = body.get("file_path", "").strip()
+
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+    if not file_path:
+        return _json_response({"error": "Missing 'file_path' field"}, 400)
+
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    if not _code_embedder:
+        return _json_response({"error": "Server not initialized"}, 503)
+
+    loop = asyncio.get_running_loop()
+    if not _code_embedder.is_loaded:
+        try:
+            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
+        except Exception as e:
+            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+
+    result = await loop.run_in_executor(
+        None, partial(reindex_file, project_path, file_path, _code_embedder)
     )
 
     status = 200 if "error" not in result else 400
@@ -341,6 +408,77 @@ def _list_projects() -> dict:
         return {}
 
 
+async def handle_batch_index(request: web.Request) -> web.Response:
+    """POST /batch-index: index multiple topics sequentially with memory management.
+
+    Body fields:
+        topics (list[str]): topic names to index (required)
+        force (bool): force reindex (default: false)
+        category (str|null): optional category for all topics
+
+    Uses process lock to prevent concurrent bulk indexing (the 8 GB RAM issue).
+    Runs GC between each topic to keep memory bounded.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    topics = body.get("topics", [])
+    if not topics:
+        return _json_response({"error": "Missing 'topics' list"}, 400)
+
+    force = body.get("force", False)
+    category = body.get("category", None)
+
+    if not _embedder:
+        return _json_response({"error": "Server not initialized"}, 503)
+
+    # Acquire process lock
+    if not acquire_index_lock("batch-index"):
+        return _json_response({
+            "error": "Another indexing operation is already running. Wait or kill the other process.",
+        }, 409)
+
+    loop = asyncio.get_running_loop()
+
+    # Warm up embedder
+    if not _embedder.is_loaded:
+        try:
+            await loop.run_in_executor(None, _embedder.embed_query, "warmup")
+        except Exception as e:
+            release_index_lock()
+            return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
+
+    results = []
+    try:
+        for topic in topics:
+            err = _validate_topic_name(topic)
+            if err:
+                results.append({"topic": topic, "error": err})
+                continue
+
+            try:
+                result = await loop.run_in_executor(
+                    None, partial(index_topic, topic, _embedder, force=force, category=category)
+                )
+                results.append(result)
+            except Exception as e:
+                results.append({"topic": topic, "error": str(e)})
+    finally:
+        release_index_lock()
+
+    succeeded = sum(1 for r in results if "error" not in r)
+    failed = sum(1 for r in results if "error" in r)
+    total_chunks = sum(r.get("chunks_created", 0) for r in results)
+    return _json_response({
+        "topics_indexed": succeeded,
+        "topics_failed": failed,
+        "total_chunks": total_chunks,
+        "results": results,
+    })
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -370,10 +508,12 @@ def create_app() -> web.Application:
     app.router.add_post("/search", handle_search)
     app.router.add_post("/index-topic", handle_index_topic)
     app.router.add_post("/index-project", handle_index_project)
+    app.router.add_post("/reindex-file", handle_reindex_file)
     app.router.add_get("/topics", handle_topics)
     app.router.add_delete("/topics/{name}", handle_delete_topic)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/acquire-topic", handle_acquire_topic)
+    app.router.add_post("/batch-index", handle_batch_index)
     app.on_shutdown.append(_on_shutdown)
 
     logger.info("clean-rag server configured (port %d)", STANDALONE_PORT)

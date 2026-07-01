@@ -13,7 +13,9 @@ Exit codes:
 import hashlib
 import json
 import os
+import socket
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -83,6 +85,77 @@ def _path_has_segment(canonical_path: str, segment: str) -> bool:
     return seg in parts
 
 
+def _is_temp_path(canonical_path: str) -> bool:
+    """Check if a file is in a system temp directory.
+
+    Covers Windows %TEMP%, %TMP%, Unix /tmp, /var/tmp, and Python's
+    tempfile.gettempdir(). Files in temp dirs are transient scratch
+    space and should never require research proof.
+    """
+    temp_dirs = set()
+
+    # Python's canonical temp dir (covers most cases)
+    try:
+        temp_dirs.add(Path(tempfile.gettempdir()).resolve().as_posix().lower())
+    except Exception:
+        pass
+
+    # Environment variables (Windows: TEMP, TMP; Unix: TMPDIR)
+    for var in ("TEMP", "TMP", "TMPDIR"):
+        val = os.environ.get(var)
+        if val:
+            try:
+                temp_dirs.add(Path(val).resolve().as_posix().lower())
+            except Exception:
+                pass
+
+    # Common Unix temp paths
+    for d in ("/tmp", "/var/tmp"):
+        try:
+            p = Path(d)
+            if p.exists():
+                temp_dirs.add(p.resolve().as_posix().lower())
+        except Exception:
+            pass
+
+    for td in temp_dirs:
+        if canonical_path.startswith(td + "/") or canonical_path == td:
+            return True
+    return False
+
+
+def _is_outside_any_repo(file_path: str) -> bool:
+    """Check if a file is outside any git repository.
+
+    Files not under version control are scratch/output files. They
+    don't benefit from research enforcement and blocking them just
+    creates friction.
+    """
+    try:
+        current = Path(file_path).resolve().parent
+    except (OSError, ValueError):
+        return False
+
+    for _ in range(15):
+        if (current / ".git").exists():
+            return False
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return True
+
+
+def _server_reachable(port: str) -> bool:
+    """Quick TCP check to see if the clean-rag server is listening."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
 def _file_content_hash(tool_input: dict) -> str:
     """Compute a SHA-256 hash of the proposed edit content.
 
@@ -118,6 +191,81 @@ def _proof_file_for(state_dir: Path, canonical_path: str) -> Path:
     return state_dir / f"pending-proof-{path_hash}.json"
 
 
+def _detect_project_root(file_path: str) -> str | None:
+    """Walk up from a file path to find the project root.
+
+    First pass: look for .git (strongest signal, always at repo root).
+    Second pass (only if no .git found): look for package.json, pyproject.toml,
+    etc. Returns the absolute path string or None.
+    """
+    try:
+        start = Path(file_path).resolve().parent
+    except (OSError, ValueError):
+        return None
+
+    # Pass 1: .git is the definitive project root marker
+    current = start
+    for _ in range(10):
+        if (current / ".git").exists():
+            return str(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    # Pass 2: fallback markers (for non-git projects)
+    fallback_markers = [
+        "package.json", "pyproject.toml", "Cargo.toml",
+        "go.mod", "pom.xml", "build.gradle",
+    ]
+    glob_exts = [".sln", ".csproj"]
+
+    current = start
+    for _ in range(10):
+        for marker in fallback_markers:
+            if (current / marker).exists():
+                return str(current)
+        for ext in glob_exts:
+            if any(current.glob(f"*{ext}")):
+                return str(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return None
+
+
+def _check_project_indexed(project_root: str) -> dict | None:
+    """Check if a project is in the clean-rag project registry.
+
+    Returns the project entry dict if indexed, None otherwise.
+    """
+    home = _clean_rag_home()
+    reg_path = home / "state" / "projects.json"
+    if not reg_path.exists():
+        return None
+    try:
+        registry = json.loads(reg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    # Check each registered project to see if it matches
+    proj_resolved = Path(project_root).resolve()
+    for pid, info in registry.items():
+        reg_path_str = info.get("project_path", "")
+        if not reg_path_str:
+            continue
+        try:
+            reg_resolved = Path(reg_path_str).resolve()
+            if reg_resolved == proj_resolved:
+                return info
+        except (OSError, ValueError):
+            continue
+
+    return None
+
+
 # Exempt path segments (checked at directory boundaries, not substrings)
 EXEMPT_SEGMENTS = [
     "workspace",
@@ -144,6 +292,9 @@ PROOF_WINDOW_S = 120
 # Minimum RAG score required for proof to be accepted
 MIN_PROOF_SCORE = 0.5
 
+# Minimum number of research angles required in proof
+MIN_RESEARCH_ANGLES = 2
+
 
 BLOCK_MESSAGE = """
 ===================================================================
@@ -158,52 +309,96 @@ Before editing, you must:
    {{"query": "<what you need to know>", "sources": ["all_topics", "project:<path>"]}}
 
    You need at least one result with score >= {min_score}.
-   If search returns NO results or all scores are below {min_score}:
-   go to step 1b to auto-research the topic first.
 
-1b. AUTO-RESEARCH (only when step 1 found nothing usable):
-   POST http://127.0.0.1:{port}/acquire-topic
-   {{"topic": "<technology-slug>"}}
+2. IF SEARCH RETURNED NOTHING (or scores below {min_score}):
+   Do DIRECT research NOW. This is the fast path (seconds, not minutes):
 
-   This runs the 4-layer waterfall automatically: GitHub sparse checkout,
-   llms.txt check, BFS doc crawl, then indexes the results into a new
-   topic database. After it completes, re-run step 1.
+   a) Grep the codebase for existing patterns (counts as "codebase" angle)
+   b) Read a specific doc file or use WebSearch for the technology question
+   c) Save what you found to clean-rag/knowledge/<category>/<topic>/
+      (even one file is enough)
+   d) Quick-index: POST http://127.0.0.1:{port}/index-topic
+      {{"topic": "<name>", "category": "<category>"}}
+      (indexes a few files in under 2 seconds)
+   e) Re-search the newly indexed topic (will get high score now)
 
-   If acquire-topic returns needs_websearch:true, use WebSearch to find
-   authoritative docs, save them to clean-rag/knowledge/<category>/<topic>/,
-   then index:
-   POST http://127.0.0.1:{port}/index-topic {{"topic": "<name>", "category": "<category>"}}
+   ALSO: spawn a background Agent to run acquire-topic for full coverage.
+   Do NOT wait for it. The background agent fills the database for future
+   queries while you continue working now.
 
-2. WRITE proof to a keyed proof file using write_pending_proof():
+3. WRITE proof using write_pending_proof():
    from clean_rag.verifier.log import write_pending_proof
 
    write_pending_proof(
        state_dir="clean-rag/state",
        file_path="<path to file being edited>",
        verdict="VERIFIED",
-       verifier_response="<summary of RAG results that justify the edit>",
-       rag_results_count=<number of RAG results used>,
-       topics_cited=["<topic1>", "<topic2>"],
-       project_cited=<True if project codebase was searched>,
+       verifier_response="<summary of research that justifies the edit>",
+       rag_results_count=<number of results>,
+       topics_cited=["<topic1>"],
+       project_cited=<True if codebase was searched>,
        content_hash="<SHA-256 of the edit content>",
-       min_score=<best RAG result score, must be >= {min_score}>,
+       min_score=<best score, must be >= {min_score}>,
+       research_angles=[
+           {{"angle": "technology", "query": "<what you searched>", "score": <score>}},
+           {{"angle": "codebase", "query": "<how you searched project>", "score": <score>}},
+       ],
    )
 
-   content_hash: compute SHA-256 of the edit content (old_string + new_string
-   for Edit, content for Write, edits array for MultiEdit).
-   min_score: the highest score from your RAG search results.
-
-3. RETRY the edit. The gate will pass if:
+4. RETRY the edit. The gate passes if:
    - verdict == VERIFIED
-   - content_hash matches the proposed edit (prevents proof reuse)
+   - content_hash matches the proposed edit
    - min_score >= {min_score}
+   - research_angles has >= 2 entries
    - timestamp is within {window}s and timezone-aware
 
-The research you acquire is permanently saved. Next time you edit code
-using the same technology, the search in step 1 will find it instantly.
-No re-research, no re-downloading. Proof comes from local search.
+{index_guidance}
 ===================================================================
 """
+
+BLOCK_MESSAGE_SERVER_DOWN = """
+===================================================================
+CLEAN-RAG: Edit blocked. No verified proof for this file.
+
+  File: {file}
+  Server: NOT RUNNING (port {port} unreachable)
+
+The clean-rag server must be running to search for proof. Start it:
+  python clean-rag/cli/server_ctl.py start
+
+Or start it from the project root:
+  python -m clean_rag.server
+
+After the server starts, search for research, write proof, then retry.
+===================================================================
+"""
+
+# Appended to BLOCK_MESSAGE when the project is NOT indexed
+INDEX_GUIDANCE_NOT_INDEXED = """PROJECT INDEX STATUS: NOT INDEXED
+  Project root detected: {project_root}
+  This project's code is not in the clean-rag index. You have two options:
+
+  Option A (recommended): Index the project first, then use it as a codebase angle:
+    POST http://127.0.0.1:{port}/index-project
+    {{"project_path": "{project_root}"}}
+    Then search with: "sources": ["all_topics", "project:{project_root}"]
+
+  Option B (immediate fallback): Use Grep as the codebase research angle.
+    Search the project with Grep for existing patterns, then cite the
+    grep results as your "codebase" angle in the proof. This works now
+    but won't build a reusable index for future edits."""
+
+# Appended when the project IS indexed
+INDEX_GUIDANCE_INDEXED = """PROJECT INDEX STATUS: INDEXED
+  Project root: {project_root}
+  Include "project:{project_root}" in your search sources for the codebase angle.
+  Example: "sources": ["topic:fastapi", "project:{project_root}"]"""
+
+# Appended when we can't detect the project root
+INDEX_GUIDANCE_UNKNOWN = """PROJECT INDEX STATUS: UNKNOWN
+  Could not detect the project root for this file.
+  For the codebase research angle, use Grep to search the project
+  directory for existing patterns, then cite grep results in the proof."""
 
 
 def main() -> int:
@@ -239,6 +434,16 @@ def main() -> int:
         if canonical.endswith(ext):
             _tel_exempt(file_path, f"extension:{ext}")
             return 0
+
+    # 2b. Exempt temp directories (scratch files, handoff docs, etc.)
+    if _is_temp_path(canonical):
+        _tel_exempt(file_path, "temp_directory")
+        return 0
+
+    # 2c. Exempt files outside any git repository (not project code)
+    if _is_outside_any_repo(file_path):
+        _tel_exempt(file_path, "outside_git_repo")
+        return 0
 
     # 3. AUTO mode bypass (logged for audit trail)
     if _read_mode() == "AUTO":
@@ -301,6 +506,14 @@ def main() -> int:
                 valid = False
                 reasons.append(f"min_score {proof_score} < {MIN_PROOF_SCORE}")
 
+            # Check research angles (multiple perspectives required)
+            angles = proof.get("research_angles", [])
+            if len(angles) < MIN_RESEARCH_ANGLES:
+                valid = False
+                reasons.append(
+                    f"research_angles: {len(angles)} provided, need >= {MIN_RESEARCH_ANGLES}"
+                )
+
             if valid:
                 _log_proof(state_dir, file_path, proof, edit_hash)
                 _tel_pass(file_path, proof.get("topics_cited", []), proof.get("min_score", 0))
@@ -334,9 +547,22 @@ def main() -> int:
             except OSError:
                 pass
 
-    # 5. No valid proof. Block.
+    # 5. No valid proof. Check server health and block with guidance.
     _tel_block(file_path, "no_valid_proof")
     _maybe_write_debug_fix(state_dir, file_path, "no_valid_proof")
+
+    if not _server_reachable(port):
+        # Server is down. Give a clear "start the server" message
+        # instead of instructions that reference an unreachable server.
+        print(
+            BLOCK_MESSAGE_SERVER_DOWN.format(file=file_path, port=port),
+            file=sys.stderr,
+        )
+        return 2
+
+    # Server is up. Show full research instructions.
+    index_guidance = _build_index_guidance(file_path, port)
+
     print(
         BLOCK_MESSAGE.format(
             file=file_path,
@@ -344,10 +570,36 @@ def main() -> int:
             state_dir=str(state_dir).replace("\\", "/"),
             min_score=MIN_PROOF_SCORE,
             window=PROOF_WINDOW_S,
+            index_guidance=index_guidance,
         ),
         file=sys.stderr,
     )
     return 2
+
+
+def _build_index_guidance(file_path: str, port: str) -> str:
+    """Build the index guidance section for the block message.
+
+    Detects the project root and checks whether it's indexed, then
+    returns the appropriate guidance text.
+    """
+    project_root = _detect_project_root(file_path)
+
+    if not project_root:
+        return INDEX_GUIDANCE_UNKNOWN
+
+    info = _check_project_indexed(project_root)
+
+    if info:
+        return INDEX_GUIDANCE_INDEXED.format(
+            project_root=project_root.replace("\\", "/"),
+            port=port,
+        )
+    else:
+        return INDEX_GUIDANCE_NOT_INDEXED.format(
+            project_root=project_root.replace("\\", "/"),
+            port=port,
+        )
 
 
 def _is_fresh_strict(proof: dict) -> bool:
@@ -459,6 +711,8 @@ def _classify_mistake(reason: str) -> str:
         return "protocol_violation"
     if "timestamp" in reason or "expired" in reason:
         return "stale_proof"
+    if "research_angles" in reason:
+        return "insufficient_angles"
     if "corrupt" in reason:
         return "corrupt_proof"
     return "missing_proof"
@@ -491,6 +745,14 @@ def _fix_instruction_for(reason: str) -> str:
             "The proof expired (older than 120s) or had no timezone. "
             "Write the proof immediately before retrying the edit. "
             "Use timezone-aware timestamps (UTC with Z suffix)."
+        )
+    if "research_angles" in reason:
+        return (
+            "The proof needs at least 2 research angles. Each angle is a "
+            "different search perspective: technology (how it works), "
+            "codebase (existing patterns), pitfalls (common mistakes), "
+            "security (implications), or best_practices (recommended approach). "
+            "Search from multiple angles, then include them in the proof."
         )
     if "corrupt" in reason:
         return (

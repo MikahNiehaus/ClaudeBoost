@@ -163,6 +163,28 @@ class ChromaStore:
 
         return search_results
 
+    def get_by_source(
+        self, collection: str, source_file: str, limit: int = 5,
+    ) -> list[SearchResult]:
+        """Get chunks for a specific source file (no embedding query needed).
+
+        Used by graph search to fetch content for structurally related files
+        discovered via edge traversal.
+        """
+        col = self._get_collection(collection)
+        results = col.get(
+            where={"source_file": source_file},
+            include=["documents", "metadatas"],
+            limit=limit,
+        )
+        if not results["ids"]:
+            return []
+
+        return [
+            SearchResult(content=doc, metadata=meta, score=1.0)
+            for doc, meta in zip(results["documents"], results["metadatas"])
+        ]
+
     def delete_by_source(self, collection: str, source_file: str) -> int:
         col = self._get_collection(collection)
         existing = col.get(where={"source_file": source_file})
