@@ -32,7 +32,7 @@ Everything Claude says or does must be grounded in indexed research. RAG is not 
 3. **If nothing found**: Do direct research (see Fast Path below), then write proof.
 4. **Base your response on RAG results**, not training data. Cite which topic and score backed each claim.
 
-For edits, the proof-gate hook mechanically blocks until you've done this. For responses, the rag-enforce hook reminds you every turn.
+For edits, the proof-gate hook mechanically blocks until you've done this. For responses, the research-stop-gate (a `type: "prompt"` Stop hook evaluated by Haiku) mechanically blocks Claude from finishing a response that makes unsourced technical claims. The rag-enforce hook also reminds you every turn.
 
 ## Smart Topic Routing
 

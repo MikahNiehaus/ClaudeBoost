@@ -23,6 +23,7 @@ PROOF_GATE_SENTINEL = "proof-gate.py"
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
+STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 
 
 def _say(msg: str) -> None:
@@ -237,6 +238,46 @@ def register_reindex_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5d: Register Stop hook (research gate)
+# ---------------------------------------------------------------------------
+def register_stop_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    port = os.environ.get("CLEAN_RAG_PORT", "8613")
+    prompt_text = (
+        "CLEAN-RAG RESEARCH GATE: Did Claude ground its response in research?\n\n"
+        "PASS (ok: true) if ANY of these:\n"
+        "- Claude searched clean-rag (POST http://127.0.0.1:{port}/search) "
+        "and cited results with topic names or scores\n"
+        "- Claude did direct research (Grep, WebSearch, read docs) "
+        "as Fast Path when no RAG topic existed\n"
+        "- Response is conversational: greetings, thanks, clarifications, "
+        "questions back to user, status updates, task coordination\n"
+        "- Claude is reading or explaining existing code without "
+        "new technical recommendations\n"
+        "- Claude is doing file operations, running tests, or "
+        "executing commands (not giving advice)\n"
+        "- Claude is working on exempt files "
+        "(.md, .txt, workspace/, knowledge/, state/)\n"
+        "- No technical claims were made\n\n"
+        "FAIL (ok: false) ONLY if Claude made specific technical "
+        "recommendations, described how a technology works, or proposed "
+        "code patterns WITHOUT any evidence of prior research in this turn. "
+        "Training data recall alone is not sufficient for technical claims.\n\n"
+        "When failing, set reason to: "
+        "'Research first: POST http://127.0.0.1:{port}/search "
+        "with your question. Cite topic and score before responding.'"
+    ).format(port=port)
+
+    hook_entry = {
+        "hooks": [{"type": "prompt", "prompt": prompt_text}],
+    }
+    _register_hook(
+        settings, "Stop", STOP_SENTINEL,
+        hook_entry, label="research-stop-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 6: Pre-seed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
@@ -399,6 +440,10 @@ def main():
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
 
+    # Step 5d
+    print("\nStep 5d: Registering research stop gate...")
+    register_stop_hook()
+
     # Step 6
     if not args.no_seed:
         print("\nStep 6: Pre-seeding topic databases...")
@@ -416,6 +461,7 @@ def main():
     print(f"    PreToolUse:        proof-gate.py (blocks edits without proof)")
     print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
+    print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
     print(f"    SessionStart:      enforcement rules prompt")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
     print()
