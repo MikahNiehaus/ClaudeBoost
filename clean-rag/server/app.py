@@ -27,6 +27,7 @@ from .config import (
 )
 from .embedding import SentenceTransformerEmbedding
 from .indexing import acquire_index_lock, index_project, index_topic, reindex_file, release_index_lock
+from .queue import IndexQueue
 from .search import search
 
 # acquire_topic is imported lazily to avoid pulling in research deps at startup
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 _embedder: SentenceTransformerEmbedding | None = None
 _code_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
+_index_queue: IndexQueue | None = None
 
 
 _TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -342,6 +344,13 @@ async def handle_projects(request: web.Request) -> web.Response:
     return _json_response({"projects": projects})
 
 
+async def handle_queue_status(request: web.Request) -> web.Response:
+    """GET /queue: show the acquire-topic index queue state."""
+    if not _index_queue:
+        return _json_response({"error": "Queue not initialized"}, 503)
+    return _json_response(_index_queue.status())
+
+
 async def handle_acquire_topic(request: web.Request) -> web.Response:
     """POST /acquire-topic: run auto-research to acquire docs for a topic."""
     try:
@@ -373,18 +382,10 @@ async def handle_acquire_topic(request: web.Request) -> web.Response:
         logger.error("acquire_topic(%s) failed: %s", topic, e)
         return _json_response({"error": f"Acquisition failed: {e}"}, 500)
 
-    # Auto-index if files were acquired
-    if result.get("files_acquired", 0) > 0 and _embedder:
-        if not _embedder.is_loaded:
-            try:
-                await loop.run_in_executor(None, _embedder.embed_query, "warmup")
-            except Exception as e:
-                logger.warning("Embedder warmup failed after acquisition: %s", e)
-        if _embedder.is_loaded:
-            idx_result = await loop.run_in_executor(
-                None, partial(index_topic, topic, _embedder, force=True)
-            )
-            result["index"] = idx_result
+    # Queue indexing so parallel acquire calls process one at a time
+    if result.get("files_acquired", 0) > 0 and _index_queue:
+        idx_status = _index_queue.submit(topic, category=category, force=True)
+        result["index"] = idx_status
 
     return _json_response(result)
 
@@ -493,7 +494,9 @@ async def handle_batch_index(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 async def _on_shutdown(app: web.Application) -> None:
-    """Clean up ChromaDB clients on shutdown."""
+    """Clean up queue worker and ChromaDB clients on shutdown."""
+    if _index_queue:
+        await _index_queue.stop()
     from .store import ChromaStore
     ChromaStore.clear_cache()
     logger.info("ChromaDB client cache cleared")
@@ -501,7 +504,7 @@ async def _on_shutdown(app: web.Application) -> None:
 
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
-    global _embedder, _code_embedder, _start_time
+    global _embedder, _code_embedder, _start_time, _index_queue
 
     _start_time = time.time()
 
@@ -509,8 +512,15 @@ def create_app() -> web.Application:
     _embedder = SentenceTransformerEmbedding(model_name=EMBEDDING_MODEL)
     _code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
 
+    # Create index queue (worker starts after the event loop is running)
+    _index_queue = IndexQueue()
+
     # Ensure state directory exists
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    async def _on_startup(app: web.Application) -> None:
+        """Start the index queue worker once the event loop is running."""
+        _index_queue.start(_embedder)
 
     app = web.Application()
     app.router.add_get("/status", handle_status)
@@ -523,6 +533,8 @@ def create_app() -> web.Application:
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/acquire-topic", handle_acquire_topic)
     app.router.add_post("/batch-index", handle_batch_index)
+    app.router.add_get("/queue", handle_queue_status)
+    app.on_startup.append(_on_startup)
     app.on_shutdown.append(_on_shutdown)
 
     logger.info("clean-rag server configured (port %d)", STANDALONE_PORT)
