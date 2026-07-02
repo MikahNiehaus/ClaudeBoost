@@ -184,20 +184,29 @@ async def handle_index_topic(request: web.Request) -> web.Response:
     if not _embedder:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    # Warm up embedder
-    loop = asyncio.get_running_loop()
-    if not _embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _embedder.embed_query, "warmup")
-        except Exception as e:
-            return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
+    # Prevent concurrent indexing (each index op loads embeddings into RAM)
+    if not acquire_index_lock(f"index-topic:{topic}"):
+        return _json_response({
+            "error": "Another indexing operation is already running. Wait or use /batch-index for sequential queuing.",
+        }, 409)
 
-    result = await loop.run_in_executor(
-        None, partial(index_topic, topic, _embedder, force=force, category=category)
-    )
+    try:
+        # Warm up embedder
+        loop = asyncio.get_running_loop()
+        if not _embedder.is_loaded:
+            try:
+                await loop.run_in_executor(None, _embedder.embed_query, "warmup")
+            except Exception as e:
+                return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
 
-    status = 200 if "error" not in result else 400
-    return _json_response(result, status)
+        result = await loop.run_in_executor(
+            None, partial(index_topic, topic, _embedder, force=force, category=category)
+        )
+
+        status = 200 if "error" not in result else 400
+        return _json_response(result, status)
+    finally:
+        release_index_lock()
 
 
 async def handle_index_project(request: web.Request) -> web.Response:
