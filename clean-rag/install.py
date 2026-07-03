@@ -149,7 +149,8 @@ def _register_hook(
 # ---------------------------------------------------------------------------
 def register_proof_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/proof-gate.py"'
+    # Use env var for portability across machines
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/proof-gate.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -172,41 +173,16 @@ def set_env_var() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Register SessionStart prompt with enforcement rules
+# Step 5: Register SessionStart — NO-OP (enforcement via UserPromptSubmit + Stop)
 # ---------------------------------------------------------------------------
 def register_session_prompt() -> None:
-    settings = read_json(SETTINGS_PATH)
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    prompt_text = (
-        "CLEAN-RAG ENFORCEMENT: Everything you say or do must be grounded "
-        "in indexed research. Before responding, editing, or deciding:\n"
-        "1. Check the topic tree (injected every turn by rag-enforce.py)\n"
-        "2. Search via POST http://127.0.0.1:{port}/search with your question\n"
-        "3. If no topic exists or results don't answer your question, "
-        "do BOTH (not one or the other):\n"
-        "   a) DIRECT RESEARCH NOW: research the question yourself (Grep, read docs, WebSearch)\n"
-        "   b) ALSO SPAWN PARALLEL AGENT (REQUIRED): acquire-topic first, "
-        "then WebSearch+save+index if acquire returns 0 files. "
-        "Skipping this means the same gap next time.\n"
-        "4. For edits: write proof with write_pending_proof() including "
-        "content_hash (SHA-256), min_score (>= 0.5), and research_angles "
-        "(>= 2 different search perspectives), then retry\n"
-        "5. The proof gate mechanically blocks edits without proof. "
-        "The rag-enforce hook reminds you every turn to search RAG.\n"
-        "6. RESEARCH SUFFICIENCY: search from >= 2 angles before writing proof. "
-        "Angles: technology, codebase, pitfalls, security, best_practices. "
-        "Proofs with < 2 angles are rejected.\n"
-        "Exempt: workspace/, knowledge/, .md, .txt files. "
-        "NOT exempt: .json, .yaml, .toml, .xml, clean-rag/ files."
-    ).format(port=port)
-
-    hook_entry = {
-        "hooks": [{"type": "prompt", "prompt": prompt_text}],
-    }
-    _register_hook(
-        settings, "SessionStart", SESSION_SENTINEL,
-        hook_entry, label="SessionStart prompt",
-    )
+    # SessionStart: prompt-type hooks are NOT supported (SessionStart fires before any conversation)
+    # Enforcement moved to:
+    #   - UserPromptSubmit: rag-enforce.py (injects mandate + topic tree every turn)
+    #   - Stop: research-stop-gate (blocks unresearched responses)
+    #   - PreToolUse: proof-gate.py (blocks edits without proof)
+    # No hook registered here.
+    _ok("SessionStart enforcement via UserPromptSubmit + Stop hooks")
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +190,8 @@ def register_session_prompt() -> None:
 # ---------------------------------------------------------------------------
 def register_rag_enforce_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/rag-enforce.py"'
+    # Use env var for portability across machines
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/rag-enforce.py"'
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -229,7 +206,8 @@ def register_rag_enforce_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_reindex_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = f'python "{CLEAN_RAG_HOME.as_posix()}/hooks/reindex-after-edit.py"'
+    # Use env var for portability across machines
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/reindex-after-edit.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -241,48 +219,40 @@ def register_reindex_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5d: Register Stop hook (research gate)
+# Step 5d: Register Stop hook (research gate) — prompt type for actual enforcement
 # ---------------------------------------------------------------------------
 def register_stop_hook() -> None:
     settings = read_json(SETTINGS_PATH)
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
     prompt_text = (
         "CLEAN-RAG RESEARCH GATE: Did Claude cite research in this response?\n\n"
-        "PASS (ok: true) if:\n"
-        "- Claude cited specific RAG results (topic name + score), OR\n"
-        "- Claude cited direct research (named files read with file:line, "
-        "Grep results, WebSearch results), OR\n"
-        "- Claude is reporting on tools it used THIS TURN "
-        "(search results, Grep output, file reads, commands run) "
-        "and quoting or summarizing their output, OR\n"
-        "- Claude is explaining code it just read THIS TURN, "
-        "citing file:line from the Read/Grep output, OR\n"
-        "- Response is a clarification question asking the user "
-        "for input, OR\n"
-        "- Response is task coordination: status updates, "
-        "acknowledging instructions, next steps, OR\n"
-        "- Response is ONLY executing tools with no technical "
-        "explanation attached\n\n"
-        "FAIL (ok: false) if:\n"
-        "- Technical claims about how a technology works "
-        "without citing a source (RAG, file:line, or URL)\n"
-        "- Code pattern or architecture recommendations "
-        "without citing where they came from\n"
-        "- 'Best practice' or 'you should' statements "
-        "without a cited source\n"
-        "- Using 'typically', 'generally', 'usually' "
-        "as substitutes for actual research\n"
-        "- Describing trade-offs without research\n\n"
-        "KEY DISTINCTION: reporting on what Claude just did "
-        "('I searched RAG and got X') is a status report, not "
-        "a technical claim. Explaining code Claude just read "
-        "with file:line citations is grounded research. "
-        "Only flag claims about external technology or patterns "
-        "that lack any source.\n\n"
-        "Be strict on unsourced technical advice. "
-        "Do not flag status reports or cited code explanations.\n\n"
+        "PASS (ok: true) ONLY if:\n"
+        "- Claude cited specific RAG results (topic name + score from "
+        "POST http://127.0.0.1:{port}/search), OR\n"
+        "- Claude cited specific direct research (named files read, "
+        "Grep results shown, WebSearch results referenced), OR\n"
+        "- Response is a short clarification question asking the user "
+        "for input (no factual claims), OR\n"
+        "- Response is pure task coordination: 'I will do X next', "
+        "status of running commands, acknowledging instructions, OR\n"
+        "- Response is ONLY executing tools (file ops, tests, commands) "
+        "with no technical explanation attached\n\n"
+        "FAIL (ok: false) if ANY of these:\n"
+        "- Any factual statement about how a technology, library, "
+        "framework, or protocol works without citing a source\n"
+        "- Any code pattern, architecture, or approach recommendation "
+        "without citing where it came from\n"
+        "- Any explanation of existing code that adds interpretation "
+        "beyond what the code literally says, without research\n"
+        "- Any 'best practice' or 'you should' statement without "
+        "a cited source\n"
+        "- Describing trade-offs between approaches without research\n"
+        "- Using phrases like 'typically', 'generally', 'usually', "
+        "'in most cases' as substitutes for actual research\n\n"
+        "Be strict. When in doubt, FAIL. The cost of one extra search "
+        "is low. The cost of ungrounded advice is high.\n\n"
         "When failing, set reason to: "
-        "'You made technical claims without citing a source. "
+        "'You made factual claims without citing research. "
         "Search first: POST http://127.0.0.1:{port}/search "
         "then cite topic:score before responding.'"
     ).format(port=port)
@@ -410,6 +380,47 @@ def seed_topics(topic_filter: list[str] | None = None) -> None:
     _say(f"\n  Seeding complete: {seeded} cloned, {indexed} indexed, {failed} failed out of {total}")
 
 
+def setup_gpu_memory_manager():
+    """Configure GPU memory management for embeddings.
+
+    Copies smart_gpu_indexing.py to LocalAI project and configures
+    dynamic VRAM allocation based on available GPU memory.
+    """
+    try:
+        # Check if LocalAI project exists
+        localai_path = Path.cwd().parent / "LocalAI"
+        if not localai_path.exists():
+            _warn("LocalAI project not found, skipping GPU memory manager setup")
+            return
+
+        # Check if smart_gpu_indexing.py exists locally (in clean-rag)
+        gpu_manager_src = CLEAN_RAG_HOME / "smart_gpu_indexing.py"
+        if not gpu_manager_src.exists():
+            _say("smart_gpu_indexing.py not found in clean-rag directory")
+            _say("GPU memory manager must be set up separately in LocalAI project")
+            return
+
+        # Verify it exists in LocalAI
+        gpu_manager_dst = localai_path / "smart_gpu_indexing.py"
+        if gpu_manager_dst.exists():
+            _ok("GPU memory manager already installed in LocalAI")
+            return
+
+        # Configure Python embedding settings with GPU memory awareness
+        try:
+            from server.embedding import configure_gpu_aware_embedding
+            from server.config import EMBEDDING_MODEL
+            configure_gpu_aware_embedding(EMBEDDING_MODEL)
+            _ok("GPU-aware embedding configured for dynamic batch sizing")
+        except Exception as e:
+            _say(f"Optional: GPU-aware embedding setup: {e}")
+            _say("Embeddings will use CPU fallback if GPU memory is insufficient")
+
+    except Exception as e:
+        _warn(f"GPU memory manager setup: {e}")
+        _say("Embeddings will still function with CPU fallback")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -463,6 +474,10 @@ def main():
     print("\nStep 5d: Registering research stop gate...")
     register_stop_hook()
 
+    # Step 5e
+    print("\nStep 5e: Setting up GPU memory management...")
+    setup_gpu_memory_manager()
+
     # Step 6
     if not args.no_seed:
         print("\nStep 6: Pre-seeding topic databases...")
@@ -482,9 +497,11 @@ def main():
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
     print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
     print(f"    SessionStart:      enforcement rules prompt")
+    print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
     print()
     print("Start the server, then every code edit will require verified proof.")
+    print("GPU memory manager provides dynamic batch sizing for embeddings.")
     print("=" * 60)
 
 

@@ -46,6 +46,10 @@ Sweep-then-verify across domains — every flag must cite file:line or be droppe
 
 ## Agent Spawning
 
+**CRITICAL:** Always use the **Task tool** to spawn agents, never the Agent tool.
+The enforcement gate (PreToolUse hook on Task) blocks unresearched agent spawns.
+Agent tool bypasses enforcement — it will be blocked by agent-spawn-gate.py.
+
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one-line fix doesn't need an agent.
 

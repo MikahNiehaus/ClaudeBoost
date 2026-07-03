@@ -76,50 +76,15 @@ def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
     topic_tree = _load_topic_tree()
 
-    # The mandate injected into every user message turn
+    # The mandate injected into every user message turn (compressed for local inference)
     mandate = (
-        "\n\n--- CLEAN-RAG: RESEARCH-FIRST MANDATE ---\n"
-        "Before responding, editing, or making any decision:\n\n"
-        "1. IDENTIFY which topic(s) your response touches.\n"
-        "   Indexed topics by category:\n"
-        f"{topic_tree}\n\n"
-        "2. SEARCH for each topic before responding:\n"
-        f"   POST http://127.0.0.1:{port}/search\n"
-        '   {{"query": "<specific question>", "sources": ["topic:<name>", "all_topics"]}}\n\n'
-        "3. If NO matching topic exists or results don't answer your question,\n"
-        "   do BOTH of these (not one or the other, BOTH):\n"
-        "   a. DIRECT RESEARCH NOW (Fast Path): Research the specific question\n"
-        "      yourself (Grep codebase, read a doc, WebSearch). This unblocks you.\n"
-        "   b. ALSO SPAWN PARALLEL AGENT (REQUIRED, not optional):\n"
-        "      Spawn a background agent with this workflow:\n"
-        f"      1) POST http://127.0.0.1:{port}/acquire-topic\n"
-        '         {{"topic": "<slug>", "category": "<category>"}}\n'
-        "      2) If files_acquired > 0: done. Report what was indexed.\n"
-        "      3) If files_acquired == 0 or needs_websearch == true:\n"
-        "         a) WebSearch for '<topic> official documentation'\n"
-        "         b) Fetch top 3-5 results with WebFetch\n"
-        "         c) Save content to clean-rag/knowledge/<category>/<topic>/\n"
-        f"         d) POST http://127.0.0.1:{port}/index-topic\n"
-        '            {{"topic": "<slug>", "category": "<category>"}}\n'
-        "         e) Report files saved and chunks indexed\n"
-        "      Categories: ai, api, cloud, databases, dotnet, frontend,\n"
-        "      infrastructure, languages, node-frameworks, php-frameworks,\n"
-        "      python-frameworks, ruby-frameworks, security, testing,\n"
-        "      tools, ui. New category if none fit.\n"
-        "      Do NOT wait for this agent. Do NOT spawn a second for same topic.\n"
-        "      Skipping this step means the same gap next time.\n\n"
-        "4. BASE your response on RAG results, not training data.\n"
-        "   Cite which topic and score backed each claim.\n\n"
-        "5. For EDITS: the proof-gate hook will mechanically block any edit\n"
-        "   without a proof file. Search first, write proof, then edit.\n\n"
-        "6. RESEARCH SUFFICIENCY: Before writing proof, search from at least\n"
-        "   2 different angles (proof-gate rejects proofs with < 2 angles):\n"
-        "   - technology : How does this tech work? Search the topic docs\n"
-        "   - codebase   : What patterns exist in this project already?\n"
-        "   - pitfalls   : What commonly goes wrong with this approach?\n"
-        "   - security   : Any security implications? (when applicable)\n"
-        "   - best_practices : What is the recommended pattern?\n"
-        "   Include angles in proof: research_angles=[{angle, query, score}, ...]\n"
+        "\n\n--- CLEAN-RAG: RESEARCH-FIRST ---\n"
+        "1. Topics: {topic_tree}\n"
+        "2. SEARCH: POST http://127.0.0.1:{port}/search OR direct research (Grep/WebSearch)\n"
+        "3. Cite source: file:line, grep result, or WebSearch title\n"
+        "4. Base response on research. For edits: write proof file (2+ angles: technology, codebase, pitfalls, security, best-practices)\n"
+        "5. Save findings to clean-rag/knowledge/<category>/<topic>/ and POST /index-topic\n"
+        "6. NO unresearched claims. NO 'typically/generally/usually' without sources.\n"
         "--- END CLEAN-RAG MANDATE ---\n"
     )
 

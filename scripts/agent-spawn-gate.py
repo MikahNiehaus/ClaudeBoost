@@ -22,13 +22,20 @@ spawn prompt instructs the agent to call POST http://127.0.0.1:8612/context as i
 and exits 2 (blocking) if it doesn't.
 
 Behavior:
-  - Prompt mentions RAG context call (rag_context or 8612/context) -> exit 0 silently (pass)
-  - Prompt missing RAG context call  -> exit 2 + stderr error (blocked)
-  - architect-agent spawn without PROPOSAL_ONLY + 2 citations
-                                  -> exit 2 + stderr error (blocked)
+  - Prompt missing RAG context call (8612/context) -> exit 2 + stderr error (blocked)
+  - research-agent spawn without depth research citations -> exit 2 + stderr error (blocked)
+  - research-agent spawn without bulk acquire-topic system -> exit 2 + stderr error (blocked)
+  - architect-agent spawn without PROPOSAL_ONLY + 2 citations -> exit 2 + stderr error (blocked)
+  - All checks pass -> exit 0 silently (pass)
 
-Exits 2 (blocking) when the spawn prompt does not include a RAG context call (rag_context or POST http://127.0.0.1:8612/context).
-Exits 0 (pass) when a RAG context call is present or when checking architect-agent contract only.
+Enforces DEPTH + BREADTH research pattern:
+  1. All spawns: RAG context call (rag_context or POST http://127.0.0.1:8612/context)
+  2. Research spawns: DEPTH check — Claude must cite direct research (file:line, grep, websearch)
+  3. Research spawns: BREADTH check — Agent must use POST /acquire-topic (4-layer waterfall)
+  4. Architect spawns: PROPOSAL_ONLY contract + 2 file:line citations
+
+Exits 2 (blocking) when any requirement is missing.
+Exits 0 (pass) when all applicable checks pass.
 """
 from __future__ import annotations
 import json
@@ -88,6 +95,40 @@ def main() -> int:
     tool_input = payload.get("tool_input", {}) or {}
     prompt = str(tool_input.get("prompt", "") or "")
     description = str(tool_input.get("description", "") or "")
+
+    # ENFORCEMENT: research-agent spawns follow DEPTH + BREADTH pattern
+    # DEPTH: Claude does direct research first to answer specific question
+    # BREADTH: Agent acquires and indexes comprehensive coverage (doesn't read/answer)
+    is_research_spawn = "research-agent" in description.lower() or "research" in description.lower()
+    if is_research_spawn:
+        # Check 1: Has Claude done depth research? (file:line, Grep, WebSearch citations)
+        has_depth_research = (
+            "file:" in prompt or "grep" in prompt_lower or "websearch" in prompt_lower
+            or "found in" in prompt_lower or "direct research" in prompt_lower
+        )
+        if not has_depth_research:
+            nudges.append(
+                "[research-agent depth check] You must do direct research FIRST (depth) "
+                "before spawning a research agent for breadth. Search RAG or read files "
+                "to answer your specific question with citations (file:line or grep results). "
+                "Then spawn research-agent only for comprehensive acquisition and indexing, "
+                "not to answer your original question."
+            )
+
+        # Check 2: Is agent using the bulk acquisition system (acquire-topic 4-layer waterfall)?
+        # acquire-topic automatically: (1) GitHub sparse checkout, (2) llms.txt scraping,
+        # (3) BFS doc crawl, (4) WebSearch fallback. This is how we scale knowledge breadth.
+        uses_acquire_topic = "acquire-topic" in prompt or "8613/acquire-topic" in prompt
+
+        if not uses_acquire_topic:
+            nudges.append(
+                "[research-agent breadth check] Research-agent MUST use the bulk acquisition system. "
+                "Instead of manual research, spawn with: POST http://127.0.0.1:8613/acquire-topic "
+                "{\"topic\": \"<slug>\"} in the agent prompt. This runs the 4-layer waterfall: "
+                "(1) GitHub sparse checkout, (2) llms.txt scraping, (3) BFS doc crawl, (4) WebSearch. "
+                "Agent does NOT read/analyze — just calls acquire-topic and reports chunks indexed. "
+                "See clean-rag/CLAUDE.md lines 48-153 for the system design."
+            )
 
     # Normalize for case-insensitive substring checks
     prompt_lower = prompt.lower()
