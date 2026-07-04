@@ -101,6 +101,7 @@ write_pending_proof(
 The proof file is keyed per target file (uses a hash of the canonical path), so concurrent edits to different files each get their own proof. The gate atomically renames the proof file during consumption to prevent TOCTOU races.
 
 **Required fields the gate checks:**
+- `file` must be present and match the file being edited (normalized to lowercase POSIX path)
 - `verdict` must be `"VERIFIED"`
 - `ts` must be timezone-aware ISO format (Z suffix or +00:00) and within 120 seconds
 - `content_hash` must match the SHA-256 of the actual edit being applied
