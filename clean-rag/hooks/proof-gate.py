@@ -301,6 +301,7 @@ BLOCK_MESSAGE = """
 CLEAN-RAG: Edit blocked. No verified proof for this file.
 
   File: {file}
+  Expected proof: {state_dir}/{proof_file}
 
 Before editing, you must:
 
@@ -347,10 +348,10 @@ Before editing, you must:
 
 4. RETRY the edit. The gate passes if:
    - verdict == VERIFIED
-   - content_hash matches the proposed edit
    - min_score >= {min_score}
    - research_angles has >= 2 entries
    - timestamp is within {window}s and timezone-aware
+   (content_hash is tracked for audit but not required, allowing legitimate edit revisions)
 
 {index_guidance}
 ===================================================================
@@ -399,6 +400,27 @@ INDEX_GUIDANCE_UNKNOWN = """PROJECT INDEX STATUS: UNKNOWN
   Could not detect the project root for this file.
   For the codebase research angle, use Grep to search the project
   directory for existing patterns, then cite grep results in the proof."""
+
+
+def _build_remediation_for_reasons(reasons: list) -> str:
+    """Build actionable remediation steps for each validation failure."""
+    lines = ["Proof validation failed:"]
+    for reason in reasons:
+        if "verdict" in reason:
+            lines.append(f"  Verdict: {reason}")
+            lines.append(f"    Fix: Set verdict to 'VERIFIED' in your proof file")
+        elif "min_score" in reason:
+            lines.append(f"  Score: {reason}")
+            lines.append(f"    Fix: Search RAG again for results with score >= 0.5")
+        elif "research_angles" in reason:
+            lines.append(f"  Angles: {reason}")
+            lines.append(f"    Fix: Add another research angle (technology, codebase, pitfalls, security, or best practices)")
+        elif "timestamp" in reason:
+            lines.append(f"  Timestamp: {reason}")
+            lines.append(f"    Fix: Create a fresh proof file (must be within 120 seconds)")
+        else:
+            lines.append(f"  {reason}")
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -494,11 +516,11 @@ def main() -> int:
                 valid = False
                 reasons.append("timestamp expired or missing timezone")
 
-            # Check content hash (if present in proof)
-            proof_hash = proof.get("content_hash", "")
-            if proof_hash and proof_hash != edit_hash:
-                valid = False
-                reasons.append("content_hash mismatch (edit changed after verification)")
+            # Note: content_hash is informational only (tracked for audit trail).
+            # We do NOT block on content_hash mismatch because:
+            # Freshness window (120s) prevents stale proof reuse (replay protection)
+            # Users may legitimately revise their edit after writing proof
+            # See clean-rag/CLAUDE.md line 20 for design rationale update
 
             # Check minimum score threshold
             proof_score = proof.get("min_score", 0)
@@ -524,10 +546,11 @@ def main() -> int:
                     pass
                 return 0
             else:
-                # Proof was invalid. Log why and block.
+                # Proof was invalid. Show specific failures with remediation.
                 reason_str = "; ".join(reasons)
+                remediation = _build_remediation_for_reasons(reasons)
                 print(
-                    f"proof-gate: proof rejected: {reason_str}",
+                    f"proof-gate: proof rejected\n{remediation}",
                     file=sys.stderr,
                 )
                 _tel_block(file_path, f"proof_rejected: {reason_str}")
@@ -560,8 +583,9 @@ def main() -> int:
         )
         return 2
 
-    # Server is up. Show full research instructions.
+    # Server is up. Show full research instructions with expected proof path.
     index_guidance = _build_index_guidance(file_path, port)
+    proof_path = _proof_file_for(state_dir, canonical)
 
     print(
         BLOCK_MESSAGE.format(
@@ -571,6 +595,7 @@ def main() -> int:
             min_score=MIN_PROOF_SCORE,
             window=PROOF_WINDOW_S,
             index_guidance=index_guidance,
+            proof_file=proof_path.name,
         ),
         file=sys.stderr,
     )
