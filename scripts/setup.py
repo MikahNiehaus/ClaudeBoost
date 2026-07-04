@@ -275,21 +275,31 @@ def _load_settings() -> dict:
         sys.exit(1)
 
 
-def _py_cmd(script_name: str) -> str:
+def _py_cmd(script_name: str, base_dir: str = "scripts") -> str:
     """Hook command that invokes a ClaudeBoost script.
 
-    Uses $CLAUDEBOOST_PYTHON from the settings.json env block. Falls back to
-    python / python3 / py on PATH so hooks survive a machine move where
-    settings.json still has the old machine's Python path baked in.
-    The || chain is bash short-circuit: each fallback only fires if the
-    previous command returned non-zero (e.g. exit 127 = binary not found).
+    Resolves the working Python launcher ONCE via `command -v` (an existence
+    check, not an execution), then runs the script exactly once so its real
+    exit code (0 pass / 2 block / etc.) propagates untouched. Falls back
+    through python3 / python / py in case $CLAUDEBOOST_PYTHON isn't valid on
+    this machine (e.g. after a machine move where settings.json still has
+    the old machine's Python path baked in).
+
+    Earlier versions chained with `A || B || C || D`. Bash's `||` can't tell
+    "the interpreter wasn't found" apart from "the script ran fine and
+    deliberately exited non-zero to block a tool call" (exit code 2 is
+    Claude Code's documented PreToolUse block signal) — both are non-zero,
+    so any legitimate block re-ran the next fallback against
+    already-drained stdin, producing duplicate/contradictory hook output
+    (and, for scripts with input-order bugs, a crash on the retry).
+    Checking with `command -v` first avoids ever running the script twice.
     """
-    script = f'"$CLAUDEBOOST_HOME/scripts/{script_name}"'
+    script = f'"$CLAUDEBOOST_HOME/{base_dir}/{script_name}"'
     return (
-        f'"$CLAUDEBOOST_PYTHON" {script}'
-        f' || python {script}'
-        f' || python3 {script}'
-        f' || py {script}'
+        f'if command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then "$CLAUDEBOOST_PYTHON" {script}; '
+        f'elif command -v python3 >/dev/null 2>&1; then python3 {script}; '
+        f'elif command -v python >/dev/null 2>&1; then python {script}; '
+        f'else py {script}; fi'
     )
 
 
@@ -481,16 +491,12 @@ def _install_clean_rag_hooks(settings: dict) -> None:
         return
 
     crag_home = _clean_rag_home_posix()
-    gate_script = f"{crag_home}/hooks/proof-gate.py"
 
     # proof-gate.py must run standalone (no $CLAUDEBOOST_PYTHON fallback needed,
-    # it uses only stdlib). Use the same Python interpreter chain for consistency.
-    gate_cmd = (
-        f'"$CLAUDEBOOST_PYTHON" "{gate_script}"'
-        f' || python "{gate_script}"'
-        f' || python3 "{gate_script}"'
-        f' || py "{gate_script}"'
-    )
+    # it uses only stdlib). Use the same interpreter-resolution helper as every
+    # other hook for consistency (see _py_cmd docstring for why this isn't a
+    # plain `||` chain).
+    gate_cmd = _py_cmd("proof-gate.py", base_dir="clean-rag/hooks")
 
     _install_hook(settings, "PreToolUse", {
         "matcher": "Edit|Write|MultiEdit",
@@ -626,9 +632,13 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="rag-session-reset.py", label="RAG session reset (command-type)")
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
+    # Lives under clean-rag/hooks/ alongside proof-gate.py etc., but enforces
+    # core ClaudeBoost RAG (port 8612) — installed unconditionally here, not
+    # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
+    # concern even though it's physically colocated with clean-rag's hooks.
     _install_hook(settings, "PreToolUse", {
         "matcher": "Task",
-        "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py")}],
+        "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py", base_dir="clean-rag/hooks")}],
     }, sentinel="agent-spawn-gate.py", label="Task RAG/proposal gate (command-type)")
 
     # --- PreToolUse: skill verify gate on Skill tool ---

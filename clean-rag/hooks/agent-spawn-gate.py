@@ -1,6 +1,12 @@
 """
 ClaudeBoost agent-spawn gate - command-type PreToolUse hook on Task.
 
+Lives under clean-rag/hooks/ alongside proof-gate.py, rag-enforce.py, and
+reindex-after-edit.py, but enforces core ClaudeBoost RAG (POST
+http://127.0.0.1:8612/context — the mcp-rag-server), not clean-rag's own
+research gate (port 8613). Installed unconditionally by setup.py regardless
+of whether clean-rag is bundled.
+
 Replaces the prompt-type "AGENT SPAWN QUALITY ROUTING" hook that was installed
 by scripts/setup.ps1. Prompt-type hooks on Task tool calls were over-firing:
 
@@ -95,6 +101,16 @@ def main() -> int:
     tool_input = payload.get("tool_input", {}) or {}
     prompt = str(tool_input.get("prompt", "") or "")
     description = str(tool_input.get("description", "") or "")
+    # Normalize for case-insensitive substring checks. Must happen before the
+    # research-spawn checks below, which read prompt_lower.
+    prompt_lower = prompt.lower()
+
+    # This file lives at clean-rag/hooks/agent-spawn-gate.py — three levels
+    # below the ClaudeBoost root (hooks -> clean-rag -> ClaudeBoost). The env
+    # var is always set in practice (settings.json's env block); this is only
+    # a fallback for direct/manual invocation.
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent.parent)
+    nudges: list[str] = []
 
     # ENFORCEMENT: research-agent spawns follow DEPTH + BREADTH pattern
     # DEPTH: Claude does direct research first to answer specific question
@@ -129,12 +145,6 @@ def main() -> int:
                 "Agent does NOT read/analyze — just calls acquire-topic and reports chunks indexed. "
                 "See clean-rag/CLAUDE.md lines 48-153 for the system design."
             )
-
-    # Normalize for case-insensitive substring checks
-    prompt_lower = prompt.lower()
-
-    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
-    nudges: list[str] = []
 
     # Primary check: does the spawn prompt instruct the agent to call
     # Accept: rag_context (legacy), mcp__rag-server__rag_context (legacy MCP name),

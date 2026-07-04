@@ -21,9 +21,14 @@ def run_hook(
     script_name: str,
     fixture: dict,
     env_overrides: dict | None = None,
+    base_dir: Path | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a hook script with a JSON fixture on stdin, return the result."""
-    script = SCRIPTS_DIR / script_name
+    """Run a hook script with a JSON fixture on stdin, return the result.
+
+    base_dir overrides SCRIPTS_DIR for hooks that live elsewhere (e.g.
+    clean-rag/hooks/) — defaults to SCRIPTS_DIR for every other hook.
+    """
+    script = (base_dir or SCRIPTS_DIR) / script_name
     env = {**os.environ, **(env_overrides or {})}
     if COVERAGERC.exists():
         env["COVERAGE_PROCESS_START"] = str(COVERAGERC)

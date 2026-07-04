@@ -12,7 +12,7 @@
       {
         "name": "agent-spawn-gate",
         "description": "Enforces RAG context + depth+breadth research pattern",
-        "script": "$CLAUDEBOOST_HOME/scripts/agent-spawn-gate.py",
+        "script": "$CLAUDEBOOST_HOME/clean-rag/hooks/agent-spawn-gate.py",
         "applies_to": ["Task"]
       }
     ],

@@ -22,7 +22,7 @@
 
 ### 1.1 agent-spawn-gate.py
 
-**File:** `scripts/agent-spawn-gate.py`  
+**File:** `clean-rag/hooks/agent-spawn-gate.py` (enforces core ClaudeBoost RAG, port 8612 — colocated with clean-rag's hooks but not clean-rag-specific)  
 **Event:** PreToolUse  
 **Tool matcher:** `Task`  
 **Type:** Command hook  
