@@ -347,6 +347,63 @@ async def handle_projects(request: web.Request) -> web.Response:
     return _json_response({"projects": projects})
 
 
+async def handle_register_project(request: web.Request) -> web.Response:
+    """POST /register-project: register an externally indexed project.
+
+    Called by /index-project skill after indexing on ClaudeBoost RAG (port 8612)
+    so clean-rag tracks all RAG databases system wide.
+
+    Body fields:
+        project_path (str): absolute path to the project (required)
+        source (str): which RAG system indexed it, e.g. "claudeboost-rag" (required)
+        server (str): base URL of the RAG server, e.g. "http://127.0.0.1:8612"
+        files_indexed (int): number of files indexed
+        chunks_created (int): number of chunks created
+        graph (dict): optional graph stats
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    source = body.get("source", "").strip()
+    if not source:
+        return _json_response({"error": "Missing 'source' field"}, 400)
+
+    import hashlib
+    from datetime import datetime, timezone
+    norm_path = project_path.replace("\\", "/").rstrip("/").lower()
+    pid = f"ext_{hashlib.md5(norm_path.encode()).hexdigest()[:12]}"
+
+    registry = _list_projects()
+    entry = {
+        "project_path": project_path.replace("\\", "/").rstrip("/"),
+        "source": source,
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.get("server"):
+        entry["server"] = body["server"]
+    if body.get("files_indexed") is not None:
+        entry["files_indexed"] = body["files_indexed"]
+    if body.get("chunks_created") is not None:
+        entry["chunks_created"] = body["chunks_created"]
+    if body.get("graph"):
+        entry["graph"] = body["graph"]
+
+    registry[pid] = entry
+
+    registry_path = STATE_DIR / "projects.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+    logger.info("Registered external project: %s (source=%s, id=%s)", project_path, source, pid)
+    return _json_response({"registered": pid, "project_path": entry["project_path"], "source": source})
+
+
 async def handle_queue_status(request: web.Request) -> web.Response:
     """GET /queue: show the acquire-topic index queue state."""
     if not _index_queue:
@@ -552,6 +609,7 @@ def create_app() -> web.Application:
     app.router.add_get("/topics", handle_topics)
     app.router.add_delete("/topics/{name}", handle_delete_topic)
     app.router.add_get("/projects", handle_projects)
+    app.router.add_post("/register-project", handle_register_project)
     app.router.add_post("/acquire-topic", handle_acquire_topic)
     app.router.add_post("/batch-index", handle_batch_index)
     app.router.add_get("/queue", handle_queue_status)

@@ -40,7 +40,7 @@ def _make_payload(tool_name, file_path, **extra_input):
 def _write_proof(state_dir, file_path, verdict="VERIFIED",
                  content_hash="", min_score=0.85, ts=None,
                  verifier_response="Proof sufficient",
-                 research_angles=None):
+                 research_angles=None, quality_aspects=None):
     """Write a keyed proof file the way the gate expects to find it."""
     canonical = proof_gate._canonicalize(file_path)
     proof_path = proof_gate._proof_file_for(Path(state_dir), canonical)
@@ -50,6 +50,11 @@ def _write_proof(state_dir, file_path, verdict="VERIFIED",
         research_angles = [
             {"angle": "technology", "query": "test query", "score": 0.85},
             {"angle": "codebase", "query": "test codebase pattern", "score": 0.80},
+        ]
+    if quality_aspects is None:
+        quality_aspects = [
+            {"aspect": "architecture", "assertion": "test architecture assertion"},
+            {"aspect": "patterns", "assertion": "test patterns assertion"},
         ]
     proof = {
         "file": file_path,
@@ -63,6 +68,7 @@ def _write_proof(state_dir, file_path, verdict="VERIFIED",
         "content_hash": content_hash,
         "min_score": min_score,
         "research_angles": research_angles,
+        "quality_aspects": quality_aspects,
     }
     Path(state_dir).mkdir(parents=True, exist_ok=True)
     proof_path.write_text(json.dumps(proof), encoding="utf-8")
@@ -144,30 +150,19 @@ class TestCleanRagNotExempt:
 # Extension exemptions (no structured data formats)
 # ---------------------------------------------------------------------------
 
-class TestExtensionExemptions:
-    """AUDIT FIX: .json, .yaml, .yml, .toml, .xml NOT exempt."""
+class TestNoExtensionExemptions:
+    """All file types require proof. No extension exemptions exist."""
 
     @pytest.mark.parametrize("ext", [".md", ".mdx", ".rst", ".txt",
                                       ".gitignore", ".env.example",
-                                      ".csv", ".svg"])
-    def test_still_exempt(self, ext):
-        path = f"/project/file{ext}"
-        matched = any(path.endswith(e) for e in proof_gate.EXEMPT_EXTENSIONS)
-        assert matched, f"{ext} should still be exempt"
-
-    @pytest.mark.parametrize("ext", [".json", ".yaml", ".yml", ".toml", ".xml"])
-    def test_structured_data_not_exempt(self, ext):
-        """Structured data files can fabricate proof. Must require proof."""
-        path = f"/project/file{ext}"
-        matched = any(path.endswith(e) for e in proof_gate.EXEMPT_EXTENSIONS)
-        assert not matched, f"{ext} should NOT be exempt (proof fabrication risk)"
-
-    @pytest.mark.parametrize("ext", [".py", ".ts", ".js", ".cs", ".go",
+                                      ".csv", ".svg",
+                                      ".json", ".yaml", ".yml", ".toml", ".xml",
+                                      ".py", ".ts", ".js", ".cs", ".go",
                                       ".rs", ".java", ".tsx", ".jsx"])
-    def test_source_not_exempt(self, ext):
-        path = f"/project/file{ext}"
-        matched = any(path.endswith(e) for e in proof_gate.EXEMPT_EXTENSIONS)
-        assert not matched, f"{ext} should NOT be exempt"
+    def test_no_extension_exempt(self, ext):
+        """No file extension gets a free pass. Everything needs research proof."""
+        assert not hasattr(proof_gate, "EXEMPT_EXTENSIONS"), \
+            "EXEMPT_EXTENSIONS should not exist in proof_gate"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +278,155 @@ class TestMinScore:
                                 old_string="old", new_string="new")
         result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
         assert result == 2, "Score 0.0 should block"
+
+
+# ---------------------------------------------------------------------------
+# Codebase context angle enforcement
+# ---------------------------------------------------------------------------
+
+class TestCodebaseAngleRequired:
+    """Proof must include at least one angle with angle='codebase'."""
+
+    def test_no_codebase_angle_blocks(self, tmp_path):
+        """Proof with only non-codebase angles should block."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        angles = [
+            {"angle": "technology", "query": "how does X work", "score": 0.9},
+            {"angle": "best_practices", "query": "recommended pattern", "score": 0.8},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, research_angles=angles)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 2, "Missing codebase angle should block"
+
+    def test_codebase_angle_passes(self, tmp_path):
+        """Proof with a codebase angle should pass (default behavior)."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        _write_proof(state_dir, file_path, content_hash=edit_hash)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 0, "Proof with codebase angle should pass"
+
+    def test_only_codebase_angle_still_needs_two(self, tmp_path):
+        """A single codebase angle still fails the >= 2 angles check."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        angles = [
+            {"angle": "codebase", "query": "callers of this function", "score": 0.9},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, research_angles=angles)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 2, "Single angle (even codebase) should block (need >= 2)"
+
+
+# ---------------------------------------------------------------------------
+# Quality aspects enforcement
+# ---------------------------------------------------------------------------
+
+class TestQualityAspectsRequired:
+    """Proof must include quality_aspects with macro quality (architecture/patterns)."""
+
+    def test_no_quality_aspects_blocks(self, tmp_path):
+        """Proof with research angles but no quality aspects should block."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, quality_aspects=[])
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 2, "Missing quality_aspects should block"
+
+    def test_quality_aspects_passes(self, tmp_path):
+        """Proof with 2 quality aspects including architecture should pass."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        aspects = [
+            {"aspect": "architecture", "assertion": "fits project structure"},
+            {"aspect": "maintainability", "assertion": "clear naming, low coupling"},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, quality_aspects=aspects)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 0, "Proof with architecture + maintainability should pass"
+
+    def test_quality_without_macro_blocks(self, tmp_path):
+        """Proof with only micro quality aspects (no architecture/patterns) blocks."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        aspects = [
+            {"aspect": "security", "assertion": "no SQL injection"},
+            {"aspect": "testing", "assertion": "unit testable"},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, quality_aspects=aspects)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 2, "Quality without macro aspect should block"
+
+    def test_one_quality_aspect_blocks(self, tmp_path):
+        """A single quality aspect still fails the >= 2 check."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        aspects = [
+            {"aspect": "architecture", "assertion": "fits project structure"},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, quality_aspects=aspects)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 2, "Single quality aspect should block (need >= 2)"
+
+    def test_patterns_counts_as_macro(self, tmp_path):
+        """The 'patterns' aspect satisfies the macro quality requirement."""
+        file_path = str(tmp_path / "src" / "main.py")
+        state_dir = tmp_path / "state"
+
+        edit_hash = hashlib.sha256(b"old\x00new").hexdigest()
+        aspects = [
+            {"aspect": "patterns", "assertion": "follows existing repo pattern"},
+            {"aspect": "testing", "assertion": "unit testable with mock"},
+        ]
+        _write_proof(state_dir, file_path,
+                     content_hash=edit_hash, quality_aspects=aspects)
+
+        payload = _make_payload("Edit", file_path,
+                                old_string="old", new_string="new")
+        result = _run_gate(payload, {"CLEAN_RAG_HOME": str(tmp_path)})
+        assert result == 0, "Proof with patterns + testing should pass"
 
 
 # ---------------------------------------------------------------------------

@@ -1138,6 +1138,8 @@ def _update_project_registry(
 
     entry = {
         "project_path": project_path,
+        "source": "clean-rag",
+        "server": "http://127.0.0.1:8613",
         "files_indexed": files_indexed,
         "chunks_created": chunks_created,
         "indexed_at": datetime.now(timezone.utc).isoformat(),

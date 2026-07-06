@@ -95,6 +95,10 @@ write_pending_proof(
         {"angle": "technology", "query": "FastAPI dependency injection Depends()", "score": 0.87},
         {"angle": "codebase", "query": "existing DI patterns in project", "score": 0.72},
     ],
+    quality_aspects=[
+        {"aspect": "architecture", "assertion": "New endpoint goes in routes/auth.py alongside existing auth routes. Controller layer only."},
+        {"aspect": "patterns", "assertion": "Project uses Depends() for DI everywhere (auth.py:23, users.py:15). Following same pattern."},
+    ],
 )
 ```
 
@@ -107,20 +111,38 @@ The proof file is keyed per target file (uses a hash of the canonical path), so 
 - `content_hash` must match the SHA-256 of the actual edit being applied
 - `min_score` must be >= 0.5 (best RAG result score from the search)
 - `research_angles` must have >= 2 entries (multiple search perspectives required)
+- `research_angles` must include at least one entry with `angle: "codebase"` (callers, imports, dependents of the target file must be researched)
+- `quality_aspects` must have >= 2 entries (multiple quality perspectives required)
+- `quality_aspects` must include at least one entry with `aspect: "architecture"` or `aspect: "patterns"` (macro quality proving the code fits the project)
 
 ### Research Angles
 
-Every proof must include at least 2 research angles. Each angle is a search from a different perspective:
+Every proof must include at least 2 research angles, and one of them **must** be a `codebase` angle. The codebase angle proves you searched the surrounding codebase (callers, imports, files that depend on the target) before editing, not just the target file itself.
 
-| Angle | What to search |
-|-------|---------------|
-| `technology` | How does this tech work? Search the topic docs |
-| `codebase` | What patterns exist in this project already? |
-| `pitfalls` | What commonly goes wrong with this approach? |
-| `security` | Any security implications? (when applicable) |
-| `best_practices` | What is the recommended pattern? |
+| Angle | What to search | Required? |
+|-------|---------------|-----------|
+| `codebase` | Callers, imports, dependents of the target file | **Yes, always** |
+| `technology` | How does this tech work? Search the topic docs | No |
+| `pitfalls` | What commonly goes wrong with this approach? | No |
+| `security` | Any security implications? (when applicable) | No |
+| `best_practices` | What is the recommended pattern? | No |
 
-Each angle entry is `{"angle": "<name>", "query": "<what you searched>", "score": <best_score>}`. The gate rejects proofs with fewer than 2 angles.
+Each angle entry is `{"angle": "<name>", "query": "<what you searched>", "score": <best_score>}`. The gate rejects proofs with fewer than 2 angles or missing a codebase angle.
+
+### Quality Aspects
+
+Every proof must include at least 2 quality aspects, and at least one must be `architecture` or `patterns` (macro quality). Quality aspects prove you considered code quality at multiple levels, not just whether the code runs correctly. There is a difference between writing a good for loop and understanding the architecture around that for loop.
+
+| Aspect | What to verify | Required? |
+|--------|---------------|-----------|
+| `architecture` | Does the change fit the project structure? Right file, right layer, right separation of concerns. | **At least one of architecture or patterns is required** |
+| `patterns` | Does the code follow existing project patterns, not invent new ones? | **At least one of architecture or patterns is required** |
+| `maintainability` | Will the code be easy to change later? Clear naming, low coupling, reasonable complexity. | No |
+| `security` | Does this introduce any vulnerabilities? (when applicable) | No |
+| `performance` | Any unnecessary performance costs? (when applicable) | No |
+| `testing` | Is this testable? How will it be tested? | No |
+
+Each aspect entry is `{"aspect": "<name>", "assertion": "<what you verified>"}`. The assertion is freeform text describing what you checked and found. You can verify quality aspects by reading the codebase (Grep, Read) without needing RAG. The gate rejects proofs with fewer than 2 aspects or missing a macro quality aspect (architecture or patterns).
 
 ## Auto-Research (builds knowledge permanently)
 
@@ -186,16 +208,13 @@ If a technology doesn't fit any category, create a new category with a clear nam
 
 The proof gate does NOT apply to:
 - Files under directories named: workspace/, knowledge/, plans/, docs/, state/, .claudeboost/, .claude/ (checked at directory boundaries, not substrings)
-- Files with extensions: .md, .mdx, .rst, .txt, .gitignore, .env.example, .csv, .svg
 - Files in the system temp directory ($TEMP, %TMP%, /tmp) including subdirectories
 - Files outside any git repository (not project code, just scratch/output files)
 - When ClaudeBoost AUTO mode is active (logged to proof-log.jsonl for audit trail)
 
-**Deliberately NOT exempt:**
-- `.json`, `.yaml`, `.yml`, `.toml`, `.xml` files require proof (prevents proof file fabrication)
-- Files under `clean-rag/` require proof (the enforcement system does not exempt itself)
+**No file extension exemptions.** Every file type requires research proof, including .md, .json, .yaml, .toml, .xml, and all source code. The only exemptions are directory based (workspace, state, etc.) and temp paths.
 
-Only project source code under version control requires proof. Documentation, temp files, scratch output, and workspace artifacts skip the gate.
+Files under `clean-rag/` also require proof (the enforcement system does not exempt itself).
 
 ## Database Organization
 
@@ -259,6 +278,19 @@ python clean-rag/cli/topic.py delete <name>             # Delete a topic
 python clean-rag/cli/topic.py acquire <name>            # Auto-research + index
 ```
 
+## Project Registry (System Wide)
+
+clean-rag maintains a central registry of ALL indexed projects across all RAG servers at `state/projects.json`. Each entry tracks the project path, which RAG system indexed it, and stats.
+
+**Automatic registration:** When clean-rag indexes a project (`POST /index-project`), it auto-registers with `source: "clean-rag"`. When the ClaudeBoost RAG server (port 8612) indexes a project via the `/index-project` skill, it calls `POST /register-project` to register with `source: "claudeboost-rag"`.
+
+**API:**
+- `GET /projects` returns the full registry
+- `POST /register-project` registers an externally indexed project:
+  ```json
+  {"project_path": "/path", "source": "claudeboost-rag", "server": "http://127.0.0.1:8612", "files_indexed": 200, "chunks_created": 1000}
+  ```
+
 ## Project Indexing
 
 ```bash
@@ -290,6 +322,5 @@ The hook runs in a background thread so it never blocks the editing flow. If the
 
 Files that are skipped:
 - Files inside the clean-rag directory (internal, not project code)
-- Documentation extensions (.md, .mdx, .rst, .txt, .gitignore, .env.example)
 
 The single file reindex only re-embeds the changed file (checks content hash against the manifest to skip unchanged files), making it fast enough to run after every edit.

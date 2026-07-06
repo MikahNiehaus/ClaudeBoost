@@ -205,6 +205,28 @@ def main() -> int:
                 "receives Tier 3c workspace research (task-specific docs indexed by /research-task)."
             )
 
+    # Clean-rag enforcement: agents that will edit files must know about clean-rag
+    # proof requirements. Check that the spawn prompt mentions clean-rag search
+    # (port 8613) so the agent knows it needs to search and write proof before editing.
+    # Evaluator and research agents are exempt (they don't edit source files).
+    is_evaluator_spawn = "evaluator" in description.lower() or "verdict" in description.lower()
+    is_non_editing = is_evaluator_spawn or is_research_spawn
+    has_clean_rag = (
+        "8613" in prompt
+        or "clean-rag" in prompt_lower
+        or "proof-gate" in prompt_lower
+        or "clean_rag" in prompt_lower
+    )
+    if not is_non_editing and not has_clean_rag:
+        nudges.append(
+            "[clean-rag enforcement] Spawn prompt does not mention clean-rag research enforcement. "
+            "Agents that edit files must search clean-rag (POST http://127.0.0.1:8613/search) "
+            "and write proof before editing. Include these instructions in the spawn prompt: "
+            "\"Before editing any file, search clean-rag (POST http://127.0.0.1:8613/search) "
+            "for relevant research, write proof to clean-rag/state/, then retry the edit. "
+            "The proof-gate hook will block edits without verified proof.\""
+        )
+
     # Secondary check: architect-agent proposal contract.
     # Only fires when the spawn IS an architect-agent, not when the prompt merely
     # references it (e.g. as a context call agent= parameter or in a description).

@@ -277,15 +277,6 @@ EXEMPT_SEGMENTS = [
     ".claude",
 ]
 
-# File extensions that don't need proof (documentation and config only)
-# NOTE: .json, .yaml, .yml, .toml deliberately EXCLUDED to prevent
-# proof file fabrication through config file writes
-EXEMPT_EXTENSIONS = [
-    ".md", ".mdx", ".rst", ".txt",
-    ".gitignore", ".env.example",
-    ".csv", ".svg",
-]
-
 # How long a verified proof stays valid (seconds)
 PROOF_WINDOW_S = 120
 
@@ -294,6 +285,12 @@ MIN_PROOF_SCORE = 0.5
 
 # Minimum number of research angles required in proof
 MIN_RESEARCH_ANGLES = 2
+
+# Minimum number of quality aspects required in proof
+MIN_QUALITY_ASPECTS = 2
+
+# Quality aspects that count as "macro" (project fit, not just code correctness)
+MACRO_QUALITY_ASPECTS = {"architecture", "patterns"}
 
 
 BLOCK_MESSAGE = """
@@ -344,12 +341,19 @@ Before editing, you must:
            {{"angle": "technology", "query": "<what you searched>", "score": <score>}},
            {{"angle": "codebase", "query": "<how you searched project>", "score": <score>}},
        ],
+       quality_aspects=[
+           {{"aspect": "architecture", "assertion": "<how the change fits the project structure>"}},
+           {{"aspect": "patterns", "assertion": "<which existing patterns this follows>"}},
+       ],
    )
 
 4. RETRY the edit. The gate passes if:
    - verdict == VERIFIED
    - min_score >= {min_score}
-   - research_angles has >= 2 entries
+   - research_angles has >= 2 entries, including at least one with angle="codebase"
+     (you MUST search callers, imports, and dependents of the target file)
+   - quality_aspects has >= 2 entries, at least one with aspect="architecture" or "patterns"
+     (you MUST consider whether the code fits the project, not just whether it works)
    - timestamp is within {window}s and timezone-aware
    (content_hash is tracked for audit but not required, allowing legitimate edit revisions)
 
@@ -412,9 +416,23 @@ def _build_remediation_for_reasons(reasons: list) -> str:
         elif "min_score" in reason:
             lines.append(f"  Score: {reason}")
             lines.append(f"    Fix: Search RAG again for results with score >= 0.5")
+        elif "missing 'codebase' angle" in reason:
+            lines.append(f"  Codebase context: {reason}")
+            lines.append(f"    Fix: Search the surrounding codebase (callers, imports, files that depend on")
+            lines.append(f"    the target) and include an angle with angle='codebase' in your proof")
         elif "research_angles" in reason:
             lines.append(f"  Angles: {reason}")
-            lines.append(f"    Fix: Add another research angle (technology, codebase, pitfalls, security, or best practices)")
+            lines.append(f"    Fix: Add research angles including at least one 'codebase' angle (callers, imports, dependents)")
+        elif "missing macro quality" in reason:
+            lines.append(f"  Quality: {reason}")
+            lines.append(f"    Fix: Include at least one quality aspect with aspect='architecture' or")
+            lines.append(f"    aspect='patterns' to prove the code fits the project structure")
+        elif "quality_aspects" in reason:
+            lines.append(f"  Quality: {reason}")
+            lines.append(f"    Fix: Add quality_aspects to your proof with at least 2 entries.")
+            lines.append(f"    Each entry: {{\"aspect\": \"<name>\", \"assertion\": \"<what you verified>\"}}")
+            lines.append(f"    Aspects: architecture, patterns, maintainability, security, performance, testing")
+            lines.append(f"    At least one must be 'architecture' or 'patterns' (macro quality)")
         elif "timestamp" in reason:
             lines.append(f"  Timestamp: {reason}")
             lines.append(f"    Fix: Create a fresh proof file (must be within 120 seconds)")
@@ -451,13 +469,7 @@ def main() -> int:
             _tel_exempt(file_path, f"segment:{seg}")
             return 0
 
-    # 2. Exempt extensions (docs only, no structured data formats)
-    for ext in EXEMPT_EXTENSIONS:
-        if canonical.endswith(ext):
-            _tel_exempt(file_path, f"extension:{ext}")
-            return 0
-
-    # 2b. Exempt temp directories (scratch files, handoff docs, etc.)
+    # 2. Exempt temp directories (scratch files, handoff docs, etc.)
     if _is_temp_path(canonical):
         _tel_exempt(file_path, "temp_directory")
         return 0
@@ -535,6 +547,45 @@ def main() -> int:
                 reasons.append(
                     f"research_angles: {len(angles)} provided, need >= {MIN_RESEARCH_ANGLES}"
                 )
+
+            # Require at least one "codebase" angle (callers, imports, dependents)
+            has_codebase = any(
+                isinstance(a, dict) and a.get("angle") == "codebase"
+                for a in angles
+            )
+            if not has_codebase:
+                valid = False
+                reasons.append(
+                    "research_angles: missing 'codebase' angle. "
+                    "You must search the surrounding codebase (callers, imports, "
+                    "dependents) before editing, not just the target file"
+                )
+
+            # Require quality aspects (code quality proof at multiple levels)
+            quality = proof.get("quality_aspects", [])
+            if len(quality) < MIN_QUALITY_ASPECTS:
+                valid = False
+                reasons.append(
+                    f"quality_aspects: {len(quality)} provided, need >= {MIN_QUALITY_ASPECTS}. "
+                    "You must consider code quality from multiple angles before editing: "
+                    "architecture, patterns, maintainability, security, performance, testing"
+                )
+
+            # At least one must be architecture or patterns (macro quality)
+            if quality:
+                has_macro = any(
+                    isinstance(q, dict)
+                    and q.get("aspect") in MACRO_QUALITY_ASPECTS
+                    for q in quality
+                )
+                if not has_macro:
+                    valid = False
+                    reasons.append(
+                        "quality_aspects: missing macro quality aspect. "
+                        "At least one aspect must be 'architecture' or 'patterns' "
+                        "to prove the code fits the project structure, not just "
+                        "that it works correctly"
+                    )
 
             if valid:
                 _log_proof(state_dir, file_path, proof, edit_hash)
@@ -738,6 +789,8 @@ def _classify_mistake(reason: str) -> str:
         return "stale_proof"
     if "research_angles" in reason:
         return "insufficient_angles"
+    if "quality_aspects" in reason or "macro quality" in reason:
+        return "insufficient_quality"
     if "corrupt" in reason:
         return "corrupt_proof"
     return "missing_proof"
@@ -778,6 +831,17 @@ def _fix_instruction_for(reason: str) -> str:
             "codebase (existing patterns), pitfalls (common mistakes), "
             "security (implications), or best_practices (recommended approach). "
             "Search from multiple angles, then include them in the proof."
+        )
+    if "quality_aspects" in reason or "macro quality" in reason:
+        return (
+            "The proof needs at least 2 quality aspects proving you considered "
+            "code quality at multiple levels. Each aspect is "
+            '{"aspect": "<name>", "assertion": "<what you verified>"}. '
+            "Valid aspects: architecture (right file, right layer), "
+            "patterns (follows existing project patterns), "
+            "maintainability (clear, low coupling), security (no vulns), "
+            "performance (no unnecessary cost), testing (how to test it). "
+            "At least one must be 'architecture' or 'patterns' (macro quality)."
         )
     if "corrupt" in reason:
         return (
