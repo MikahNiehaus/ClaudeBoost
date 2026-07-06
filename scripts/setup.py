@@ -275,21 +275,31 @@ def _load_settings() -> dict:
         sys.exit(1)
 
 
-def _py_cmd(script_name: str) -> str:
+def _py_cmd(script_name: str, base_dir: str = "scripts") -> str:
     """Hook command that invokes a ClaudeBoost script.
 
-    Uses $CLAUDEBOOST_PYTHON from the settings.json env block. Falls back to
-    python / python3 / py on PATH so hooks survive a machine move where
-    settings.json still has the old machine's Python path baked in.
-    The || chain is bash short-circuit: each fallback only fires if the
-    previous command returned non-zero (e.g. exit 127 = binary not found).
+    Resolves the working Python launcher ONCE via `command -v` (an existence
+    check, not an execution), then runs the script exactly once so its real
+    exit code (0 pass / 2 block / etc.) propagates untouched. Falls back
+    through python3 / python / py in case $CLAUDEBOOST_PYTHON isn't valid on
+    this machine (e.g. after a machine move where settings.json still has
+    the old machine's Python path baked in).
+
+    Earlier versions chained with `A || B || C || D`. Bash's `||` can't tell
+    "the interpreter wasn't found" apart from "the script ran fine and
+    deliberately exited non-zero to block a tool call" (exit code 2 is
+    Claude Code's documented PreToolUse block signal) — both are non-zero,
+    so any legitimate block re-ran the next fallback against
+    already-drained stdin, producing duplicate/contradictory hook output
+    (and, for scripts with input-order bugs, a crash on the retry).
+    Checking with `command -v` first avoids ever running the script twice.
     """
-    script = f'"$CLAUDEBOOST_HOME/scripts/{script_name}"'
+    script = f'"$CLAUDEBOOST_HOME/{base_dir}/{script_name}"'
     return (
-        f'"$CLAUDEBOOST_PYTHON" {script}'
-        f' || python {script}'
-        f' || python3 {script}'
-        f' || py {script}'
+        f'if command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then "$CLAUDEBOOST_PYTHON" {script}; '
+        f'elif command -v python3 >/dev/null 2>&1; then python3 {script}; '
+        f'elif command -v python >/dev/null 2>&1; then python {script}; '
+        f'else py {script}; fi'
     )
 
 
@@ -463,6 +473,51 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
     _ok(f"hooks.{hook_type} - appended {label}")
 
 
+# ---------------------------------------------------------------------------
+# clean-rag bundled integration: registers proof-gate hook and SessionStart
+# prompt when clean-rag/ exists alongside ClaudeBoost. Detection is read-only:
+# setup.py never writes into clean-rag/.
+# ---------------------------------------------------------------------------
+def _clean_rag_detected() -> bool:
+    return (BOOST_HOME / "clean-rag" / "install.py").exists()
+
+
+def _clean_rag_home_posix() -> str:
+    return (BOOST_HOME / "clean-rag").as_posix()
+
+
+def _install_clean_rag_hooks(settings: dict) -> None:
+    if not _clean_rag_detected():
+        return
+
+    crag_home = _clean_rag_home_posix()
+
+    # proof-gate.py must run standalone (no $CLAUDEBOOST_PYTHON fallback needed,
+    # it uses only stdlib). Use the same interpreter-resolution helper as every
+    # other hook for consistency (see _py_cmd docstring for why this isn't a
+    # plain `||` chain).
+    gate_cmd = _py_cmd("proof-gate.py", base_dir="clean-rag/hooks")
+
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": gate_cmd}],
+    }, sentinel="proof-gate.py", label="clean-rag proof gate (bundled)")
+
+    # SessionStart prompt so sub-agents know about proof enforcement
+    port = os.environ.get("CLEAN_RAG_PORT", "8613")
+    prompt_text = (
+        "CLEAN-RAG ENFORCEMENT: Every Edit/Write/MultiEdit on source code "
+        "requires verified proof. Before editing:\n"
+        f"1. Search via POST http://127.0.0.1:{port}/search\n"
+        "2. Spawn a Haiku verification agent with your proof\n"
+        f"3. Write verification to {crag_home}/state/pending-proof.json\n"
+        "4. Retry the edit. Exempt: workspace/, knowledge/, .md, .json, .yaml files."
+    )
+    _install_hook(settings, "SessionStart", {
+        "hooks": [{"type": "prompt", "prompt": prompt_text}],
+    }, sentinel="CLEAN-RAG ENFORCEMENT", label="clean-rag enforcement prompt")
+
+
 # Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
 # re-running this script never duplicates an entry that the PowerShell
 # version installed previously.
@@ -577,9 +632,13 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="rag-session-reset.py", label="RAG session reset (command-type)")
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
+    # Lives under clean-rag/hooks/ alongside proof-gate.py etc., but enforces
+    # core ClaudeBoost RAG (port 8612) — installed unconditionally here, not
+    # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
+    # concern even though it's physically colocated with clean-rag's hooks.
     _install_hook(settings, "PreToolUse", {
         "matcher": "Task",
-        "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py")}],
+        "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py", base_dir="clean-rag/hooks")}],
     }, sentinel="agent-spawn-gate.py", label="Task RAG/proposal gate (command-type)")
 
     # --- PreToolUse: skill verify gate on Skill tool ---
@@ -610,17 +669,16 @@ def _install_all_hooks(settings: dict) -> None:
         }],
     }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
 
+    # --- PreToolUse: clean-rag proof gate (bundled mode) ---
+    # Detects clean-rag at BOOST_HOME/clean-rag/. When present, registers the
+    # proof-gate hook BEFORE consult-gate so proof verification fires first.
+    _install_clean_rag_hooks(settings)
+
     # --- PreToolUse: CONSULT gate on Edit/Write/Bash (command-type) ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Edit|Write|MultiEdit|Bash",
         "hooks": [{"type": "command", "command": _py_cmd("consult-gate.py")}],
     }, sentinel="consult-gate.py", label="CONSULT gate on Edit/Write/Bash (command-type)")
-
-    # --- PreToolUse: action gate (requires [Action] form before Edit/Write/MultiEdit) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": _py_cmd("action-gate.py")}],
-    }, sentinel="action-gate.py", label="action form gate on Edit/Write/MultiEdit (command-type)")
 
     # --- PreToolUse: Bash guard (blocks commands that trigger permission prompts) ---
     _install_hook(settings, "PreToolUse", {
@@ -911,6 +969,15 @@ def update_settings() -> None:
     env = settings.setdefault("env", {})
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
     env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
+
+    # clean-rag bundled mode: set CLEAN_RAG_HOME when clean-rag/ is present
+    if _clean_rag_detected():
+        env["CLEAN_RAG_HOME"] = _clean_rag_home_posix()
+        _ok(f"CLEAN_RAG_HOME set (bundled mode): {_clean_rag_home_posix()}")
+    elif "CLEAN_RAG_HOME" in env:
+        # clean-rag was removed, clean up the stale env var
+        del env["CLEAN_RAG_HOME"]
+        _ok("CLEAN_RAG_HOME removed (clean-rag not present)")
 
     # Write a stable lookup file so ensure-setup.py can find the repo even when
     # it's running from ~/.claude/ (outside the repo tree).

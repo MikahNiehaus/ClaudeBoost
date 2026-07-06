@@ -4,7 +4,7 @@
 
 Claude knows how to code. ClaudeBoost knows how to do it right.
 
-It loads security standards, testing methodology, and 108 knowledge files into every
+It loads security standards, testing methodology, and 109 knowledge files into every
 session. When something's missing, it researches and indexes it on the fly. Whatever
 you're building, whatever stack you're on — ClaudeBoost makes sure Claude behaves like
 a senior engineer who already knows your domain.
@@ -75,8 +75,8 @@ Microsoft's full GraphRAG synthesizes graph edges from unstructured text using L
 
 ```
 ClaudeBoost/
-├── agents/              24 agent definitions (XML)
-├── knowledge/           108 knowledge files (XML)
+├── agents/              25 agent definitions (XML)
+├── knowledge/           109 knowledge files (XML)
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
@@ -291,9 +291,9 @@ the default.
 
 ### Knowledge Bases
 
-108 XML files loaded automatically by the RAG server:
+109 XML files loaded automatically by the RAG server:
 
-- **54 domain bases**: coding standards, security (OWASP), architecture, debugging,
+- **55 domain bases**: coding standards, security (OWASP), architecture, debugging,
   testing, observability, performance, refactoring, API design, context engineering,
   scope governance, rule enforcement, and more
 - **21 language guides**: Python, TypeScript, C#, Go, SQL, Rust, Swift, Kotlin, Java,

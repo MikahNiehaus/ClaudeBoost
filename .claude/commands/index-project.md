@@ -117,7 +117,17 @@ $ARGUMENTS — flexible, any of:
    - Files indexed / chunks created / files skipped
    - Total time if notable
 
-8. **Post-index quality check** — run `/rag-health project` to validate the index end to end.
+8. **Register with clean-rag** — after successful indexing, register the project with clean-rag's system wide registry so it tracks all RAG databases:
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8613/register-project \
+     -H "Content-Type: application/json" \
+     -d '{"project_path": "<resolved_path>", "source": "claudeboost-rag", "server": "http://127.0.0.1:8612", "files_indexed": <N>, "chunks_created": <N>}'
+   ```
+
+   If clean-rag server is not running (connection refused), skip silently. This is best effort registration, not a blocker.
+
+9. **Post-index quality check** — run `/rag-health project` to validate the index end to end.
 
    `/rag-health project` covers all checks in one pass: coverage, graph liveness, relevance quality, manifest integrity, context pipeline, .ragignore compliance, partial index ratio, and community summaries. Any failure or warning includes the specific action needed. Follow those actions rather than running ad-hoc fixes.
 

@@ -1,5 +1,5 @@
 """
-Tests for scripts/agent-spawn-gate.py (PreToolUse/Task hook).
+Tests for clean-rag/hooks/agent-spawn-gate.py (PreToolUse/Task hook).
 
 Phase A — base behavior:
   - Prompt with RAG context HTTP call + project_path  -> exit 0
@@ -23,6 +23,11 @@ import pytest
 
 from helpers import SCRIPTS_DIR, run_hook, pretooluse
 
+# agent-spawn-gate.py lives in clean-rag/hooks/, not scripts/ — it enforces
+# core ClaudeBoost RAG (port 8612), but is physically colocated with
+# clean-rag's other hooks.
+CLEAN_RAG_HOOKS_DIR = SCRIPTS_DIR.parent / "clean-rag" / "hooks"
+
 # A minimal prompt that satisfies all base checks (no active workspace assumed)
 _BASE_PROMPT = (
     "curl -s -X POST http://127.0.0.1:8612/context "
@@ -39,14 +44,22 @@ def _spawn(prompt: str, description: str = "test spawn") -> dict:
     })
 
 
+def _run_gate(fixture: dict, env_overrides: dict | None = None):
+    return run_hook(
+        "agent-spawn-gate.py",
+        fixture,
+        env_overrides=env_overrides,
+        base_dir=CLEAN_RAG_HOOKS_DIR,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Happy paths
 # ---------------------------------------------------------------------------
 
 def test_passes_with_http_context_call(boost_home):
     """Prompt includes the HTTP context call with project_path — should pass."""
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -68,8 +81,7 @@ def test_passes_with_workspace_path_in_prompt(boost_home):
             '"project_path":"/test/project","workspace_path":"/test/project/workspace/task-1"',
         )
     )
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(prompt),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -81,8 +93,7 @@ def test_passes_with_workspace_path_in_prompt(boost_home):
 def test_passes_with_legacy_rag_context(boost_home):
     """Legacy rag_context keyword still accepted for backward compat."""
     prompt = "Call rag_context with project_path='/test/project' as first action"
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(prompt),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -95,7 +106,7 @@ def test_passes_with_legacy_rag_context(boost_home):
 
 def test_blocks_missing_rag_context():
     """Prompt with no RAG context mention should exit 2 with an informative nudge."""
-    result = run_hook("agent-spawn-gate.py", _spawn("Do some work and report findings."))
+    result = _run_gate(_spawn("Do some work and report findings."))
     assert result.returncode == 2
     assert b"does not instruct" in result.stderr or b"RAG context" in result.stderr.lower()
 
@@ -103,7 +114,7 @@ def test_blocks_missing_rag_context():
 def test_blocks_missing_project_path():
     """Context call present but project_path missing exits 2."""
     prompt = "POST http://127.0.0.1:8612/context with {\"agent\":\"test\"}"
-    result = run_hook("agent-spawn-gate.py", _spawn(prompt))
+    result = _run_gate(_spawn(prompt))
     assert result.returncode == 2
     assert b"project_path" in result.stderr
 
@@ -118,10 +129,7 @@ def test_blocks_architect_missing_proposal_only():
         _BASE_PROMPT + "\n"
         "You are architect-agent. Review scripts/foo.py:1 and scripts/bar.py:50."
     )
-    result = run_hook(
-        "agent-spawn-gate.py",
-        _spawn(prompt, description="architect-agent spawn"),
-    )
+    result = _run_gate(_spawn(prompt, description="architect-agent spawn"))
     assert result.returncode == 2
     assert b"PROPOSAL_ONLY" in result.stderr
 
@@ -131,10 +139,9 @@ def test_passes_architect_with_full_contract(boost_home):
     prompt = (
         _BASE_PROMPT + "\n"
         "PROPOSAL_ONLY\n"
-        "Review scripts/agent-spawn-gate.py:1 and scripts/verify-gate-cmd.py:50."
+        "Review clean-rag/hooks/agent-spawn-gate.py:1 and scripts/verify-gate-cmd.py:50."
     )
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(prompt, description="architect-agent spawn"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -157,8 +164,7 @@ def _write_flag(boost_home: Path) -> Path:
 def test_blocks_when_verification_pending(boost_home):
     """With needs-verification.json set, non-evaluator spawns are blocked."""
     _write_flag(boost_home)
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT, description="some other agent"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -172,8 +178,7 @@ def test_passes_evaluator_spawn_and_clears_flag(boost_home):
     assert flag.exists()
 
     prompt = _BASE_PROMPT + "\nYou are spawning evaluator-agent to verify findings."
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(prompt, description="evaluator-agent verification"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -186,8 +191,7 @@ def test_passes_verdict_spawn_and_clears_flag(boost_home):
     flag = _write_flag(boost_home)
     assert flag.exists()
 
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT, description="Opus verdict synthesis"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -197,8 +201,7 @@ def test_passes_verdict_spawn_and_clears_flag(boost_home):
 
 def test_passes_normally_without_flag(boost_home):
     """When no flag file exists, normal spawns are unaffected."""
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -211,8 +214,7 @@ def test_passes_during_active_audit(boost_home):
     audit_flag = boost_home / "state" / "audit-in-progress.json"
     audit_flag.write_text('{"active":true}', encoding="utf-8")
     try:
-        result = run_hook(
-            "agent-spawn-gate.py",
+        result = _run_gate(
             _spawn(_BASE_PROMPT, description="audit dimension: security analysis"),
             env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
         )
@@ -234,9 +236,9 @@ def test_handles_invalid_json_stdin():
     """
     import os as _os
     import subprocess as _sp
-    from helpers import SCRIPTS_DIR as _SCRIPTS_DIR, COVERAGERC
+    from helpers import COVERAGERC
 
-    script = _SCRIPTS_DIR / "agent-spawn-gate.py"
+    script = CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py"
     env = {**_os.environ}
     if COVERAGERC.exists():
         env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
@@ -254,9 +256,9 @@ def test_handles_invalid_json_stdin_with_partial_json():
     """Partial/truncated JSON triggers lines 61-62 (except Exception: payload = {})."""
     import os as _os
     import subprocess as _sp
-    from helpers import SCRIPTS_DIR as _SCRIPTS_DIR, COVERAGERC
+    from helpers import COVERAGERC
 
-    script = _SCRIPTS_DIR / "agent-spawn-gate.py"
+    script = CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py"
     env = {**_os.environ}
     if COVERAGERC.exists():
         env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
@@ -285,10 +287,10 @@ def test_invalid_json_via_importlib_covers_lines_61_62(tmp_path):
 
     spec = importlib.util.spec_from_file_location(
         "agent_spawn_gate",
-        SCRIPTS_DIR / "agent-spawn-gate.py",
+        CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py",
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(SCRIPTS_DIR))
+    sys.path.insert(0, str(CLEAN_RAG_HOOKS_DIR))
     spec.loader.exec_module(mod)
 
     fake_stdin = io.StringIO("this is not valid json {{{")
@@ -312,8 +314,7 @@ def test_log_exception_does_not_crash_hook(tmp_path):
     # Make state a regular file so opening agent-usage.jsonl inside it fails
     state_as_file = tmp_path / "state"
     state_as_file.write_text("not a dir")
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn("no rag here", description="test"),
         env_overrides={"CLAUDEBOOST_HOME": str(tmp_path)},
     )
@@ -335,8 +336,7 @@ def test_workspace_path_looked_up_via_registry(boost_home, tmp_path):
     (state_dir / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
 
     # Prompt has context call + project_path but NOT workspace_path
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -351,8 +351,7 @@ def test_handles_corrupt_active_workspace_json(boost_home):
     state_dir.mkdir(exist_ok=True)
     (state_dir / "active-workspace.json").write_text("NOT JSON", encoding="utf-8")
 
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(_BASE_PROMPT),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
@@ -366,8 +365,7 @@ def test_evaluator_unlink_exception_silently_ignored(boost_home):
     flag_path.mkdir(parents=True, exist_ok=True)  # directory, not file
 
     prompt = _BASE_PROMPT + "\nYou are spawning evaluator-agent to verify findings."
-    result = run_hook(
-        "agent-spawn-gate.py",
+    result = _run_gate(
         _spawn(prompt, description="evaluator-agent verification"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )

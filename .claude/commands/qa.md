@@ -1776,6 +1776,14 @@ Session charter
 
 Write the charter to `$WORKSPACE_ABS/session-charter.md`.
 
+**G1b — Create logs directory.**
+
+```bash
+mkdir -p "$WORKSPACE_ABS/logs"
+```
+
+This is where temporary logging output will be captured during testing. All log files in this directory are removed at the end of the QA session (see Phase 6).
+
 ---
 
 ### G2: Inventory
@@ -1895,6 +1903,31 @@ Run the new tests immediately. Record results in `coverage-map.md`.
 ```
 
 **G3.6b — Add missing log calls.** For any handler missing required calls: add them now following the GOOD log patterns above. Then run a build to confirm no compile errors.
+
+**G3.6c — Add temporary coverage logging.** For every function, handler, and code path touched by this ticket, add temporary log statements that will capture execution evidence during testing. These go to `$WORKSPACE_ABS/logs/`:
+
+1. Add `LogDebug` or `print` calls at the entry and exit of every function under test, and at every branch point (if/else, switch cases, error paths)
+2. Log inputs (sanitized, no secrets) and outputs so the logs prove which paths were exercised
+3. Configure log output to write to `$WORKSPACE_ABS/logs/coverage-trace.log` (or the project's existing log sink if applicable)
+4. Every temporary log line MUST have a `// QA-TEMP` marker comment so it can be found and removed later
+5. Run a build to confirm no compile errors after instrumentation
+
+The goal is complete code coverage evidence: after running all tests, the log file should show that every branch of every changed function was executed.
+
+---
+
+### G3.7: Bug Fix During QA (MANDATORY)
+
+> **Bugs found during QA are fixed during QA. They are not deferred, not logged for later, not left as known issues.**
+
+When a test reveals a bug:
+1. Fix the bug immediately
+2. Rerun the test that found the bug to confirm the fix
+3. Rerun any tests that could be affected by the fix (regression check)
+4. Update `$WORKSPACE_ABS/bugs-fixed.md` with: what was found, what was fixed, which test confirmed it
+5. If the fix touches files outside the original scope, note them in context.md
+
+Do not move to Phase 5 (audit) until all discovered bugs are fixed and verified.
 
 ---
 
@@ -2078,9 +2111,60 @@ Jump to **Phase 5** now. Use `MODE = general` context:
 
 ---
 
+## Phase 6: Log Cleanup and Build Verification (MANDATORY)
+
+**This phase runs after Phase 5 completes. QA is NOT done until logs are cleaned up and the build is verified.**
+
+### 6a — Remove all temporary logging instrumentation
+
+1. Search all in scope files for `// QA-TEMP` marker comments:
+   ```bash
+   grep -rn "QA-TEMP" "$PROJECT_PATH" --include="*.py" --include="*.cs" --include="*.ts" --include="*.js" --include="*.go" --include="*.java"
+   ```
+2. Remove every line marked with `// QA-TEMP`
+3. Cross reference against `$WORKSPACE_ABS/temp-log-removal.md` (written in G3.6) to confirm nothing was missed
+4. If any temp log was accidentally left without the marker, search for common QA log patterns (e.g. "coverage-trace", "QA debug") and remove those too
+
+### 6b — Clean up workspace logs directory
+
+1. Archive the coverage trace log for the audit record:
+   ```bash
+   cp "$WORKSPACE_ABS/logs/coverage-trace.log" "$WORKSPACE_ABS/logs/coverage-trace-archive.log" 2>/dev/null
+   ```
+2. Remove all log files from the workspace logs directory:
+   ```bash
+   rm -f "$WORKSPACE_ABS/logs/"*.log
+   ```
+   Keep the directory itself and the archive copy.
+
+### 6c — Verify build still passes
+
+Run the project's build command after log removal to confirm nothing was broken:
+- Python: `python -m py_compile <changed files>` or `pytest --co` (collect only)
+- .NET: `dotnet build`
+- Node: `npm run build` or `tsc --noEmit`
+- Go: `go build ./...`
+
+If the build fails: a temp log removal broke something. Fix it, rerun the build, and continue.
+
+### 6d — Verify tests still pass
+
+Run the test suite one final time after log removal. If any test fails that was passing before: the temp log was load bearing (it changed behavior). Investigate and fix.
+
+Print:
+```
+Log cleanup complete:
+  Temp logs removed     : [N] lines across [N] files
+  Build after removal   : [PASS/FAIL]
+  Tests after removal   : [PASS/FAIL]
+  Coverage trace saved  : $WORKSPACE_ABS/logs/coverage-trace-archive.log
+```
+
+---
+
 ## What's Next After /qa
 
-The session integrity audit (Phase 5) already ran before you saw this output. It checked proof coverage, retried blocked items, and confirmed the verdict.
+The session integrity audit (Phase 5) and log cleanup (Phase 6) already ran before you saw this output. It checked proof coverage, retried blocked items, and confirmed the verdict.
 
 | If Phase 5 verdict was... | Do this |
 |---------------------------|---------|

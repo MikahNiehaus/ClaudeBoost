@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -50,6 +51,12 @@ _SAFE_KEYS: dict[str, list[str]] = {
 }
 
 
+_REDACT_PATTERNS = re.compile(
+    r"(password|secret|token|api.?key|authorization|bearer)\s*[=:]\s*\S+",
+    re.IGNORECASE,
+)
+
+
 def _build_summary(tool: str, tool_input: dict) -> str:
     """Build a sanitised one-line summary of the tool call."""
     allowed = _SAFE_KEYS.get(tool)
@@ -62,6 +69,8 @@ def _build_summary(tool: str, tool_input: dict) -> str:
         val = tool_input.get(key)
         if val is not None:
             safe_val = str(val)[:200]  # cap length
+            if key == "command":
+                safe_val = _REDACT_PATTERNS.sub(r"\1=***REDACTED***", safe_val)
             parts.append(f"{key}={safe_val}")
 
     return " ".join(parts)

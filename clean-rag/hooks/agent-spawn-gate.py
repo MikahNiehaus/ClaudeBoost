@@ -1,6 +1,12 @@
 """
 ClaudeBoost agent-spawn gate - command-type PreToolUse hook on Task.
 
+Lives under clean-rag/hooks/ alongside proof-gate.py, rag-enforce.py, and
+reindex-after-edit.py, but enforces core ClaudeBoost RAG (POST
+http://127.0.0.1:8612/context — the mcp-rag-server), not clean-rag's own
+research gate (port 8613). Installed unconditionally by setup.py regardless
+of whether clean-rag is bundled.
+
 Replaces the prompt-type "AGENT SPAWN QUALITY ROUTING" hook that was installed
 by scripts/setup.ps1. Prompt-type hooks on Task tool calls were over-firing:
 
@@ -22,13 +28,20 @@ spawn prompt instructs the agent to call POST http://127.0.0.1:8612/context as i
 and exits 2 (blocking) if it doesn't.
 
 Behavior:
-  - Prompt mentions RAG context call (rag_context or 8612/context) -> exit 0 silently (pass)
-  - Prompt missing RAG context call  -> exit 2 + stderr error (blocked)
-  - architect-agent spawn without PROPOSAL_ONLY + 2 citations
-                                  -> exit 2 + stderr error (blocked)
+  - Prompt missing RAG context call (8612/context) -> exit 2 + stderr error (blocked)
+  - research-agent spawn without depth research citations -> exit 2 + stderr error (blocked)
+  - research-agent spawn without bulk acquire-topic system -> exit 2 + stderr error (blocked)
+  - architect-agent spawn without PROPOSAL_ONLY + 2 citations -> exit 2 + stderr error (blocked)
+  - All checks pass -> exit 0 silently (pass)
 
-Exits 2 (blocking) when the spawn prompt does not include a RAG context call (rag_context or POST http://127.0.0.1:8612/context).
-Exits 0 (pass) when a RAG context call is present or when checking architect-agent contract only.
+Enforces DEPTH + BREADTH research pattern:
+  1. All spawns: RAG context call (rag_context or POST http://127.0.0.1:8612/context)
+  2. Research spawns: DEPTH check — Claude must cite direct research (file:line, grep, websearch)
+  3. Research spawns: BREADTH check — Agent must use POST /acquire-topic (4-layer waterfall)
+  4. Architect spawns: PROPOSAL_ONLY contract + 2 file:line citations
+
+Exits 2 (blocking) when any requirement is missing.
+Exits 0 (pass) when all applicable checks pass.
 """
 from __future__ import annotations
 import json
@@ -88,12 +101,50 @@ def main() -> int:
     tool_input = payload.get("tool_input", {}) or {}
     prompt = str(tool_input.get("prompt", "") or "")
     description = str(tool_input.get("description", "") or "")
-
-    # Normalize for case-insensitive substring checks
+    # Normalize for case-insensitive substring checks. Must happen before the
+    # research-spawn checks below, which read prompt_lower.
     prompt_lower = prompt.lower()
 
-    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+    # This file lives at clean-rag/hooks/agent-spawn-gate.py — three levels
+    # below the ClaudeBoost root (hooks -> clean-rag -> ClaudeBoost). The env
+    # var is always set in practice (settings.json's env block); this is only
+    # a fallback for direct/manual invocation.
+    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent.parent)
     nudges: list[str] = []
+
+    # ENFORCEMENT: research-agent spawns follow DEPTH + BREADTH pattern
+    # DEPTH: Claude does direct research first to answer specific question
+    # BREADTH: Agent acquires and indexes comprehensive coverage (doesn't read/answer)
+    is_research_spawn = "research-agent" in description.lower() or "research" in description.lower()
+    if is_research_spawn:
+        # Check 1: Has Claude done depth research? (file:line, Grep, WebSearch citations)
+        has_depth_research = (
+            "file:" in prompt or "grep" in prompt_lower or "websearch" in prompt_lower
+            or "found in" in prompt_lower or "direct research" in prompt_lower
+        )
+        if not has_depth_research:
+            nudges.append(
+                "[research-agent depth check] You must do direct research FIRST (depth) "
+                "before spawning a research agent for breadth. Search RAG or read files "
+                "to answer your specific question with citations (file:line or grep results). "
+                "Then spawn research-agent only for comprehensive acquisition and indexing, "
+                "not to answer your original question."
+            )
+
+        # Check 2: Is agent using the bulk acquisition system (acquire-topic 4-layer waterfall)?
+        # acquire-topic automatically: (1) GitHub sparse checkout, (2) llms.txt scraping,
+        # (3) BFS doc crawl, (4) WebSearch fallback. This is how we scale knowledge breadth.
+        uses_acquire_topic = "acquire-topic" in prompt or "8613/acquire-topic" in prompt
+
+        if not uses_acquire_topic:
+            nudges.append(
+                "[research-agent breadth check] Research-agent MUST use the bulk acquisition system. "
+                "Instead of manual research, spawn with: POST http://127.0.0.1:8613/acquire-topic "
+                "{\"topic\": \"<slug>\"} in the agent prompt. This runs the 4-layer waterfall: "
+                "(1) GitHub sparse checkout, (2) llms.txt scraping, (3) BFS doc crawl, (4) WebSearch. "
+                "Agent does NOT read/analyze — just calls acquire-topic and reports chunks indexed. "
+                "See clean-rag/CLAUDE.md lines 48-153 for the system design."
+            )
 
     # Primary check: does the spawn prompt instruct the agent to call
     # Accept: rag_context (legacy), mcp__rag-server__rag_context (legacy MCP name),
@@ -153,6 +204,28 @@ def main() -> int:
                 f"Include workspace_path=\"{ws_path}\" in the context call so the agent "
                 "receives Tier 3c workspace research (task-specific docs indexed by /research-task)."
             )
+
+    # Clean-rag enforcement: agents that will edit files must know about clean-rag
+    # proof requirements. Check that the spawn prompt mentions clean-rag search
+    # (port 8613) so the agent knows it needs to search and write proof before editing.
+    # Evaluator and research agents are exempt (they don't edit source files).
+    is_evaluator_spawn = "evaluator" in description.lower() or "verdict" in description.lower()
+    is_non_editing = is_evaluator_spawn or is_research_spawn
+    has_clean_rag = (
+        "8613" in prompt
+        or "clean-rag" in prompt_lower
+        or "proof-gate" in prompt_lower
+        or "clean_rag" in prompt_lower
+    )
+    if not is_non_editing and not has_clean_rag:
+        nudges.append(
+            "[clean-rag enforcement] Spawn prompt does not mention clean-rag research enforcement. "
+            "Agents that edit files must search clean-rag (POST http://127.0.0.1:8613/search) "
+            "and write proof before editing. Include these instructions in the spawn prompt: "
+            "\"Before editing any file, search clean-rag (POST http://127.0.0.1:8613/search) "
+            "for relevant research, write proof to clean-rag/state/, then retry the edit. "
+            "The proof-gate hook will block edits without verified proof.\""
+        )
 
     # Secondary check: architect-agent proposal contract.
     # Only fires when the spawn IS an architect-agent, not when the prompt merely

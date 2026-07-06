@@ -19,7 +19,7 @@
   to grab the docs folder directly. This is Layer 1 (highest quality).
   Attributes: repo="owner/name" path="docs/folder" branch="main"
 
-  doc-root is optional. When present, fetch-docs.py --crawl uses BFS crawl
+  doc-root is optional. When present, fetch-docs.py's crawl mode uses BFS crawl
   starting from this URL. This is Layer 3.
   Attributes: url="https://..." max-pages="200"
 

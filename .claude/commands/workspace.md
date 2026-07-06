@@ -124,9 +124,17 @@ If workspaces are listed, parse each `wid|wpath|ppath` line and ask the user:
 
 ## Phase 1: Create the Workspace
 
-### 1a — Generate a slug
+### 1a — Detect flags
 
-Derive a slug from `$ARGUMENTS`:
+Before generating the slug, check `$ARGUMENTS` for flags:
+
+- `--auto`: Run the full automated pipeline after plan creation (see Phase 7). Strip `--auto` from arguments before slug generation.
+
+Set `AUTO_MODE = true` if `--auto` was detected, `false` otherwise.
+
+### 1b — Generate a slug
+
+Derive a slug from `$ARGUMENTS` (with flags stripped):
 - Strip filler words: `fix`, `add`, `update`, `build`, `create`, `make`, `implement`, `the`, `a`, `an`, `for`, `to`, `of`, `in`, `on`, `it`, `this`, `that`, `i`, `want`
 - Take up to 4 remaining content words, lowercase, hyphenated
 - Append today's date: `YYYY-MM-DD`
@@ -136,7 +144,7 @@ Set `WORKSPACE_ID = [slug]`.
 
 Check for collision — read `state/workspaces.json` (under CLAUDEBOOST_HOME) with the **Read tool** and look at its keys. If that slug already exists, append `-2`, `-3`, etc. Do NOT use multiline `python3 -c` for this — bash-guard blocks it; the Read tool never prompts.
 
-### 1b — Determine workspace root and create workspace
+### 1c — Determine workspace root and create workspace
 
 **Detect project path** — do NOT use CWD as a proxy. CWD is often the ClaudeBoost directory even when the work is for a different project. Use this priority order instead:
 
@@ -206,7 +214,7 @@ If it errors, note it but do not block — the workspace was already created.
 
 Report: "Created workspace `$WORKSPACE_ID` at `$WORKSPACE_ABS`."
 
-### 1c — Save the goal verbatim
+### 1d — Save the goal verbatim
 
 Detect input format:
 - **Short description** (≤30 whitespace-delimited words, single-line): write as a one-liner under `**Input**:`
@@ -237,7 +245,7 @@ $ARGUMENTS
 
 Also write `$WORKSPACE_ABS/ticket.md` with the raw verbatim input when a full ticket is detected (per CLAUDE.md convention: "Ticket pasted → Save verbatim to `workspace/[task-id]/ticket.md`").
 
-### 1d — Create feature branch
+### 1e — Create feature branch
 
 **First: check the branch-creation setting in state.**
 
@@ -748,6 +756,108 @@ Context budget : [sequential/parallel note based on current context level]
 ```
 
 If any critical ambiguity remains (you genuinely cannot determine work type or scope): ask ONE focused question before presenting the plan. Do not ask about details that the plan itself can accommodate.
+
+If `AUTO_MODE` is true, print the plan but do NOT wait for user approval. Instead, immediately proceed to Phase 7 (Auto Execution Pipeline).
+
+---
+
+## Phase 7: Auto Execution Pipeline (only when `--auto` flag was set)
+
+If `AUTO_MODE` is false, skip this phase entirely. The user will execute manually.
+
+If `AUTO_MODE` is true, proceed through every step below without stopping for user confirmation. Update `context.md` after each stage. If any stage fails, attempt to fix it once before moving on. If the fix fails, log the failure to `context.md` and continue with the next stage.
+
+### 7a — Ticket documentation and understanding
+
+Read the ticket/goal. Write a detailed analysis to `$WORKSPACE_ABS/ticket-analysis.md`:
+- What the ticket asks for (in plain language)
+- Acceptance criteria (explicit and implied)
+- Edge cases and open questions
+- Dependencies on other systems
+
+### 7b — Full codebase context (no gaps)
+
+Use RAG and file reads to build complete understanding:
+1. `POST /search scope=codebase mode=both` seeded from ticket entities
+2. Read every file in the scope graph until there are no unknowns
+3. Trace imports, callers, and dependents for every file that will change
+4. Write findings to `context.md` as "Codebase Understanding" section
+5. If any area is unclear, read more files until it is clear. No gaps.
+
+### 7c — Generate spec, audit, fix gaps
+
+1. Write `$WORKSPACE_ABS/spec.md` with:
+   - Every file that will change and exactly what changes
+   - New files to create and what they contain
+   - Files that must NOT change (out of scope)
+2. Self audit the spec against the ticket: does every acceptance criterion have a matching spec entry?
+3. Self audit for codebase gaps: does the spec account for all callers and dependents?
+4. Fix any gaps found. Repeat until the spec is clean.
+
+### 7d — Code changes
+
+Switch to AUTO mode (`/auto workspace-auto-pipeline`). Execute every change in the spec:
+1. For each file, search RAG and write proof before editing (clean-rag enforces this)
+2. Follow the plan step by step
+3. After each significant change, update `context.md`
+
+### 7e — Code quality review
+
+Run `/xray --deep` on the changed files. Fix every issue flagged as C or below. Rerun until all grades are B or above.
+
+### 7f — Full audit
+
+Run `/audit` on the workspace. Fix anything the audit flags. This covers:
+- Correctness against the ticket
+- Security (OWASP top 10)
+- Performance
+- Code quality
+- Test coverage gaps
+
+### 7g — QA and audit loop
+
+Run `/qa --code` to execute tests. If tests fail, fix them and rerun. Then:
+1. Run `/qa <url>` if there is a UI (localhost only)
+2. Focus on local testing: verify every feature locally
+3. If the audit finds something QA missed, fix it and rerun QA
+4. Loop until the audit passes with no findings and all tests pass
+5. Any bugs found during QA must be fixed during QA, not deferred
+
+### 7h — Visualization
+
+Run `/visualize` to generate a visual explanation of:
+- What the ticket asked for
+- What was implemented
+- How the changes connect to the existing codebase
+
+### 7i — IDE change justifications
+
+Generate a change summary for each modified file:
+- What changed and why
+- Which ticket requirement it satisfies
+- Any tradeoffs made
+
+Write this to `$WORKSPACE_ABS/change-justifications.md`.
+
+### 7j — Report completion
+
+Update `context.md` status to COMPLETE. Print a summary:
+```
+Auto pipeline complete for: $WORKSPACE_ID
+
+  Stages completed: [list]
+  Stages with issues: [list, if any]
+  Files changed: [count]
+  Tests passing: [yes/no]
+  XRay grade: [grade]
+  Audit status: [passed/issues]
+
+  Artifacts:
+    ticket-analysis.md
+    spec.md
+    change-justifications.md
+    context.md (full session log)
+```
 
 ---
 

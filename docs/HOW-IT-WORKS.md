@@ -1,15 +1,15 @@
 # ClaudeBoost — How It Works
 
-ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 23 specialist
-agents, 108 knowledge files, a local semantic RAG + GraphRAG server, and 35 slash
+ClaudeBoost is a multi-agent orchestration layer for Claude Code. It adds 24 specialist
+agents, 109 knowledge files, a local semantic RAG + GraphRAG server, and 35 slash
 commands — all wired together through hooks.
 
 ## Directory Layout
 
 ```
 ClaudeBoost/
-├── agents/              24 agent definitions (XML)
-├── knowledge/           108 knowledge files (XML)
+├── agents/              25 agent definitions (XML)
+├── knowledge/           109 knowledge files (XML)
 │   ├── lang-*.xml       21 language guides
 │   └── fw-*.xml         33 framework guides
 ├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
@@ -54,7 +54,7 @@ exists, graph mode falls back to vector results.
 
 ## Agents
 
-23 specialist agents (plus one internal orchestrator), each defined as an XML file in `agents/`. They are not scripts —
+24 specialist agents (plus one internal orchestrator), each defined as an XML file in `agents/`. They are not scripts —
 they are prompt definitions that the RAG server loads and injects via `POST /context`
 when an agent is spawned.
 
@@ -69,8 +69,8 @@ when an agent is spawned.
 
 ## Knowledge Files
 
-108 XML files in `knowledge/`, organized as:
-- **Domain bases** (54): coding standards, security, architecture, debugging, testing,
+109 XML files in `knowledge/`, organized as:
+- **Domain bases** (55): coding standards, security, architecture, debugging, testing,
   observability, performance, refactoring, UI implementation, API design, context
   engineering, verify gate, scope governance, rule enforcement, human voice standard,
   and more

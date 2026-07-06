@@ -19,9 +19,11 @@ sys.path.insert(0, str(BOOST_HOME / "scripts"))
 
 from telemetry_writer import (  # noqa: E402
     _DISABLED,
+    _acquire_lock,
     _get_telemetry_dir,
     now_iso,
     path_hash,
+    release_lock,
     session_id,
 )
 
@@ -104,6 +106,9 @@ def handle_session_end() -> None:
     session_file = tel_dir / "session.json"
     if not session_file.exists():
         return
+
+    lock_path = tel_dir / "session.lock"
+    acquired = _acquire_lock(lock_path, timeout_s=1.0)
     try:
         data = json.loads(session_file.read_text(encoding="utf-8"))
         data["ended_at"] = now_iso()
@@ -119,6 +124,9 @@ def handle_session_end() -> None:
         session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
         pass
+    finally:
+        if acquired:
+            release_lock(lock_path)
 
 
 def main() -> int:

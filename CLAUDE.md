@@ -4,7 +4,7 @@ Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, sema
 
 ## How It Works
 
-You have 24 agents (`agents/*.xml`) and 108 knowledge files (`knowledge/*.xml`) — 54 domain bases, 21 language guides (`lang-*.xml`), 33 framework guides (`fw-*.xml`).
+You have 25 agents (`agents/*.xml`) and 109 knowledge files (`knowledge/*.xml`) — 55 domain bases, 21 language guides (`lang-*.xml`), 33 framework guides (`fw-*.xml`).
 A RAG server indexes all of them for semantic search.
 
 **RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
@@ -45,6 +45,10 @@ Steps:
 Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
 
 ## Agent Spawning
+
+**CRITICAL:** Always use the **Task tool** to spawn agents, never the Agent tool.
+The enforcement gate (PreToolUse hook on Task) blocks unresearched agent spawns.
+Agent tool bypasses enforcement — it will be blocked by agent-spawn-gate.py.
 
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one-line fix doesn't need an agent.
@@ -123,7 +127,7 @@ State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
 
 **Agent weight routing**:
 - **Full** (reviewer, security, performance): verify gate + evaluator-agent
-- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator, e2e): no verify gate
+- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator, e2e, clean-rag-doctor): no verify gate
 - **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
 Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.
