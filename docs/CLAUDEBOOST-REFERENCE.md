@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
-**Generated:** 2026-05-08 (counts updated 2026-06-12)
-**Coverage:** All 16 hook registrations, 24 agent XMLs (including _orchestrator), 108 knowledge XMLs (54 domain + 21 lang + 33 framework), 35 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Generated:** 2026-05-08 (counts updated 2026-07-05)
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 109 knowledge XMLs (55 domain + 21 lang + 33 framework), 35 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1076,6 +1076,22 @@ Agent reads and internalizes before taking any action
 - Snapshot-first verification: text confirmation before screenshot; screenshots annotated with red JS overlay
 - Reports distinguish PASS / FAIL / BLOCKED — no shortcuts, no self-certification
 - Knowledge: `e2e-testing.xml` (primary), `playwright.xml`, `testing.xml`
+
+---
+
+### 3.25 clean-rag-doctor-agent
+
+**File:** `agents/clean-rag-doctor-agent.xml`  
+**Model:** Sonnet  
+**Role:** clean-rag Server Doctor — diagnoses and repairs the clean-rag research-enforcement server (port 8613) when it's down, stuck warming up, or returning errors  
+**Key behaviors:**
+- STANDARD spawn template
+- Spawned automatically in the background by the UserPromptSubmit health check in `clean-rag/hooks/rag-enforce.py` (rate-limited to one nudge per 600s); runs in parallel with whatever the orchestrator is already doing
+- Reads `clean-rag/state/server.log` for the real traceback rather than trusting the DEVNULL-redirected background launch
+- Reproduces failures in the foreground (`python server/__main__.py`) to see stdout/stderr directly
+- Documents two known recurring issue classes: a script-directory-shadows-stdlib bug (a file in `clean-rag/server/` named after a stdlib module, e.g. `queue.py`, breaks relative imports process-wide) and a lazy-embedder-load race on first request after a fresh start
+- Must satisfy clean-rag's own proof-gate before editing any non-exempt file, using `write_pending_proof()`
+- Verifies with an actual search request returning real scored results before reporting done — never guesses from the error string alone
 
 ---
 

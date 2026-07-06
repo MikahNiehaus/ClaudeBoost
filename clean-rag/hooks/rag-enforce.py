@@ -16,6 +16,7 @@ Exit codes:
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -25,6 +26,65 @@ def _clean_rag_home() -> Path:
     if env:
         return Path(env)
     return Path(__file__).resolve().parent.parent
+
+
+def _health_check(port: str) -> dict:
+    """Quick, non-blocking check of clean-rag server health.
+
+    Mirrors the /status probe cli/server_ctl.py's cmd_start already uses to verify
+    a fresh launch. status=='warming_up' is treated as healthy for the first 90s
+    (matches the ~23s cold start measured after the startup-warmup fix in app.py's
+    _on_startup) so a server that just started doesn't get flagged as broken.
+    """
+    import http.client
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=1.0)
+        conn.request("GET", "/status")
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        data = json.loads(body)
+    except Exception as e:
+        return {"ok": False, "reason": f"unreachable: {e}"}
+
+    status = data.get("status")
+    uptime = data.get("uptime_s", 0)
+
+    if status == "ready":
+        return {"ok": True}
+    if status == "warming_up" and uptime < 90:
+        return {"ok": True}
+
+    return {
+        "ok": False,
+        "reason": (
+            f"status={status} uptime_s={uptime} "
+            f"embedding_loaded={data.get('embedding_loaded')} "
+            f"code_embedding_loaded={data.get('code_embedding_loaded')}"
+        ),
+    }
+
+
+def _should_nudge_doctor(state_dir: Path, cooldown_s: int = 600) -> bool:
+    """Rate-limit doctor-agent nudges so an in-progress repair isn't re-triggered every turn."""
+    marker = state_dir / "last-doctor-nudge.json"
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        if time.time() - data.get("ts", 0) < cooldown_s:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _mark_doctor_nudged(state_dir: Path) -> None:
+    marker = state_dir / "last-doctor-nudge.json"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _read_mode() -> str:
@@ -89,7 +149,23 @@ def main() -> int:
     )
 
     # Output the mandate so it gets injected into the conversation
-    print(mandate)
+    print(mandate.format(topic_tree=topic_tree, port=port))
+
+    health = _health_check(port)
+    if not health["ok"]:
+        home = _clean_rag_home()
+        state_dir = home / "state"
+        if _should_nudge_doctor(state_dir):
+            _mark_doctor_nudged(state_dir)
+            print(
+                "\n--- CLEAN-RAG SERVER ISSUE DETECTED ---\n"
+                f"Health check failed: {health['reason']}\n"
+                "Spawn clean-rag-doctor-agent via the Task tool right now, running in the "
+                "background (do not wait for it). Continue whatever you were already doing in "
+                "parallel; do not block on the repair.\n"
+                "--- END NOTICE ---\n"
+            )
+
     return 0
 
 

@@ -27,7 +27,7 @@ from .config import (
 )
 from .embedding import SentenceTransformerEmbedding
 from .indexing import acquire_index_lock, index_project, index_topic, reindex_file, release_index_lock
-from .queue import IndexQueue
+from .index_queue import IndexQueue
 from .search import search
 
 # acquire_topic is imported lazily to avoid pulling in research deps at startup
@@ -141,6 +141,7 @@ async def handle_search(request: web.Request) -> web.Response:
         try:
             await loop.run_in_executor(None, _embedder.embed_query, "warmup")
         except Exception as e:
+            logger.exception("Embedding model failed to load")
             return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
 
     # Only load code embedder if a project source is requested
@@ -149,6 +150,7 @@ async def handle_search(request: web.Request) -> web.Response:
         try:
             await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
         except Exception as e:
+            logger.exception("Code embedding model failed to load")
             return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
     results = await loop.run_in_executor(
@@ -199,6 +201,7 @@ async def handle_index_topic(request: web.Request) -> web.Response:
             try:
                 await loop.run_in_executor(None, _embedder.embed_query, "warmup")
             except Exception as e:
+                logger.exception("Embedding model failed to load")
                 return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
 
         result = await loop.run_in_executor(
@@ -457,6 +460,7 @@ async def handle_batch_index(request: web.Request) -> web.Response:
         try:
             await loop.run_in_executor(None, _embedder.embed_query, "warmup")
         except Exception as e:
+            logger.exception("Embedding model failed to load")
             release_index_lock()
             return _json_response({"error": f"Embedding model failed to load: {e}"}, 503)
 
@@ -519,8 +523,25 @@ def create_app() -> web.Application:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     async def _on_startup(app: web.Application) -> None:
-        """Start the index queue worker once the event loop is running."""
+        """Start the index queue worker once the event loop is running.
+
+        Also warms up both embedders here, synchronously, before the server
+        starts accepting connections. sentence-transformers' first import is
+        not thread-safe (github.com/huggingface/sentence-transformers/issues/2313);
+        loading it lazily from a request-handling executor thread races with
+        that first import and intermittently raises "attempted relative import
+        with no known parent package". aiohttp awaits on_startup handlers to
+        completion before opening the listening socket, so doing it here is
+        guaranteed single-threaded and race-free.
+        """
         _index_queue.start(_embedder)
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, _embedder.embed_query, "warmup")
+            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
+            logger.info("Embedders warmed up at startup")
+        except Exception:
+            logger.exception("Embedder warmup failed at startup")
 
     app = web.Application()
     app.router.add_get("/status", handle_status)
@@ -543,9 +564,18 @@ def create_app() -> web.Application:
 
 def run_server() -> None:
     """Start the standalone HTTP server."""
+    from logging.handlers import RotatingFileHandler
+
+    log_format = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        STATE_DIR / "server.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(logging.Formatter(log_format))
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        format=log_format,
+        handlers=[logging.StreamHandler(), file_handler],
     )
     app = create_app()
     logger.info("Starting clean-rag server on http://127.0.0.1:%d", STANDALONE_PORT)

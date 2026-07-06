@@ -307,7 +307,10 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
             # Resolve hidden dimension via a minimal test inference.
             import numpy as _np
             test_enc = self._tokenizer(["d"], return_tensors="np", max_length=4)
-            test_in = {k: v for k, v in dict(test_enc).items() if k in self._input_names}
+            # Export uses return_tensors="pt", which is always int64. return_tensors="np"
+            # can hand back int32 depending on the tokenizers backend/padding path — cast
+            # explicitly so the dtype always matches what the ONNX graph was traced with.
+            test_in = {k: v.astype(_np.int64) for k, v in dict(test_enc).items() if k in self._input_names}
             # RoBERTa tokenizers don't produce token_type_ids; the ONNX export wrapper
             # always includes it as a required input — fill with zeros when absent.
             if "token_type_ids" in self._input_names and "token_type_ids" not in test_in:
@@ -336,7 +339,7 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
             ["Calibration sentence for throughput measurement."] * 4,
             padding=True, truncation=True, return_tensors="np", max_length=64,
         )
-        bench = {k: v for k, v in dict(bench_enc).items() if k in self._input_names}
+        bench = {k: v.astype(_np_cal.int64) for k, v in dict(bench_enc).items() if k in self._input_names}
         if "token_type_ids" in self._input_names and "token_type_ids" not in bench:
             bench["token_type_ids"] = _np_cal.zeros_like(bench["input_ids"])
 
@@ -394,7 +397,9 @@ class OnnxDirectMLEmbedding(EmbeddingPort):
         import numpy as np
         enc = self._tokenizer(texts, padding=True, truncation=True,
                               return_tensors="np", max_length=512)
-        inputs = {k: v for k, v in dict(enc).items() if k in self._input_names}
+        # Cast to int64 to match the dtype the ONNX graph was exported with
+        # (export uses return_tensors="pt", always int64; "np" can be int32).
+        inputs = {k: v.astype(np.int64) for k, v in dict(enc).items() if k in self._input_names}
         # RoBERTa tokenizers omit token_type_ids; pad with zeros when ONNX model needs them.
         if "token_type_ids" in self._input_names and "token_type_ids" not in inputs:
             inputs["token_type_ids"] = np.zeros_like(inputs["input_ids"])

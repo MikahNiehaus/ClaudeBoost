@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 23 specialist agents (architect, security, performance, test, debug, and more), 108 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 35 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 24 specialist agents (architect, security, performance, test, debug, and more), 109 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 35 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -150,7 +150,7 @@ Everything else in the tables below is available, but most of it runs automatica
 
 ## 5. Agents
 
-All 23 specialist agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
+All 24 specialist agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
 
 | Agent | What it does | Best for | Model |
 |-------|-------------|----------|-------|
@@ -177,6 +177,7 @@ All 23 specialist agents are spawned automatically based on task type. You can r
 | estimator-agent | Story pointing, complexity estimation | Estimating effort for a sprint backlog | Sonnet |
 | evaluator-agent | Verify-gate — validates findings from other agents | Confirming a security or bug finding is real before it reaches you | Sonnet |
 | rag-indexing-agent | RAG index management, re-indexing advice | Diagnosing stale or broken index state | Sonnet |
+| clean-rag-doctor-agent | Diagnoses and repairs the clean-rag research-enforcement server (port 8613) when it's down or erroring | Spawned automatically by the clean-rag health check when a search fails; runs in the background | Sonnet |
 
 The `_orchestrator` meta-agent is internal — it coordinates agent spawning and isn't listed as a specialist agent.
 
@@ -579,7 +580,7 @@ You will not see most of these. They run silently unless there is a problem, in 
 
 ## Appendix: Knowledge base coverage
 
-The 108 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
+The 109 knowledge files are loaded automatically by RAG — you don't pick them manually. RAG matches them based on what you're working on.
 
 **Domain bases (54 files)** cover: api-design, architecture, branching-strategy, code-critique, code-exploration, coding-standards, consult-mode, context-engineering, database, debugging, devops, documentation, e2e-testing, error-handling, human-voice, memory-management, model-selection, observability, performance, playwright, pr-review, refactoring, research, security, testing, ticket-understanding, tool-design, ui-implementation, verify-gate, workflow, and more.
 

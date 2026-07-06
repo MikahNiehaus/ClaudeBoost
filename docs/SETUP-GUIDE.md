@@ -71,7 +71,7 @@ GET http://127.0.0.1:8612/status
 Should return `{"status":"ready"}` with collection chunk counts.
 
 That's it. Every Claude Code session now has:
-- Semantic search over 108 knowledge files (54 domain, 21 language, 33 framework) and 24 agent XML files
+- Semantic search over 109 knowledge files (55 domain, 21 language, 33 framework) and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
 - 35 slash commands for task management
 
@@ -95,8 +95,8 @@ Only changed files get re-indexed normally (incremental via SHA-256 hash compari
 
 | Scope | Source files | What's in them |
 |-------|------------|----------------|
-| knowledge | `knowledge/*.xml` (108 files: 54 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
-| agents | `agents/*.xml` (24 files) | Agent definitions with capabilities, guidelines, output formats |
+| knowledge | `knowledge/*.xml` (109 files: 55 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
+| agents | `agents/*.xml` (25 files) | Agent definitions with capabilities, guidelines, output formats |
 
 ## Verification Checklist
 

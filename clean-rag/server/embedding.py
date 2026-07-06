@@ -42,7 +42,7 @@ class SentenceTransformerEmbedding:
             return
         with self._load_lock:
             if self._model is None:
-                from .config import DEVICE, EMBED_BATCH_SIZE
+                from server.config import DEVICE, EMBED_BATCH_SIZE
                 logger.info("Loading embedding model: %s (device=%s)", self._model_name, DEVICE)
                 from sentence_transformers import SentenceTransformer
                 kwargs: dict = {"device": DEVICE}
