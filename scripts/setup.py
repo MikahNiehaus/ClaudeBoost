@@ -680,12 +680,6 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("consult-gate.py")}],
     }, sentinel="consult-gate.py", label="CONSULT gate on Edit/Write/Bash (command-type)")
 
-    # --- PreToolUse: action gate (requires [Action] form before Edit/Write/MultiEdit) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": _py_cmd("action-gate.py")}],
-    }, sentinel="action-gate.py", label="action form gate on Edit/Write/MultiEdit (command-type)")
-
     # --- PreToolUse: Bash guard (blocks commands that trigger permission prompts) ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Bash",
