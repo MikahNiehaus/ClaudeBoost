@@ -59,6 +59,7 @@ _TRUST_REMOTE_CODE_MODELS = {
     "nomic-ai/nomic-embed-code",
     "nomic-ai/nomic-embed-text-v1",
     "nomic-ai/nomic-embed-text-v1.5",
+    "nomic-ai/CodeRankEmbed",
 }
 
 
