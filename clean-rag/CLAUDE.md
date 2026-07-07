@@ -121,8 +121,9 @@ Every proof must include at least 2 research angles, and one of them **must** be
 
 | Angle | What to search | Required? |
 |-------|---------------|-----------|
-| `codebase` | Callers, imports, dependents of the target file | **Yes, always** |
+| `codebase` | Callers, imports, dependents of the target file. Use mode=both when project is indexed. | **Yes, always** |
 | `technology` | How does this tech work? Search the topic docs | No |
+| `methodology` | Code quality practices: clean code, SOLID, patterns, code smells | Recommended when changing logic |
 | `pitfalls` | What commonly goes wrong with this approach? | No |
 | `security` | Any security implications? (when applicable) | No |
 | `best_practices` | What is the recommended pattern? | No |

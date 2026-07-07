@@ -340,6 +340,7 @@ Before editing, you must:
        research_angles=[
            {{"angle": "technology", "query": "<what you searched>", "score": <score>}},
            {{"angle": "codebase", "query": "<how you searched project>", "score": <score>}},
+           {{"angle": "methodology", "query": "clean code naming conventions", "score": 0.85}},
        ],
        quality_aspects=[
            {{"aspect": "architecture", "assertion": "<how the change fits the project structure>"}},
@@ -347,6 +348,11 @@ Before editing, you must:
        ],
    )
 
+   TIP: The "methodology" angle searches code quality topics (SOLID, clean code,
+   design patterns, code smells, etc.) for best practices relevant to your change.
+   Not required, but recommended when changing logic or structure.
+
+{methodology_guidance}
 4. RETRY the edit. The gate passes if:
    - verdict == VERIFIED
    - min_score >= {min_score}
@@ -396,14 +402,81 @@ INDEX_GUIDANCE_NOT_INDEXED = """PROJECT INDEX STATUS: NOT INDEXED
 # Appended when the project IS indexed
 INDEX_GUIDANCE_INDEXED = """PROJECT INDEX STATUS: INDEXED
   Project root: {project_root}
-  Include "project:{project_root}" in your search sources for the codebase angle.
-  Example: "sources": ["topic:fastapi", "project:{project_root}"]"""
+  Include "project:{project_root}" in your search sources with mode="both" for the codebase angle.
+  mode="both" runs vector + graph search together, finding semantically similar code AND
+  structural neighbors (what imports this file, what calls its functions, what inherits from it).
+  Example: "sources": ["topic:fastapi", "project:{project_root}"], "mode": "both" """
 
 # Appended when we can't detect the project root
 INDEX_GUIDANCE_UNKNOWN = """PROJECT INDEX STATUS: UNKNOWN
   Could not detect the project root for this file.
   For the codebase research angle, use Grep to search the project
   directory for existing patterns, then cite grep results in the proof."""
+
+
+METHODOLOGY_TOPICS = {
+    "baseline": ["clean-code-principles", "code-smells"],
+    "class_structure": ["solid-principles", "design-patterns"],
+    "api": ["api-design", "error-handling"],
+    "test": ["testing-strategy"],
+    "config": ["configuration-management"],
+    "database": ["database-design"],
+    "performance": ["performance-optimization"],
+    "concurrency": ["concurrency"],
+}
+
+_SOURCE_EXTS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".cs", ".java", ".go", ".rs",
+    ".rb", ".php", ".swift", ".kt", ".scala", ".cpp", ".c", ".h",
+}
+
+_API_PATTERNS = {"route", "endpoint", "controller", "api", "handler", "view"}
+_DB_PATTERNS = {"model", "migration", "schema", "database", "db", "query", "orm"}
+_TEST_PATTERNS = {"test", "spec", "tests", "specs", "__tests__"}
+_CONFIG_PATTERNS = {"config", "settings", "env"}
+_PERF_PATTERNS = {"cache", "queue", "worker", "batch", "stream"}
+_CONCURRENCY_PATTERNS = {"async", "thread", "parallel", "concurrent", "lock"}
+
+
+def _suggest_methodology_topics(file_path: str, tool_input: dict) -> list[str]:
+    """Suggest relevant methodology topics based on the file being edited.
+
+    Returns 2 to 4 topic slugs most relevant to the file type.
+    """
+    topics = list(METHODOLOGY_TOPICS["baseline"])
+    path_lower = file_path.lower().replace("\\", "/")
+    ext = Path(file_path).suffix.lower()
+
+    if ext not in _SOURCE_EXTS:
+        return topics
+
+    path_parts = set(path_lower.split("/"))
+
+    # Check edit content for class/module structure keywords
+    content = tool_input.get("content", "") + tool_input.get("new_string", "")
+    if any(kw in content for kw in ("class ", "interface ", "abstract ", "extends ", "implements ")):
+        topics.extend(METHODOLOGY_TOPICS["class_structure"])
+
+    if path_parts & _API_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["api"])
+    if path_parts & _DB_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["database"])
+    if path_parts & _TEST_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["test"])
+    if path_parts & _CONFIG_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["config"])
+    if path_parts & _PERF_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["performance"])
+    if path_parts & _CONCURRENCY_PATTERNS:
+        topics.extend(METHODOLOGY_TOPICS["concurrency"])
+
+    seen = set()
+    unique = []
+    for t in topics:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    return unique[:4]
 
 
 def _build_remediation_for_reasons(reasons: list) -> str:
@@ -636,6 +709,7 @@ def main() -> int:
 
     # Server is up. Show full research instructions with expected proof path.
     index_guidance = _build_index_guidance(file_path, port)
+    methodology_guidance = _build_methodology_guidance(file_path, tool_input, port)
     proof_path = _proof_file_for(state_dir, canonical)
 
     print(
@@ -646,6 +720,7 @@ def main() -> int:
             min_score=MIN_PROOF_SCORE,
             window=PROOF_WINDOW_S,
             index_guidance=index_guidance,
+            methodology_guidance=methodology_guidance,
             proof_file=proof_path.name,
         ),
         file=sys.stderr,
@@ -676,6 +751,26 @@ def _build_index_guidance(file_path: str, port: str) -> str:
             project_root=project_root.replace("\\", "/"),
             port=port,
         )
+
+
+def _build_methodology_guidance(file_path: str, tool_input: dict, port: str) -> str:
+    """Build methodology topic suggestions for the block message.
+
+    Analyzes the file path and edit content to suggest which code quality
+    methodology topics are most relevant to search before making this edit.
+    """
+    topics = _suggest_methodology_topics(file_path, tool_input)
+    if not topics:
+        return ""
+
+    sources = ", ".join(f'"topic:{t}"' for t in topics)
+    return (
+        f"METHODOLOGY TOPICS (search these for code quality guidance):\n"
+        f'  POST http://127.0.0.1:{port}/search\n'
+        f'  {{"query": "<your code quality question>", "sources": [{sources}]}}\n'
+        f"  Suggested topics: {', '.join(topics)}\n"
+        f'  Add a "methodology" angle to your proof for stronger quality grounding.'
+    )
 
 
 def _is_fresh_strict(proof: dict) -> bool:

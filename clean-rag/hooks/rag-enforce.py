@@ -142,9 +142,13 @@ def main() -> int:
         "1. Topics: {topic_tree}\n"
         "2. SEARCH: POST http://127.0.0.1:{port}/search OR direct research (Grep/WebSearch)\n"
         "3. Cite source: file:line, grep result, or WebSearch title\n"
-        "4. Base response on research. For edits: write proof file (2+ angles: technology, codebase, pitfalls, security, best-practices)\n"
+        "4. Base response on research. For edits: write proof file (2+ angles: technology, codebase, pitfalls, security, best-practices, methodology)\n"
         "5. Save findings to clean-rag/knowledge/<category>/<topic>/ and POST /index-topic\n"
         "6. NO unresearched claims. NO 'typically/generally/usually' without sources.\n"
+        "7. METHODOLOGY (code quality): clean-code-principles, solid-principles, code-smells,\n"
+        "   design-patterns, refactoring-techniques, error-handling, api-design, testing-strategy,\n"
+        "   defensive-programming, logging-observability, performance-optimization, architectural-patterns\n"
+        "   Search these when writing or reviewing code for quality guidance.\n"
         "--- END CLEAN-RAG MANDATE ---\n"
     )
 
