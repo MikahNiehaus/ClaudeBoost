@@ -24,6 +24,7 @@ RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
+GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 
 
 def _say(msg: str) -> None:
@@ -158,6 +159,24 @@ def register_proof_gate_hook() -> None:
     _register_hook(
         settings, "PreToolUse", PROOF_GATE_SENTINEL,
         hook_entry, prepend=True, label="proof-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3b: Register graph-context-inject hook (PreToolUse) -- plan Stage 5+7.
+# Not prepend=True like proof-gate: this one only informs, never blocks, so
+# order relative to proof-gate doesn't matter for correctness.
+# ---------------------------------------------------------------------------
+def register_graph_context_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/graph-context-inject.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", GRAPH_CONTEXT_SENTINEL,
+        hook_entry, prepend=False, label="graph-context-inject",
     )
 
 
@@ -454,6 +473,9 @@ def main():
     print("\nStep 3: Registering proof gate hook...")
     register_proof_gate_hook()
 
+    print("\nStep 3b: Registering graph-context-inject hook...")
+    register_graph_context_hook()
+
     # Step 4
     print("\nStep 4: Setting environment variables...")
     set_env_var()
@@ -493,6 +515,7 @@ def main():
     print(f"  Home:    {CLEAN_RAG_HOME}")
     print(f"  Hooks:")
     print(f"    PreToolUse:        proof-gate.py (blocks edits without proof)")
+    print(f"    PreToolUse:        graph-context-inject.py (auto-fetches caller context + reflective nudge, never blocks)")
     print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
     print(f"    Stop:              research-stop-gate (blocks unresearched responses)")

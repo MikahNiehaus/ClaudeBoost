@@ -86,6 +86,35 @@ Applies everywhere: reviews, planning, bug diagnosis, security audits, test plan
 
 Hooks remind you of this: PreToolUse nudges agents to call POST http://127.0.0.1:8612/context in spawn prompts, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION status flags a finding for evaluator-agent escalation.
 
+## TDD Guard
+
+PreToolUse hook on Edit, Write, and MultiEdit that enforces writing tests before source code. Uses git diff detection (no LLM calls, no external API) to check whether a corresponding test file was modified before allowing source edits.
+
+**Modes** (set via `CLAUDEBOOST_TDD_GUARD` env var):
+- `soft` (default): warns on stderr but allows the edit (exit 0)
+- `strict`: blocks the edit (exit 2) until a test file is changed
+- `off`: disabled entirely
+
+**How it works**: when you edit a source file, the hook runs `git diff --name-only HEAD` and checks if any changed file matches a test pattern for the source file's name. Test patterns: `test_{name}.*`, `{name}_test.*`, `{name}.test.*`, `{name}.spec.*`, `{name}Tests.*`, `{name}_spec.*`. Any test file in the changed set also counts.
+
+**Exempt paths**: workspace/, state/, knowledge/, plans/, docs/, .claudeboost/, .claude/, temp directories. Editing test files themselves is always allowed.
+
+**Hook order**: TDD guard fires BEFORE proof-gate. If TDD guard blocks, proof-gate never runs (no wasted proof computation).
+
+**To satisfy the guard**: write or modify a test file first, then edit the source file. The test file must be in git's uncommitted changes (staged or unstaged).
+
+## Socratic Brainstorming (Workspace Auto)
+
+Phase 7c.5 in the `/workspace --auto` pipeline. After spec creation (7c) and before code changes (7d), Claude answers 5 probing questions in `brainstorm.md`:
+
+1. What am I assuming that might not be true?
+2. What's the simplest approach that could work?
+3. What existing code am I duplicating or conflicting with?
+4. What will break if I'm wrong?
+5. Who or what depends on the code I'm changing?
+
+Each answer must cite evidence (file:line, RAG score). If any answer reveals a spec flaw, the spec gets updated before implementation begins. This phase only runs during `--auto` pipeline execution, not during manual workspace use.
+
 ## Collaborative Mode (CONSULT / AUTO)
 
 Default: **CONSULT**. Before touching any file, produce a spec sheet: a plain-language summary of what the task does, then a table listing every file and the specific change planned. The user approves the spec. Claude can only edit files listed in the approved spec. Anything outside the spec requires a new spec sheet first.

@@ -16,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 
+from workspace_identity import get_instance_id, write_ws_instance
+
 
 def _home() -> Path:
     return Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
@@ -48,16 +50,6 @@ def register(task_id: str, workspace_path: str, project_path: str = "") -> None:
     print(f"Registered: {task_id} -> {workspace_path}")
 
 
-def _get_instance_id() -> str:
-    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-    if session_id:
-        return f"session-{session_id}"
-    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
-    if env_id:
-        return env_id
-    return f"ppid-{os.getppid()}"
-
-
 def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
     home = _home()
     p = home / "state" / "active-workspace.json"
@@ -71,21 +63,8 @@ def activate(task_id: str, workspace_path: str, project_path: str = "") -> None:
     )
 
     # Write to per-instance file so the statusline picks it up for this session
-    instance_id = _get_instance_id()
-    inst_path = home / "state" / "ws-instance" / f"{instance_id}.json"
-    cwd = (project_path or os.getcwd()).replace("\\", "/").rstrip("/")
-    try:
-        try:
-            data = json.loads(inst_path.read_text(encoding="utf-8"))
-            if "workspace_id" in data:
-                data = {}
-        except Exception:
-            data = {}
-        data[cwd] = task_id
-        inst_path.parent.mkdir(parents=True, exist_ok=True)
-        inst_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    cwd = project_path or os.getcwd()
+    write_ws_instance(home / "state", get_instance_id(), cwd, task_id)
 
     print(f"Activated: {task_id}")
 

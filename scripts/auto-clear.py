@@ -31,69 +31,7 @@ _CREATE_NO_WINDOW = 0x08000000
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
-def _find_claude_pid_windows() -> int | None:
-    """Walk the Windows process tree to find the node.exe Claude Code ancestor."""
-    if sys.platform != "win32":
-        return None
-    try:
-        import ctypes
-        import ctypes.wintypes
-
-        TH32CS_SNAPPROCESS = 0x00000002
-
-        class PROCESSENTRY32(ctypes.Structure):
-            _fields_ = [
-                ("dwSize",              ctypes.wintypes.DWORD),
-                ("cntUsage",            ctypes.wintypes.DWORD),
-                ("th32ProcessID",       ctypes.wintypes.DWORD),
-                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
-                ("th32ModuleID",        ctypes.wintypes.DWORD),
-                ("cntThreads",          ctypes.wintypes.DWORD),
-                ("th32ParentProcessID", ctypes.wintypes.DWORD),
-                ("pcPriClassBase",      ctypes.c_long),
-                ("dwFlags",             ctypes.wintypes.DWORD),
-                ("szExeFile",           ctypes.c_char * 260),
-            ]
-
-        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snap == ctypes.wintypes.HANDLE(-1).value:
-            return None
-
-        process_map: dict[int, tuple[int, str]] = {}
-        try:
-            entry = PROCESSENTRY32()
-            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
-                while True:
-                    pid  = entry.th32ProcessID
-                    ppid = entry.th32ParentProcessID
-                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
-                    process_map[pid] = (ppid, exe)
-                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
-                        break
-        finally:
-            ctypes.windll.kernel32.CloseHandle(snap)
-
-        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
-        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
-
-        pid = os.getpid()
-        seen: set[int] = set()
-        for _ in range(20):
-            if pid in seen or pid not in process_map:
-                break
-            seen.add(pid)
-            ppid, _ = process_map[pid]
-            if ppid not in process_map:
-                break
-            _, parent_exe = process_map[ppid]
-            if target_exe in parent_exe or "node" in parent_exe:
-                return ppid
-            pid = ppid
-
-        return None
-    except Exception:
-        return None
+from workspace_identity import _find_claude_pid_windows
 
 
 def main() -> int:

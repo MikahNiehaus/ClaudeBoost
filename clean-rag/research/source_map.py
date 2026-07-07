@@ -75,6 +75,7 @@ TOPIC_CATEGORIES = {
     # AI / ML
     "langchain": "ai", "pytorch": "ai", "openai-api": "ai",
     "anthropic-api": "ai", "huggingface": "ai",
+    "langgraph": "ai", "litellm": "ai",
 
     # Build Tools / Package Managers
     "vite": "tools", "webpack": "tools", "eslint": "tools",
@@ -596,6 +597,16 @@ SOURCE_MAP = {
         "docs_path": "docs/docs",
         "doc_root": "https://python.langchain.com/docs",
     },
+    "langgraph": {
+        "github": "langchain-ai/langgraph",
+        "docs_path": "docs/docs",
+        "doc_root": "https://docs.langchain.com/oss/python/langgraph",
+    },
+    "litellm": {
+        "github": "BerriAI/litellm-docs",
+        "docs_path": "docs",
+        "doc_root": "https://docs.litellm.ai/docs",
+    },
     "pytorch": {
         "github": "pytorch/pytorch",
         "docs_path": "docs/source",
@@ -866,6 +877,8 @@ SEED_TOPICS = [
     # === ai/ ===
     {"topic": "langchain", "category": "ai", "repo": "langchain-ai/langchain", "path": "docs"},
     {"topic": "huggingface", "category": "ai", "repo": "huggingface/transformers", "path": "docs/source/en"},
+    {"topic": "langgraph", "category": "ai", "repo": "langchain-ai/langgraph", "path": "docs/docs"},
+    {"topic": "litellm", "category": "ai", "repo": "BerriAI/litellm-docs", "path": "docs"},
 
     # === tools/ ===
     {"topic": "vite", "category": "tools", "repo": "vitejs/vite", "path": "docs"},

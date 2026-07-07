@@ -669,6 +669,14 @@ def _install_all_hooks(settings: dict) -> None:
         }],
     }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
 
+    # --- PreToolUse: TDD guard (blocks source edits without test changes) ---
+    # Runs BEFORE proof-gate so test-first is checked before research proof.
+    # Default mode is "soft" (nudge, not block) until user opts into strict.
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": _py_cmd("tdd-guard.py")}],
+    }, sentinel="tdd-guard.py", label="TDD guard (command-type)")
+
     # --- PreToolUse: clean-rag proof gate (bundled mode) ---
     # Detects clean-rag at BOOST_HOME/clean-rag/. When present, registers the
     # proof-gate hook BEFORE consult-gate so proof verification fires first.

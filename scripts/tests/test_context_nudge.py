@@ -1008,11 +1008,11 @@ def test_project_workspace_detected_via_registry(boost_home, tmp_path):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
-    # Channel B checkpoint should fire and reference "task-proj"
+    # Channel B checkpoint should fire with generic workspace reference
     if result.stdout.strip():
         output = json.loads(result.stdout)
         ctx = output.get("additionalContext", "")
-        assert "task-proj" in ctx
+        assert "your workspace" in ctx
 
 
 def test_has_workspace_true_for_registry_path_only(boost_home, tmp_path):
@@ -1053,7 +1053,7 @@ def test_has_workspace_true_for_registry_path_only(boost_home, tmp_path):
     output = json.loads(result.stdout)
     ctx = output.get("additionalContext", "")
     assert "WRITE FINDINGS" in ctx
-    assert "issue-42" in ctx
+    assert "your workspace" in ctx
 
 
 def test_registry_missing_workspace_path_key_skipped(boost_home, tmp_path):
@@ -1093,7 +1093,7 @@ def test_registry_missing_workspace_path_key_skipped(boost_home, tmp_path):
     if result.stdout.strip():
         output = json.loads(result.stdout)
         ctx = output.get("additionalContext", "")
-        assert "task-good" in ctx
+        assert "your workspace" in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -1200,7 +1200,7 @@ def test_block_escalation_with_registry_workspace(boost_home, tmp_path):
     assert result.stdout.strip()
     output = json.loads(result.stdout)
     assert output.get("decision") == "block"
-    assert "feat-99" in output.get("reason", "")
+    assert "your workspace" in output.get("reason", "")
 
 
 # ---------------------------------------------------------------------------

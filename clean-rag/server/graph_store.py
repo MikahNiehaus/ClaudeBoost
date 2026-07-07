@@ -314,25 +314,70 @@ class SQLiteGraphStore:
         file: str,
         symbol: str | None = None,
         depth: int = 1,
+        direction: str = "both",
+        max_nodes: int = 200,
     ) -> list[GraphEdge]:
-        """Return all edges incident on file (as source or target).
+        """Return edges incident on file, expanded transitively out to `depth` hops.
 
-        depth=1: direct neighbours only.
-        depth=2: direct neighbours plus their neighbours (two hops, capped at 2).
+        depth: number of hops, clamped to 1-5 (was hardcoded to a max of 2).
+        direction: "both" (default, original behavior -- file may be either
+            source_file or target_file of a matching edge), "callers" (only
+            follow edges where the frontier is target_file -- i.e. the other
+            side has an edge pointing INTO the frontier, meaning it depends
+            on/calls/imports it -- this is the "blast radius" direction),
+            or "dependencies" (only follow edges where the frontier is
+            source_file -- what the frontier itself points at).
+        max_nodes: if a hop's frontier would exceed this, prune to the top
+            max_nodes by PageRank (get_all_pagerank()) before expanding
+            further -- keeps deep traversals from exploding on hub files.
+            Falls back to deterministic (sorted) truncation if no PageRank
+            data exists yet (e.g. a project indexed before compute_pagerank
+            was wired into indexing.py).
         """
-        depth = min(depth, 2)
+        depth = min(max(depth, 1), 5)
+        if direction not in ("both", "callers", "dependencies"):
+            direction = "both"
 
-        def _rows_for_files(conn, files: set[str]) -> list:
+        def _rows_for_frontier(conn, files: list[str]) -> list:
             if not files:
                 return []
-            placeholders = ",".join("?" * len(files))
-            params = list(files) + list(files)
-            return conn.execute(
-                f"""SELECT * FROM edges
-                    WHERE source_file IN ({placeholders})
-                       OR target_file IN ({placeholders})""",
-                params,
-            ).fetchall()
+            ph = ",".join("?" * len(files))
+            if direction == "callers":
+                return conn.execute(
+                    f"SELECT * FROM edges WHERE target_file IN ({ph})", files,
+                ).fetchall()
+            elif direction == "dependencies":
+                return conn.execute(
+                    f"SELECT * FROM edges WHERE source_file IN ({ph})", files,
+                ).fetchall()
+            else:
+                return conn.execute(
+                    f"SELECT * FROM edges WHERE source_file IN ({ph}) OR target_file IN ({ph})",
+                    files + files,
+                ).fetchall()
+
+        def _next_hop_neighbor(row) -> str | None:
+            """The newly-discovered node on the far side of an edge, respecting direction."""
+            sf, tf = row["source_file"], row["target_file"]
+            if direction == "callers":
+                candidate = sf  # matched because tf was in the frontier
+            elif direction == "dependencies":
+                candidate = tf  # matched because sf was in the frontier
+            else:
+                candidate = tf if sf in visited else sf
+            if not candidate or candidate == _EXTERNAL_SENTINEL:
+                return None
+            return candidate
+
+        def _prune(frontier: set[str]) -> set[str]:
+            if len(frontier) <= max_nodes:
+                return frontier
+            pagerank = self.get_all_pagerank()
+            if pagerank:
+                ranked = sorted(frontier, key=lambda f: pagerank.get(f, 0.0), reverse=True)
+            else:
+                ranked = sorted(frontier)  # deterministic fallback, no pagerank data yet
+            return set(ranked[:max_nodes])
 
         with self._connect() as conn:
             if symbol:
@@ -348,29 +393,40 @@ class SQLiteGraphStore:
                        WHERE source_file = ? OR target_file = ?""",
                     (file, file),
                 ).fetchall()
+                if direction == "callers":
+                    depth1_rows = [r for r in depth1_rows if r["target_file"] == file]
+                elif direction == "dependencies":
+                    depth1_rows = [r for r in depth1_rows if r["source_file"] == file]
 
             all_rows = list(depth1_rows)
+            seen_edges = {(r["source_file"], r["target_file"], r["edge_type"]) for r in all_rows}
+            visited = {file}
 
-            if depth >= 2:
-                neighbour_files: set[str] = set()
-                for r in depth1_rows:
-                    sf, tf = r["source_file"], r["target_file"]
-                    if sf != file and sf and sf != _EXTERNAL_SENTINEL:
-                        neighbour_files.add(sf)
-                    if tf != file and tf and tf != _EXTERNAL_SENTINEL:
-                        neighbour_files.add(tf)
+            frontier: set[str] = set()
+            for r in depth1_rows:
+                sf, tf = r["source_file"], r["target_file"]
+                if sf != file and sf and sf != _EXTERNAL_SENTINEL:
+                    frontier.add(sf)
+                if tf != file and tf and tf != _EXTERNAL_SENTINEL:
+                    frontier.add(tf)
+            visited |= frontier
 
-                if neighbour_files:
-                    depth2_rows = _rows_for_files(conn, neighbour_files)
-                    seen = {
-                        (r["source_file"], r["target_file"], r["edge_type"])
-                        for r in all_rows
-                    }
-                    for r in depth2_rows:
-                        key = (r["source_file"], r["target_file"], r["edge_type"])
-                        if key not in seen:
-                            seen.add(key)
-                            all_rows.append(r)
+            hop = 2
+            while hop <= depth and frontier:
+                frontier = _prune(frontier)
+                hop_rows = _rows_for_frontier(conn, list(frontier))
+                next_frontier: set[str] = set()
+                for r in hop_rows:
+                    key = (r["source_file"], r["target_file"], r["edge_type"])
+                    if key not in seen_edges:
+                        seen_edges.add(key)
+                        all_rows.append(r)
+                    neighbor = _next_hop_neighbor(r)
+                    if neighbor and neighbor not in visited:
+                        next_frontier.add(neighbor)
+                visited |= next_frontier
+                frontier = next_frontier
+                hop += 1
 
         return [
             GraphEdge(
@@ -399,6 +455,22 @@ class SQLiteGraphStore:
         """Total edge count."""
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    def get_all_edges(self) -> list[GraphEdge]:
+        """Return every stored edge. Used for whole-graph analysis (PageRank)."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM edges").fetchall()
+        return [
+            GraphEdge(
+                source_file=r["source_file"],
+                source_symbol=r["source_symbol"],
+                target_file=r["target_file"],
+                target_symbol=r["target_symbol"],
+                edge_type=r["edge_type"],
+                confidence=r["confidence"],
+            )
+            for r in rows
+        ]
 
     def count_resolved_edges(self) -> int:
         """Count edges with a resolved target_file (not empty, not external)."""
@@ -517,3 +589,42 @@ class SQLiteGraphStore:
                 "SELECT file, score FROM node_pagerank"
             ).fetchall()
         return {r["file"]: r["score"] for r in rows}
+
+
+def compute_pagerank(graph_store: "SQLiteGraphStore") -> dict[str, float]:
+    """Score each file by how many other files import or reference it.
+
+    Ported from ClaudeBoost mcp-rag-server (core/community.py) -- the
+    save_pagerank()/get_all_pagerank() storage methods above were already
+    ported, but this computation function (the only thing that actually
+    populates node_pagerank) never was, so the table has been empty since
+    this store was introduced. Uses PageRank on a directed graph where
+    A->B means A imports/references B, so widely-imported files (core
+    modules, shared utilities) get high scores. Returns {} on any failure
+    or if NetworkX is not available.
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        logger.debug("PageRank skipped: networkx not installed")
+        return {}
+
+    edges = graph_store.get_all_edges()
+    if not edges:
+        return {}
+
+    try:
+        graph: "nx.DiGraph" = nx.DiGraph()
+        for e in edges:
+            graph.add_node(e.source_file)
+            if e.target_file and e.target_file != _EXTERNAL_SENTINEL:
+                graph.add_node(e.target_file)
+                graph.add_edge(e.source_file, e.target_file)
+        if graph.number_of_nodes() == 0:
+            return {}
+        scores = nx.pagerank(graph, alpha=0.85, max_iter=100)
+        logger.info("PageRank computed for %d nodes", len(scores))
+        return scores
+    except Exception:
+        logger.exception("PageRank computation failed")
+        return {}

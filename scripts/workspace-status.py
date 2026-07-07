@@ -272,106 +272,8 @@ def _write_instance_ws(inst_path: Path, cwd: str, ws_id: str | None) -> None:
     inst_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _find_claude_pid_windows() -> int | None:
-    """Walk the Windows process tree to find the node.exe (Claude Code) ancestor PID.
+from workspace_identity import get_instance_id
 
-    Returns the PID of the nearest node.exe ancestor, or None if not found / not Windows.
-    Each Claude Code instance is a separate node.exe process, making this PID unique
-    per terminal window with zero shell setup required.
-    """
-    if sys.platform != "win32":
-        return None
-    try:
-        import ctypes
-        import ctypes.wintypes
-
-        TH32CS_SNAPPROCESS = 0x00000002
-
-        class PROCESSENTRY32(ctypes.Structure):
-            _fields_ = [
-                ("dwSize",              ctypes.wintypes.DWORD),
-                ("cntUsage",            ctypes.wintypes.DWORD),
-                ("th32ProcessID",       ctypes.wintypes.DWORD),
-                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
-                ("th32ModuleID",        ctypes.wintypes.DWORD),
-                ("cntThreads",          ctypes.wintypes.DWORD),
-                ("th32ParentProcessID", ctypes.wintypes.DWORD),
-                ("pcPriClassBase",      ctypes.c_long),
-                ("dwFlags",             ctypes.wintypes.DWORD),
-                ("szExeFile",           ctypes.c_char * 260),
-            ]
-
-        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snap == ctypes.wintypes.HANDLE(-1).value:
-            return None
-
-        process_map: dict[int, tuple[int, str]] = {}
-        try:
-            entry = PROCESSENTRY32()
-            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
-                while True:
-                    pid  = entry.th32ProcessID
-                    ppid = entry.th32ParentProcessID
-                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
-                    process_map[pid] = (ppid, exe)
-                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
-                        break
-        finally:
-            ctypes.windll.kernel32.CloseHandle(snap)
-
-        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
-        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
-
-        pid = os.getpid()
-        seen: set[int] = set()
-        for _ in range(20):
-            if pid in seen or pid not in process_map:
-                break
-            seen.add(pid)
-            ppid, _ = process_map[pid]
-            if ppid not in process_map:
-                break
-            _, parent_exe = process_map[ppid]
-            if target_exe in parent_exe or "node" in parent_exe:
-                return ppid
-            pid = ppid
-
-        return None
-    except Exception:
-        return None
-
-
-def _get_instance_id() -> str:
-    """Return a stable, per-Claude-instance identifier (no shell setup required).
-
-    Priority:
-      1. CLAUDE_CODE_SESSION_ID env var — set by Claude Code, inherited by all subprocesses
-      2. Windows process tree walk → claude.exe ancestor PID
-      3. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
-      4. os.getppid() as last resort
-    """
-    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-    if session_id:
-        return f"session-{session_id}"
-
-    node_pid = _find_claude_pid_windows()
-    if node_pid:
-        return f"node-{node_pid}"
-
-    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
-    if env_id:
-        return env_id
-
-    return f"ppid-{os.getppid()}"
-
-
-def _read_project_workspaces(home: Path) -> dict:
-    p = home / "state" / "project-workspaces.json"
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
 
 def switch_workspace(ws_id: str) -> None:
@@ -379,7 +281,7 @@ def switch_workspace(ws_id: str) -> None:
     reg_path = home / "state" / "workspaces.json"
     cwd = _normalize_cwd()
 
-    instance_id = _get_instance_id()
+    instance_id = get_instance_id()
 
     if ws_id == "off":
         # Clear this CWD's entry from the per-instance file

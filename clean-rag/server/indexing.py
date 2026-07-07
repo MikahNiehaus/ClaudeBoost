@@ -922,6 +922,17 @@ def index_project(
                 pid, graph_stats["edges_total"], graph_stats["edges_resolved"],
                 graph_stats["edges_unresolved"], ghost_count,
             )
+            # PageRank: used as a tiebreaker when pruning deep graph
+            # traversals in get_neighbours() (search.py mode=graph). Cheap
+            # relative to the embedding work already done above, so compute
+            # it on every index rather than making it opt-in.
+            try:
+                from .graph_store import compute_pagerank
+                pr_scores = compute_pagerank(graph)
+                graph.save_pagerank(pr_scores)
+                graph_stats["pagerank_nodes"] = len(pr_scores)
+            except Exception as e:
+                logger.warning("PageRank computation failed for %s: %s", pid, e)
         except Exception as e:
             logger.error("Graph post-processing failed: %s", e)
             graph_stats = {"error": str(e)}

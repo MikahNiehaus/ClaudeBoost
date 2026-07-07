@@ -794,6 +794,27 @@ Use RAG and file reads to build complete understanding:
 3. Self audit for codebase gaps: does the spec account for all callers and dependents?
 4. Fix any gaps found. Repeat until the spec is clean.
 
+### 7c.5 — Socratic brainstorming (challenge your assumptions)
+
+Before implementing, answer these 5 questions in `$WORKSPACE_ABS/brainstorm.md`. Each answer must cite evidence (file:line, RAG score, or specific observation). "I don't know" is a valid answer that triggers more research.
+
+1. **What am I assuming that might not be true?**
+   List every assumption in the spec. For each, state what evidence supports it and what would invalidate it.
+
+2. **What's the simplest approach that could work?**
+   Describe the minimum viable implementation. If the spec is more complex, justify why.
+
+3. **What existing code am I duplicating or conflicting with?**
+   Search the codebase for similar functionality. Cite file:line for anything that overlaps.
+
+4. **What will break if I'm wrong?**
+   List every file, endpoint, or user flow that depends on the code being changed. This is the blast radius.
+
+5. **Who or what depends on the code I'm changing?**
+   Run `POST /search scope=codebase mode=both` seeded from every file in the spec. List callers, importers, and inheritors.
+
+If any answer reveals a flaw in the spec (wrong assumption, missed dependency, simpler approach available), update spec.md before proceeding to 7d.
+
 ### 7d — Code changes
 
 Switch to AUTO mode (`/auto workspace-auto-pipeline`). Execute every change in the spec:

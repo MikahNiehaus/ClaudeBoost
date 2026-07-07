@@ -65,100 +65,7 @@ def _heartbeat_status() -> str:
         return "down"
 
 
-def _find_claude_pid_windows() -> int | None:
-    """Walk the Windows process tree to find the node.exe (Claude Code) ancestor.
-
-    Uses ctypes/kernel32 — no external dependencies required.
-    Returns the PID of the nearest node.exe ancestor, or None if not found.
-    Each Claude Code instance is a separate node.exe process, so this PID is
-    unique per Claude terminal window.
-    """
-    try:
-        import ctypes
-        import ctypes.wintypes
-
-        TH32CS_SNAPPROCESS = 0x00000002
-
-        class PROCESSENTRY32(ctypes.Structure):
-            _fields_ = [
-                ("dwSize",              ctypes.wintypes.DWORD),
-                ("cntUsage",            ctypes.wintypes.DWORD),
-                ("th32ProcessID",       ctypes.wintypes.DWORD),
-                ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
-                ("th32ModuleID",        ctypes.wintypes.DWORD),
-                ("cntThreads",          ctypes.wintypes.DWORD),
-                ("th32ParentProcessID", ctypes.wintypes.DWORD),
-                ("pcPriClassBase",      ctypes.c_long),
-                ("dwFlags",             ctypes.wintypes.DWORD),
-                ("szExeFile",           ctypes.c_char * 260),
-            ]
-
-        snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snap == ctypes.wintypes.HANDLE(-1).value:
-            return None
-
-        process_map: dict[int, tuple[int, str]] = {}
-        try:
-            entry = PROCESSENTRY32()
-            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-            if ctypes.windll.kernel32.Process32First(snap, ctypes.byref(entry)):
-                while True:
-                    pid  = entry.th32ProcessID
-                    ppid = entry.th32ParentProcessID
-                    exe  = entry.szExeFile.decode("utf-8", errors="replace").lower()
-                    process_map[pid] = (ppid, exe)
-                    if not ctypes.windll.kernel32.Process32Next(snap, ctypes.byref(entry)):
-                        break
-        finally:
-            ctypes.windll.kernel32.CloseHandle(snap)
-
-        # Determine which exe name to look for (from CLAUDE_CODE_EXECPATH or default "node")
-        claude_exec = os.environ.get("CLAUDE_CODE_EXECPATH", "").replace("\\", "/").lower()
-        target_exe = claude_exec.split("/")[-1] if claude_exec else "node.exe"
-
-        # Walk from current process upward to find the target ancestor
-        pid = os.getpid()
-        seen: set[int] = set()
-        for _ in range(20):
-            if pid in seen or pid not in process_map:
-                break
-            seen.add(pid)
-            ppid, _ = process_map[pid]
-            if ppid not in process_map:
-                break
-            _, parent_exe = process_map[ppid]
-            if target_exe in parent_exe or "node" in parent_exe:
-                return ppid
-            pid = ppid
-
-        return None
-    except Exception:
-        return None
-
-
-def _get_instance_id() -> str:
-    """Return a stable, per-Claude-instance identifier.
-
-    Priority:
-      1. CLAUDE_CODE_SESSION_ID env var — set by Claude Code, inherited by all subprocesses
-      2. Windows ctypes process tree walk → claude.exe ancestor PID
-      3. CLAUDEBOOST_INSTANCE_ID env var (non-Windows fallback)
-      4. os.getppid() as last resort
-    """
-    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-    if session_id:
-        return f"session-{session_id}"
-
-    if sys.platform == "win32":
-        node_pid = _find_claude_pid_windows()
-        if node_pid:
-            return f"node-{node_pid}"
-
-    env_id = os.environ.get("CLAUDEBOOST_INSTANCE_ID", "")
-    if env_id:
-        return env_id
-
-    return f"ppid-{os.getppid()}"
+from workspace_identity import get_instance_id, normalize_cwd, read_ws_instance
 
 
 def _active_workspace() -> str | None:
@@ -169,29 +76,11 @@ def _active_workspace() -> str | None:
     start with no workspace set.
     """
     boost_home = Path(os.environ.get("CLAUDEBOOST_HOME", Path(__file__).resolve().parent.parent))
-    instance_id = _get_instance_id()
-
-    cwd = os.getcwd().replace("\\", "/").rstrip("/")
-
+    instance_id = get_instance_id()
+    cwd = normalize_cwd(os.getcwd())
     inst_path = boost_home / "state" / "ws-instance" / f"{instance_id}.json"
-    try:
-        data = json.loads(inst_path.read_text(encoding="utf-8"))
-        if "workspace_id" not in data:
-            ws = data.get(cwd) or data.get(cwd.lower())
-            if ws is None:
-                cwd_lower = cwd.lower()
-                for key, val in data.items():
-                    if isinstance(val, str) and key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
-                        ws = val
-                        break
-        else:
-            stored = data.get("cwd", "").replace("\\", "/").rstrip("/")
-            ws = data.get("workspace_id") if stored.lower() == cwd.lower() else None
-        if ws:
-            return str(ws)
-    except Exception:
-        pass
-    return None
+    ws = read_ws_instance(inst_path, cwd)
+    return ws or None
 
 
 def _mcp_registered(name: str) -> bool:
