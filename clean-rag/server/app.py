@@ -9,6 +9,8 @@ import json
 import logging
 import re
 import time
+import uuid
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from .embedding import SentenceTransformerEmbedding
 from .indexing import acquire_index_lock, index_project, index_topic, reindex_file, release_index_lock
 from .index_queue import IndexQueue
 from .search import search
+from verifier.log import write_pending_proof
 
 # acquire_topic is imported lazily to avoid pulling in research deps at startup
 
@@ -167,7 +170,204 @@ async def handle_search(request: web.Request) -> web.Response:
         ),
     )
 
-    return _json_response({"results": results})
+    search_id = _log_search(query=query, sources=sources, mode=mode, results=results)
+
+    return _json_response({"results": results, "search_id": search_id})
+
+
+# ---------------------------------------------------------------------------
+# Search log + /prove: independent, server-side proof verification.
+#
+# write_pending_proof() (verifier/log.py) accepts whatever score/count/angle
+# values the caller passes -- verifier/prompts.py:6 documents this as
+# intentional ("No separate agent is needed; the mechanical checks... handle
+# verification"), but that means a proof's content is entirely self-reported
+# by whoever calls it, with no independent check that a claimed score came
+# from a real search. _log_search()/handle_prove() close that gap: every real
+# /search call is appended to an append-only server-side log the caller can't
+# edit, and /prove only accepts search_id references into that log -- it
+# looks up the real score/sources itself rather than trusting a client-typed
+# number, then calls write_pending_proof() with server-verified values.
+# ---------------------------------------------------------------------------
+
+_SEARCH_LOG_PATH = STATE_DIR / "search-log.jsonl"
+_SEARCH_LOG_WINDOW_S = 1800  # how long a search_id remains citable in /prove
+
+
+def _log_search(query: str, sources: list[str], mode: str, results: list[dict]) -> str:
+    """Append a real search to the server-side log. Returns the search_id."""
+    search_id = uuid.uuid4().hex[:16]
+    top_score = max((r.get("score", 0.0) for r in results), default=0.0)
+    entry = {
+        "search_id": search_id,
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "query": query,
+        "sources": sources,
+        "mode": mode,
+        "results_count": len(results),
+        "top_score": top_score,
+    }
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_SEARCH_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        logger.exception("Failed to write search-log entry")
+    return search_id
+
+
+def _read_search_log_entries(search_ids: set[str]) -> list[dict]:
+    """Read matching, still-fresh entries for the given search_ids."""
+    if not _SEARCH_LOG_PATH.exists():
+        return []
+    now = datetime.now(timezone.utc)
+    matched: dict[str, dict] = {}
+    with open(_SEARCH_LOG_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            sid = entry.get("search_id")
+            if sid not in search_ids:
+                continue
+            try:
+                ts = datetime.fromisoformat(entry["ts"].replace("Z", "+00:00"))
+            except (KeyError, ValueError):
+                continue
+            if (now - ts).total_seconds() > _SEARCH_LOG_WINDOW_S:
+                continue
+            matched[sid] = entry  # last write for a given id wins
+    return list(matched.values())
+
+
+async def handle_prove(request: web.Request) -> web.Response:
+    """POST /prove: write a proof-gate proof from independently-logged searches.
+
+    Body fields:
+        file_path (str): file the proof is for (required)
+        search_ids (list[str]): search_id values returned by prior /search
+            calls (required, >=2, at least one must be from a "project:"
+            source -- the codebase angle proof-gate.py requires)
+        quality_aspects (list[dict]): [{"aspect":..., "assertion":...}, ...]
+            (required, >=2, at least one aspect must be "architecture" or
+            "patterns") -- these remain caller-written since they're
+            judgment calls about code fit, not measurable search facts.
+        note (str): optional extra context appended to verifier_response
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    file_path = body.get("file_path", "").strip()
+    if not file_path:
+        return _json_response({"error": "Missing 'file_path' field"}, 400)
+
+    search_ids = body.get("search_ids", [])
+    if not isinstance(search_ids, list) or len(search_ids) < 2:
+        return _json_response(
+            {"error": "search_ids must be a list of >=2 real /search search_id values"}, 400
+        )
+
+    quality_aspects = body.get("quality_aspects", [])
+    if not isinstance(quality_aspects, list) or len(quality_aspects) < 2:
+        return _json_response(
+            {"error": "quality_aspects must be a list of >=2 {aspect, assertion} entries"}, 400
+        )
+    macro_aspects = {"architecture", "patterns"}
+    if not any(isinstance(q, dict) and q.get("aspect") in macro_aspects for q in quality_aspects):
+        return _json_response(
+            {"error": "quality_aspects must include at least one aspect='architecture' or 'patterns'"},
+            400,
+        )
+
+    entries = _read_search_log_entries(set(search_ids))
+    if len(entries) < len(set(search_ids)):
+        found = {e["search_id"] for e in entries}
+        missing = sorted(set(search_ids) - found)
+        return _json_response({
+            "error": (
+                "One or more search_ids were not found in the server's search log, or expired "
+                f"(entries older than {_SEARCH_LOG_WINDOW_S}s are no longer citable). "
+                "Only search_id values returned by a real POST /search call in the last "
+                f"{_SEARCH_LOG_WINDOW_S}s can be cited -- scores/counts are looked up from that "
+                "log, not from anything in this request body."
+            ),
+            "missing_search_ids": missing,
+        }, 400)
+
+    research_angles = []
+    topics_cited: list[str] = []
+    project_cited = False
+    for e in entries:
+        sources = e.get("sources", [])
+        is_codebase = any(str(s).startswith("project:") for s in sources)
+        if is_codebase:
+            project_cited = True
+        angle = "codebase" if is_codebase else "technology"
+        research_angles.append({
+            "angle": angle,
+            "query": e["query"],
+            "score": e["top_score"],
+        })
+        for s in sources:
+            s = str(s)
+            if s.startswith("topic:"):
+                topics_cited.append(s.split(":", 1)[1])
+
+    if not any(a["angle"] == "codebase" for a in research_angles):
+        return _json_response({
+            "error": (
+                "None of the cited search_ids used a 'project:<path>' source. "
+                "proof-gate.py requires a codebase angle -- re-run one search with "
+                "sources including 'project:<path>' (or Grep the codebase and use the "
+                "existing Fast Path if the project isn't indexed), then cite that search_id."
+            ),
+        }, 400)
+
+    min_score = max((a["score"] for a in research_angles), default=0.0)
+    rag_results_count = sum(e.get("results_count", 0) for e in entries)
+
+    note = body.get("note", "")
+    verifier_response = (
+        f"Server-verified via /prove: {len(entries)} real /search call(s) looked up in "
+        f"{_SEARCH_LOG_PATH.name} (not client-supplied). Queries: "
+        + "; ".join(f'"{a["query"]}" (angle={a["angle"]}, score={a["score"]:.4f})' for a in research_angles)
+        + (f". {note}" if note else "")
+    )
+
+    proof_path = write_pending_proof(
+        state_dir=str(STATE_DIR),
+        file_path=file_path,
+        verdict="VERIFIED" if min_score >= DEFAULT_MIN_SCORE else "INSUFFICIENT",
+        verifier_response=verifier_response,
+        rag_results_count=rag_results_count,
+        topics_cited=sorted(set(topics_cited)),
+        project_cited=project_cited,
+        content_hash="",
+        min_score=min_score,
+        research_angles=research_angles,
+        quality_aspects=quality_aspects,
+    )
+
+    if min_score < DEFAULT_MIN_SCORE:
+        return _json_response({
+            "error": f"Best logged score {min_score:.4f} is below the required {DEFAULT_MIN_SCORE}. "
+                     "Proof was written with verdict=INSUFFICIENT and will not pass proof-gate.py.",
+            "min_score": min_score,
+        }, 400)
+
+    return _json_response({
+        "verdict": "VERIFIED",
+        "proof_path": str(proof_path),
+        "min_score": min_score,
+        "rag_results_count": rag_results_count,
+        "research_angles": research_angles,
+    })
 
 
 async def handle_index_topic(request: web.Request) -> web.Response:
@@ -603,6 +803,7 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
+    app.router.add_post("/prove", handle_prove)
     app.router.add_post("/index-topic", handle_index_topic)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)

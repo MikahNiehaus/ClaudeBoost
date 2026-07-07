@@ -324,40 +324,35 @@ Before editing, you must:
    Do NOT wait for it. The background agent fills the database for future
    queries while you continue working now.
 
-3. WRITE proof using write_pending_proof():
-   from clean_rag.verifier.log import write_pending_proof
+3. WRITE proof using POST /prove, not write_pending_proof() directly. Every real
+   POST /search response includes a "search_id" -- keep the ones from your searches
+   above, then call:
 
-   write_pending_proof(
-       state_dir="clean-rag/state",
-       file_path="<path to file being edited>",
-       verdict="VERIFIED",
-       verifier_response="<summary of research that justifies the edit>",
-       rag_results_count=<number of results>,
-       topics_cited=["<topic1>"],
-       project_cited=<True if codebase was searched>,
-       content_hash="<SHA-256 of the edit content>",
-       min_score=<best score, must be >= {min_score}>,
-       research_angles=[
-           {{"angle": "technology", "query": "<what you searched>", "score": <score>}},
-           {{"angle": "codebase", "query": "<how you searched project>", "score": <score>}},
-           {{"angle": "methodology", "query": "clean code naming conventions", "score": 0.85}},
-       ],
-       quality_aspects=[
-           {{"aspect": "architecture", "assertion": "<how the change fits the project structure>"}},
-           {{"aspect": "patterns", "assertion": "<which existing patterns this follows>"}},
-       ],
-   )
+   POST http://127.0.0.1:{port}/prove
+   {{"file_path": "<path to file being edited>",
+     "search_ids": ["<search_id from a technology/topic search>",
+                     "<search_id from a project:<path> search>"],
+     "quality_aspects": [
+       {{"aspect": "architecture", "assertion": "<how the change fits the project structure>"}},
+       {{"aspect": "patterns", "assertion": "<which existing patterns this follows>"}}
+     ]}}
 
-   TIP: The "methodology" angle searches code quality topics (SOLID, clean code,
-   design patterns, code smells, etc.) for best practices relevant to your change.
-   Not required, but recommended when changing logic or structure.
+   /prove looks up each search_id in the server's own search log (not anything you
+   type) and computes min_score/rag_results_count/research_angles from what was
+   actually returned -- it will not accept a search_id that doesn't exist or has
+   expired (30 min window), and will not accept a proof missing a project:-sourced
+   "codebase" angle. quality_aspects stay yours to write since they're judgment
+   calls, not measurable search facts. Do NOT call write_pending_proof() directly
+   from a script -- that self-certifies your own research with no independent check
+   it's real, and Claude Code's own safety layer will correctly flag it as a
+   self-authored verification artifact.
 
 {methodology_guidance}
-4. RETRY the edit. The gate passes if:
+4. RETRY the edit. The gate passes if the proof /prove wrote has:
    - verdict == VERIFIED
-   - min_score >= {min_score}
+   - min_score >= {min_score} (computed by the server from the search log, not self-reported)
    - research_angles has >= 2 entries, including at least one with angle="codebase"
-     (you MUST search callers, imports, and dependents of the target file)
+     (server-verified: that search_id's sources included "project:<path>")
    - quality_aspects has >= 2 entries, at least one with aspect="architecture" or "patterns"
      (you MUST consider whether the code fits the project, not just whether it works)
    - timestamp is within {window}s and timezone-aware

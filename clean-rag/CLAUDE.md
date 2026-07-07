@@ -76,31 +76,48 @@ Results include `score`, `file`, `tree_path`, `section`, and `content`. Higher s
 
 ## Writing Proof
 
-After searching RAG and getting results with score >= 0.5, use `write_pending_proof()` from `clean-rag/verifier/log.py`:
+**Use `POST /prove`, not `write_pending_proof()` directly.** `write_pending_proof()` accepts whatever
+score/count/angle values the caller passes with no independent check that they're real -- that's fine
+for the server's own internal use, but an agent calling it directly means the agent is both doing the
+research and self-certifying that research as sufficient, with nothing to stop a rushed or careless call
+from typing in numbers that were never actually returned by a search. `POST /prove` closes that gap:
+every real `/search` call is logged server-side (`clean-rag/state/search-log.jsonl`, not editable by the
+caller) with a `search_id` in its response, and `/prove` only accepts `search_id` references -- it looks
+up the real score/sources itself instead of trusting a client-typed number.
 
-```python
-from clean_rag.verifier.log import write_pending_proof
+1. Run your real searches first. Each `POST /search` response includes a `"search_id"` field -- keep it.
+2. Call `POST /prove`:
 
-write_pending_proof(
-    state_dir="clean-rag/state",
-    file_path="path/to/file.py",
-    verdict="VERIFIED",
-    verifier_response="RAG results: FastAPI Depends() pattern documented in dependencies-tutorial.md (score 0.87), project uses same pattern in auth.py:23 (score 0.72)",
-    rag_results_count=3,
-    topics_cited=["fastapi"],
-    project_cited=True,
-    content_hash="<sha256 of edit content>",
-    min_score=0.87,
-    research_angles=[
-        {"angle": "technology", "query": "FastAPI dependency injection Depends()", "score": 0.87},
-        {"angle": "codebase", "query": "existing DI patterns in project", "score": 0.72},
-    ],
-    quality_aspects=[
-        {"aspect": "architecture", "assertion": "New endpoint goes in routes/auth.py alongside existing auth routes. Controller layer only."},
-        {"aspect": "patterns", "assertion": "Project uses Depends() for DI everywhere (auth.py:23, users.py:15). Following same pattern."},
-    ],
-)
+```bash
+curl -X POST http://127.0.0.1:8613/prove -H "Content-Type: application/json" -d '{
+  "file_path": "path/to/file.py",
+  "search_ids": ["<id from a technology/topic search>", "<id from a project: search>"],
+  "quality_aspects": [
+    {"aspect": "architecture", "assertion": "New endpoint goes in routes/auth.py alongside existing auth routes. Controller layer only."},
+    {"aspect": "patterns", "assertion": "Project uses Depends() for DI everywhere (auth.py:23, users.py:15). Following same pattern."}
+  ]
+}'
 ```
+
+Requirements enforced server-side (not by you self-reporting them): >=2 `search_ids`, all found in the
+real search log and not expired (30 min window), at least one from a `sources` entry starting with
+`"project:"` (the codebase angle), and >=2 `quality_aspects` with at least one `aspect` of `architecture`
+or `patterns`. `min_score`/`rag_results_count`/`topics_cited`/`research_angles` are all computed by the
+server from the logged entries, not from anything in your request body. Returns `verdict: "VERIFIED"`
+and writes the proof file itself on success; returns a 400 with the specific reason on failure (missing
+search_ids, no codebase angle, score too low) so you know exactly what to search for next.
+
+`quality_aspects` stay caller-written -- they're judgment calls about code fit ("does this belong in this
+file, does it follow existing patterns"), not measurable facts a server can look up, so self-attestation
+is the right model for that part specifically. Only the research-scoring side needed independent
+verification.
+
+`write_pending_proof()` (`clean-rag/verifier/log.py`) still exists and is still what actually writes the
+proof file -- `/prove`'s handler calls it internally after validating against the search log. It's no
+longer something agents should call directly via a script; do that and Claude Code's own safety layer
+will (correctly) flag it as a self-authored verification artifact, since from the outside a script that
+manufactures a `"VERIFIED"` JSON blob and a script that manufactures a genuinely-researched one look
+identical -- the only way to tell them apart is to make the server compute the parts that matter.
 
 The proof file is keyed per target file (uses a hash of the canonical path), so concurrent edits to different files each get their own proof. The gate atomically renames the proof file during consumption to prevent TOCTOU races.
 
