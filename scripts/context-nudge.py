@@ -28,6 +28,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from workspace_identity import resolve_active_workspace, get_instance_id
+
 NUDGE_INTERVAL = 8         # workspace checkpoint every N tool uses (was 20 — more continuous)
 NO_WORKSPACE_NUDGE_THRESHOLD = 60
 RAG_THRESHOLD = 5          # reads without RAG before reminding
@@ -51,30 +53,40 @@ RAG_TOOLS: set = set()  # RAG is HTTP-only now; detection uses _is_http_rag (Bas
 FILE_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 
-def _target_workspace(ctx_files: list, home: Path) -> Path:
-    """Return the context.md file to nudge about.
+def _target_workspace(ctx_files: list, home: Path) -> Path | None:
+    """Return the context.md file to nudge about, or None if unresolvable.
 
-    Prefers the registered active workspace (state/active-workspace.json) over
-    the most-recently-modified context.md. The max(mtime) approach breaks when
-    a cross-cutting task (audit, research-task) touches many files — it keeps
-    targeting whatever workspace was last modified, not the one actually active.
+    Uses per-instance workspace resolution (same as statusline) so each terminal
+    targets its own active workspace, not a stale global file.
     """
-    active_ws_path = home / "state" / "active-workspace.json"
-    try:
-        active_ws = json.loads(active_ws_path.read_text(encoding="utf-8"))
-        # Match agent-spawn-gate.py's fallback chain for legacy "path" key
-        ws_path = active_ws.get("workspace_path") or active_ws.get("path") or ""
-        if ws_path:
-            candidate = Path(ws_path) / "context.md"
-            resolved = {f.resolve() for f in ctx_files}
-            if candidate.resolve() in resolved:
-                return candidate
-    except Exception:
-        pass
-    try:
-        return max(ctx_files, key=lambda f: f.stat().st_mtime)
-    except (OSError, ValueError):
-        return ctx_files[0]
+    state_dir = home / "state"
+    cwd = os.getcwd().replace("\\", "/").rstrip("/")
+    ws_id = resolve_active_workspace(state_dir, cwd)
+
+    if ws_id:
+        # Check the workspace registry for the path
+        try:
+            reg = json.loads((state_dir / "workspaces.json").read_text(encoding="utf-8"))
+            entry = reg.get(ws_id, {})
+            ws_path = entry.get("workspace_path", "")
+            if ws_path:
+                candidate = Path(ws_path) / "context.md"
+                if candidate.exists():
+                    return candidate
+        except Exception:
+            pass
+        # Fallback: check local workspace/ directory
+        local = home / "workspace" / ws_id / "context.md"
+        if local.exists():
+            return local
+
+    # No per-instance workspace found; fall back to most recently modified
+    if ctx_files:
+        try:
+            return max(ctx_files, key=lambda f: f.stat().st_mtime)
+        except (OSError, ValueError):
+            return ctx_files[0]
+    return None
 
 
 def _auto_save_handoff(home: Path, ctx_files: list, session_id: str = "") -> None:
@@ -221,12 +233,8 @@ def main() -> int:
     # Reset the per-read counter when the active workspace changes.
     # Without this, reads from one workspace accumulate and fire against
     # a different workspace after switching tasks.
-    _current_ws_id = ""
-    try:
-        _aws = json.loads((home / "state" / "active-workspace.json").read_text(encoding="utf-8"))
-        _current_ws_id = _aws.get("workspace", "")
-    except Exception:
-        pass
+    cwd = os.getcwd().replace("\\", "/").rstrip("/")
+    _current_ws_id = resolve_active_workspace(home / "state", cwd)
     if _current_ws_id and behavior.get("reads_ctx_workspace_id", "") != _current_ws_id:
         behavior["reads_since_context_update"] = 0
         behavior["reads_since_rag"] = 0
@@ -319,21 +327,19 @@ def main() -> int:
         and has_workspace
         and not audit_active
     ):
-        most_recent_ctx = _target_workspace(ctx_files, home)
-        task_id = most_recent_ctx.parent.name
         if reads_since_ctx >= READS_BEFORE_CONTEXT_UPDATE * 2:
             # 2nd+ nudge without compliance — escalate to hard stop
             _should_block = True
             nudges.append(
                 f"WRITE FINDINGS — BLOCKED: You've done {reads_since_ctx} reads/searches "
-                f"without updating workspace/{task_id}/context.md. "
+                "without updating your workspace's context.md. "
                 "Update it NOW (status, what you found, next step) before continuing. "
                 "The agentic loop is stopped until context.md is updated."
             )
         else:
             nudges.append(
                 f"WRITE FINDINGS: You've done {reads_since_ctx} reads/searches since last updating "
-                f"workspace/{task_id}/context.md. "
+                "your workspace's context.md. "
                 "Record what you found NOW before continuing — hypothesis, evidence, next lead. "
                 "Findings in context.md survive compaction; findings only in your head do not."
             )
@@ -399,48 +405,48 @@ def main() -> int:
         # No audit_active guard here: stale context.md is worth flagging even during audits,
         # and audits don't do Edit/Write to code files so this rarely fires.
         most_recent = _target_workspace(ctx_files, home)
-        age_seconds = time.time() - most_recent.stat().st_mtime
-        if age_seconds > STALE_NUDGE_SECONDS:
-            task_id = most_recent.parent.name
-            age_min = int(age_seconds / 60)
-            nudges.append(
-                f"CONTEXT UPDATE — workspace/{task_id}/context.md is {age_min}m stale. "
-                "Update it now: current status, decision made, next step."
-            )
+        if most_recent:
+            age_seconds = time.time() - most_recent.stat().st_mtime
+            if age_seconds > STALE_NUDGE_SECONDS:
+                age_min = int(age_seconds / 60)
+                nudges.append(
+                    f"CONTEXT UPDATE — your workspace's context.md is {age_min}m stale. "
+                    "Update it now: current status, decision made, next step."
+                )
 
     elif has_workspace and total % NUDGE_INTERVAL == 0 and not audit_active:
         # Fallback: periodic nudge for sessions without recent Edit/Write activity
         most_recent = _target_workspace(ctx_files, home)
-        task_id = most_recent.parent.name
-        current_mtime = most_recent.stat().st_mtime
+        if most_recent:
+            current_mtime = most_recent.stat().st_mtime
 
-        last_mtime = behavior.get("last_nudge_ctx_mtime", 0.0)
-        last_path = behavior.get("last_nudge_ctx_path", "")
-        last_count = behavior.get("last_nudge_count", 0)
+            last_mtime = behavior.get("last_nudge_ctx_mtime", 0.0)
+            last_path = behavior.get("last_nudge_ctx_path", "")
+            last_count = behavior.get("last_nudge_count", 0)
 
-        unchanged = (
-            last_path == str(most_recent)
-            and abs(current_mtime - last_mtime) < 2.0
-        )
-
-        if unchanged and last_count > 0:
-            uses_since = total - last_count
-            nudges.append(
-                f"URGENT CONTEXT CHECKPOINT: workspace/{task_id}/context.md "
-                f"has NOT been updated since the reminder {uses_since} tool uses ago. "
-                "Update it NOW before continuing — status, next step, decisions made. "
-                "This file is what survives /clear and compaction."
-            )
-        else:
-            nudges.append(
-                f"CONTEXT CHECKPOINT: Update workspace/{task_id}/context.md now with: "
-                "(1) what was just implemented or decided, "
-                "(2) current status and specific next step, "
-                "(3) user requirements or constraints stated this session."
+            unchanged = (
+                last_path == str(most_recent)
+                and abs(current_mtime - last_mtime) < 2.0
             )
 
-        behavior["last_nudge_ctx_mtime"] = current_mtime
-        behavior["last_nudge_ctx_path"] = str(most_recent)
+            if unchanged and last_count > 0:
+                uses_since = total - last_count
+                nudges.append(
+                    f"URGENT CONTEXT CHECKPOINT: your workspace's context.md "
+                    f"has NOT been updated since the reminder {uses_since} tool uses ago. "
+                    "Update it NOW before continuing — status, next step, decisions made. "
+                    "This file is what survives /clear and compaction."
+                )
+            else:
+                nudges.append(
+                    "CONTEXT CHECKPOINT: Update your workspace's context.md now with: "
+                    "(1) what was just implemented or decided, "
+                    "(2) current status and specific next step, "
+                    "(3) user requirements or constraints stated this session."
+                )
+
+            behavior["last_nudge_ctx_mtime"] = current_mtime
+            behavior["last_nudge_ctx_path"] = str(most_recent)
         behavior["last_nudge_count"] = total
 
     elif not has_workspace and total == NO_WORKSPACE_NUDGE_THRESHOLD:

@@ -13,29 +13,34 @@ import os
 import sys
 from pathlib import Path
 
+from workspace_identity import normalize_cwd, resolve_active_workspace
+
 
 def main() -> int:
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     ))
 
-    # Read the active workspace for this project so the compaction summary is anchored to it
+    # Read the active workspace so the compaction summary is anchored to it
     workspace_line = ""
     try:
-        cwd_norm = os.getcwd().replace("\\", "/").rstrip("/")
-        pws = json.loads((home / "state" / "project-workspaces.json").read_text(encoding="utf-8"))
-        ws_id = pws.get(cwd_norm)
-        if ws_id is None:
-            cwd_lower = cwd_norm.lower()
-            for key, val in pws.items():
-                if key.replace("\\", "/").rstrip("/").lower() == cwd_lower:
-                    ws_id = val
-                    break
-        if ws_id and isinstance(ws_id, str):
-            reg = json.loads((home / "state" / "workspaces.json").read_text(encoding="utf-8"))
+        cwd_norm = normalize_cwd(os.getcwd())
+        state_dir = home / "state"
+        ws_id = resolve_active_workspace(state_dir, cwd_norm)
+        if ws_id:
+            reg = json.loads((state_dir / "workspaces.json").read_text(encoding="utf-8"))
             entry = reg.get(ws_id, {})
             ws_path = entry.get("workspace_path", "").strip()
             proj_path = entry.get("project_path", "").strip()
+            if not ws_path or not proj_path:
+                try:
+                    aw = json.loads((state_dir / "active-workspace.json").read_text(encoding="utf-8"))
+                    if not ws_path:
+                        ws_path = aw.get("workspace_path", "")
+                    if not proj_path:
+                        proj_path = aw.get("project_path", "")
+                except Exception:
+                    pass
             parts = [f"ACTIVE WORKSPACE: {ws_id}"]
             if ws_path:
                 parts.append(f"  workspace_path: {ws_path}")
