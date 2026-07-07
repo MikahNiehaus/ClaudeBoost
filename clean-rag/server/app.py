@@ -117,6 +117,12 @@ async def handle_search(request: web.Request) -> web.Response:
             Graph mode finds structural neighbors (imports, callers,
             inheritance) of vector-matched files. Only applies to
             project sources; topic sources always use vector.
+        depth (int): graph traversal depth, 1-5 (default 2). Only applies
+            to mode="graph"/"both".
+        direction (str): "both" (default), "callers" (blast-radius
+            direction -- files that depend on/call/import the seed), or
+            "dependencies" (files the seed depends on). Only applies to
+            mode="graph"/"both".
     """
     try:
         body = await request.json()
@@ -131,9 +137,19 @@ async def handle_search(request: web.Request) -> web.Response:
     limit = body.get("limit", DEFAULT_SEARCH_LIMIT)
     min_score = body.get("min_score", DEFAULT_MIN_SCORE)
     mode = body.get("mode", "vector")
+    depth = body.get("depth", 2)
+    direction = body.get("direction", "both")
 
     if mode not in ("vector", "graph", "both"):
         return _json_response({"error": "mode must be 'vector', 'graph', or 'both'"}, 400)
+
+    if not isinstance(depth, int) or not (1 <= depth <= 5):
+        return _json_response({"error": "depth must be an integer 1-5"}, 400)
+
+    if direction not in ("both", "callers", "dependencies"):
+        return _json_response(
+            {"error": "direction must be 'both', 'callers', or 'dependencies'"}, 400,
+        )
 
     if not _embedder or not _code_embedder:
         return _json_response({"error": "Server not initialized"}, 503)
@@ -156,6 +172,7 @@ async def handle_search(request: web.Request) -> web.Response:
             logger.exception("Code embedding model failed to load")
             return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
+    graph_meta: dict = {}
     results = await loop.run_in_executor(
         None,
         partial(
@@ -167,10 +184,13 @@ async def handle_search(request: web.Request) -> web.Response:
             limit=limit,
             min_score=min_score,
             mode=mode,
+            meta_out=graph_meta,
+            depth=depth,
+            direction=direction,
         ),
     )
 
-    search_id = _log_search(query=query, sources=sources, mode=mode, results=results)
+    search_id = _log_search(query=query, sources=sources, mode=mode, results=results, graph_meta=graph_meta)
 
     return _json_response({"results": results, "search_id": search_id})
 
@@ -194,8 +214,18 @@ _SEARCH_LOG_PATH = STATE_DIR / "search-log.jsonl"
 _SEARCH_LOG_WINDOW_S = 1800  # how long a search_id remains citable in /prove
 
 
-def _log_search(query: str, sources: list[str], mode: str, results: list[dict]) -> str:
-    """Append a real search to the server-side log. Returns the search_id."""
+def _log_search(
+    query: str, sources: list[str], mode: str, results: list[dict],
+    graph_meta: dict | None = None,
+) -> str:
+    """Append a real search to the server-side log. Returns the search_id.
+
+    graph_meta (from search()'s meta_out) records whether a mode=graph/both
+    search actually found real graph neighbors, not just whether graph mode
+    was requested -- see _search_project_graph()'s docstring (search.py) for
+    what graph_status "absent"/"empty"/"hit" mean. Observe-only for now
+    (Stage 1) -- handle_prove doesn't gate on these fields yet (Stage 4).
+    """
     search_id = uuid.uuid4().hex[:16]
     top_score = max((r.get("score", 0.0) for r in results), default=0.0)
     entry = {
@@ -207,6 +237,10 @@ def _log_search(query: str, sources: list[str], mode: str, results: list[dict]) 
         "results_count": len(results),
         "top_score": top_score,
     }
+    if graph_meta:
+        entry["graph_status"] = graph_meta.get("graph_status")
+        entry["graph_hit_count"] = graph_meta.get("graph_hit_count", 0)
+        entry["caller_count"] = graph_meta.get("caller_count", 0)
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         with open(_SEARCH_LOG_PATH, "a", encoding="utf-8") as f:
@@ -244,14 +278,147 @@ def _read_search_log_entries(search_ids: set[str]) -> list[dict]:
     return list(matched.values())
 
 
+# Keywords that count as an explicit "no dependents" acknowledgment in a
+# quality_aspects assertion, when a codebase angle's graph traversal found
+# no callers. Deliberately simple substring matching, not semantic
+# understanding -- proof-gate.py has no AI judge, only mechanical checks,
+# so this forces an explicit written acknowledgment rather than trying to
+# infer intent.
+_NO_CALLERS_KEYWORDS = (
+    "no caller", "no dependent", "no depend", "leaf file", "leaf node",
+    "nothing depends", "not called by", "not imported by", "no one calls",
+    "no one imports",
+)
+
+# Topics that auto-classify a search's angle as "methodology" instead of
+# the generic "technology" default -- kept in sync with proof-gate.py's
+# METHODOLOGY_TOPICS values (all of them, not just what any single file's
+# _suggest_methodology_topics() would return, since a caller can legitimately
+# search any of these for code-quality grounding).
+_METHODOLOGY_TOPIC_NAMES = {
+    "clean-code-principles", "code-smells", "solid-principles", "design-patterns",
+    "api-design", "error-handling", "testing-strategy", "configuration-management",
+    "database-design", "performance-optimization", "concurrency",
+}
+
+_VALID_PROVE_ANGLES = {"technology", "codebase", "pitfalls", "security", "best_practices", "methodology"}
+
+
+def _project_has_graph(project_path: str) -> bool:
+    import hashlib
+    pid = hashlib.sha256(str(Path(project_path).resolve()).encode("utf-8")).hexdigest()[:12]
+    return (DATABASES_DIR / "_projects" / pid / "graph.db").exists()
+
+
+def _has_no_callers_acknowledgment(quality_aspects: list[dict]) -> bool:
+    for q in quality_aspects:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("assertion", "")).lower()
+        if any(kw in text for kw in _NO_CALLERS_KEYWORDS):
+            return True
+    return False
+
+
+def _evaluate_codebase_evidence(
+    entries: list[dict], quality_aspects: list[dict],
+) -> tuple[bool, str | None]:
+    """Apply the graph-verified codebase-evidence matrix (plan Stage 4).
+
+    A plain vector hit on a project that actually has a graph isn't enough
+    -- the codebase angle must show real graph traversal (real callers, or
+    an explicit acknowledgment when there genuinely are none), or a
+    verified direct-research receipt (Stage 3) when the project has no
+    graph at all. Returns (ok, reason_if_not_ok).
+    """
+    codebase_entries = [
+        e for e in entries
+        if any(str(s).startswith("project:") for s in e.get("sources", []))
+    ]
+    if not codebase_entries:
+        return False, "No codebase-sourced entries to evaluate (should be unreachable)."
+
+    reasons = []
+    for e in codebase_entries:
+        mode = e.get("mode", "vector")
+        project_paths = [
+            str(s)[8:] for s in e.get("sources", []) if str(s).startswith("project:")
+        ]
+
+        if mode == "direct_research":
+            # Stage 3's /log-direct-research already independently verified
+            # this (file existence, real match count) before issuing the
+            # receipt -- sufficient on its own.
+            return True, None
+
+        if mode not in ("graph", "both"):
+            # mode="vector": never sufficient on its own, whether or not
+            # the project has a graph -- either redo with graph/both, or if
+            # there's genuinely no graph, use /log-direct-research instead.
+            for pp in project_paths:
+                if _project_has_graph(pp):
+                    reasons.append(
+                        f"'{pp}' has a real graph index, but the cited search used mode='vector' "
+                        "-- graph traversal was never consulted. Re-run with mode='graph' or 'both'."
+                    )
+                else:
+                    reasons.append(
+                        f"'{pp}' has no graph index and the cited search used mode='vector', which "
+                        "doesn't verify anything structural. Either index the project first, or use "
+                        "POST /log-direct-research to verify Grep/file-read evidence instead."
+                    )
+            continue
+
+        graph_status = e.get("graph_status")
+        caller_count = e.get("caller_count", 0)
+
+        if graph_status == "absent":
+            reasons.append(
+                f"Graph traversal was attempted but no graph index exists for this project "
+                "(graph_status='absent'). Index the project first, or use "
+                "POST /log-direct-research to verify Grep/file-read evidence instead."
+            )
+            continue
+
+        if caller_count and caller_count > 0:
+            return True, None
+
+        # graph_status in ("hit", "empty") with zero callers -- a real leaf
+        # file is legitimate, but it must be acknowledged explicitly, not
+        # silently accepted, so an empty/dependency-only traversal can't
+        # become an unnoticed loophole.
+        if _has_no_callers_acknowledgment(quality_aspects):
+            return True, None
+
+        reasons.append(
+            "Graph traversal found no callers for this file (caller_count=0). If this is "
+            "genuinely a leaf file with no dependents, add a quality_aspects entry explicitly "
+            "saying so (e.g. 'no callers found, this is a leaf file') -- otherwise, check "
+            "whether the right seed file was actually searched."
+        )
+
+    return False, " ".join(reasons) if reasons else "Codebase evidence did not meet the required bar."
+
+
 async def handle_prove(request: web.Request) -> web.Response:
     """POST /prove: write a proof-gate proof from independently-logged searches.
 
     Body fields:
         file_path (str): file the proof is for (required)
-        search_ids (list[str]): search_id values returned by prior /search
-            calls (required, >=2, at least one must be from a "project:"
-            source -- the codebase angle proof-gate.py requires)
+        search_ids (list): search_id values returned by prior /search calls
+            (required, >=2, at least one must be from a "project:" source --
+            the codebase angle proof-gate.py requires). Each entry is either
+            a plain search_id string (angle auto-classified: "codebase" for
+            project: sources, "security" for topic:owasp, "methodology" for
+            a recognized code-quality topic, "technology" otherwise), or
+            {"search_id": ..., "angle": ...} to explicitly request one of
+            technology/codebase/pitfalls/security/best_practices/methodology
+            -- useful for angles auto-classification can't infer (e.g.
+            "best_practices" is an intent, not a fixed topic). An explicit
+            angle="codebase" claim is still verified against the real
+            source (silently corrected to "technology" if the search wasn't
+            actually project:-sourced) -- you can request a label, not fake
+            what the search actually was.
         quality_aspects (list[dict]): [{"aspect":..., "assertion":...}, ...]
             (required, >=2, at least one aspect must be "architecture" or
             "patterns") -- these remain caller-written since they're
@@ -267,11 +434,29 @@ async def handle_prove(request: web.Request) -> web.Response:
     if not file_path:
         return _json_response({"error": "Missing 'file_path' field"}, 400)
 
-    search_ids = body.get("search_ids", [])
-    if not isinstance(search_ids, list) or len(search_ids) < 2:
+    search_ids_raw = body.get("search_ids", [])
+    if not isinstance(search_ids_raw, list) or len(search_ids_raw) < 2:
         return _json_response(
             {"error": "search_ids must be a list of >=2 real /search search_id values"}, 400
         )
+
+    search_ids: list[str] = []
+    angle_overrides: dict[str, str] = {}
+    for item in search_ids_raw:
+        if isinstance(item, str):
+            search_ids.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("search_id"), str):
+            search_ids.append(item["search_id"])
+            requested = item.get("angle")
+            if requested in _VALID_PROVE_ANGLES:
+                angle_overrides[item["search_id"]] = requested
+        else:
+            return _json_response({
+                "error": (
+                    "each search_ids entry must be a search_id string, or "
+                    '{"search_id": "...", "angle": "..."}'
+                ),
+            }, 400)
 
     quality_aspects = body.get("quality_aspects", [])
     if not isinstance(quality_aspects, list) or len(quality_aspects) < 2:
@@ -308,7 +493,29 @@ async def handle_prove(request: web.Request) -> web.Response:
         is_codebase = any(str(s).startswith("project:") for s in sources)
         if is_codebase:
             project_cited = True
-        angle = "codebase" if is_codebase else "technology"
+
+        sid = e["search_id"]
+        if sid in angle_overrides:
+            # Caller-requested angle label (for cases auto-classification
+            # can't cover, e.g. "best_practices" -- an intent, not a fixed
+            # topic). Still server-verified for "codebase": can't claim it
+            # without a real project: source, silently corrected rather
+            # than trusted, same principle as everything else in /prove.
+            angle = angle_overrides[sid]
+            if angle == "codebase" and not is_codebase:
+                angle = "technology"
+        elif is_codebase:
+            angle = "codebase"
+        elif any(str(s) == "topic:owasp" for s in sources):
+            angle = "security"
+        elif any(
+            str(s).startswith("topic:") and str(s)[6:] in _METHODOLOGY_TOPIC_NAMES
+            for s in sources
+        ):
+            angle = "methodology"
+        else:
+            angle = "technology"
+
         research_angles.append({
             "angle": angle,
             "query": e["query"],
@@ -328,6 +535,10 @@ async def handle_prove(request: web.Request) -> web.Response:
                 "existing Fast Path if the project isn't indexed), then cite that search_id."
             ),
         }, 400)
+
+    codebase_ok, codebase_reason = _evaluate_codebase_evidence(entries, quality_aspects)
+    if not codebase_ok:
+        return _json_response({"error": codebase_reason}, 400)
 
     min_score = max((a["score"] for a in research_angles), default=0.0)
     rag_results_count = sum(e.get("results_count", 0) for e in entries)
@@ -368,6 +579,144 @@ async def handle_prove(request: web.Request) -> web.Response:
         "rag_results_count": rag_results_count,
         "research_angles": research_angles,
     })
+
+
+# Fixed "score" for a verified direct-research receipt. Not a similarity
+# estimate (there's nothing to estimate -- the file either exists and the
+# pattern either matched or it didn't), so 1.0 reflects certainty from a
+# deterministic check, not an inflated confidence claim.
+_DIRECT_RESEARCH_SCORE = 1.0
+
+
+def _grep_files(pattern: str, files: list[str]) -> int:
+    """Count real regex matches for `pattern` across `files`.
+
+    Uses Python's re module rather than shelling out to ripgrep -- avoids
+    any subprocess/shell-injection surface for a user-supplied pattern and
+    file list, and is functionally equivalent for verification purposes
+    (a real match count from actually reading the files, not a claim).
+    """
+    try:
+        compiled = re.compile(pattern)
+    except re.error:
+        return -1  # signals invalid pattern to the caller
+    total = 0
+    for f in files:
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        total += len(compiled.findall(text))
+    return total
+
+
+async def handle_log_direct_research(request: web.Request) -> web.Response:
+    """POST /log-direct-research: issue a search_id-equivalent receipt for
+    manual research (Grep/file reads) when a project isn't indexed in
+    clean-rag -- the server is up, but there's no graph/vector index for
+    this specific project yet. Never blocking, never requires indexing.
+
+    Verifies the claim itself (file existence, a real regex match count)
+    instead of trusting a self-reported description -- same principle as
+    /prove for real searches: the server checks, the caller doesn't just
+    assert. Writes into the same search-log.jsonl /prove already reads,
+    tagged with sources=["project:<path>"] so /prove's existing codebase-
+    angle detection (app.py's is_codebase check) picks it up with no
+    special-casing needed there.
+
+    Body fields:
+        project_path (str): the project this research relates to (required)
+        files_examined (list[str]): file paths actually grepped/read
+            (required, >=1, each must exist on disk)
+        method ("grep" | "read"): how the files were examined (required)
+        pattern (str): the grep pattern searched for (required if
+            method="grep"; must match at least once across files_examined)
+        description (str): optional free-text note
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    files_examined = body.get("files_examined", [])
+    if not isinstance(files_examined, list) or not files_examined:
+        return _json_response({"error": "files_examined must be a non-empty list"}, 400)
+
+    method = body.get("method", "")
+    if method not in ("grep", "read"):
+        return _json_response({"error": "method must be 'grep' or 'read'"}, 400)
+
+    pattern = body.get("pattern", "")
+    if method == "grep" and not pattern:
+        return _json_response({"error": "pattern is required when method='grep'"}, 400)
+
+    missing = [f for f in files_examined if not Path(f).is_file()]
+    if missing:
+        return _json_response({
+            "error": (
+                "One or more cited files do not exist -- cannot issue a receipt for "
+                "files that were not actually examined."
+            ),
+            "missing_files": missing,
+        }, 400)
+
+    match_count = None
+    if method == "grep":
+        match_count = _grep_files(pattern, files_examined)
+        if match_count < 0:
+            return _json_response({"error": f"'{pattern}' is not a valid regex pattern"}, 400)
+        if match_count == 0:
+            return _json_response({
+                "error": (
+                    f"Pattern {pattern!r} matched zero times across the cited files -- "
+                    "cannot issue a receipt for a grep that found nothing."
+                ),
+            }, 400)
+
+    search_id = uuid.uuid4().hex[:16]
+    entry = {
+        "search_id": search_id,
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "query": pattern if method == "grep" else body.get("description", "direct file read"),
+        "sources": [f"project:{project_path}"],
+        "mode": "direct_research",
+        "results_count": match_count if method == "grep" else len(files_examined),
+        "top_score": _DIRECT_RESEARCH_SCORE,
+        "files_examined": files_examined,
+        "method": method,
+    }
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_SEARCH_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        logger.exception("Failed to write search-log entry for direct research")
+
+    response = {
+        "search_id": search_id,
+        "verified": True,
+        "files_examined": files_examined,
+        "method": method,
+    }
+    if method == "grep":
+        response["match_count"] = match_count
+
+    # Non-blocking, ignorable suggestion -- never a requirement. Only shown
+    # when the project genuinely has no graph index, so it's relevant.
+    import hashlib
+    project_root = Path(project_path).resolve()
+    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
+    if not (DATABASES_DIR / "_projects" / pid / "graph.db").exists():
+        response["suggestion"] = (
+            f"'{project_path}' isn't indexed in clean-rag yet. Consider POST /index-project "
+            "for richer, graph-verified results next time -- optional, not required."
+        )
+
+    return _json_response(response)
 
 
 async def handle_index_topic(request: web.Request) -> web.Response:
@@ -804,6 +1153,7 @@ def create_app() -> web.Application:
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
     app.router.add_post("/prove", handle_prove)
+    app.router.add_post("/log-direct-research", handle_log_direct_research)
     app.router.add_post("/index-topic", handle_index_topic)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)

@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # clean-rag installer (Unix/macOS/WSL)
+#
+# KEEP IN SYNC WITH install.bat: this is the Linux/macOS twin of the
+# Windows installer. Both just find a Python interpreter and exec
+# install.py with the same args, so the real logic lives in install.py --
+# but if you change flag handling, usage text, or the Python-detection
+# fallback order here, make the matching change in install.bat too (and
+# vice versa), or the two platforms will drift out of sync silently.
+#
 # Usage:
 #   ./clean-rag/install.sh                     # full install with pre-seeding
 #   ./clean-rag/install.sh --no-seed           # skip pre-seeding (fast)

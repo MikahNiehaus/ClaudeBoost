@@ -13,6 +13,7 @@ Exit codes:
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -277,6 +278,18 @@ EXEMPT_SEGMENTS = [
     ".claude",
 ]
 
+# Kept in sync manually with verifier/offline_prove.py's copy of this same
+# pattern -- both need to agree on what counts as security-sensitive, since
+# offline_prove.py refuses independently too (defense in depth, not just
+# relying on this check happening first).
+_SECURITY_PATH_RE = re.compile(
+    r"(auth|session|token|password|passwd|crypto|secret|api[_-]?key)", re.IGNORECASE,
+)
+
+
+def _is_security_sensitive_path(file_path: str) -> bool:
+    return bool(_SECURITY_PATH_RE.search(file_path))
+
 # How long a verified proof stays valid (seconds)
 PROOF_WINDOW_S = 120
 
@@ -364,18 +377,65 @@ Before editing, you must:
 
 BLOCK_MESSAGE_SERVER_DOWN = """
 ===================================================================
-CLEAN-RAG: Edit blocked. No verified proof for this file.
+CLEAN-RAG: Edit blocked. No verified proof for this file, and the
+clean-rag server is unreachable (port {port}).
 
   File: {file}
-  Server: NOT RUNNING (port {port} unreachable)
 
-The clean-rag server must be running to search for proof. Start it:
-  python clean-rag/cli/server_ctl.py start
+This does NOT have to block you -- server downtime should never stop real
+work. But the server needs to actually get fixed, not just worked around
+every time, so do both:
 
-Or start it from the project root:
-  python -m clean_rag.server
+1. SPAWN clean-rag-doctor-agent via the Task tool right now, in the
+   background, to diagnose and restart the server. (Same nudge
+   rag-enforce.py already gives on the health-check path -- this is the
+   PreToolUse path hitting the same problem, so it gets the same fix.)
 
-After the server starts, search for research, write proof, then retry.
+2. WHILE that runs, verify your research locally instead of waiting:
+   python clean-rag/verifier/offline_prove.py < payload.json
+   where payload.json is:
+   {{"file_path": "{file}",
+     "checks": [
+       {{"files_examined": ["<file you greped>"], "method": "grep", "pattern": "<what you searched>"}},
+       {{"files_examined": ["<another file>"], "method": "read"}}
+     ],
+     "quality_aspects": [
+       {{"aspect": "architecture", "assertion": "<how this fits the project>"}},
+       {{"aspect": "patterns", "assertion": "<what existing pattern this follows>"}}
+     ]}}
+
+   This verifies your claims itself (real file existence, real regex match
+   counts) before writing a proof -- same principle as /prove, just
+   running locally since the server can't. Needs >=2 checks, same as
+   /prove needs >=2 search_ids. Every offline-verified proof gets logged to
+   clean-rag/state/rag-down-events.jsonl so this doesn't go unnoticed.
+
+3. RETRY the edit once the script reports success.
+
+===================================================================
+"""
+
+BLOCK_MESSAGE_SERVER_DOWN_SECURITY = """
+===================================================================
+CLEAN-RAG: Edit blocked. This file matches a security-sensitive path
+(auth/session/token/password/crypto/secret/api-key), and the clean-rag
+server is unreachable (port {port}).
+
+  File: {file}
+
+Unlike other files, there is no offline path for security-sensitive edits.
+Per OWASP's RAG security guidance ("the system must deny the request rather
+than fall back to potentially unsafe behavior" when a RAG pipeline
+component fails), this fails CLOSED, not open -- this edit must wait.
+
+1. SPAWN clean-rag-doctor-agent via the Task tool right now to fix the
+   server. This is the only path forward for this file.
+2. Once the server is back, search for real research and retry through the
+   normal /prove flow.
+
+If this file was flagged incorrectly (not actually security-relevant),
+that's a real finding worth telling the user about, not something to work
+around here.
 ===================================================================
 """
 
@@ -472,6 +532,51 @@ def _suggest_methodology_topics(file_path: str, tool_input: dict) -> list[str]:
             seen.add(t)
             unique.append(t)
     return unique[:4]
+
+
+def _is_new_or_substantial_addition(file_path: str, tool_input: dict) -> bool:
+    """Heuristic trigger for the Stage 6 prior-art check: a brand new file,
+    or an edit that goes from near-nothing to a large block of new code --
+    not exact, just a reasonable signal for "scaffolding something new"
+    as opposed to a small fix or refactor.
+    """
+    if "content" in tool_input:
+        try:
+            already_exists = Path(file_path).exists()
+        except OSError:
+            already_exists = True  # unknown -- don't flag on uncertainty
+        return not already_exists and len(tool_input.get("content", "")) > 200
+    if "old_string" in tool_input and "new_string" in tool_input:
+        old_s = tool_input.get("old_string", "")
+        new_s = tool_input.get("new_string", "")
+        return len(old_s) < 10 and len(new_s) > 200
+    if "edits" in tool_input:
+        for e in tool_input["edits"]:
+            if len(e.get("old_string", "")) < 10 and len(e.get("new_string", "")) > 200:
+                return True
+    return False
+
+
+# Keywords that count as an explicit "checked for prior art, building
+# custom is the right call" justification in a quality_aspects assertion.
+# Simple substring matching (proof-gate.py has no AI judge), same pattern
+# as app.py's _has_no_callers_acknowledgment.
+_PRIOR_ART_KEYWORDS = (
+    "no existing library", "no suitable library", "checked for existing",
+    "no existing solution", "custom because", "building custom because",
+    "core differentiat", "no library found", "searched for existing",
+    "no existing pattern",
+)
+
+
+def _has_prior_art_justification(quality_aspects: list) -> bool:
+    for q in quality_aspects:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("assertion", "")).lower()
+        if any(kw in text for kw in _PRIOR_ART_KEYWORDS):
+            return True
+    return False
 
 
 def _build_remediation_for_reasons(reasons: list) -> str:
@@ -655,6 +760,55 @@ def main() -> int:
                         "that it works correctly"
                     )
 
+            # Stage 6a: methodology required (not just suggested) when this
+            # file's structure calls for it beyond the always-suggested
+            # baseline (clean-code-principles, code-smells) -- e.g. a
+            # class-heavy file should cite solid-principles/design-patterns.
+            suggested_methodology = _suggest_methodology_topics(file_path, tool_input)
+            if set(suggested_methodology) - set(METHODOLOGY_TOPICS["baseline"]):
+                has_methodology = any(
+                    isinstance(a, dict) and a.get("angle") == "methodology" for a in angles
+                )
+                if not has_methodology:
+                    valid = False
+                    reasons.append(
+                        "research_angles: missing 'methodology' angle. This file's structure "
+                        f"suggests {', '.join(suggested_methodology)} -- search one of these "
+                        "topics and cite it as a methodology angle"
+                    )
+
+            # Stage 6b: prior-art check for new files / substantial new code.
+            # Not "you must reuse" -- "you must have actually checked" (Not
+            # Invented Here syndrome is a real, named anti-pattern, but not
+            # an absolute rule -- core/differentiating tech is a legitimate
+            # exception, hence the justification escape hatch).
+            if _is_new_or_substantial_addition(file_path, tool_input):
+                has_best_practices = any(
+                    isinstance(a, dict) and a.get("angle") == "best_practices" for a in angles
+                )
+                if not has_best_practices and not _has_prior_art_justification(quality):
+                    valid = False
+                    reasons.append(
+                        "This looks like new functionality being built from scratch. Either cite "
+                        "a 'best_practices' research angle checking for an existing library/pattern "
+                        "first, or add a quality_aspects entry explicitly justifying why building "
+                        "custom is the right call here"
+                    )
+
+            # Stage 6c: security angle required for security-sensitive paths.
+            if _is_security_sensitive_path(file_path):
+                has_security = any(
+                    isinstance(a, dict) and a.get("angle") == "security" for a in angles
+                )
+                if not has_security:
+                    valid = False
+                    reasons.append(
+                        "research_angles: missing 'security' angle. This file's path matches a "
+                        "security-sensitive pattern (auth/session/token/password/crypto/secret/"
+                        "api-key) -- cite a search against the owasp topic (or equivalent) as a "
+                        "security angle before editing"
+                    )
+
             if valid:
                 _log_proof(state_dir, file_path, proof, edit_hash)
                 _tel_pass(file_path, proof.get("topics_cited", []), proof.get("min_score", 0))
@@ -694,12 +848,19 @@ def main() -> int:
     _maybe_write_debug_fix(state_dir, file_path, "no_valid_proof")
 
     if not _server_reachable(port):
-        # Server is down. Give a clear "start the server" message
-        # instead of instructions that reference an unreachable server.
-        print(
-            BLOCK_MESSAGE_SERVER_DOWN.format(file=file_path, port=port),
-            file=sys.stderr,
-        )
+        # Server is down. Security-sensitive files fail closed (no offline
+        # path, must wait for the server) -- everything else gets pointed
+        # at verifier/offline_prove.py instead of just "start the server".
+        if _is_security_sensitive_path(file_path):
+            print(
+                BLOCK_MESSAGE_SERVER_DOWN_SECURITY.format(file=file_path, port=port),
+                file=sys.stderr,
+            )
+        else:
+            print(
+                BLOCK_MESSAGE_SERVER_DOWN.format(file=file_path, port=port),
+                file=sys.stderr,
+            )
         return 2
 
     # Server is up. Show full research instructions with expected proof path.

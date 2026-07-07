@@ -1,5 +1,13 @@
 @echo off
 REM clean-rag installer (Windows)
+REM
+REM KEEP IN SYNC WITH install.sh: this is the Windows twin of the
+REM Linux/macOS installer. Both just find a Python interpreter and exec
+REM install.py with the same args, so the real logic lives in install.py --
+REM but if you change flag handling, usage text, or the Python-detection
+REM fallback order here, make the matching change in install.sh too (and
+REM vice versa), or the two platforms will drift out of sync silently.
+REM
 REM Usage:
 REM   clean-rag\install.bat                     :: full install with pre-seeding
 REM   clean-rag\install.bat --no-seed           :: skip pre-seeding (fast)
