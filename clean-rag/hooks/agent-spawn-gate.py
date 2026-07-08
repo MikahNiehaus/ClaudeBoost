@@ -260,24 +260,51 @@ def main() -> int:
     flag = boost_home / "state" / "needs-verification.json"
     audit_active = (boost_home / "state" / "audit-in-progress.json").exists()
     if flag.exists() and not audit_active:
-        # "verdict" covers evaluator passes named e.g. "Opus verdict synthesis"
-        is_evaluator = (
-            "evaluator-agent" in prompt_lower
-            or "evaluator_agent" in prompt_lower
-            or "verdict" in prompt_lower
-            or "verdict" in description.lower()
-        )
-        if is_evaluator:
+        # A flag from a different project's session, or one older than the
+        # expiry window, is stale leftover state rather than a real pending
+        # verification for THIS session — drop it instead of blocking on it.
+        # (verify-gate-cmd.py stamps "cwd" when it writes the flag; older
+        # flags written before that field existed have no "cwd" and are
+        # treated as not-matching, so this also self-heals any flag already
+        # on disk from before this check was added.)
+        FLAG_MAX_AGE_S = 4 * 3600
+        flag_data: dict = {}
+        try:
+            flag_data = json.loads(flag.read_text(encoding="utf-8"))
+        except Exception:
+            flag_data = {}
+        flag_stale = True
+        try:
+            flagged_at = datetime.fromisoformat(flag_data.get("flagged_at", ""))
+            flag_stale = (datetime.now(timezone.utc) - flagged_at).total_seconds() > FLAG_MAX_AGE_S
+        except Exception:
+            flag_stale = True
+        same_project = flag_data.get("cwd") == os.getcwd()
+
+        if flag_stale or not same_project:
             try:
                 flag.unlink(missing_ok=True)
             except Exception:
                 pass
         else:
-            nudges.append(
-                "[verify gate] NEEDS_VERIFICATION pending — a prior agent flagged findings "
-                "that require verification. Spawn evaluator-agent before proceeding with "
-                "other work. This gate clears automatically when evaluator-agent runs."
+            # "verdict" covers evaluator passes named e.g. "Opus verdict synthesis"
+            is_evaluator = (
+                "evaluator-agent" in prompt_lower
+                or "evaluator_agent" in prompt_lower
+                or "verdict" in prompt_lower
+                or "verdict" in description.lower()
             )
+            if is_evaluator:
+                try:
+                    flag.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            else:
+                nudges.append(
+                    "[verify gate] NEEDS_VERIFICATION pending — a prior agent flagged findings "
+                    "that require verification. Spawn evaluator-agent before proceeding with "
+                    "other work. This gate clears automatically when evaluator-agent runs."
+                )
 
     if nudges:
         for n in nudges:
