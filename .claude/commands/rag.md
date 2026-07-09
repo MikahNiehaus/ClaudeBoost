@@ -11,37 +11,56 @@ Use this skill to start the RAG server at the beginning of a session, or reconne
 
 ---
 
-## Step 1: Start the RAG HTTP Server
+## Step 1: Start Both RAG Servers via Supervisor
+
+```bash
+"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-supervisor.py" start
+```
+
+This starts the supervisor managing both the main RAG server (port 8612) and clean-rag server (port 8613) with auto restart on crash. If the supervisor is already running, it reports existing status.
+
+If the output says "already running" or shows both servers alive, proceed. If it fails, fall back to direct start:
 
 ```bash
 "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-server-start.py"
 ```
 
-If the output is "already running" or "ready", proceed. If it fails or times out, stop and report the error — do not continue.
+If both fail, stop and report the error.
 
 ---
 
-## Step 2: Verify via HTTP
+## Step 2: Verify Both Servers via HTTP
 
-Poll until ready (up to 60s):
+Poll main RAG server until ready (up to 60s):
 
 ```bash
 for attempt in $(seq 1 20); do
   STATUS=$(curl -s --max-time 3 http://127.0.0.1:8612/status)
   echo "$STATUS" | grep -q '"status": *"ready"' && break
-  echo "waiting for server... (attempt $attempt)"
+  echo "waiting for main RAG server... (attempt $attempt)"
   sleep 3
 done
 echo "$STATUS"
 ```
 
-(`$attempt` is a loop variable and `$STATUS` is assigned in the same command, so
-bash-guard allows them; curl to 127.0.0.1 is fine. If the loop ends without
-`ready`, the last `echo` shows whatever the server returned.)
+Then check clean-rag server:
+
+```bash
+for attempt in $(seq 1 10); do
+  CR_STATUS=$(curl -s --max-time 3 http://127.0.0.1:8613/status)
+  echo "$CR_STATUS" | grep -q '"status"' && break
+  echo "waiting for clean-rag server... (attempt $attempt)"
+  sleep 3
+done
+echo "$CR_STATUS"
+```
+
+(`$attempt` is a loop variable and `$STATUS`/`$CR_STATUS` are assigned in the same command, so
+bash-guard allows them; curl to 127.0.0.1 is fine.)
 
 If exit code is non-zero, stop and tell the user: "RAG server did not start. Check the terminal for errors or run `python $CLAUDEBOOST_HOME/scripts/rag-server-start.py` manually."
 
-Parse the JSON output and note:
+Parse the main RAG JSON output and note:
 - `model` — embedding model name
 - `embedding_dimensions` — vector size
 - `collections.knowledge` — chunk and file counts
@@ -81,7 +100,7 @@ If it returns a token_count, RAG is fully live. If it errors but `/status` was h
 
 **Success:**
 ```
-RAG live — HTTP port 8612  |  knowledge: Xc/Yf  agents: Xc/Yf  |  session primed
+RAG live — main: port 8612 | knowledge: Xc/Yf agents: Xc/Yf | clean-rag: port 8613 | supervisor: auto restart active | session primed
 ```
 
 **Model still loading (status was ready but /context timed out):**
@@ -91,7 +110,7 @@ RAG starting — model loading (~60s). Run /rag again when ready. Status line sh
 
 **Failed:**
 ```
-RAG failed — [specific error]. Try: "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-server-start.py" in the terminal.
+RAG failed — [specific error]. Try: "${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/rag-supervisor.py" start in the terminal.
 ```
 
 ---

@@ -43,6 +43,37 @@ _code_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
 _index_queue: IndexQueue | None = None
 
+# Heartbeat: writes a JSON file every 30s so the supervisor (and health checks)
+# can detect a stuck process without HTTP calls.
+_HEARTBEAT_PATH = STATE_DIR / ".heartbeat"
+_HEARTBEAT_INTERVAL_S = 30
+
+
+def _write_heartbeat(model_loaded: bool = False, index_ok: bool = False) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _HEARTBEAT_PATH.write_text(
+            json.dumps({"ts": time.time(), "model_loaded": model_loaded, "index_ok": index_ok}),
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.debug("Heartbeat write failed (not fatal)", exc_info=True)
+
+
+def _start_heartbeat_thread() -> None:
+    import threading
+
+    def _beat():
+        while True:
+            time.sleep(_HEARTBEAT_INTERVAL_S)
+            _write_heartbeat(
+                model_loaded=_embedder is not None and _embedder.is_loaded,
+                index_ok=True,
+            )
+
+    t = threading.Thread(target=_beat, daemon=True, name="clean-rag-heartbeat")
+    t.start()
+
 
 _TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -1110,6 +1141,10 @@ async def _on_shutdown(app: web.Application) -> None:
     from .store import ChromaStore
     ChromaStore.clear_cache()
     logger.info("ChromaDB client cache cleared")
+    try:
+        _HEARTBEAT_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def create_app() -> web.Application:
@@ -1148,6 +1183,10 @@ def create_app() -> web.Application:
             logger.info("Embedders warmed up at startup")
         except Exception:
             logger.exception("Embedder warmup failed at startup")
+
+        _write_heartbeat(model_loaded=True, index_ok=True)
+        _start_heartbeat_thread()
+        logger.info("Heartbeat thread started (interval=%ds)", _HEARTBEAT_INTERVAL_S)
 
     app = web.Application()
     app.router.add_get("/status", handle_status)
