@@ -1,5 +1,5 @@
 ---
-argument-hint: <topic-slug> [category] [--sources url1 url2 ...] [--supplement]
+argument-hint: <anything — a topic, a question, or nothing to infer from the conversation>
 description: "Spawn a background agent to grab, convert, and index real documentation for any topic"
 allowed-tools: Agent, Bash, Glob, Grep, Read
 ---
@@ -18,21 +18,40 @@ Works for code topics (FastAPI, React) and anything else (project management, da
 
 ---
 
-## Step 1: Parse Arguments
+## Step 1: Figure Out The Topic
 
-Split `$ARGUMENTS` on whitespace.
+`$ARGUMENTS` is free text, not a rigid `<slug> [category]` format. Read it like a request, not a
+command line. Do NOT require the user to already know the kebab-case slug or category — figure
+those out yourself.
 
-- First token: `TOPIC_SLUG` (required, kebab case). Example: `clean-code`, `project-management`, `fastapi`
-- Second token (if not a flag): `CATEGORY`. Example: `methodology`, `languages`, `business`
-- `--sources url1 url2 ...`: seed URLs to fetch directly (skip discovery)
-- `--supplement`: add to existing topic without replacing. This is the default when the topic already has files.
+**1a — Understand intent from `$ARGUMENTS` plus the conversation so far.**
 
-If `CATEGORY` is not provided:
+- If `$ARGUMENTS` names a clear subject ("kubernetes ingress", "how litellm routing works",
+  "look up FastAPI background tasks"), that subject is the topic — regardless of phrasing.
+- If `$ARGUMENTS` is vague or empty ("do more on that", "research it", "go deeper", or nothing at
+  all), look back at the current conversation for what "it"/"that" refers to: the most recently
+  discussed library, framework, error, or subject. Use that.
+- If `$ARGUMENTS` contains explicit flags (`--sources`, `--supplement`) anywhere in the text,
+  honor them regardless of position — don't require them to trail a fixed positional prefix.
+- If after checking both `$ARGUMENTS` and recent conversation there is still no identifiable
+  subject, THEN print usage and stop. This should be rare — only truly cold, contextless
+  invocations with nothing to go on.
+
+**1b — Derive `TOPIC_SLUG`** (kebab-case) from whatever subject you identified. "How does LiteLLM
+route requests" → `litellm`. "kubernetes ingress" → `kubernetes-ingress` or just `kubernetes` if
+that's already an existing topic (prefer extending an existing topic over fragmenting into a new
+near-duplicate one — check existing `knowledge/*/` directories first).
+
+**1c — Derive `CATEGORY`:**
 1. Check `source_map.py` `TOPIC_CATEGORIES` dict for the topic
 2. Check existing `knowledge/*/` directories for a folder matching the topic
-3. Fall back to `uncategorized`
+3. Infer from subject matter if neither matches (a language → `languages`, a framework →
+   `frontend`/`python-frameworks`/etc. matching the existing category naming, a non-code subject →
+   whatever existing category fits, or `uncategorized`)
 
-If no `TOPIC_SLUG` provided, print usage and stop.
+**1d — Confirm briefly before spawning** (one line, not a question the user has to answer): state
+the resolved `TOPIC_SLUG` and `CATEGORY` so the user can redirect if you inferred wrong, then
+proceed — don't block on it.
 
 ---
 
@@ -49,14 +68,16 @@ FIRST ACTION: Call POST http://127.0.0.1:8612/context with {"agent":"research-ra
 
 TOPIC: TOPIC_SLUG
 CATEGORY: CATEGORY
-CLEAN_RAG_HOME: C:/Development/ClaudeBoost/clean-rag
-KNOWLEDGE_DIR: C:/Development/ClaudeBoost/clean-rag/knowledge/CATEGORY/TOPIC_SLUG
+CLEAN_RAG_HOME: resolve this from your own CLAUDEBOOST_HOME environment variable, joined with
+  /clean-rag — do not hardcode a path, it differs per machine (e.g. C:/prj/ClaudeBoost/clean-rag
+  on some setups, C:/Development/ClaudeBoost/clean-rag on others)
+KNOWLEDGE_DIR: <CLEAN_RAG_HOME>/knowledge/CATEGORY/TOPIC_SLUG
 
 ## Step 1: Check if topic is in source_map
 
 Run this search to check:
 ```bash
-grep -c "\"TOPIC_SLUG\"" "C:/Development/ClaudeBoost/clean-rag/research/source_map.py"
+grep -c "\"TOPIC_SLUG\"" "<CLEAN_RAG_HOME>/research/source_map.py"
 ```
 
 If the topic IS in source_map (count > 0), call acquire-topic directly:
@@ -100,12 +121,12 @@ Cap at 15 URLs max.
 
 Create the knowledge directory if it does not exist:
 ```bash
-mkdir -p "C:/Development/ClaudeBoost/clean-rag/knowledge/CATEGORY/TOPIC_SLUG"
+mkdir -p "<KNOWLEDGE_DIR>"
 ```
 
 For each Tier A/B URL:
 1. Use WebFetch to grab the page (returns markdown)
-2. Save with the Write tool to: knowledge/CATEGORY/TOPIC_SLUG/<slugified-url>.md
+2. Save with the Write tool to: <KNOWLEDGE_DIR>/<slugified-url>.md
 3. Add this header at the top of each saved file:
    <!-- Source: <url> | Tier: <A or B> | Topic: TOPIC_SLUG | Fetched: <YYYY-MM-DD> -->
 4. After saving, check file size. If under 500 bytes, delete it (navigation only page).
