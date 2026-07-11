@@ -25,6 +25,8 @@ REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
+PROOF_STOP_GATE_SENTINEL = "proof-stop-gate.py"
+SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 
 
 def _say(msg: str) -> None:
@@ -286,7 +288,57 @@ def register_stop_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Pre-seed topic databases (optional)
+# Step 5f: Register proof-stop-gate hook (Stop) -- enforces CLEAN_RAG_GATE_MODE=stop
+# ---------------------------------------------------------------------------
+def register_proof_stop_gate_hook() -> None:
+    """Register the deferred-proof Stop hook.
+
+    Always registered, same as proof-gate.py's PreToolUse hook -- but it
+    only ever does anything when CLEAN_RAG_GATE_MODE=stop is set (an env
+    var, not something this installer decides). In the default
+    'pretooluse' mode nothing ever gets recorded to the pending list, so
+    this hook is a fast no-op on every turn. See proof-gate.py's
+    _gate_mode() docstring and proof-stop-gate.py's module docstring for
+    the full design.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/proof-stop-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", PROOF_STOP_GATE_SENTINEL,
+        hook_entry, label="proof-stop-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
+# ---------------------------------------------------------------------------
+def register_spec_compliance_gate_hook() -> None:
+    """Register the spec-compliance Stop hook.
+
+    Always registered, default on -- cheap (regex only, no LLM call) with
+    no false-block risk beyond the fixed keyword list in
+    scripts/spec-compliance-gate.py. Checks whether a technology named in
+    the task prompt (react, vue, typescript, etc.) shows up anywhere in
+    the files changed this session; proof-gate.py has no equivalent check
+    since it only verifies edits are research-backed, not that they
+    satisfy what was actually asked for.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", SPEC_COMPLIANCE_GATE_SENTINEL,
+        hook_entry, label="spec-compliance-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 6: preseed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
     # Add clean-rag root to sys.path so research/ is importable
@@ -500,6 +552,14 @@ def main():
     print("\nStep 5e: Setting up GPU memory management...")
     setup_gpu_memory_manager()
 
+    # Step 5f
+    print("\nStep 5f: Registering proof-stop-gate hook...")
+    register_proof_stop_gate_hook()
+
+    # Step 5g
+    print("\nStep 5g: Registering spec-compliance-gate hook...")
+    register_spec_compliance_gate_hook()
+
     # Step 6
     if not args.no_seed:
         print("\nStep 6: Pre-seeding topic databases...")
@@ -519,6 +579,7 @@ def main():
     print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
     print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
+    print(f"    Stop:              proof-stop-gate.py (no-op unless CLEAN_RAG_GATE_MODE=stop)")
     print(f"    SessionStart:      enforcement rules prompt")
     print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")

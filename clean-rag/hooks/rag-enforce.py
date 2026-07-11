@@ -117,12 +117,16 @@ def _load_topic_tree() -> str:
     if not topics:
         return "  (no topics indexed yet)"
 
-    # Group by category
+    # Group by category. Deliberately omit chunk counts: the model only
+    # needs a topic name to route a search, never the exact count, and the
+    # counts cost real tokens on every single turn (measured ~79 tokens for
+    # ~70 topics, growing as more topics get indexed). See LocalAI's
+    # workspace/llama-server-wifi-switch-2026-07-01/context.md, "lower token
+    # ways to run the research gate" research (2026-07-11).
     by_cat: dict[str, list[str]] = {}
     for name, info in topics.items():
         cat = info.get("category", "uncategorized")
-        chunks = info.get("chunks", 0)
-        by_cat.setdefault(cat, []).append(f"{name}({chunks})")
+        by_cat.setdefault(cat, []).append(name)
 
     lines = []
     for cat in sorted(by_cat):

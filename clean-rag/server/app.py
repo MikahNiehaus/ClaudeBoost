@@ -321,6 +321,83 @@ _NO_CALLERS_KEYWORDS = (
     "no one imports",
 )
 
+# Detects the pattern found in a real session (LocalAI flappy bird v25,
+# 2026-07-10): three of four searches were near-duplicate rephrasings of
+# the same failing query ("Web Audio API oscillator gain node..."), all
+# landing on the same wrong topic (expo-audio, a React Native mic-recording
+# API, not browser Web Audio API synthesis) at score ~0.83 -- comfortably
+# above DEFAULT_MIN_SCORE, so the existing threshold check does not catch
+# it. This is a documented RAG failure mode, not a one time fluke: coverage
+# gaps (the knowledge base does not contain the answer) are a known, common
+# retrieval failure category distinct from low score misses, and repeated
+# near-identical reformulation without new evidence is the standard sign an
+# agent is thrashing against one rather than actually converging on an
+# answer. Mechanical, not a relevance judgment: this counts shared
+# significant words across cited technology angle queries, it does not
+# evaluate whether results were actually correct.
+_RESEARCH_GAP_KEYWORDS = (
+    "no relevant result", "results not relevant", "irrelevant result",
+    "no relevant doc", "coverage gap", "not in the knowledge base",
+    "no matching doc", "proceeding from general knowledge",
+    "used general knowledge", "no useful result",
+)
+
+_QUERY_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with",
+    "how", "what", "is", "are", "using", "use", "api", "javascript", "js",
+})
+
+
+def _has_research_gap_acknowledgment(quality_aspects: list[dict]) -> bool:
+    for q in quality_aspects:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("assertion", "")).lower()
+        if any(kw in text for kw in _RESEARCH_GAP_KEYWORDS):
+            return True
+    return False
+
+
+def _query_words(query: str) -> set[str]:
+    tokens = re.findall(r"[a-z0-9]+", query.lower())
+    return {t for t in tokens if t not in _QUERY_STOPWORDS and len(t) > 2}
+
+
+def _has_repeated_query_pattern(entries: list[dict]) -> bool:
+    """True if 2+ real /search calls (not /log-direct-research receipts)
+    share most of their significant words -- the reformulate-and-retry-
+    the-same-question shape, not just two searches that happen to be about
+    the same general subject.
+
+    Checked across all real search entries regardless of which angle they
+    got classified into: a search that includes a project:<path> source
+    gets classified "codebase" even when it is really a reformulated
+    technology question (confirmed directly by sanity-testing this check --
+    two near-duplicate Web Audio API queries, each with
+    project:C:/prj/LocalAI in sources like every real query in this
+    codebase's own search calls, both landed in "codebase" and an earlier
+    technology-only version of this check missed them entirely).
+
+    Excludes mode="direct_research" entries (from /log-direct-research):
+    those carry a fixed boilerplate description that embeds the caller's
+    topic string verbatim by design, not a reformulated retrieval attempt
+    -- including them caused a real false positive against this project's
+    own unblock_edit.py helper, confirmed directly by sanity-testing this
+    check against it before this exclusion was added."""
+    real_queries = [
+        _query_words(e["query"]) for e in entries if e.get("mode") != "direct_research"
+    ]
+    real_queries = [q for q in real_queries if q]
+    for i in range(len(real_queries)):
+        for j in range(i + 1, len(real_queries)):
+            a, b = real_queries[i], real_queries[j]
+            if not a or not b:
+                continue
+            overlap = len(a & b) / min(len(a), len(b))
+            if overlap >= 0.6:
+                return True
+    return False
+
 # Topics that auto-classify a search's angle as "methodology" instead of
 # the generic "technology" default -- kept in sync with proof-gate.py's
 # METHODOLOGY_TOPICS values (all of them, not just what any single file's
@@ -347,6 +424,34 @@ def _has_no_callers_acknowledgment(quality_aspects: list[dict]) -> bool:
             continue
         text = str(q.get("assertion", "")).lower()
         if any(kw in text for kw in _NO_CALLERS_KEYWORDS):
+            return True
+    return False
+
+
+# A minimal grounding check for quality_aspects assertions -- same principle
+# as _has_no_callers_acknowledgment: force a concrete written reference
+# rather than trusting free prose. Deliberately cheap (regex, no content
+# diffing against the actual file) -- this raises the cost of a fabricated
+# assertion from "write any sentence" to "write a sentence that references
+# something checkable," it does not make fabrication impossible. See
+# workspace/llama-server-wifi-switch-2026-07-01/context.md, reward-hacking
+# research indexed 2026-07-10 (arxiv.org/html/2604.15149v1,
+# arxiv.org/html/2603.11337): a step that is checked only by the one who
+# wrote it, with no independent check, is a documented gaming vector once a
+# caller is motivated to skip real verification.
+_GROUNDING_PATTERNS = (
+    re.compile(r"[\w./\\-]+\.\w+:\d+"),        # file.ext:123
+    re.compile(r"[\w./\\-]+/[\w./\\-]+\.\w+"),  # path/to/file.ext
+    re.compile(r"`[^`]+`"),                     # backtick-quoted identifier/snippet
+)
+
+
+def _has_minimal_grounding(quality_aspects: list[dict]) -> bool:
+    for q in quality_aspects:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("assertion", ""))
+        if any(pattern.search(text) for pattern in _GROUNDING_PATTERNS):
             return True
     return False
 
@@ -501,6 +606,16 @@ async def handle_prove(request: web.Request) -> web.Response:
             400,
         )
 
+    if not _has_minimal_grounding(quality_aspects):
+        return _json_response({
+            "error": (
+                "quality_aspects assertions must reference something concrete -- a file:line "
+                "(e.g. 'auth.py:23'), a path (e.g. 'routes/users.py'), or a backtick-quoted "
+                "identifier/snippet actually relevant to this change. A vague assertion like "
+                "'fits the project structure' with no concrete reference is not accepted."
+            ),
+        }, 400)
+
     entries = _read_search_log_entries(set(search_ids))
     if len(entries) < len(set(search_ids)):
         found = {e["search_id"] for e in entries}
@@ -570,6 +685,21 @@ async def handle_prove(request: web.Request) -> web.Response:
     codebase_ok, codebase_reason = _evaluate_codebase_evidence(entries, quality_aspects)
     if not codebase_ok:
         return _json_response({"error": codebase_reason}, 400)
+
+    if _has_repeated_query_pattern(entries) and not _has_research_gap_acknowledgment(quality_aspects):
+        return _json_response({
+            "error": (
+                "Two or more cited technology-angle searches share most of their "
+                "significant words (e.g. reformulating the same failing query several "
+                "times) -- this is the shape of a research gap, not converging research. "
+                "If the results genuinely were not relevant, add a quality_aspects entry "
+                "saying so explicitly (e.g. 'no relevant results found, coverage gap, "
+                "proceeding from general knowledge') so it is a documented decision "
+                "instead of a silent skip. Otherwise, try a genuinely different search "
+                "angle, or use the Fast Path (WebSearch, save to clean-rag/knowledge/, "
+                "POST /index-topic) to close the gap before proving this file."
+            ),
+        }, 400)
 
     min_score = max((a["score"] for a in research_angles), default=0.0)
     rag_results_count = sum(e.get("results_count", 0) for e in entries)
