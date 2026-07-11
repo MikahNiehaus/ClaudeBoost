@@ -189,8 +189,19 @@ def set_env_var() -> None:
     settings = read_json(SETTINGS_PATH)
     env = settings.setdefault("env", {})
     env["CLEAN_RAG_HOME"] = CLEAN_RAG_HOME.as_posix()
+    # Default proof-gate to batched (once-per-turn) checking everywhere, not
+    # just for local models. proof-gate.py's own default is "pretooluse"
+    # (blocks every Edit/Write/MultiEdit individually) unless this env var
+    # says otherwise -- "stop" defers checking to the Stop hook instead.
+    # Settings.json's env block is visible to hook subprocesses (confirmed
+    # by LocalAI's manage-claude-settings.ps1, which sets this same var to
+    # gate local-model burst writes), so no real OS-level env var is needed
+    # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
+    # Code's own autocompact logic can't see through settings.json.
+    env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+    _ok("CLEAN_RAG_GATE_MODE defaulted to 'stop' (batched proof-checking once per turn)")
 
 
 # ---------------------------------------------------------------------------
