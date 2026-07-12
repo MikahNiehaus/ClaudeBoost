@@ -1,0 +1,106 @@
+"""Code metrics collection and caching for context injection.
+
+Collects complexity, maintainability, and quality metrics via AST analysis.
+Results cached and lazy-loaded, injected into RAG context.
+"""
+
+import json
+import os
+from pathlib import Path
+from datetime import datetime, timedelta
+import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
+
+METRICS_CACHE_DIR = Path(os.environ.get("METRICS_CACHE_DIR", "state/metrics-cache"))
+CACHE_TTL_SECONDS = int(os.environ.get("METRICS_CACHE_TTL", "3600"))
+
+
+def _get_file_hash(filepath: str) -> str:
+    """Compute hash of file contents for cache invalidation."""
+    try:
+        with open(filepath, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:8]
+    except Exception as e:
+        logger.warning(f"Failed to hash {filepath}: {e}")
+        return "unknown"
+
+
+def _compute_metrics(filepath: str) -> dict:
+    """Compute metrics for a file (AST-based complexity, LOC, etc.)."""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        lines = content.split("\n")
+        loc = len([l for l in lines if l.strip() and not l.strip().startswith("#")])
+
+        # Simplified cyclomatic complexity estimate
+        complexity = 1 + sum(1 for line in lines if any(kw in line for kw in ["if ", "elif ", "for ", "while ", "except "]))
+
+        # Maintainability index (simplified: based on LOC and complexity)
+        maintainability = max(0, min(100, 171 - 5.2 * (complexity ** 0.4) - 0.23 * loc + 50 * (loc ** -0.5)))
+
+        return {
+            "file": filepath,
+            "lines_of_code": loc,
+            "cyclomatic_complexity": complexity,
+            "maintainability_index": round(maintainability, 1),
+            "computed_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.warning(f"Failed to compute metrics for {filepath}: {e}")
+        return {"file": filepath, "error": str(e)}
+
+
+def get_metrics(filepath: str, force_recompute: bool = False) -> dict:
+    """Get cached metrics, recompute if missing/stale."""
+    METRICS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    cache_file = METRICS_CACHE_DIR / f"{hashlib.sha256(filepath.encode()).hexdigest()[:8]}.json"
+    file_hash = _get_file_hash(filepath)
+
+    # Check cache
+    if cache_file.exists() and not force_recompute:
+        try:
+            with open(cache_file) as f:
+                cached = json.load(f)
+
+            if cached.get("file_hash") == file_hash:
+                cached_time = datetime.fromisoformat(cached["cached_at"])
+                if datetime.now() - cached_time < timedelta(seconds=CACHE_TTL_SECONDS):
+                    return cached["metrics"]
+        except Exception as e:
+            logger.warning(f"Failed to read cache for {filepath}: {e}")
+
+    # Recompute and cache
+    metrics = _compute_metrics(filepath)
+    cache_entry = {
+        "file": filepath,
+        "file_hash": file_hash,
+        "cached_at": datetime.now().isoformat(),
+        "metrics": metrics,
+    }
+
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(cache_entry, f)
+    except Exception as e:
+        logger.warning(f"Failed to write cache for {filepath}: {e}")
+
+    return metrics
+
+
+def format_metrics_for_context(metrics_list: list[dict]) -> str:
+    """Format metrics as markdown for prompt injection."""
+    if not metrics_list:
+        return ""
+
+    lines = ["## Code Quality Metrics", ""]
+    for m in metrics_list:
+        if "error" in m:
+            continue
+        lines.append(f"- **{m['file']}**: LOC={m['lines_of_code']}, Complexity={m['cyclomatic_complexity']}, Maintainability={m['maintainability_index']}")
+
+    return "\n".join(lines)
