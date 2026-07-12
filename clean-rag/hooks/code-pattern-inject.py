@@ -63,8 +63,6 @@ PATTERN_RULES = [
     (["print", "console", "log", "logger"], "logging structured logging debug levels"),
 ]
 
-DEFAULT_QUERY = "code quality patterns methodology error handling maintainability"
-
 
 def _detect_patterns(code_text: str) -> list:
     """Detect code patterns in the added/modified code."""
