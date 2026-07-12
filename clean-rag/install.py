@@ -22,11 +22,8 @@ SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
-STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
-WEB_SEARCH_INJECT_SENTINEL = "web_search_inject.py"
-METRICS_INJECT_SENTINEL = "metrics_inject.py"
 RAG_SEARCH_ON_EDIT_SENTINEL = "rag-search-on-edit.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 
@@ -197,11 +194,10 @@ def set_env_var() -> None:
 def register_session_prompt() -> None:
     # SessionStart: prompt-type hooks are NOT supported (SessionStart fires before any conversation)
     # Enforcement moved to:
-    #   - UserPromptSubmit: rag-enforce.py (injects mandate + topic tree every turn)
-    #   - Stop: research-stop-gate (blocks unresearched responses)
-    #   - PreToolUse: proof-gate.py (blocks edits without proof)
+    #   UserPromptSubmit: rag-enforce.py (real query search, web fallback, git auto index every turn)
+    #   PreToolUse: code-pattern-inject.py, rag-search-on-edit.py (forced research before edits)
     # No hook registered here.
-    _ok("SessionStart enforcement via UserPromptSubmit + Stop hooks")
+    _ok("SessionStart enforcement via UserPromptSubmit + PreToolUse hooks")
 
 
 # ---------------------------------------------------------------------------
@@ -238,56 +234,6 @@ def register_reindex_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5d: Register Stop hook (research gate) — prompt type for actual enforcement
-# ---------------------------------------------------------------------------
-def register_stop_hook() -> None:
-    settings = read_json(SETTINGS_PATH)
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    prompt_text = (
-        "CLEAN-RAG RESEARCH GATE: Did Claude cite research in this response?\n\n"
-        "PASS (ok: true) ONLY if:\n"
-        "- Claude cited specific RAG results (topic name + score from "
-        "POST http://127.0.0.1:{port}/search), OR\n"
-        "- Claude cited specific direct research (named files read, "
-        "Grep results shown, WebSearch results referenced), OR\n"
-        "- Response is a short clarification question asking the user "
-        "for input (no factual claims), OR\n"
-        "- Response is pure task coordination: 'I will do X next', "
-        "status of running commands, acknowledging instructions, OR\n"
-        "- Response is ONLY executing tools (file ops, tests, commands) "
-        "with no technical explanation attached\n\n"
-        "FAIL (ok: false) if ANY of these:\n"
-        "- Any factual statement about how a technology, library, "
-        "framework, or protocol works without citing a source\n"
-        "- Any code pattern, architecture, or approach recommendation "
-        "without citing where it came from\n"
-        "- Any explanation of existing code that adds interpretation "
-        "beyond what the code literally says, without research\n"
-        "- Any 'best practice' or 'you should' statement without "
-        "a cited source\n"
-        "- Describing trade-offs between approaches without research\n"
-        "- Using phrases like 'typically', 'generally', 'usually', "
-        "'in most cases' as substitutes for actual research\n\n"
-        "Be strict. When in doubt, FAIL. The cost of one extra search "
-        "is low. The cost of ungrounded advice is high.\n\n"
-        "When failing, set reason to: "
-        "'You made factual claims without citing research. "
-        "Search first: POST http://127.0.0.1:{port}/search "
-        "then cite topic:score before responding.'"
-    ).format(port=port)
-
-    hook_entry = {
-        "hooks": [{"type": "prompt", "prompt": prompt_text}],
-    }
-    _register_hook(
-        settings, "Stop", STOP_SENTINEL,
-        hook_entry, label="research-stop-gate",
-    )
-
-
-
-
-# ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
 def register_spec_compliance_gate_hook() -> None:
@@ -313,26 +259,6 @@ def register_spec_compliance_gate_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5h: Register web-search-inject hook (UserPromptSubmit)
-# ---------------------------------------------------------------------------
-def register_web_search_inject_hook() -> None:
-    """Register the web search fallback injection hook.
-
-    Fires on UserPromptSubmit to check if fallback web search results
-    should be injected into the next agent call.
-    """
-    settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/web_search_inject.py"'
-    hook_entry = {
-        "hooks": [{"type": "command", "command": hook_command}],
-    }
-    _register_hook(
-        settings, "UserPromptSubmit", WEB_SEARCH_INJECT_SENTINEL,
-        hook_entry, label="web-search-inject",
-    )
-
-
-# ---------------------------------------------------------------------------
 # Step 5i: Configure web search env vars
 # ---------------------------------------------------------------------------
 def configure_web_search_env() -> None:
@@ -350,34 +276,20 @@ def configure_web_search_env() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5j: Register metrics-inject hook (UserPromptSubmit)
-# ---------------------------------------------------------------------------
-def register_metrics_inject_hook() -> None:
-    """Register the code quality metrics injection hook.
-
-    Fires on UserPromptSubmit to inject complexity, maintainability, and LOC
-    metrics into the RAG context for guided refactoring decisions.
-    """
-    settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/metrics_inject.py"'
-    hook_entry = {
-        "hooks": [{"type": "command", "command": hook_command}],
-    }
-    _register_hook(
-        settings, "UserPromptSubmit", METRICS_INJECT_SENTINEL,
-        hook_entry, label="metrics-inject",
-    )
-
-
-# ---------------------------------------------------------------------------
 # Step 5k: Configure metrics env vars
 # ---------------------------------------------------------------------------
 def configure_metrics_env() -> None:
-    """Set code quality metrics configuration env vars in settings.json."""
+    """Set code quality metrics configuration env vars in settings.json.
+
+    METRICS_CACHE_DIR/TTL are genuinely used by server/metrics.py (real,
+    working code behind the code_metrics MCP tool). CLEAN_RAG_METRICS_INJECT
+    itself has no remaining consumer — metrics_inject.py was dead code
+    (wrong hook signature, confirmed to never actually run) and has been
+    removed; git-root auto-index detection was folded into rag-enforce.py.
+    """
     settings = read_json(SETTINGS_PATH)
     env = settings.setdefault("env", {})
 
-    env.setdefault("CLEAN_RAG_METRICS_INJECT", "true")
     env.setdefault("METRICS_CACHE_DIR", "state/metrics-cache")
     env.setdefault("METRICS_CACHE_TTL", "3600")
 
@@ -639,10 +551,6 @@ def main():
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
 
-    # Step 5d
-    print("\nStep 5d: Registering research stop gate...")
-    register_stop_hook()
-
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")
     setup_gpu_memory_manager()
@@ -651,17 +559,9 @@ def main():
     print("\nStep 5f: Registering spec-compliance-gate hook...")
     register_spec_compliance_gate_hook()
 
-    # Step 5h
-    print("\nStep 5h: Registering web-search-inject hook...")
-    register_web_search_inject_hook()
-
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")
     configure_web_search_env()
-
-    # Step 5j
-    print("\nStep 5j: Registering metrics-inject hook...")
-    register_metrics_inject_hook()
 
     # Step 5k
     print("\nStep 5k: Configuring metrics environment variables...")
@@ -694,10 +594,10 @@ def main():
     print(f"  Home:    {CLEAN_RAG_HOME}")
     print(f"  Hooks:")
     print(f"    PreToolUse:        graph-context-inject.py (auto-fetches caller context)")
-    print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
-    print(f"    UserPromptSubmit:  metrics-inject.py (injects code quality metrics)")
+    print(f"    PreToolUse:        code-pattern-inject.py (forces research on Edit/Write/MultiEdit)")
+    print(f"    PreToolUse:        rag-search-on-edit.py (searches RAG on Edit/Write)")
+    print(f"    UserPromptSubmit:  rag-enforce.py (real-query search, web fallback, git auto-index)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
-    print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
     print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
     print()

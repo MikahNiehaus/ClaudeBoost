@@ -53,6 +53,72 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+def _find_git_root(start_path: str = ".") -> str | None:
+    """Walk up from cwd to find a .git directory. None if not in a repo."""
+    current = Path(start_path).resolve()
+    while current != current.parent:
+        if (current / ".git").exists():
+            return str(current)
+        current = current.parent
+    return None
+
+
+def _git_project_context(port: str) -> str:
+    """If cwd is inside a git repo, report whether it's indexed in clean-rag
+    and queue indexing if not.
+
+    Replaces the old metrics_inject.py version of this, which was fully
+    dead code (wrong hook signature — never actually ran as a Claude Code
+    hook, confirmed by running it directly and getting silent zero output)
+    and, even if it had run, queried the wrong server (ClaudeBoost's 8612
+    instead of clean-rag's own 8613) with a malformed indexing call.
+
+    This uses clean-rag's own /status and /index-project endpoints, with
+    the real response shape confirmed by direct curl in this session:
+    status["projects"]["entries"] is a dict keyed by project hash, each
+    entry has a "project_path" field — not a flat "indexed_projects" list.
+    """
+    git_root = _find_git_root()
+    if not git_root:
+        return ""
+
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/status", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            status = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.error(f"Git project status check failed: {type(e).__name__}: {e}")
+        return ""
+
+    entries = status.get("projects", {}).get("entries", {})
+    git_root_norm = str(Path(git_root)).lower()
+    is_indexed = any(
+        str(Path(entry.get("project_path", ""))).lower() == git_root_norm
+        for entry in entries.values()
+    )
+
+    if is_indexed:
+        return f"\n## Project Context\n{git_root} is indexed. Codebase search available via `project:{git_root}` in RAG queries.\n"
+
+    try:
+        # Fire and forget: indexing can take a while, don't block the prompt
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(_clean_rag_home() / "hooks" / "_index_project_runner.py"),
+                git_root,
+                port,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info(f"Queued background indexing for {git_root}")
+    except Exception as e:
+        logger.error(f"Failed to queue indexing for {git_root}: {type(e).__name__}: {e}")
+
+    return f"\n## Project Context\n{git_root} is not indexed yet. Indexing queued in background — codebase search will be available on a later turn.\n"
+
+
 def _extract_keywords(message: str, limit: int = 5) -> list[str]:
     """Extract search keywords from user message.
 
@@ -322,6 +388,10 @@ def _read_user_prompt() -> str:
 
 def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
+
+    git_context = _git_project_context(port)
+    if git_context:
+        print(git_context)
 
     user_prompt = _read_user_prompt()
     keywords = _extract_keywords(user_prompt) if user_prompt else []

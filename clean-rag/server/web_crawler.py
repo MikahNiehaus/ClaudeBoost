@@ -20,6 +20,49 @@ logger = logging.getLogger(__name__)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 CRAWL_TIMEOUT = 10.0
 
+# Admission filter: no quality signal existed before this. Confirmed by
+# reading _fetch_and_extract() that nothing checked domain reputation or
+# content quality, only whether a page loaded at all (>100 raw chars). The
+# only prior signal was DuckDuckGo's own search ranking, with no second
+# opinion before content got written into the permanent KB.
+MIN_CONTENT_LENGTH = 200  # was 50, too low to filter thin/broken pages
+# unique_words / total_words. Measured directly, not guessed: a real 41KB
+# Flappy Bird tutorial article scored 0.17 (long form text naturally repeats
+# common words across length), a synthetic spam sample scored 0.02. 0.25 sat
+# above both and rejected legitimate content — recalibrated to 0.08, which
+# sits below the real article and above the spam sample with margin on
+# both sides.
+MIN_WORD_DIVERSITY = 0.08
+URL_SHORTENER_DOMAINS = {
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd", "buff.ly",
+}
+
+
+def _is_low_quality(content: str, url: str) -> tuple[bool, str]:
+    """Mechanical admission check, not an LLM judgment call.
+
+    Returns (is_low_quality, reason).
+    """
+    if len(content) < MIN_CONTENT_LENGTH:
+        return True, f"content too short ({len(content)} chars, min {MIN_CONTENT_LENGTH})"
+
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().removeprefix("www.")
+    except Exception:
+        domain = ""
+    if domain in URL_SHORTENER_DOMAINS:
+        return True, f"URL shortener domain: {domain}"
+
+    words = re.findall(r"\b[a-z]+\b", content.lower())
+    if len(words) < 20:
+        return True, f"too few words ({len(words)})"
+    diversity = len(set(words)) / len(words)
+    if diversity < MIN_WORD_DIVERSITY:
+        return True, f"low word diversity ({diversity:.2f}, min {MIN_WORD_DIVERSITY}) — likely repeated boilerplate"
+
+    return False, ""
+
 
 def crawl_and_index_urls(urls: list[str], topic_slug: str, source_query: str) -> dict:
     """Crawl URLs and index their content without LLM processing.
@@ -42,15 +85,23 @@ def crawl_and_index_urls(urls: list[str], topic_slug: str, source_query: str) ->
     stats = {
         "files_created": 0,
         "urls_failed": 0,
+        "urls_rejected_low_quality": 0,
         "total_bytes": 0,
     }
 
     for idx, url in enumerate(urls):
         try:
             content = _fetch_and_extract(url)
-            if not content or len(content.strip()) < 50:
-                logger.debug("Skipped URL (too short): %s", url)
+            if not content:
+                logger.debug("Skipped URL (fetch failed): %s", url)
                 stats["urls_failed"] += 1
+                continue
+
+            content = content.strip()
+            is_low_quality, reason = _is_low_quality(content, url)
+            if is_low_quality:
+                logger.info("Rejected from KB (stricter than fallback display): %s — %s", url, reason)
+                stats["urls_rejected_low_quality"] += 1
                 continue
 
             file_path = kb_dir / f"{idx:02d}_{_url_to_filename(url)}.md"
