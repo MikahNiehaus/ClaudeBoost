@@ -70,13 +70,14 @@ If `--topics` was provided, merge those into the list (they go first, as priorit
 For each topic in the list:
 
 ```bash
-# Check if knowledge directory exists and count files
-ls "C:/Development/ClaudeBoost/clean-rag/knowledge/CATEGORY/<topic>/" 2>/dev/null | wc -l
+# Check if knowledge directory exists and count files. Resolve the base path from your own
+# CLAUDEBOOST_HOME env var joined with /clean-rag -- do not hardcode it, it differs per machine.
+ls "${CLAUDEBOOST_HOME}/clean-rag/knowledge/CATEGORY/<topic>/" 2>/dev/null | wc -l
 ```
 
 Also check for source headers in existing files:
 ```bash
-grep -l "<!-- Source:" "C:/Development/ClaudeBoost/clean-rag/knowledge/CATEGORY/<topic>/"*.md 2>/dev/null | wc -l
+grep -l "<!-- Source:" "${CLAUDEBOOST_HOME}/clean-rag/knowledge/CATEGORY/<topic>/"*.md 2>/dev/null | wc -l
 ```
 
 Assign priority:
