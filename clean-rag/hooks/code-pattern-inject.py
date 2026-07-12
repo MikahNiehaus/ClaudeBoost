@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
-"""Pre-edit hook: detect code patterns and inject research automatically.
+"""Pre-edit hook: detect code patterns and force research injection.
 
-Fires BEFORE Edit/Write/MultiEdit. Parses what's being added and injects
-relevant research without user asking. Works for trivial changes like
-"just add this for loop" — system detects pattern and injects research.
+Fires BEFORE Edit/Write/MultiEdit. Parses what's being added, searches RAG
+synchronously, and prints results to stdout so Claude Code injects them
+into context before the edit proceeds. No background threads: if it
+doesn't print before the hook exits, it never reaches the model.
 
 Exit codes:
-  0 = always (PreToolUse hooks should not block)
+  0 = always (PreToolUse hooks should not block the edit itself)
 """
 
 import json
 import logging
 import os
 import sys
-import threading
+import time
 import urllib.request
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stderr)])
+
+def _log_path() -> Path:
+    home = os.environ.get("CLEAN_RAG_HOME")
+    base = Path(home) if home else Path(__file__).resolve().parent.parent
+    return base / "state" / "code-pattern-inject.log"
+
+
+try:
+    _log_file = _log_path()
+    _log_file.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        filename=str(_log_file),
+        filemode="a",
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+except Exception:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
 # Pattern detection rules: (pattern_keywords, search_query)
@@ -45,6 +63,8 @@ PATTERN_RULES = [
     (["print", "console", "log", "logger"], "logging structured logging debug levels"),
 ]
 
+DEFAULT_QUERY = "code quality patterns methodology error handling maintainability"
+
 
 def _detect_patterns(code_text: str) -> list:
     """Detect code patterns in the added/modified code."""
@@ -58,15 +78,14 @@ def _detect_patterns(code_text: str) -> list:
     return detected
 
 
-def _clean_rag_home() -> Path:
-    env = os.environ.get("CLEAN_RAG_HOME")
-    if env:
-        return Path(env)
-    return Path(__file__).resolve().parent.parent
-
-
 def _search_rag(query: str) -> dict:
-    """Search RAG for a pattern."""
+    """Search RAG for a pattern. Synchronous.
+
+    Timeout measured, not guessed: a curl to /search with limit=10 across
+    61 topic databases took 7.8s under load in this session. This call uses
+    limit=2 (lighter), but still needs headroom above the 3s that was
+    causing every search to look like a failure when it was just slow.
+    """
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
 
     try:
@@ -84,17 +103,15 @@ def _search_rag(query: str) -> dict:
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        start = time.monotonic()
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+            elapsed = time.monotonic() - start
             results = data.get("results", [])
-            logger.info(f"Pattern search '{query}' returned {len(results)} results")
-            return {
-                "query": query,
-                "results": results,
-                "count": len(results),
-            }
+            logger.info(f"Pattern search '{query}' took {elapsed:.2f}s, returned {len(results)} results")
+            return {"query": query, "results": results, "count": len(results)}
     except Exception as e:
-        logger.error(f"Pattern search failed: {e}")
+        logger.error(f"Pattern search failed for '{query}': {type(e).__name__}: {e}")
         return {"query": query, "results": [], "count": 0, "error": str(e)}
 
 
@@ -103,7 +120,7 @@ def _format_injection(searches: list) -> str:
     if not searches:
         return ""
 
-    lines = ["## Code Pattern Research (Auto-Detected)\n"]
+    lines = ["## Code Pattern Research (forced, pre-edit)\n"]
 
     for search_result in searches:
         results = search_result.get("results", [])
@@ -124,92 +141,57 @@ def _format_injection(searches: list) -> str:
     return "\n".join(lines)
 
 
-def _inject_pattern_research(old_string: str, new_string: str) -> None:
-    """Detect patterns and inject research in background."""
+def main() -> int:
+    """Entry point. Runs synchronously so output reaches stdout before exit."""
     try:
-        # Detect patterns in the change
-        code_diff = new_string  # Simplified: just check the new code
-        patterns = _detect_patterns(code_diff)
+        try:
+            payload = json.loads(sys.stdin.read())
+        except Exception:
+            return 0
 
+        tool_name = payload.get("tool_name", "")
+        if tool_name not in ("Edit", "Write", "MultiEdit"):
+            return 0
+
+        if os.environ.get("CLEAN_RAG_PATTERN_INJECT") == "false":
+            return 0
+
+        tool_input = payload.get("tool_input", {})
+
+        if tool_name == "Edit":
+            new_string = tool_input.get("new_string", "")
+        elif tool_name == "Write":
+            new_string = tool_input.get("content", "")
+        elif tool_name == "MultiEdit":
+            edits = tool_input.get("edits", [])
+            if not edits:
+                return 0
+            new_string = edits[0].get("new_string", "")
+        else:
+            return 0
+
+        patterns = _detect_patterns(new_string)
+        # Always search at least once, even with no keyword match, so every
+        # edit gets research injected, not just ones matching a keyword list.
         if not patterns:
-            return
+            patterns = [DEFAULT_QUERY]
 
-        logger.info(f"Detected {len(patterns)} patterns, searching RAG...")
+        logger.info(f"Detected {len(patterns)} pattern(s), searching RAG synchronously...")
 
-        # Search RAG for each pattern (in parallel via threading)
-        searches = []
+        searches = [_search_rag(q) for q in patterns[:3]]
 
-        def search_pattern(query):
-            result = _search_rag(query)
-            searches.append(result)
-
-        threads = [
-            threading.Thread(target=search_pattern, args=(pattern,), daemon=True)
-            for pattern in patterns[:5]  # Limit to 5 patterns to avoid flooding
-        ]
-
-        for t in threads:
-            t.start()
-
-        # Wait for searches to complete (with timeout)
-        for t in threads:
-            t.join(timeout=2)
-
-        # Log what was found
         total_results = sum(s.get("count", 0) for s in searches)
         logger.info(f"Pattern research: {len(searches)} searches, {total_results} results")
 
-        # Format and log injection (for visibility)
         injection = _format_injection(searches)
         if injection:
-            logger.info(f"Injecting pattern research:\n{injection[:300]}...")
+            print(injection)
+            logger.info("Injected pattern research into context")
 
+        return 0
     except Exception as e:
-        logger.error(f"Pattern research error: {e}")
-
-
-def main() -> int:
-    """Entry point."""
-    try:
-        payload = json.loads(sys.stdin.read())
-    except Exception:
+        logger.error(f"Hook fatal error: {e}", exc_info=True)
         return 0
-
-    tool_name = payload.get("tool_name", "")
-    if tool_name not in ("Edit", "Write", "MultiEdit"):
-        return 0
-
-    # Skip if injection disabled
-    if os.environ.get("CLEAN_RAG_PATTERN_INJECT") == "false":
-        return 0
-
-    tool_input = payload.get("tool_input", {})
-
-    if tool_name == "Edit":
-        old_string = tool_input.get("old_string", "")
-        new_string = tool_input.get("new_string", "")
-    elif tool_name == "Write":
-        new_string = tool_input.get("content", "")
-        old_string = ""
-    elif tool_name == "MultiEdit":
-        # For MultiEdit, check the first edit
-        edits = tool_input.get("edits", [])
-        if not edits:
-            return 0
-        new_string = edits[0].get("new_string", "")
-        old_string = edits[0].get("old_string", "")
-    else:
-        return 0
-
-    # Fire and forget: background thread does pattern research
-    t = threading.Thread(
-        target=_inject_pattern_research,
-        args=(old_string, new_string),
-        daemon=True,
-    )
-    t.start()
-
-    return 0
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from typing import Optional
 import httpx
 from html2text import html2text
 
-from .config import KNOWLEDGE_DIR
+from .config import KNOWLEDGE_DIR, STANDALONE_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +62,30 @@ def crawl_and_index_urls(urls: list[str], topic_slug: str, source_query: str) ->
             logger.debug("Failed to crawl %s: %s", url, e)
             stats["urls_failed"] += 1
 
-    # Quick index the new files
+    # Quick index the new files. index_topic() needs a loaded embedder
+    # instance (confirmed: calling it directly here raises "missing 1
+    # required positional argument: 'embedder'" — this function has no
+    # embedder to pass, whether called in-process from the server or from a
+    # standalone script). Call the server's own /index-topic HTTP endpoint
+    # instead, which already has the embedder loaded.
     if stats["files_created"] > 0:
         try:
-            from .indexing import index_topic
-            index_topic(topic_slug, force=False)
+            import json
+            import urllib.request
+
+            req_data = json.dumps({
+                "topic": topic_slug,
+                "category": "fallback",
+                "force": False,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{STANDALONE_PORT}/index-topic",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                json.loads(resp.read().decode("utf-8"))
             logger.info("Indexed %d files for topic: %s", stats["files_created"], topic_slug)
         except Exception as e:
             logger.warning("Failed to index topic %s: %s", topic_slug, e)
