@@ -26,6 +26,10 @@ from .config import (
     STATE_DIR,
     CODE_EMBEDDING_MODEL,
     EMBEDDING_MODEL,
+    WEB_SEARCH_ENABLED,
+    WEB_SEARCH_TIMEOUT,
+    WEB_SEARCH_MAX_RESULTS,
+    WEB_SEARCH_SCORE_THRESHOLD,
 )
 from .embedding import SentenceTransformerEmbedding
 from .indexing import acquire_index_lock, index_project, index_topic, reindex_file, release_index_lock
@@ -223,7 +227,32 @@ async def handle_search(request: web.Request) -> web.Response:
 
     search_id = _log_search(query=query, sources=sources, mode=mode, results=results, graph_meta=graph_meta)
 
-    return _json_response({"results": results, "search_id": search_id})
+    # Check if fallback web search is needed (low scores or no results)
+    top_score = max((r.get("score", 0.0) for r in results), default=0.0)
+    fallback_triggered = False
+    web_search_results = []
+
+    if WEB_SEARCH_ENABLED and (len(results) == 0 or top_score < WEB_SEARCH_SCORE_THRESHOLD):
+        # Trigger web search as fallback
+        from .web_search import web_search
+        web_result = web_search(query, max_results=WEB_SEARCH_MAX_RESULTS, timeout=WEB_SEARCH_TIMEOUT)
+        if web_result.get("results"):
+            web_search_results = web_result["results"]
+            fallback_triggered = True
+            logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
+            # Spawn background indexer (not blocking)
+            _spawn_web_indexer(query, web_search_results)
+
+    response = {
+        "results": results,
+        "search_id": search_id,
+        "fallback_triggered": fallback_triggered,
+    }
+
+    if web_search_results:
+        response["web_search_results"] = web_search_results
+
+    return _json_response(response)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +390,31 @@ def _has_research_gap_acknowledgment(quality_aspects: list[dict]) -> bool:
 def _query_words(query: str) -> set[str]:
     tokens = re.findall(r"[a-z0-9]+", query.lower())
     return {t for t in tokens if t not in _QUERY_STOPWORDS and len(t) > 2}
+
+
+def _spawn_web_indexer(query: str, web_results: list[dict]) -> None:
+    """Spawn a background thread to crawl and index web results (no LLM).
+
+    Args:
+        query: original search query (used as topic slug)
+        web_results: list of {title, url, snippet} dicts from web search
+    """
+    import threading
+    from .web_crawler import crawl_and_index_urls
+
+    topic_slug = re.sub(r"[^a-z0-9]+", "_", query.lower()).strip("_")[:32]
+
+    def _index_worker():
+        try:
+            urls = [r["url"] for r in web_results if r.get("url")]
+            if urls:
+                crawl_and_index_urls(urls, topic_slug, query)
+                logger.info("Web indexing complete for topic: %s (%d URLs)", topic_slug, len(urls))
+        except Exception as e:
+            logger.warning("Web indexing failed for topic %s: %s", topic_slug, e)
+
+    thread = threading.Thread(target=_index_worker, daemon=True, name=f"web-indexer-{topic_slug}")
+    thread.start()
 
 
 def _has_repeated_query_pattern(entries: list[dict]) -> bool:

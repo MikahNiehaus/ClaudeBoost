@@ -1412,6 +1412,49 @@ def register_playwright_mcp() -> None:
 
 
 # ---------------------------------------------------------------------------
+# ponytail plugin: a ruleset that favors reusing existing code over
+# rewriting it, like a lazy senior dev, which cuts token waste. Registered
+# as a user scope Claude Code plugin the same way mcp-debugger and
+# Playwright are registered above, so every future /setup run (any
+# machine) installs it without a manual step.
+# ---------------------------------------------------------------------------
+def register_ponytail_plugin() -> None:
+    _info("\nVerifying ponytail plugin...")
+    claude = _claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found — skipping ponytail plugin registration")
+        return
+
+    rc, out = run_cmd(claude + ["plugin", "list"])
+    if rc != 0:
+        _skip(f"claude plugin list failed (exit {rc}) — skipping ponytail registration")
+        return
+
+    if "ponytail@ponytail" in out:
+        _ok("ponytail plugin already installed")
+        return
+
+    _info("Adding ponytail marketplace...")
+    rc, out = run_cmd(claude + ["plugin", "marketplace", "add", "DietrichGebert/ponytail"])
+    if rc != 0:
+        _warn(f"ponytail marketplace add failed (exit {rc})")
+        if out:
+            _warn(f"  {out[:200]}")
+        _warn("  To register manually: claude plugin marketplace add DietrichGebert/ponytail")
+        return
+
+    _info("Installing ponytail plugin (user scope)...")
+    rc, out = run_cmd(claude + ["plugin", "install", "ponytail@ponytail"])
+    if rc == 0:
+        _ok("ponytail plugin installed — active on next Claude Code restart")
+    else:
+        _warn(f"ponytail plugin install failed (exit {rc})")
+        if out:
+            _warn(f"  {out[:200]}")
+        _warn("  To register manually: claude plugin install ponytail@ponytail")
+
+
+# ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
 # ---------------------------------------------------------------------------
@@ -1608,6 +1651,7 @@ def main() -> int:
     install_rag_server()
     register_mcp_debugger()
     register_playwright_mcp()
+    register_ponytail_plugin()
     install_edge_tts()
     install_netcoredbg()
 

@@ -27,6 +27,7 @@ STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 PROOF_STOP_GATE_SENTINEL = "proof-stop-gate.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
+WEB_SEARCH_INJECT_SENTINEL = "web_search_inject.py"
 
 
 def _say(msg: str) -> None:
@@ -349,6 +350,43 @@ def register_spec_compliance_gate_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5h: Register web-search-inject hook (UserPromptSubmit)
+# ---------------------------------------------------------------------------
+def register_web_search_inject_hook() -> None:
+    """Register the web search fallback injection hook.
+
+    Fires on UserPromptSubmit to check if fallback web search results
+    should be injected into the next agent call.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/web_search_inject.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "UserPromptSubmit", WEB_SEARCH_INJECT_SENTINEL,
+        hook_entry, label="web-search-inject",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5i: Configure web search env vars
+# ---------------------------------------------------------------------------
+def configure_web_search_env() -> None:
+    """Set web search configuration env vars in settings.json."""
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
+
+    env.setdefault("CLEAN_RAG_WEB_SEARCH", "true")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_TIMEOUT", "4.0")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_MAX_RESULTS", "3")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_THRESHOLD", "0.4")
+
+    write_json(SETTINGS_PATH, settings)
+    _ok("Web search env vars configured (can be overridden in settings.json)")
+
+
+# ---------------------------------------------------------------------------
 # Step 6: preseed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
@@ -570,6 +608,14 @@ def main():
     # Step 5g
     print("\nStep 5g: Registering spec-compliance-gate hook...")
     register_spec_compliance_gate_hook()
+
+    # Step 5h
+    print("\nStep 5h: Registering web-search-inject hook...")
+    register_web_search_inject_hook()
+
+    # Step 5i
+    print("\nStep 5i: Configuring web search environment variables...")
+    configure_web_search_env()
 
     # Step 6
     if not args.no_seed:

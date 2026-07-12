@@ -68,3 +68,9 @@ def _detect_device() -> str:
 
 
 DEVICE: str = _detect_device()
+
+# Web search fallback config
+WEB_SEARCH_ENABLED = os.environ.get("CLEAN_RAG_WEB_SEARCH", "true").lower() in ("true", "1", "yes")
+WEB_SEARCH_TIMEOUT = float(os.environ.get("CLEAN_RAG_WEB_SEARCH_TIMEOUT", "4.0"))
+WEB_SEARCH_MAX_RESULTS = int(os.environ.get("CLEAN_RAG_WEB_SEARCH_MAX_RESULTS", "3"))
+WEB_SEARCH_SCORE_THRESHOLD = float(os.environ.get("CLEAN_RAG_WEB_SEARCH_THRESHOLD", "0.4"))
