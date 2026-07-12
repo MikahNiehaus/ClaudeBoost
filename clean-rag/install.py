@@ -403,6 +403,39 @@ def register_rag_search_on_edit_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5m: Register code pattern inject hook (PreToolUse) — enforce on Claude
+# ---------------------------------------------------------------------------
+def register_code_pattern_inject_hook() -> None:
+    """Register hook to enforce pattern detection + research before edits.
+
+    This blocks CLAUDE from editing without automatic pattern detection
+    and research injection. Non-blocking in background threads.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", CODE_PATTERN_INJECT_SENTINEL,
+        hook_entry, label="code-pattern-inject",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5n: Configure code pattern injection environment
+# ---------------------------------------------------------------------------
+def configure_code_pattern_inject_env() -> None:
+    """Enable pattern-based research injection on all Claude edits."""
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
+    env.setdefault("CLEAN_RAG_PATTERN_INJECT", "true")
+    write_json(SETTINGS_PATH, settings)
+    _ok("Code pattern injection enabled (CLEAN_RAG_PATTERN_INJECT=true)")
+
+
+# ---------------------------------------------------------------------------
 # Step 6: preseed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
@@ -637,6 +670,14 @@ def main():
     # Step 5l
     print("\nStep 5l: Registering rag-search-on-edit hook...")
     register_rag_search_on_edit_hook()
+
+    # Step 5m
+    print("\nStep 5m: Registering code-pattern-inject hook (enforce on Claude)...")
+    register_code_pattern_inject_hook()
+
+    # Step 5n
+    print("\nStep 5n: Configuring code pattern injection environment...")
+    configure_code_pattern_inject_env()
 
     # Step 6
     if not args.no_seed:
