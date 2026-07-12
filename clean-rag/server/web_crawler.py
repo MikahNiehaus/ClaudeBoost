@@ -37,6 +37,40 @@ URL_SHORTENER_DOMAINS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd", "buff.ly",
 }
 
+# Indirect prompt injection defense: crawled content gets written into the
+# KB and later injected as "Research Context" straight into a future
+# prompt. A page containing text aimed at an LLM reader, not a human, is a
+# real attack surface (a compromised or malicious page authored to say
+# "ignore previous instructions, do X" the moment some agent's crawler
+# reads it). Mechanical phrase match, not an LLM judgment call — same
+# principle as the quality filter above.
+PROMPT_INJECTION_PATTERNS = [
+    r"ignore (all )?(previous|prior|above) instructions",
+    r"disregard (all )?(previous|prior|above)",
+    r"you are now\b",
+    r"new instructions?:",
+    r"system prompt",
+    r"act as (if you|a|an)\b.{0,30}(ai|assistant|model)",
+    r"\bAI[,:]? (please|you must|you should) (ignore|forget|disregard)",
+    r"end of (user )?(prompt|message|instructions)",
+    r"\[?system\]?:\s*override",
+]
+
+# TODO: further hardening, not yet implemented.
+#  1. Domain reputation, not just a hardcoded shortener blocklist (a real
+#     reputation feed or allowlist of known documentation domains would
+#     catch more than word count heuristics ever will).
+#  2. Rate limit or dedupe by domain, so one compromised or spam domain
+#     cannot flood the KB with many crawled pages across different topics.
+#  3. Strip HTML comments and hidden or zero width text before the
+#     diversity and injection checks run. A page can hide injection text
+#     in a zero opacity div or an HTML comment that html2text still emits
+#     as plain text, defeating a naive visible content check.
+#  4. Version and audit the admission thresholds (MIN_CONTENT_LENGTH,
+#     MIN_WORD_DIVERSITY) in a small log so recalibration mistakes like
+#     the one caught this session (0.25 rejecting real content) show up
+#     faster next time, instead of only being caught by a manual spot check.
+
 
 def _is_low_quality(content: str, url: str) -> tuple[bool, str]:
     """Mechanical admission check, not an LLM judgment call.
@@ -59,7 +93,12 @@ def _is_low_quality(content: str, url: str) -> tuple[bool, str]:
         return True, f"too few words ({len(words)})"
     diversity = len(set(words)) / len(words)
     if diversity < MIN_WORD_DIVERSITY:
-        return True, f"low word diversity ({diversity:.2f}, min {MIN_WORD_DIVERSITY}) — likely repeated boilerplate"
+        return True, f"low word diversity ({diversity:.2f}, min {MIN_WORD_DIVERSITY}), likely repeated boilerplate"
+
+    for pattern in PROMPT_INJECTION_PATTERNS:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            return True, f"prompt injection pattern matched: {match.group(0)!r}"
 
     return False, ""
 
