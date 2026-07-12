@@ -10,18 +10,23 @@ Install: register in OpenCode settings as an MCP server pointing to this script.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+_CLEAN_RAG_HOME = Path(os.environ.get("CLEAN_RAG_HOME") or Path(__file__).resolve().parent.parent)
+_LOG_DIR = _CLEAN_RAG_HOME / "state"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stderr),
-        logging.FileHandler("/tmp/opencode_mcp_server.log", encoding="utf-8"),
+        logging.FileHandler(str(_LOG_DIR / "opencode_mcp_server.log"), encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -179,25 +184,29 @@ class OpenCodeRAGServer:
             return {"error": str(e)}
 
     def web_search_fallback(self, query: str, max_results: int = 3) -> dict:
-        """Trigger web search fallback."""
+        """Trigger web search fallback.
+
+        There is no HTTP /web-search route on the server (confirmed by
+        scanning every registered handler in app.py). The server's web
+        fallback lives inside /search itself, keyed off its own score
+        threshold, and only fires there. This calls server/web_search.py's
+        web_search() directly, in-process, as the explicit fallback path
+        for callers (like this MCP tool) that want to force a web search
+        regardless of what /search's internal threshold decided.
+        """
         try:
-            payload = json.dumps(
-                {"query": query, "max_results": max_results}
-            ).encode("utf-8")
+            server_dir = _CLEAN_RAG_HOME / "server"
+            if str(server_dir) not in sys.path:
+                sys.path.insert(0, str(server_dir))
+            from web_search import web_search as _do_web_search
 
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{self.rag_port}/web-search",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+            result = _do_web_search(query, max_results=max_results, timeout=5.0)
+            if result.get("error"):
+                logger.error(f"Web search returned error: {result['error']}")
+            logger.info(
+                f"Web search '{query}' returned {len(result.get('results', []))} results"
             )
-
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                results = json.loads(resp.read().decode("utf-8"))
-                logger.info(
-                    f"Web search '{query}' returned {len(results.get('results', []))} results"
-                )
-                return results
+            return result
         except Exception as e:
             logger.error(f"Web search failed: {e}")
             return {"results": [], "error": str(e)}
