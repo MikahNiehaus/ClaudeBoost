@@ -19,6 +19,7 @@ TOPIC_CATEGORIES = {
     "php": "languages", "ruby": "languages", "dart": "languages",
     "lua": "languages", "sql": "languages", "html": "languages",
     "css": "languages", "powershell": "languages", "bash": "languages",
+    "canvas": "languages",
 
     # .NET / C# Ecosystem
     "dotnet": "dotnet", "aspnet": "dotnet", "aspnet-mvc": "dotnet",
@@ -184,6 +185,11 @@ SOURCE_MAP = {
     },
     "html": {
         "doc_root": "https://developer.mozilla.org/en-US/docs/Web/HTML",
+    },
+    "canvas": {
+        "github": "IceCreamYou/HTML5-Canvas-Game-Boilerplate",
+        "docs_path": "",
+        "doc_root": "https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API",
     },
     "css": {
         "doc_root": "https://developer.mozilla.org/en-US/docs/Web/CSS",

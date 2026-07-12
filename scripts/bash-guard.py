@@ -377,6 +377,103 @@ def check_db_mutation(command: str) -> str | None:
     return None
 
 
+# Matches an ordinary relative-path rm -rf on purpose, since that class of
+# command runs constantly for legitimate cleanup (e.g. `rm -rf test/build`
+# before a fresh run) -- blocking every rm -rf would be far too disruptive.
+# Only flags the actual danger class documented in arxiv.org/pdf/2604.13536
+# (a Codex agent deleting 370+GB of files outside its project directory):
+# root/home/system paths and heavy ".." traversal, not scoped deletes.
+#
+# Compared as whole tokens (see _token_is_dangerous_target below), not as a
+# substring search over the raw command -- a \b-anchored substring search
+# was tried first and found broken by direct testing: it both false-
+# positived on legitimate relative paths (\b/ matches any slash after a
+# word char, so "test/flappy-bird" tripped it) and false-negatived on the
+# actual dangerous cases (\b does not transition correctly before a target
+# that does not start with a word character, like "/" or "~").
+_DANGEROUS_DELETE_TARGETS = (
+    "/", "~", "$home", "${home}",
+    "/etc", "/usr", "/bin", "/boot", "/system", "/library",
+)
+
+
+def _token_is_dangerous_target(token: str) -> bool:
+    """True if a single whitespace-separated command token is a root/home/
+    system path, checked as a whole token (exact match or a dangerous
+    prefix followed by nothing or a trailing slash), not a substring match
+    anywhere in the command."""
+    normalized = token.rstrip("/\\").lower()
+    if not normalized:
+        # token was purely slashes, e.g. "/" or "//" -- that is the bare
+        # root case itself
+        return bool(token.strip("\\").strip() in ("/", ""))
+
+    if normalized in _DANGEROUS_DELETE_TARGETS:
+        return True
+
+    # Windows drive root: "c:" or "c:\" alone, or "c:\windows"/"c:\users\<name>"
+    # with nothing deeper (a whole profile, not a subpath inside it).
+    drive_match = re.fullmatch(r"([a-z]):(\\windows)?", normalized)
+    if drive_match:
+        return True
+    users_match = re.fullmatch(r"[a-z]:\\users\\[^\\]*", normalized)
+    if users_match:
+        return True
+
+    return False
+
+
+def check_destructive_delete(command: str) -> str | None:
+    """Block recursive-force deletes targeting root/home/system paths or
+    heavy path traversal -- the same failure class as a real, documented
+    incident (arxiv.org/pdf/2604.13536): a coding agent deleted 370+GB of
+    user files outside its project directory in an unattended run.
+
+    Deliberately narrow: ordinary relative-path deletes (rm -rf
+    test/build, rm -rf node_modules) are common, legitimate cleanup and
+    are not touched here.
+
+    Covered patterns:
+    - rm -rf / rm -fr / rm -r -f / rm --recursive --force
+    - rmdir /s /q
+    - del /f /s /q
+    - PowerShell Remove-Item -Recurse -Force
+    """
+    unquoted = _strip_quoted(command)
+
+    is_recursive_force = bool(
+        re.search(r"\brm\s+(-\w*[rf]\w*[rf]?\w*|--recursive\s+--force|--force\s+--recursive)\b", unquoted, re.IGNORECASE)
+        or re.search(r"\brmdir\s+/s\s+/q\b", unquoted, re.IGNORECASE)
+        or re.search(r"\bdel\s+/f\s+/s\s+/q\b", unquoted, re.IGNORECASE)
+        or re.search(r"\bRemove-Item\b.*-Recurse\b.*-Force\b", unquoted, re.IGNORECASE)
+        or re.search(r"\bRemove-Item\b.*-Force\b.*-Recurse\b", unquoted, re.IGNORECASE)
+    )
+    if not is_recursive_force:
+        return None
+
+    if re.search(r"\.\.[\\/].*\.\.[\\/].*\.\.[\\/]", unquoted):
+        return (
+            "BLOCKED: recursive force-delete with heavy '..' path traversal. "
+            "This matches the pattern behind a real documented incident of a coding "
+            "agent deleting files far outside its project directory. Use an explicit, "
+            "absolute path you have confirmed, or run this yourself in the terminal."
+        )
+
+    for token in unquoted.split():
+        if token.startswith("-"):
+            continue
+        if _token_is_dangerous_target(token):
+            return (
+                "BLOCKED: recursive force-delete targeting a root/home/system path. "
+                "This matches the pattern behind a real documented incident of a coding "
+                "agent deleting 370+GB of user files outside its project directory. "
+                "Run this yourself in the terminal after confirming exactly what will "
+                "be deleted."
+            )
+
+    return None
+
+
 def check_backslash_spaces(command: str) -> str | None:
     """Detect backslash-escaped spaces in paths."""
     # Match backslash-space that looks like path escaping, not inside quotes
@@ -412,7 +509,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_db_mutation, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_db_mutation, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

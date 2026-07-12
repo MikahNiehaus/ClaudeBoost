@@ -25,6 +25,9 @@ REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
+PROOF_STOP_GATE_SENTINEL = "proof-stop-gate.py"
+SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
+WEB_SEARCH_INJECT_SENTINEL = "web_search_inject.py"
 
 
 def _say(msg: str) -> None:
@@ -187,8 +190,19 @@ def set_env_var() -> None:
     settings = read_json(SETTINGS_PATH)
     env = settings.setdefault("env", {})
     env["CLEAN_RAG_HOME"] = CLEAN_RAG_HOME.as_posix()
+    # Default proof-gate to batched (once-per-turn) checking everywhere, not
+    # just for local models. proof-gate.py's own default is "pretooluse"
+    # (blocks every Edit/Write/MultiEdit individually) unless this env var
+    # says otherwise -- "stop" defers checking to the Stop hook instead.
+    # Settings.json's env block is visible to hook subprocesses (confirmed
+    # by LocalAI's manage-claude-settings.ps1, which sets this same var to
+    # gate local-model burst writes), so no real OS-level env var is needed
+    # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
+    # Code's own autocompact logic can't see through settings.json.
+    env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+    _ok("CLEAN_RAG_GATE_MODE defaulted to 'stop' (batched proof-checking once per turn)")
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +300,94 @@ def register_stop_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Pre-seed topic databases (optional)
+# Step 5f: Register proof-stop-gate hook (Stop) -- enforces CLEAN_RAG_GATE_MODE=stop
+# ---------------------------------------------------------------------------
+def register_proof_stop_gate_hook() -> None:
+    """Register the deferred-proof Stop hook.
+
+    Always registered, same as proof-gate.py's PreToolUse hook -- but it
+    only ever does anything when CLEAN_RAG_GATE_MODE=stop is set (an env
+    var, not something this installer decides). In the default
+    'pretooluse' mode nothing ever gets recorded to the pending list, so
+    this hook is a fast no-op on every turn. See proof-gate.py's
+    _gate_mode() docstring and proof-stop-gate.py's module docstring for
+    the full design.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/proof-stop-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", PROOF_STOP_GATE_SENTINEL,
+        hook_entry, label="proof-stop-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
+# ---------------------------------------------------------------------------
+def register_spec_compliance_gate_hook() -> None:
+    """Register the spec-compliance Stop hook.
+
+    Always registered, default on -- cheap (regex only, no LLM call) with
+    no false-block risk beyond the fixed keyword list in
+    scripts/spec-compliance-gate.py. Checks whether a technology named in
+    the task prompt (react, vue, typescript, etc.) shows up anywhere in
+    the files changed this session; proof-gate.py has no equivalent check
+    since it only verifies edits are research-backed, not that they
+    satisfy what was actually asked for.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", SPEC_COMPLIANCE_GATE_SENTINEL,
+        hook_entry, label="spec-compliance-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5h: Register web-search-inject hook (UserPromptSubmit)
+# ---------------------------------------------------------------------------
+def register_web_search_inject_hook() -> None:
+    """Register the web search fallback injection hook.
+
+    Fires on UserPromptSubmit to check if fallback web search results
+    should be injected into the next agent call.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/web_search_inject.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "UserPromptSubmit", WEB_SEARCH_INJECT_SENTINEL,
+        hook_entry, label="web-search-inject",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5i: Configure web search env vars
+# ---------------------------------------------------------------------------
+def configure_web_search_env() -> None:
+    """Set web search configuration env vars in settings.json."""
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
+
+    env.setdefault("CLEAN_RAG_WEB_SEARCH", "true")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_TIMEOUT", "4.0")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_MAX_RESULTS", "3")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_THRESHOLD", "0.4")
+
+    write_json(SETTINGS_PATH, settings)
+    _ok("Web search env vars configured (can be overridden in settings.json)")
+
+
+# ---------------------------------------------------------------------------
+# Step 6: preseed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
     # Add clean-rag root to sys.path so research/ is importable
@@ -500,6 +601,22 @@ def main():
     print("\nStep 5e: Setting up GPU memory management...")
     setup_gpu_memory_manager()
 
+    # Step 5f
+    print("\nStep 5f: Registering proof-stop-gate hook...")
+    register_proof_stop_gate_hook()
+
+    # Step 5g
+    print("\nStep 5g: Registering spec-compliance-gate hook...")
+    register_spec_compliance_gate_hook()
+
+    # Step 5h
+    print("\nStep 5h: Registering web-search-inject hook...")
+    register_web_search_inject_hook()
+
+    # Step 5i
+    print("\nStep 5i: Configuring web search environment variables...")
+    configure_web_search_env()
+
     # Step 6
     if not args.no_seed:
         print("\nStep 6: Pre-seeding topic databases...")
@@ -519,6 +636,7 @@ def main():
     print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
     print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
+    print(f"    Stop:              proof-stop-gate.py (no-op unless CLEAN_RAG_GATE_MODE=stop)")
     print(f"    SessionStart:      enforcement rules prompt")
     print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")

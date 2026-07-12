@@ -307,72 +307,17 @@ MACRO_QUALITY_ASPECTS = {"architecture", "patterns"}
 
 
 BLOCK_MESSAGE = """
-===================================================================
-CLEAN-RAG: Edit blocked. No verified proof for this file.
+CLEAN-RAG: Edit blocked, no verified proof for {file}.
+Expected proof: {state_dir}/{proof_file}
 
-  File: {file}
-  Expected proof: {state_dir}/{proof_file}
+1. SEARCH: POST http://127.0.0.1:{port}/search {{"query": "<what you need>", "sources": ["all_topics", "project:<path>"]}} -- need score >= {min_score}.
+   Nothing found? Grep/Read/WebSearch directly (counts as research), optionally POST /index-topic {{"topic":"<name>","category":"<cat>"}} to persist it, then re-search.
 
-Before editing, you must:
-
-1. SEARCH clean-rag for relevant research:
-   POST http://127.0.0.1:{port}/search
-   {{"query": "<what you need to know>", "sources": ["all_topics", "project:<path>"]}}
-
-   You need at least one result with score >= {min_score}.
-
-2. IF SEARCH RETURNED NOTHING (or scores below {min_score}):
-   Do DIRECT research NOW. This is the fast path (seconds, not minutes):
-
-   a) Grep the codebase for existing patterns (counts as "codebase" angle)
-   b) Read a specific doc file or use WebSearch for the technology question
-   c) Save what you found to clean-rag/knowledge/<category>/<topic>/
-      (even one file is enough)
-   d) Quick-index: POST http://127.0.0.1:{port}/index-topic
-      {{"topic": "<name>", "category": "<category>"}}
-      (indexes a few files in under 2 seconds)
-   e) Re-search the newly indexed topic (will get high score now)
-
-   ALSO: spawn a background Agent to run acquire-topic for full coverage.
-   Do NOT wait for it. The background agent fills the database for future
-   queries while you continue working now.
-
-3. WRITE proof using POST /prove, not write_pending_proof() directly. Every real
-   POST /search response includes a "search_id" -- keep the ones from your searches
-   above, then call:
-
-   POST http://127.0.0.1:{port}/prove
-   {{"file_path": "<path to file being edited>",
-     "search_ids": ["<search_id from a technology/topic search>",
-                     "<search_id from a project:<path> search>"],
-     "quality_aspects": [
-       {{"aspect": "architecture", "assertion": "<how the change fits the project structure>"}},
-       {{"aspect": "patterns", "assertion": "<which existing patterns this follows>"}}
-     ]}}
-
-   /prove looks up each search_id in the server's own search log (not anything you
-   type) and computes min_score/rag_results_count/research_angles from what was
-   actually returned -- it will not accept a search_id that doesn't exist or has
-   expired (30 min window), and will not accept a proof missing a project:-sourced
-   "codebase" angle. quality_aspects stay yours to write since they're judgment
-   calls, not measurable search facts. Do NOT call write_pending_proof() directly
-   from a script -- that self-certifies your own research with no independent check
-   it's real, and Claude Code's own safety layer will correctly flag it as a
-   self-authored verification artifact.
-
+2. PROVE: POST http://127.0.0.1:{port}/prove {{"file_path": "<file>", "search_ids": ["<id1>", "<id2>"], "quality_aspects": [{{"aspect":"architecture","assertion":"<fits project how>"}}, {{"aspect":"patterns","assertion":"<follows what existing pattern>"}}]}}
+   search_ids must be real (from step 1's responses, logged server-side, <=30min old). Needs >=2 angles incl. one "codebase" (a project:<path> search). Needs >=2 quality_aspects incl. one "architecture" or "patterns". Do not call write_pending_proof() yourself -- only /prove's own server-side check counts.
 {methodology_guidance}
-4. RETRY the edit. The gate passes if the proof /prove wrote has:
-   - verdict == VERIFIED
-   - min_score >= {min_score} (computed by the server from the search log, not self-reported)
-   - research_angles has >= 2 entries, including at least one with angle="codebase"
-     (server-verified: that search_id's sources included "project:<path>")
-   - quality_aspects has >= 2 entries, at least one with aspect="architecture" or "patterns"
-     (you MUST consider whether the code fits the project, not just whether it works)
-   - timestamp is within {window}s and timezone-aware
-   (content_hash is tracked for audit but not required, allowing legitimate edit revisions)
-
+3. RETRY the edit once /prove returns verdict VERIFIED. (Also checks: min_score >= {min_score}, timestamp within {window}s and timezone-aware.)
 {index_guidance}
-===================================================================
 """
 
 BLOCK_MESSAGE_SERVER_DOWN = """
@@ -579,6 +524,227 @@ def _has_prior_art_justification(quality_aspects: list) -> bool:
     return False
 
 
+def _gate_mode() -> str:
+    """Read the edit-gate enforcement mode.
+
+    'pretooluse' (default): every Edit/Write/MultiEdit is blocked immediately
+    until proof exists -- unchanged original behavior.
+
+    'stop': edits are allowed through immediately; proof is required before
+    the turn can end (the proof-stop-gate.py Stop hook enforces it). This
+    turns a burst of N new files in one batch into one consolidated
+    rejection instead of N individual ones -- see workspace/
+    llama-server-wifi-switch-2026-07-01/context.md for the measured burst-
+    cost problem this fixes. Opt-in via the CLEAN_RAG_GATE_MODE env var so
+    projects that don't set it keep today's behavior unchanged.
+
+    Security-sensitive paths always use 'pretooluse' behavior regardless of
+    this setting -- see _is_security_sensitive_path and the call site in
+    main() that excludes them from deferral.
+    """
+    mode = os.environ.get("CLEAN_RAG_GATE_MODE", "pretooluse").strip().lower()
+    return mode if mode in ("pretooluse", "stop") else "pretooluse"
+
+
+_SESSION_ID_RE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _safe_session_id(session_id: str) -> str:
+    """Sanitize a session_id for safe use as a filename component."""
+    return _SESSION_ID_RE.sub("_", session_id)[:128]
+
+
+def stop_pending_path(state_dir: Path, session_id: str) -> Path:
+    return state_dir / "stop-pending" / f"{_safe_session_id(session_id)}.json"
+
+
+def load_stop_pending(state_dir: Path, session_id: str) -> dict:
+    path = stop_pending_path(state_dir, session_id)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_stop_pending(state_dir: Path, session_id: str, data: dict) -> None:
+    path = stop_pending_path(state_dir, session_id)
+    if data:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    else:
+        # Nothing left pending -- remove the file instead of writing "{}"
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _record_stop_pending(
+    state_dir: Path, session_id: str, canonical: str, file_path: str,
+    needs_methodology: bool, suggested_methodology_topics: list,
+    needs_best_practices: bool,
+) -> None:
+    data = load_stop_pending(state_dir, session_id)
+    data[canonical] = {
+        "file_path": file_path,
+        "ts": _utc_now_iso(),
+        "needs_methodology": needs_methodology,
+        "suggested_methodology_topics": suggested_methodology_topics,
+        "needs_best_practices": needs_best_practices,
+    }
+    save_stop_pending(state_dir, session_id, data)
+
+
+def _clear_stop_pending(state_dir: Path, session_id: str, canonical: str) -> None:
+    data = load_stop_pending(state_dir, session_id)
+    if canonical in data:
+        del data[canonical]
+        save_stop_pending(state_dir, session_id, data)
+
+
+def _try_consume_proof(state_dir: Path, canonical: str) -> dict | None:
+    """Atomically consume and parse the keyed proof file for a path.
+
+    Returns None if no proof file exists. Raises json.JSONDecodeError or
+    OSError if a proof file existed but was corrupt -- callers should catch
+    and treat that the same as "no proof", after logging the corruption.
+    Shared by main()'s PreToolUse check and proof-stop-gate.py's Stop check
+    so both use the exact same atomic TOCTOU-safe consumption.
+    """
+    proof_path = _proof_file_for(state_dir, canonical)
+    consumed_path = proof_path.with_suffix(".consumed")
+    try:
+        os.replace(str(proof_path), str(consumed_path))
+    except (OSError, FileNotFoundError):
+        return None
+    try:
+        raw = consumed_path.read_text(encoding="utf-8")
+        return json.loads(raw)
+    finally:
+        try:
+            consumed_path.unlink()
+        except OSError:
+            pass
+
+
+def _validate_proof(
+    proof: dict, canonical: str,
+    needs_methodology: bool, suggested_methodology_topics: list,
+    needs_best_practices: bool, needs_security: bool,
+) -> tuple[bool, list[str]]:
+    """Run every mechanical proof check. Returns (valid, reasons).
+
+    Pulled out of main() so proof-stop-gate.py can run the identical checks
+    against proof files that show up after the edit already happened (stop
+    gate mode), using needs_* flags captured at write time since the Stop
+    hook has no tool_input to re-derive them from.
+    """
+    valid = True
+    reasons: list[str] = []
+
+    proof_canonical = _canonicalize(proof.get("file", ""))
+    if proof_canonical != canonical:
+        valid = False
+        reasons.append(f"file mismatch: proof={proof_canonical}, edit={canonical}")
+
+    if proof.get("verdict") != "VERIFIED":
+        valid = False
+        reasons.append(f"verdict={proof.get('verdict', 'missing')}")
+
+    if not _is_fresh_strict(proof):
+        valid = False
+        reasons.append("timestamp expired or missing timezone")
+
+    # Note: content_hash is informational only (tracked for audit trail).
+    # We do NOT block on content_hash mismatch -- see clean-rag/CLAUDE.md.
+
+    proof_score = proof.get("min_score", 0)
+    if proof_score < MIN_PROOF_SCORE:
+        valid = False
+        reasons.append(f"min_score {proof_score} < {MIN_PROOF_SCORE}")
+
+    angles = proof.get("research_angles", [])
+    if len(angles) < MIN_RESEARCH_ANGLES:
+        valid = False
+        reasons.append(
+            f"research_angles: {len(angles)} provided, need >= {MIN_RESEARCH_ANGLES}"
+        )
+
+    has_codebase = any(
+        isinstance(a, dict) and a.get("angle") == "codebase" for a in angles
+    )
+    if not has_codebase:
+        valid = False
+        reasons.append(
+            "research_angles: missing 'codebase' angle. "
+            "You must search the surrounding codebase (callers, imports, "
+            "dependents) before editing, not just the target file"
+        )
+
+    quality = proof.get("quality_aspects", [])
+    if len(quality) < MIN_QUALITY_ASPECTS:
+        valid = False
+        reasons.append(
+            f"quality_aspects: {len(quality)} provided, need >= {MIN_QUALITY_ASPECTS}. "
+            "You must consider code quality from multiple angles before editing: "
+            "architecture, patterns, maintainability, security, performance, testing"
+        )
+
+    if quality:
+        has_macro = any(
+            isinstance(q, dict) and q.get("aspect") in MACRO_QUALITY_ASPECTS
+            for q in quality
+        )
+        if not has_macro:
+            valid = False
+            reasons.append(
+                "quality_aspects: missing macro quality aspect. "
+                "At least one aspect must be 'architecture' or 'patterns' "
+                "to prove the code fits the project structure, not just "
+                "that it works correctly"
+            )
+
+    if needs_methodology:
+        has_methodology = any(
+            isinstance(a, dict) and a.get("angle") == "methodology" for a in angles
+        )
+        if not has_methodology:
+            valid = False
+            reasons.append(
+                "research_angles: missing 'methodology' angle. This file's structure "
+                f"suggests {', '.join(suggested_methodology_topics)} -- search one of these "
+                "topics and cite it as a methodology angle"
+            )
+
+    if needs_best_practices:
+        has_best_practices = any(
+            isinstance(a, dict) and a.get("angle") == "best_practices" for a in angles
+        )
+        if not has_best_practices and not _has_prior_art_justification(quality):
+            valid = False
+            reasons.append(
+                "This looks like new functionality being built from scratch. Either cite "
+                "a 'best_practices' research angle checking for an existing library/pattern "
+                "first, or add a quality_aspects entry explicitly justifying why building "
+                "custom is the right call here"
+            )
+
+    if needs_security:
+        has_security = any(
+            isinstance(a, dict) and a.get("angle") == "security" for a in angles
+        )
+        if not has_security:
+            valid = False
+            reasons.append(
+                "research_angles: missing 'security' angle. This file's path matches a "
+                "security-sensitive pattern (auth/session/token/password/crypto/secret/"
+                "api-key) -- cite a search against the owasp topic (or equivalent) as a "
+                "security angle before editing"
+            )
+
+    return valid, reasons
+
+
 def _build_remediation_for_reasons(reasons: list) -> str:
     """Build actionable remediation steps for each validation failure."""
     lines = ["Proof validation failed:"]
@@ -668,182 +834,70 @@ def main() -> int:
     # Compute content hash of the proposed edit
     edit_hash = _file_content_hash(tool_input)
 
-    # Atomic proof consumption: rename to .consumed, then read.
-    # If rename fails, another process already consumed it.
-    consumed_path = proof_path.with_suffix(".consumed")
+    # Atomic proof consumption + validation, shared with proof-stop-gate.py.
+    proof = None
     try:
-        os.replace(str(proof_path), str(consumed_path))
-    except (OSError, FileNotFoundError):
-        # No proof file exists or rename failed (already consumed)
-        consumed_path = None
+        proof = _try_consume_proof(state_dir, canonical)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"proof-gate: corrupt proof file: {e}", file=sys.stderr)
+        _tel_block(file_path, f"corrupt_proof: {e}")
 
-    if consumed_path and consumed_path.exists():
-        try:
-            raw = consumed_path.read_text(encoding="utf-8")
-            proof = json.loads(raw)
-            proof_canonical = _canonicalize(proof.get("file", ""))
+    if proof is not None:
+        suggested_methodology = _suggest_methodology_topics(file_path, tool_input)
+        needs_methodology = bool(
+            set(suggested_methodology) - set(METHODOLOGY_TOPICS["baseline"])
+        )
+        needs_best_practices = _is_new_or_substantial_addition(file_path, tool_input)
+        needs_security = _is_security_sensitive_path(file_path)
 
-            valid = True
-            reasons = []
+        valid, reasons = _validate_proof(
+            proof, canonical,
+            needs_methodology, suggested_methodology,
+            needs_best_practices, needs_security,
+        )
 
-            # Check file match
-            if proof_canonical != canonical:
-                valid = False
-                reasons.append(f"file mismatch: proof={proof_canonical}, edit={canonical}")
-
-            # Check verdict
-            if proof.get("verdict") != "VERIFIED":
-                valid = False
-                reasons.append(f"verdict={proof.get('verdict', 'missing')}")
-
-            # Check freshness (timezone required)
-            if not _is_fresh_strict(proof):
-                valid = False
-                reasons.append("timestamp expired or missing timezone")
-
-            # Note: content_hash is informational only (tracked for audit trail).
-            # We do NOT block on content_hash mismatch because:
-            # Freshness window (120s) prevents stale proof reuse (replay protection)
-            # Users may legitimately revise their edit after writing proof
-            # See clean-rag/CLAUDE.md line 20 for design rationale update
-
-            # Check minimum score threshold
-            proof_score = proof.get("min_score", 0)
-            if proof_score < MIN_PROOF_SCORE:
-                valid = False
-                reasons.append(f"min_score {proof_score} < {MIN_PROOF_SCORE}")
-
-            # Check research angles (multiple perspectives required)
-            angles = proof.get("research_angles", [])
-            if len(angles) < MIN_RESEARCH_ANGLES:
-                valid = False
-                reasons.append(
-                    f"research_angles: {len(angles)} provided, need >= {MIN_RESEARCH_ANGLES}"
-                )
-
-            # Require at least one "codebase" angle (callers, imports, dependents)
-            has_codebase = any(
-                isinstance(a, dict) and a.get("angle") == "codebase"
-                for a in angles
+        if valid:
+            _log_proof(state_dir, file_path, proof, edit_hash)
+            _tel_pass(file_path, proof.get("topics_cited", []), proof.get("min_score", 0))
+            if _gate_mode() == "stop":
+                session_id = payload.get("session_id", "")
+                if session_id:
+                    _clear_stop_pending(state_dir, session_id, canonical)
+            return 0
+        else:
+            # Proof was invalid. Show specific failures with remediation.
+            reason_str = "; ".join(reasons)
+            remediation = _build_remediation_for_reasons(reasons)
+            print(
+                f"proof-gate: proof rejected\n{remediation}",
+                file=sys.stderr,
             )
-            if not has_codebase:
-                valid = False
-                reasons.append(
-                    "research_angles: missing 'codebase' angle. "
-                    "You must search the surrounding codebase (callers, imports, "
-                    "dependents) before editing, not just the target file"
-                )
+            _tel_block(file_path, f"proof_rejected: {reason_str}")
+            _maybe_write_debug_fix(state_dir, file_path, f"proof_rejected: {reason_str}")
 
-            # Require quality aspects (code quality proof at multiple levels)
-            quality = proof.get("quality_aspects", [])
-            if len(quality) < MIN_QUALITY_ASPECTS:
-                valid = False
-                reasons.append(
-                    f"quality_aspects: {len(quality)} provided, need >= {MIN_QUALITY_ASPECTS}. "
-                    "You must consider code quality from multiple angles before editing: "
-                    "architecture, patterns, maintainability, security, performance, testing"
-                )
+    # 5. No valid proof yet. In 'stop' gate mode, defer to the Stop hook
+    # instead of blocking this call immediately -- unless the file is
+    # security-sensitive (those always fail closed at PreToolUse time, same
+    # as the server-down path below) or we have no session_id to key the
+    # pending list on (fail safe to normal blocking behavior).
+    if (
+        _gate_mode() == "stop"
+        and payload.get("session_id", "")
+        and not _is_security_sensitive_path(file_path)
+    ):
+        suggested_methodology = _suggest_methodology_topics(file_path, tool_input)
+        needs_methodology = bool(
+            set(suggested_methodology) - set(METHODOLOGY_TOPICS["baseline"])
+        )
+        needs_best_practices = _is_new_or_substantial_addition(file_path, tool_input)
+        _record_stop_pending(
+            state_dir, payload["session_id"], canonical, file_path,
+            needs_methodology, suggested_methodology, needs_best_practices,
+        )
+        _tel_block(file_path, "deferred_to_stop_gate")
+        return 0
 
-            # At least one must be architecture or patterns (macro quality)
-            if quality:
-                has_macro = any(
-                    isinstance(q, dict)
-                    and q.get("aspect") in MACRO_QUALITY_ASPECTS
-                    for q in quality
-                )
-                if not has_macro:
-                    valid = False
-                    reasons.append(
-                        "quality_aspects: missing macro quality aspect. "
-                        "At least one aspect must be 'architecture' or 'patterns' "
-                        "to prove the code fits the project structure, not just "
-                        "that it works correctly"
-                    )
-
-            # Stage 6a: methodology required (not just suggested) when this
-            # file's structure calls for it beyond the always-suggested
-            # baseline (clean-code-principles, code-smells) -- e.g. a
-            # class-heavy file should cite solid-principles/design-patterns.
-            suggested_methodology = _suggest_methodology_topics(file_path, tool_input)
-            if set(suggested_methodology) - set(METHODOLOGY_TOPICS["baseline"]):
-                has_methodology = any(
-                    isinstance(a, dict) and a.get("angle") == "methodology" for a in angles
-                )
-                if not has_methodology:
-                    valid = False
-                    reasons.append(
-                        "research_angles: missing 'methodology' angle. This file's structure "
-                        f"suggests {', '.join(suggested_methodology)} -- search one of these "
-                        "topics and cite it as a methodology angle"
-                    )
-
-            # Stage 6b: prior-art check for new files / substantial new code.
-            # Not "you must reuse" -- "you must have actually checked" (Not
-            # Invented Here syndrome is a real, named anti-pattern, but not
-            # an absolute rule -- core/differentiating tech is a legitimate
-            # exception, hence the justification escape hatch).
-            if _is_new_or_substantial_addition(file_path, tool_input):
-                has_best_practices = any(
-                    isinstance(a, dict) and a.get("angle") == "best_practices" for a in angles
-                )
-                if not has_best_practices and not _has_prior_art_justification(quality):
-                    valid = False
-                    reasons.append(
-                        "This looks like new functionality being built from scratch. Either cite "
-                        "a 'best_practices' research angle checking for an existing library/pattern "
-                        "first, or add a quality_aspects entry explicitly justifying why building "
-                        "custom is the right call here"
-                    )
-
-            # Stage 6c: security angle required for security-sensitive paths.
-            if _is_security_sensitive_path(file_path):
-                has_security = any(
-                    isinstance(a, dict) and a.get("angle") == "security" for a in angles
-                )
-                if not has_security:
-                    valid = False
-                    reasons.append(
-                        "research_angles: missing 'security' angle. This file's path matches a "
-                        "security-sensitive pattern (auth/session/token/password/crypto/secret/"
-                        "api-key) -- cite a search against the owasp topic (or equivalent) as a "
-                        "security angle before editing"
-                    )
-
-            if valid:
-                _log_proof(state_dir, file_path, proof, edit_hash)
-                _tel_pass(file_path, proof.get("topics_cited", []), proof.get("min_score", 0))
-                # Clean up consumed file
-                try:
-                    consumed_path.unlink()
-                except OSError:
-                    pass
-                return 0
-            else:
-                # Proof was invalid. Show specific failures with remediation.
-                reason_str = "; ".join(reasons)
-                remediation = _build_remediation_for_reasons(reasons)
-                print(
-                    f"proof-gate: proof rejected\n{remediation}",
-                    file=sys.stderr,
-                )
-                _tel_block(file_path, f"proof_rejected: {reason_str}")
-                _maybe_write_debug_fix(state_dir, file_path, f"proof_rejected: {reason_str}")
-                # Clean up consumed file
-                try:
-                    consumed_path.unlink()
-                except OSError:
-                    pass
-
-        except (json.JSONDecodeError, KeyError, OSError) as e:
-            print(f"proof-gate: corrupt proof file: {e}", file=sys.stderr)
-            _tel_block(file_path, f"corrupt_proof: {e}")
-            # Clean up corrupt consumed file
-            try:
-                consumed_path.unlink()
-            except OSError:
-                pass
-
-    # 5. No valid proof. Check server health and block with guidance.
+    # No valid proof. Check server health and block with guidance.
     _tel_block(file_path, "no_valid_proof")
     _maybe_write_debug_fix(state_dir, file_path, "no_valid_proof")
 
