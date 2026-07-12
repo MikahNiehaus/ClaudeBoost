@@ -25,6 +25,29 @@ def _find_git_root(start_path: str = ".") -> str | None:
     return None
 
 
+def _format_call_graph(metrics: dict) -> str:
+    """Format call graph as context section."""
+    call_graph = metrics.get("call_graph", {})
+    if not call_graph or (not call_graph.get("functions") and not call_graph.get("classes")):
+        return ""
+
+    lines = ["## Code Structure\n"]
+
+    functions = call_graph.get("functions", [])
+    if functions:
+        lines.append(f"**Functions:** {', '.join(functions[:5])}")
+
+    classes = call_graph.get("classes", [])
+    if classes:
+        lines.append(f"**Classes:** {', '.join(classes[:5])}")
+
+    imports = call_graph.get("imports", [])
+    if imports:
+        lines.append(f"**Imports:** {', '.join(imports[:5])}\n")
+
+    return "\n".join(lines)
+
+
 def _get_project_context() -> str:
     """Build project context section if in a git repo."""
     git_root = _find_git_root()
@@ -57,7 +80,7 @@ def _get_project_context() -> str:
                     )
                 except Exception:
                     pass
-                return f"\n## Project Context\nFile in project at {git_root} (indexing queued in background; use import graph for context until indexed)."
+                return f"\n## Project Context\nFile in project at {git_root} (indexing queued in background)."
     except Exception:
         pass
 
@@ -91,6 +114,12 @@ def hook_user_prompt_submit(context: dict, message: str) -> dict:
         metrics_section = format_metrics_for_context(all_metrics)
         if metrics_section:
             sections.append(metrics_section)
+
+        # Add call graph for first file (unindexed project context)
+        first_metric = all_metrics[0] if all_metrics else {}
+        call_graph_section = _format_call_graph(first_metric)
+        if call_graph_section:
+            sections.append(call_graph_section)
 
     # Add project context if in a git repo
     project_context = _get_project_context()

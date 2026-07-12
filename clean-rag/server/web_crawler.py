@@ -1,5 +1,10 @@
-"""Web crawler for fallback indexing. Extracts text from URLs without LLM."""
+"""Web crawler for fallback indexing. Extracts text from URLs without LLM.
 
+For code files, uses AST parsing to extract semantic structure (functions,
+classes, docstrings) instead of plain text extraction.
+"""
+
+import ast
 import logging
 import re
 from pathlib import Path
@@ -69,8 +74,52 @@ def crawl_and_index_urls(urls: list[str], topic_slug: str, source_query: str) ->
     return stats
 
 
+def _is_code_file(url: str, content_type: str = "") -> bool:
+    """Check if URL points to a code file."""
+    code_extensions = (".py", ".js", ".ts", ".go", ".java", ".rs", ".cpp", ".c")
+    code_types = ("application/x-python", "text/javascript", "text/x-typescript")
+    return url.endswith(code_extensions) or any(ct in content_type for ct in code_types)
+
+
+def _extract_code_structure(code: str) -> str:
+    """Extract semantic structure from code via AST (Python)."""
+    try:
+        tree = ast.parse(code)
+        lines = ["# Code Structure\n"]
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                docstring = ast.get_docstring(node) or ""
+                lines.append(f"## Function: {node.name}")
+                if docstring:
+                    lines.append(docstring)
+                lines.append("")
+
+            elif isinstance(node, ast.ClassDef):
+                docstring = ast.get_docstring(node) or ""
+                lines.append(f"## Class: {node.name}")
+                if docstring:
+                    lines.append(docstring)
+                lines.append("")
+
+        # Append actual code for reference
+        lines.append("## Code\n")
+        lines.append("```python")
+        lines.append(code[:2000])  # First 2000 chars
+        lines.append("```")
+
+        return "\n".join(lines)
+    except Exception:
+        # If AST parsing fails, return original code
+        return code
+
+
 def _fetch_and_extract(url: str, timeout: float = CRAWL_TIMEOUT) -> Optional[str]:
-    """Fetch URL and extract text content via html2text."""
+    """Fetch URL and extract content.
+
+    For code files: use AST-based extraction for semantic structure.
+    For web pages: use html2text for plain text.
+    """
     if not url or not url.startswith(("http://", "https://")):
         return None
 
@@ -79,13 +128,20 @@ def _fetch_and_extract(url: str, timeout: float = CRAWL_TIMEOUT) -> Optional[str
         client = httpx.Client(timeout=timeout, headers=headers, follow_redirects=True)
         response = client.get(url)
         response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
         client.close()
 
         html = response.text
         if not html or len(html) < 100:
             return None
 
-        text = html2text(html)
+        # Use AST extraction for code files
+        if _is_code_file(url, content_type):
+            text = _extract_code_structure(html)
+        else:
+            # Use html2text for web pages
+            text = html2text(html)
+
         text = text.strip()
 
         if not text or len(text) < 50:

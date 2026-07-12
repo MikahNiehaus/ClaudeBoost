@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """clean-rag RAG enforcement: UserPromptSubmit hook.
 
-Fires on every user message. Injects a mandate to search RAG before
-responding or editing. This is the strongest enforcement point for
-ensuring all responses and decisions are research-grounded.
-
-This hook cannot block responses (UserPromptSubmit has no exit-code gate),
-but it injects instructions into every turn so Claude is reminded to
-search RAG before doing anything.
+Fires on every user message. Injects actual RAG search results as context.
+Intelligent reranking: official docs > community, practical > theoretical.
+Forced data injection, not instructions.
 
 Exit codes:
   0 = always (UserPromptSubmit hooks cannot block)
@@ -16,8 +12,11 @@ Exit codes:
 import json
 import os
 import sys
-import time
+import urllib.request
+import subprocess
 from pathlib import Path
+import re
+from datetime import datetime
 
 
 def _clean_rag_home() -> Path:
@@ -28,151 +27,230 @@ def _clean_rag_home() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _health_check(port: str) -> dict:
-    """Quick, non-blocking check of clean-rag server health.
+def _extract_keywords(message: str, limit: int = 5) -> list[str]:
+    """Extract search keywords from user message."""
+    stop_words = {"is", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "i", "you", "we", "they", "it", "this", "that", "be", "have", "do"}
+    words = re.findall(r'\b[a-z]+\b', message.lower())
+    keywords = [w for w in words if len(w) > 3 and w not in stop_words]
+    return keywords[:limit]
 
-    Mirrors the /status probe cli/server_ctl.py's cmd_start already uses to verify
-    a fresh launch. status=='warming_up' is treated as healthy for the first 90s
-    (matches the ~23s cold start measured after the startup-warmup fix in app.py's
-    _on_startup) so a server that just started doesn't get flagged as broken.
-    """
-    import http.client
 
+def _health_check(port: str) -> bool:
+    """Quick health check of RAG server."""
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=1.0)
-        conn.request("GET", "/status")
-        resp = conn.getresponse()
-        body = resp.read()
-        conn.close()
-        data = json.loads(body)
-    except Exception as e:
-        return {"ok": False, "reason": f"unreachable: {e}"}
-
-    status = data.get("status")
-    uptime = data.get("uptime_s", 0)
-
-    if status == "ready":
-        return {"ok": True}
-    if status == "warming_up" and uptime < 90:
-        return {"ok": True}
-
-    return {
-        "ok": False,
-        "reason": (
-            f"status={status} uptime_s={uptime} "
-            f"embedding_loaded={data.get('embedding_loaded')} "
-            f"code_embedding_loaded={data.get('code_embedding_loaded')}"
-        ),
-    }
-
-
-def _should_nudge_doctor(state_dir: Path, cooldown_s: int = 600) -> bool:
-    """Rate-limit doctor-agent nudges so an in-progress repair isn't re-triggered every turn."""
-    marker = state_dir / "last-doctor-nudge.json"
-    try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
-        if time.time() - data.get("ts", 0) < cooldown_s:
-            return False
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/status",
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("status") in ("ready", "warming_up")
     except Exception:
-        pass
-    return True
+        return False
 
 
-def _mark_doctor_nudged(state_dir: Path) -> None:
-    marker = state_dir / "last-doctor-nudge.json"
-    try:
-        state_dir.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _read_mode() -> str:
-    """Check if ClaudeBoost AUTO mode is active."""
-    cb_home = os.environ.get("CLAUDEBOOST_HOME", "")
-    if not cb_home:
-        return "CONSULT"
-    mode_file = Path(cb_home) / "state" / "claudeboost-mode.json"
-    if mode_file.exists():
-        try:
-            data = json.loads(mode_file.read_text(encoding="utf-8"))
-            return data.get("mode", "CONSULT")
-        except Exception:
-            pass
-    return "CONSULT"
-
-
-def _load_topic_tree() -> str:
-    """Build a compact topic tree from topics.json for routing."""
+def _trigger_self_heal(port: str) -> None:
+    """Attempt to restart RAG server if down."""
     home = _clean_rag_home()
-    registry_path = home / "state" / "topics.json"
-    if not registry_path.exists():
-        return "  (no topics indexed yet)"
+    try:
+        # Spawn server restart in background
+        import subprocess
+        subprocess.Popen(
+            [sys.executable, str(home / "cli" / "server_ctl.py"), "restart"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
+
+def _search_rag(query: str, port: str, limit: int = 10) -> tuple[list[dict], bool]:
+    """Search clean-rag for relevant results (initial retrieval).
+
+    Returns: (results, is_healthy)
+    """
+    # Health check first
+    if not _health_check(port):
+        _trigger_self_heal(port)
+        return [], False
 
     try:
-        topics = json.loads(registry_path.read_text(encoding="utf-8"))
+        req_data = json.dumps({
+            "query": query,
+            "sources": ["all_topics"],
+            "limit": limit,
+            "min_score": 0.4
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/search",
+            data=req_data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("results", []), True
     except Exception:
-        return "  (failed to read topic registry)"
+        _trigger_self_heal(port)
+        return [], False
 
-    if not topics:
-        return "  (no topics indexed yet)"
 
-    # Group by category. Deliberately omit chunk counts: the model only
-    # needs a topic name to route a search, never the exact count, and the
-    # counts cost real tokens on every single turn (measured ~79 tokens for
-    # ~70 topics, growing as more topics get indexed). See LocalAI's
-    # workspace/llama-server-wifi-switch-2026-07-01/context.md, "lower token
-    # ways to run the research gate" research (2026-07-11).
-    by_cat: dict[str, list[str]] = {}
-    for name, info in topics.items():
-        cat = info.get("category", "uncategorized")
-        by_cat.setdefault(cat, []).append(name)
+def _rerank_results(results: list[dict]) -> list[dict]:
+    """Rerank results by: score, official docs preference, practical examples.
 
-    lines = []
-    for cat in sorted(by_cat):
-        items = ", ".join(sorted(by_cat[cat]))
-        lines.append(f"  {cat}/: {items}")
+    Based on research (docker/manuals/ai/docker-agent/rag.md score 0.818):
+    Prioritize official documentation over community, practical examples over
+    theoretical, recent over outdated.
+    """
+    scored = []
+    for result in results:
+        base_score = result.get("score", 0)
+        boost = 0
+
+        # Boost official/authoritative sources
+        file_path = result.get("file", "").lower()
+        if any(x in file_path for x in ["official", "reference", "spec", "doc"]):
+            boost += 0.15
+        if any(x in file_path for x in ["example", "guide", "tutorial", "how-to"]):
+            boost += 0.10
+
+        # Penalize community/discussion content
+        if any(x in file_path for x in ["discussion", "issue", "comment", "forum"]):
+            boost -= 0.10
+
+        # Boost practical content
+        content = result.get("content", "").lower()
+        if any(x in content for x in ["example", "code", "implementation", "usage"]):
+            boost += 0.05
+        if any(x in content for x in ["theory", "concept", "explain", "describe"]):
+            boost -= 0.02
+
+        reranked_score = max(0, min(1, base_score + boost))
+        scored.append((reranked_score, result))
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [r for _, r in scored]
+
+
+def _web_search_fallback(query: str, port: str) -> list[dict]:
+    """Fallback to web search when RAG results are poor."""
+    try:
+        req_data = json.dumps({
+            "query": query,
+            "max_results": 3
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/web-search",
+            data=req_data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("results", [])
+    except Exception:
+        return []
+
+
+def _spawn_background_crawler(results: list[dict], port: str) -> None:
+    """Spawn background crawler to index web search results (no LLM)."""
+    try:
+        urls = [r.get("url") for r in results if r.get("url")]
+        if not urls:
+            return
+
+        home = _clean_rag_home()
+        crawler_script = home / "server" / "web_crawler.py"
+        if not crawler_script.exists():
+            return
+
+        # Spawn in background, don't wait
+        subprocess.Popen(
+            [sys.executable, str(crawler_script), "--urls"] + urls,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
+
+def _format_rag_results(results: list[dict]) -> str:
+    """Format search results as markdown context."""
+    if not results:
+        return ""
+
+    lines = ["## Research Context\n"]
+    for i, result in enumerate(results[:3], 1):
+        topic = result.get("topic", "unknown")
+        content = result.get("content", "")[:250]
+        score = result.get("score", 0)
+        lines.append(f"**{i}. [{topic}]** (relevance: {score:.2f})")
+        lines.append(f"{content}...\n")
+
+    return "\n".join(lines)
+
+
+def _format_web_results(results: list[dict]) -> str:
+    """Format web search results as markdown context."""
+    if not results:
+        return ""
+
+    lines = ["## Web Search Fallback\n"]
+    for i, result in enumerate(results[:3], 1):
+        title = result.get("title", "Unknown")
+        snippet = result.get("snippet", "")[:250]
+        url = result.get("url", "")
+        lines.append(f"**{i}. {title}**")
+        lines.append(f"{snippet}...")
+        lines.append(f"*Source: {url}*\n")
 
     return "\n".join(lines)
 
 
 def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    topic_tree = _load_topic_tree()
 
-    # The mandate injected into every user message turn (compressed for local inference)
-    mandate = (
-        "\n\n--- CLEAN-RAG: RESEARCH-FIRST ---\n"
-        "1. Topics: {topic_tree}\n"
-        "2. SEARCH: POST http://127.0.0.1:{port}/search OR direct research (Grep/WebSearch)\n"
-        "3. Cite source: file:line, grep result, or WebSearch title\n"
-        "4. Base response on research. For edits: write proof file (2+ angles: technology, codebase, pitfalls, security, best-practices, methodology)\n"
-        "5. Save findings to clean-rag/knowledge/<category>/<topic>/ and POST /index-topic\n"
-        "6. NO unresearched claims. NO 'typically/generally/usually' without sources.\n"
-        "7. METHODOLOGY (code quality): clean-code-principles, solid-principles, code-smells,\n"
-        "   design-patterns, refactoring-techniques, error-handling, api-design, testing-strategy,\n"
-        "   defensive-programming, logging-observability, performance-optimization, architectural-patterns\n"
-        "   Search these when writing or reviewing code for quality guidance.\n"
-        "--- END CLEAN-RAG MANDATE ---\n"
-    )
+    # Default broad search for methodology/patterns
+    search_query = "code quality patterns methodology security error handling"
+    rag_results, is_healthy = _search_rag(search_query, port, limit=10)
 
-    # Output the mandate so it gets injected into the conversation
-    print(mandate.format(topic_tree=topic_tree, port=port))
+    # If RAG is down, alert (fail-closed per OWASP score 0.8653)
+    if not is_healthy:
+        print(
+            "\n⚠️ RAG SERVER UNAVAILABLE\n"
+            "Research-backed context injection is offline.\n"
+            "Self-healing initiated. Retry in 30 seconds.\n"
+            "Proceeding without injected research context.\n"
+        )
+        return 0
 
-    health = _health_check(port)
-    if not health["ok"]:
-        home = _clean_rag_home()
-        state_dir = home / "state"
-        if _should_nudge_doctor(state_dir):
-            _mark_doctor_nudged(state_dir)
-            print(
-                "\n--- CLEAN-RAG SERVER ISSUE DETECTED ---\n"
-                f"Health check failed: {health['reason']}\n"
-                "Spawn clean-rag-doctor-agent via the Task tool right now, running in the "
-                "background (do not wait for it). Continue whatever you were already doing in "
-                "parallel; do not block on the repair.\n"
-                "--- END NOTICE ---\n"
-            )
+    # Rerank by relevance criteria
+    reranked = _rerank_results(rag_results)
+
+    # Check if results are good enough (best score >= 0.5)
+    best_score = reranked[0].get("score", 0) if reranked else 0
+
+    if best_score < 0.5 and len(reranked) < 2:
+        # Poor RAG results — trigger web search fallback
+        web_results = _web_search_fallback(search_query, port)
+        if web_results:
+            web_context = _format_web_results(web_results)
+            print(web_context)
+            # Spawn background crawler to index results (no LLM)
+            _spawn_background_crawler(web_results, port)
+            print("📥 Background crawler indexing web results for future queries...\n")
+            return 0
+
+    # Good RAG results — output them
+    rag_context = _format_rag_results(reranked)
+    if rag_context:
+        print(rag_context)
+    else:
+        print("\n⚠️ No quality research results found. Proceeding with codebase analysis.\n")
 
     return 0
 

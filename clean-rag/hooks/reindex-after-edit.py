@@ -59,15 +59,56 @@ def _find_project_for_file(file_path: str) -> str | None:
     return None
 
 
-def _send_reindex(project_path: str, file_path: str) -> None:
-    """Send reindex request to clean-rag server. Runs in background thread."""
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    url = f"http://127.0.0.1:{port}/reindex-file"
+def _should_force_reindex(project_path: str) -> bool:
+    """Check if force reindexing is needed."""
+    home = _clean_rag_home()
 
-    payload = json.dumps({
-        "project_path": project_path,
-        "file_path": file_path,
-    }).encode("utf-8")
+    # Check 1: Project manifest exists
+    manifest_path = Path(project_path) / ".rag-manifest.json"
+    if not manifest_path.exists():
+        return True  # First time or corrupted
+
+    # Check 2: clean-rag databases dir exists
+    db_root = home / "databases" / "_projects"
+    if not db_root.exists():
+        return True  # No indexed projects yet
+
+    # Check 3: Try to detect manifest corruption
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or "files" not in manifest:
+            return True  # Corrupted manifest
+    except Exception:
+        return True  # Can't read manifest
+
+    return False
+
+
+def _send_reindex(project_path: str, file_path: str) -> None:
+    """Send reindex request to clean-rag server. Runs in background thread.
+
+    Auto-detects when force reindexing is needed (hash mismatch, manifest
+    corruption, first discovery). Defaults to incremental for performance.
+    """
+    port = os.environ.get("CLEAN_RAG_PORT", "8613")
+
+    # Check if force reindex is needed
+    force = _should_force_reindex(project_path)
+
+    if force:
+        # Force reindex entire project
+        url = f"http://127.0.0.1:{port}/index-project"
+        payload = json.dumps({
+            "project_path": project_path,
+            "force": True,
+        }).encode("utf-8")
+    else:
+        # Incremental reindex single file
+        url = f"http://127.0.0.1:{port}/reindex-file"
+        payload = json.dumps({
+            "project_path": project_path,
+            "file_path": file_path,
+        }).encode("utf-8")
 
     req = urllib.request.Request(
         url,
@@ -77,7 +118,7 @@ def _send_reindex(project_path: str, file_path: str) -> None:
     )
 
     try:
-        urllib.request.urlopen(req, timeout=30)
+        urllib.request.urlopen(req, timeout=60)
     except Exception:
         pass
 

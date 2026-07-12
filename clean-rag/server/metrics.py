@@ -27,6 +27,39 @@ def _get_file_hash(filepath: str) -> str:
         return "unknown"
 
 
+def _extract_call_graph(filepath: str) -> dict:
+    """Extract function/class definitions and imports via AST."""
+    try:
+        import ast
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+
+        functions = []
+        classes = []
+        imports = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                functions.append(node.name)
+            elif isinstance(node, ast.ClassDef):
+                classes.append(node.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.append(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imports.append(node.module)
+
+        return {
+            "functions": list(set(functions))[:10],  # Top 10
+            "classes": list(set(classes))[:10],
+            "imports": list(set(imports))[:10],
+        }
+    except Exception:
+        return {"functions": [], "classes": [], "imports": []}
+
+
 def _compute_metrics(filepath: str) -> dict:
     """Compute metrics for a file (AST-based complexity, LOC, etc.)."""
     try:
@@ -42,11 +75,15 @@ def _compute_metrics(filepath: str) -> dict:
         # Maintainability index (simplified: based on LOC and complexity)
         maintainability = max(0, min(100, 171 - 5.2 * (complexity ** 0.4) - 0.23 * loc + 50 * (loc ** -0.5)))
 
+        # Extract call graph
+        call_graph = _extract_call_graph(filepath)
+
         return {
             "file": filepath,
             "lines_of_code": loc,
             "cyclomatic_complexity": complexity,
             "maintainability_index": round(maintainability, 1),
+            "call_graph": call_graph,
             "computed_at": datetime.now().isoformat(),
         }
     except Exception as e:

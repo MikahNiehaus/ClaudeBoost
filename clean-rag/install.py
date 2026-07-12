@@ -19,15 +19,15 @@ CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
 # Hook sentinels: unique strings in hook commands for idempotent registration
-PROOF_GATE_SENTINEL = "proof-gate.py"
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
-PROOF_STOP_GATE_SENTINEL = "proof-stop-gate.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 WEB_SEARCH_INJECT_SENTINEL = "web_search_inject.py"
+METRICS_INJECT_SENTINEL = "metrics_inject.py"
+RAG_SEARCH_ON_EDIT_SENTINEL = "rag-search-on-edit.py"
 
 
 def _say(msg: str) -> None:
@@ -385,6 +385,23 @@ def configure_metrics_env() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5l: Register RAG search on edit hook (PreToolUse)
+# ---------------------------------------------------------------------------
+def register_rag_search_on_edit_hook() -> None:
+    """Register hook to trigger RAG search when editing files."""
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/rag-search-on-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", RAG_SEARCH_ON_EDIT_SENTINEL,
+        hook_entry, label="rag-search-on-edit",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 6: preseed topic databases (optional)
 # ---------------------------------------------------------------------------
 def seed_topics(topic_filter: list[str] | None = None) -> None:
@@ -615,6 +632,10 @@ def main():
     # Step 5k
     print("\nStep 5k: Configuring metrics environment variables...")
     configure_metrics_env()
+
+    # Step 5l
+    print("\nStep 5l: Registering rag-search-on-edit hook...")
+    register_rag_search_on_edit_hook()
 
     # Step 6
     if not args.no_seed:
