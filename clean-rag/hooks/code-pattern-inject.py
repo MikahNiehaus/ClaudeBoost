@@ -171,10 +171,15 @@ def main() -> int:
             return 0
 
         patterns = _detect_patterns(new_string)
-        # Always search at least once, even with no keyword match, so every
-        # edit gets research injected, not just ones matching a keyword list.
         if not patterns:
-            patterns = [DEFAULT_QUERY]
+            # No pattern matched (likely a trivial edit: single string,
+            # comment, constant). Confirmed the DEFAULT_QUERY fallback here
+            # had the same bug as rag-enforce.py's static-query bug: it
+            # injected generic "code quality patterns" content regardless
+            # of what actually changed, misleading rather than helpful.
+            # Skip instead of guessing.
+            logger.info("No pattern matched, skipping injection")
+            return 0
 
         logger.info(f"Detected {len(patterns)} pattern(s), searching RAG synchronously...")
 
