@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""
+MCP Server for OpenCode: RAG + Metrics + Web Search Injection
+
+This server bridges OpenCode (any model: DeepSeek, Claude, LocalAI) to clean-rag services.
+Provides semantic search, code metrics, web search fallback, and context injection.
+
+Install: register in OpenCode settings as an MCP server pointing to this script.
+"""
+
+import json
+import logging
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler("/tmp/opencode_mcp_server.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+class OpenCodeRAGServer:
+    """MCP-compliant RAG server for OpenCode."""
+
+    def __init__(self, rag_port: int = 8613):
+        self.rag_port = rag_port
+        self.tools = self._build_tools()
+
+    def _build_tools(self) -> list:
+        """Define MCP tools."""
+        return [
+            {
+                "name": "rag_search",
+                "description": "Search clean-rag knowledge base for code quality patterns, security, error handling, refactoring",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (e.g., 'error handling patterns', 'SQL injection prevention')",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max results (default 3)",
+                            "default": 3,
+                        },
+                        "min_score": {
+                            "type": "number",
+                            "description": "Minimum relevance score 0.0-1.0 (default 0.5)",
+                            "default": 0.5,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "code_metrics",
+                "description": "Analyze code quality: LOC, complexity, maintainability index, call graph",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "filepath": {
+                            "type": "string",
+                            "description": "Path to Python/JS/TS/Go file to analyze",
+                        },
+                    },
+                    "required": ["filepath"],
+                },
+            },
+            {
+                "name": "web_search_fallback",
+                "description": "Search the web when RAG returns weak results (score < 0.5)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Max results to return (default 3)",
+                            "default": 3,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "inject_full_context",
+                "description": "Process a prompt and inject RAG + metrics + web context in one call",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "User prompt or question",
+                        },
+                        "filepath": {
+                            "type": "string",
+                            "description": "Optional: filepath for code metrics injection",
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Model name (DeepSeek, Claude, etc.) - for logging",
+                        },
+                    },
+                    "required": ["prompt"],
+                },
+            },
+        ]
+
+    def rag_search(self, query: str, limit: int = 3, min_score: float = 0.5) -> dict:
+        """Search RAG knowledge base."""
+        try:
+            payload = json.dumps(
+                {
+                    "query": query,
+                    "sources": ["all_topics"],
+                    "limit": limit,
+                    "min_score": min_score,
+                }
+            ).encode("utf-8")
+
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.rag_port}/search",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                logger.info(
+                    f"RAG search '{query}' returned {len(data.get('results', []))} results"
+                )
+                return {
+                    "results": data.get("results", []),
+                    "search_id": data.get("search_id", ""),
+                    "total": len(data.get("results", [])),
+                }
+        except urllib.error.URLError as e:
+            logger.error(f"RAG connection failed: {e}")
+            return {
+                "results": [],
+                "search_id": "",
+                "error": "RAG server unavailable",
+            }
+        except Exception as e:
+            logger.error(f"RAG search error: {e}")
+            return {"results": [], "search_id": "", "error": str(e)}
+
+    def code_metrics(self, filepath: str) -> dict:
+        """Get code metrics for a file."""
+        try:
+            payload = json.dumps({"file_path": filepath}).encode("utf-8")
+
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.rag_port}/metrics",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                metrics = json.loads(resp.read().decode("utf-8"))
+                logger.info(f"Metrics for {filepath}: LOC={metrics.get('lines_of_code', '?')}")
+                return metrics
+        except Exception as e:
+            logger.error(f"Metrics fetch failed: {e}")
+            return {"error": str(e)}
+
+    def web_search_fallback(self, query: str, max_results: int = 3) -> dict:
+        """Trigger web search fallback."""
+        try:
+            payload = json.dumps(
+                {"query": query, "max_results": max_results}
+            ).encode("utf-8")
+
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.rag_port}/web-search",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                results = json.loads(resp.read().decode("utf-8"))
+                logger.info(
+                    f"Web search '{query}' returned {len(results.get('results', []))} results"
+                )
+                return results
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            return {"results": [], "error": str(e)}
+
+    def inject_full_context(
+        self, prompt: str, filepath: str = None, model: str = "unknown"
+    ) -> dict:
+        """Complete context injection: RAG + metrics + web fallback."""
+        logger.info(f"Injecting context for {model}: {prompt[:60]}...")
+
+        # Step 1: Search RAG
+        rag_result = self.rag_search(prompt)
+        rag_results = rag_result.get("results", [])
+
+        # Step 2: Get metrics if filepath provided
+        metrics = None
+        if filepath:
+            metrics = self.code_metrics(filepath)
+
+        # Step 3: Check if fallback needed (weak RAG score or no results)
+        web_results = []
+        fallback_triggered = False
+        if not rag_results:
+            logger.info("RAG returned no results, triggering web search fallback")
+            fallback_triggered = True
+            web_result = self.web_search_fallback(prompt)
+            web_results = web_result.get("results", [])
+        elif rag_results:
+            best_score = rag_results[0].get("score", 0)
+            if best_score < 0.4:
+                logger.info(
+                    f"RAG score {best_score} < 0.4, triggering web search fallback"
+                )
+                fallback_triggered = True
+                web_result = self.web_search_fallback(prompt)
+                web_results = web_result.get("results", [])
+
+        # Step 4: Format injected context
+        context_lines = []
+
+        if rag_results:
+            context_lines.append("## Research Context (RAG Knowledge Base)\n")
+            for i, result in enumerate(rag_results[:3], 1):
+                topic = result.get("topic", "unknown")
+                score = result.get("score", 0)
+                content = result.get("content", "")[:200]
+                context_lines.append(
+                    f"**{i}. {topic}** (relevance: {score:.2f})"
+                )
+                context_lines.append(f"{content}...\n")
+
+        if metrics and "lines_of_code" in metrics:
+            context_lines.append("## Code Quality Metrics\n")
+            context_lines.append(
+                f"- **Lines of Code**: {metrics.get('lines_of_code', 0)}"
+            )
+            context_lines.append(
+                f"- **Cyclomatic Complexity**: {metrics.get('cyclomatic_complexity', 0)}"
+            )
+            context_lines.append(
+                f"- **Maintainability Index**: {metrics.get('maintainability_index', 0)}"
+            )
+
+            if "call_graph" in metrics:
+                call_graph = metrics["call_graph"]
+                if call_graph:
+                    context_lines.append("\n**Dependencies & Structure**:")
+                    if call_graph.get("functions"):
+                        context_lines.append(
+                            f"- Functions: {', '.join(call_graph['functions'][:5])}"
+                        )
+                    if call_graph.get("classes"):
+                        context_lines.append(
+                            f"- Classes: {', '.join(call_graph['classes'][:5])}"
+                        )
+            context_lines.append("")
+
+        if web_results:
+            context_lines.append("## Web Search Results (Fallback)\n")
+            for i, result in enumerate(web_results[:3], 1):
+                title = result.get("title", "Unknown")
+                snippet = result.get("snippet", "")[:150]
+                url = result.get("url", "")
+                context_lines.append(f"**{i}. {title}**")
+                if url:
+                    context_lines.append(f"_Source: {url}_")
+                context_lines.append(f"{snippet}...\n")
+
+        injected_context = "\n".join(context_lines)
+
+        return {
+            "injected_context": injected_context,
+            "rag_results": rag_results,
+            "metrics": metrics,
+            "web_results": web_results,
+            "fallback_triggered": fallback_triggered,
+        }
+
+    def handle_tool_call(self, tool_name: str, tool_input: dict) -> Any:
+        """Execute a tool call."""
+        logger.info(f"Tool call: {tool_name} with {list(tool_input.keys())}")
+
+        if tool_name == "rag_search":
+            return self.rag_search(
+                tool_input.get("query", ""),
+                tool_input.get("limit", 3),
+                tool_input.get("min_score", 0.5),
+            )
+
+        elif tool_name == "code_metrics":
+            return self.code_metrics(tool_input.get("filepath", ""))
+
+        elif tool_name == "web_search_fallback":
+            return self.web_search_fallback(
+                tool_input.get("query", ""), tool_input.get("max_results", 3)
+            )
+
+        elif tool_name == "inject_full_context":
+            return self.inject_full_context(
+                tool_input.get("prompt", ""),
+                tool_input.get("filepath"),
+                tool_input.get("model", "unknown"),
+            )
+
+        else:
+            return {"error": f"Unknown tool: {tool_name}"}
+
+
+def main():
+    """MCP server main loop."""
+    server = OpenCodeRAGServer()
+    logger.info("OpenCode RAG MCP Server starting...")
+
+    # Read from stdin, process requests, write to stdout
+    while True:
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                break
+
+            request = json.loads(line)
+            request_id = request.get("id")
+            method = request.get("method")
+
+            if method == "tools/list":
+                response = {
+                    "id": request_id,
+                    "result": {"tools": server.tools},
+                }
+
+            elif method == "tools/call":
+                tool_name = request.get("params", {}).get("name")
+                tool_input = request.get("params", {}).get("arguments", {})
+
+                result = server.handle_tool_call(tool_name, tool_input)
+                response = {
+                    "id": request_id,
+                    "result": result,
+                }
+
+            else:
+                response = {
+                    "id": request_id,
+                    "error": {"code": -32601, "message": f"Unknown method: {method}"},
+                }
+
+            sys.stdout.write(json.dumps(response) + "\n")
+            sys.stdout.flush()
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+        except Exception as e:
+            logger.error(f"Unhandled error: {e}")
+
+
+if __name__ == "__main__":
+    main()
