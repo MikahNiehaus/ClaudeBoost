@@ -28,6 +28,7 @@ SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 WEB_SEARCH_INJECT_SENTINEL = "web_search_inject.py"
 METRICS_INJECT_SENTINEL = "metrics_inject.py"
 RAG_SEARCH_ON_EDIT_SENTINEL = "rag-search-on-edit.py"
+CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 
 
 def _say(msg: str) -> None:
