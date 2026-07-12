@@ -54,10 +54,17 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_keywords(message: str, limit: int = 5) -> list[str]:
-    """Extract search keywords from user message."""
-    stop_words = {"is", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "i", "you", "we", "they", "it", "this", "that", "be", "have", "do"}
+    """Extract search keywords from user message.
+
+    len >= 3, not > 3: confirmed the stricter cutoff drops meaningful short
+    words ("fix", "bug", "add", "run", "log"), which silently forced every
+    short message ("did u fix it") into the generic fallback query, the
+    same misleading-generic-content problem from the start of this session,
+    just from a different cause.
+    """
+    stop_words = {"is", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "i", "you", "we", "they", "it", "this", "that", "be", "have", "do", "did", "was", "are", "can"}
     words = re.findall(r'\b[a-z]+\b', message.lower())
-    keywords = [w for w in words if len(w) > 3 and w not in stop_words]
+    keywords = [w for w in words if len(w) >= 3 and w not in stop_words]
     return keywords[:limit]
 
 
@@ -319,11 +326,17 @@ def main() -> int:
     user_prompt = _read_user_prompt()
     keywords = _extract_keywords(user_prompt) if user_prompt else []
 
-    if keywords:
-        search_query = " ".join(keywords)
-    else:
-        # Fallback only when there's no usable prompt text to search on
-        search_query = "code quality patterns methodology security error handling"
+    if not keywords:
+        # No usable keywords (empty prompt, or a short conversational
+        # message like "did u fix it" / "thanks" / "ok"). Confirmed this
+        # used to silently fall back to a generic OWASP/dotnet/go query,
+        # injecting content with no real relevance to what was typed — the
+        # same misleading-injection problem this whole session started
+        # from. Skip injection entirely instead of guessing.
+        logger.info(f"No usable keywords, skipping injection. prompt={user_prompt!r}")
+        return 0
+
+    search_query = " ".join(keywords)
 
     rag_results, is_healthy, server_web_results = _search_rag(search_query, port, limit=10)
 
