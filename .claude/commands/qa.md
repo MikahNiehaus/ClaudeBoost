@@ -698,7 +698,7 @@ Before writing TCs for any external embed:
 1. **Detect whether the SDK immediately errors after page load.** Navigate to the page and observe: does an error event fire within 1-2 seconds of page load, before any user interaction? If yes, the embed URL is almost certainly wrong-format or unreachable — proceed to step 2.
 
 2. **Determine the required URL format.** Search for it in this order:
-   - RAG workspace knowledge (if SDK docs were indexed by /research-task)
+   - RAG workspace knowledge (if SDK docs were already indexed for this workspace)
    - SDK documentation for "embed URL format" or "supported URL patterns"
    - Codebase config files (appsettings.json, launchSettings.json, Azure App Config, any Settings page in the app) — look for the canonical URL format already in use
    - Key question: does the embed URL point at the same service that issued the credentials for this SDK? If the credentials come from ServiceX, the embed URL must also point at ServiceX — not at a share link, proxy, or unrelated domain.

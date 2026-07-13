@@ -29,7 +29,6 @@
   <agent name="database-agent"/>
   <agent name="rag-indexing-agent"/>
   <agent name="e2e-agent"/>
-  <agent name="research-rag-agent"/>
 </default-sonnet>
 
 <decision-tree><![CDATA[

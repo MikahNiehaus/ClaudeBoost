@@ -103,6 +103,7 @@ def main() -> int:
         _FLAG.write_text(
             json.dumps({
                 "flagged_at": datetime.now(timezone.utc).isoformat(),
+                "cwd": os.getcwd(),
                 "tool_name": tool_input.get("description", "Task"),
                 "finding_summary": tool_response[:500],
             }),

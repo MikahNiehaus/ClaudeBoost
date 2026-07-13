@@ -10,10 +10,12 @@ Run it directly:
     python scripts/uninstall.py --purge      # also remove pip pkg, indexes, PATH, shared MCPs
 
 Default scope (no --purge) removes only ClaudeBoost's own footprint:
-  - CB hooks, env vars, statusLine, and the permission entries setup added,
-    out of ~/.claude/settings.json
+  - CB and clean-rag hooks, env vars, statusLine, and the permission entries
+    setup added, out of ~/.claude/settings.json
   - the ~/.claude symlinks (CLAUDE.md, commands) and copied files
     (ensure-setup.py, claudeboost-home.txt)
+  - the clean-rag user assets clean-rag/install.py drops in ~/.claude: the
+    hook-run.py launcher, the research and triage agents, and the research skills
   - the rag-server MCP registration (legacy)
   - stops the running RAG HTTP daemon and clears its temp sentinel
 
@@ -122,7 +124,16 @@ def _setup_permission_sets() -> tuple[list[str], list[str], str]:
 # Hooks installed by setup all run through "$CLAUDEBOOST_PYTHON" / live under
 # "$CLAUDEBOOST_HOME". Prompt-type hooks carry these sentinel phrases. Both lists
 # below identify a hook as ClaudeBoost's so we remove only what setup added.
-_CB_COMMAND_MARKERS = ("CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "ensure-setup.py", "rag-statusline", "proof-gate.py")
+_CB_COMMAND_MARKERS = (
+    "CLAUDEBOOST_HOME", "CLAUDEBOOST_PYTHON", "ensure-setup.py", "rag-statusline",
+    # Legacy clean-rag marker, kept so older installs still get cleaned.
+    "proof-gate.py",
+    # Current clean-rag hooks. install.py wraps each one through hook-run.py, so
+    # the launcher marker alone catches them all, but list the hook filenames too
+    # in case an unwrapped registration is ever left behind.
+    "hook-run.py", "research-gate.py", "research-record.py", "rag-enforce.py",
+    "reindex-after-edit.py", "code-pattern-inject.py", "graph-context-inject.py",
+)
 _CB_PROMPT_SENTINELS = (
     "Quality-first routing",
     "CONSULT vs AUTO",
@@ -328,6 +339,36 @@ def remove_claude_files() -> None:
             (_plan if DRY_RUN else _ok)(f"remove {name}" if DRY_RUN else f"removed {name}")
         else:
             _skip(f"~/.claude/{name} not present")
+
+    # clean-rag user assets, dropped into ~/.claude by clean-rag/install.py's
+    # install_user_assets(): the hook launcher, the two research agents, and the
+    # two research skills. clean-rag has no uninstaller of its own, so we clean
+    # them here as part of the shared footprint.
+    launcher = CLAUDE_DIR / "hook-run.py"
+    if launcher.exists():
+        _unlink(launcher)
+        (_plan if DRY_RUN else _ok)("remove hook-run.py" if DRY_RUN else "removed hook-run.py")
+    else:
+        _skip("~/.claude/hook-run.py not present")
+
+    for agent_name in ("research-agent.md", "triage-agent.md"):
+        p = CLAUDE_DIR / "agents" / agent_name
+        if p.exists():
+            _unlink(p)
+            (_plan if DRY_RUN else _ok)(f"remove agents/{agent_name}" if DRY_RUN
+                                        else f"removed agents/{agent_name}")
+        else:
+            _skip(f"~/.claude/agents/{agent_name} not present")
+
+    for skill_name in ("research", "research-routing"):
+        d = CLAUDE_DIR / "skills" / skill_name
+        if d.is_dir():
+            if not DRY_RUN:
+                shutil.rmtree(d, ignore_errors=True)
+            (_plan if DRY_RUN else _ok)(f"remove skills/{skill_name}" if DRY_RUN
+                                        else f"removed skills/{skill_name}")
+        else:
+            _skip(f"~/.claude/skills/{skill_name} not present")
 
 
 # ---------------------------------------------------------------------------

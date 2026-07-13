@@ -14,7 +14,7 @@ Blocked skills (run code or tests against unverified findings):
   qa, workspace, explore, plan-task, create-prd, done, debug
 
 Pass-through skills (ARE the verification step, or are read-only):
-  audit, xray, security-review, graph, rag, rag-health, research-task,
+  audit, xray, security-review, graph, rag, rag-health,
   telemetry, ws, changes, visualize, speak, handoff, clear-safe
 
 Behavior:
@@ -54,7 +54,6 @@ PASSTHROUGH_SKILLS = {
     "graph",
     "rag",
     "rag-health",
-    "research-task",
     "telemetry",
     "ws",
     "changes",

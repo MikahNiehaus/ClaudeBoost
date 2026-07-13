@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""clean-rag installer. Registers hooks and optionally seeds topics.
+"""clean-rag installer. Registers hooks and sets up the environment.
 
 Usage:
-  python clean-rag/install.py                    # full install with pre-seeding
-  python clean-rag/install.py --no-seed          # skip pre-seeding (fast)
-  python clean-rag/install.py --seed react,fastapi  # seed only specific topics
+  python clean-rag/install.py                # full install
+  python clean-rag/install.py --skip-deps    # skip pip install
 """
 
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,12 +20,14 @@ CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
 # Hook sentinels: unique strings in hook commands for idempotent registration
-PROOF_GATE_SENTINEL = "proof-gate.py"
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
-STOP_SENTINEL = "CLEAN-RAG RESEARCH GATE"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
+SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
+CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
+RESEARCH_GATE_SENTINEL = "research-gate.py"
+RESEARCH_RECORD_SENTINEL = "research-record.py"
 
 
 def _say(msg: str) -> None:
@@ -62,10 +65,78 @@ def write_json(path: Path, data) -> None:
 # ---------------------------------------------------------------------------
 def ensure_directories() -> None:
     dirs = ["knowledge", "databases", "databases/_projects", "state",
-            "server", "hooks", "verifier", "research", "cli"]
+            "server", "hooks", "cli"]
     for d in dirs:
         (CLEAN_RAG_HOME / d).mkdir(parents=True, exist_ok=True)
     _ok("Directories created")
+
+
+def ensure_env_file() -> None:
+    """Seed clean-rag/.env from the template on first install.
+
+    The .env is gitignored, so a fresh checkout has none. Copy the committed
+    .env.example over, but never clobber an existing .env, that's the machine's
+    own config. config.py reads it (and a ClaudeBoost/.env one level up) at
+    startup.
+    """
+    env = CLEAN_RAG_HOME / ".env"
+    example = CLEAN_RAG_HOME / ".env.example"
+    if env.exists():
+        _ok(".env already present, left as is")
+        return
+    if not example.is_file():
+        _warn(".env.example missing, skipping .env seed")
+        return
+    shutil.copy2(example, env)
+    _ok("created clean-rag/.env from template")
+
+
+# ---------------------------------------------------------------------------
+# Copy the pieces that have to live under ~/.claude, not in the repo.
+#
+# The research agents, the two skills, and the hook launcher can't stay only in
+# the repo: Claude Code reads agents from ~/.claude/agents, skills from
+# ~/.claude/skills, and the launcher is referenced from ~/.claude/settings.json.
+# So the repo holds the canonical copies under clean-rag/portable/, and this
+# copies them into place. A clone plus one install run reproduces the whole
+# setup on a new machine, which it could not before: the hooks were wired to run
+# a launcher that nothing created and to satisfy a gate with agents that didn't
+# exist.
+# ---------------------------------------------------------------------------
+def install_user_assets() -> None:
+    portable = CLEAN_RAG_HOME / "portable"
+    if not portable.is_dir():
+        _warn("clean-rag/portable not found, skipping user asset install")
+        return
+
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _copy_file(src: Path, dst: Path) -> None:
+        if not src.is_file():
+            _warn(f"missing bundled file: {src.name}")
+            return
+        # Don't silently stomp a copy the user edited to be newer than the repo's.
+        # Note it and skip, so a local tweak survives a re-run.
+        if dst.exists() and dst.stat().st_mtime > src.stat().st_mtime:
+            _warn(f"{dst.name} in ~/.claude is newer than the repo copy, leaving it")
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
+
+    # The branch safety launcher. Lives outside the repo on purpose, so a branch
+    # switch can't remove it out from under a live hook registration.
+    _copy_file(portable / "hook-run.py", CLAUDE_DIR / "hook-run.py")
+
+    # Agents. research-agent (Sonnet) and triage-agent (Haiku).
+    for md in (portable / "agents").glob("*.md"):
+        _copy_file(md, CLAUDE_DIR / "agents" / md.name)
+
+    # Skills. Copied whole so a skill can carry more than one file later.
+    skills_src = portable / "skills"
+    if skills_src.is_dir():
+        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True)
+        _ok("installed .claude/skills (research, research-routing)")
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +161,113 @@ def install_deps() -> None:
 # ---------------------------------------------------------------------------
 # Hook registration helpers
 # ---------------------------------------------------------------------------
+
+# Lives in ~/.claude/, deliberately outside the repo, because that's the whole
+# point of it.
+HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
+
+
+def _wrap_command(command: str) -> str:
+    """Route a hook command through hook-run.py so a branch switch can't brick Claude.
+
+    Hook commands are registered in the global settings.json, which does not
+    change when you check out a different branch. The scripts they point at do
+    live in the repo. So a branch that predates a hook leaves a live registration
+    aimed at nothing, python exits 2, and Claude Code reads exit 2 from a
+    PreToolUse hook as "block this tool call". Not a warning. Every Edit, Write,
+    and Bash refused until you switch back.
+
+    Measured on this repo's real branches: switching to main breaks 4 live hooks,
+    2 of them blocking. The two feature branches break 11, with 4 blocking.
+
+    hook-run.py runs the script if it's there, exits 0 if it isn't, and passes
+    real exit codes straight through so a genuine gate can still block a genuine
+    edit. It only swallows absence.
+    """
+    if not command or ".py" not in command or "hook-run.py" in command:
+        return command
+
+    runner = str(HOOK_RUNNER).replace("\\", "/")
+
+    # Split the interpreter off the front, keep whatever it was.
+    match = re.match(r'^\s*("[^"]*"|\S+)\s+(.*)$', command)
+    if not match:
+        return command
+
+    interpreter, rest = match.group(1), match.group(2).strip()
+    return f'{interpreter} "{runner}" {rest}'
+
+
+def _hook_target_script(command: str) -> Path | None:
+    """The .py a hook command actually runs (ignoring the hook-run.py wrapper)."""
+    scripts = [m for m in re.findall(r'"([^"]*\.py)"', command)
+               if "hook-run.py" not in m]
+    if not scripts:
+        scripts = [m for m in re.findall(r'(\S+\.py)', command)
+                   if "hook-run.py" not in m]
+    if not scripts:
+        return None
+    raw = scripts[-1]
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    return Path(expanded.replace("\\", "/"))
+
+
+def heal_stale_hooks() -> None:
+    """Make a re-install repair a broken or stale settings.json.
+
+    Two failure modes this fixes, both seen for real:
+
+    1. A registration left over from an older install points at a script that no
+       longer exists (research-task-nudge was the one that bit). If that command
+       isn't wrapped, the missing script exits nonzero and, on a PreToolUse hook,
+       blocks the tool. So any registration whose target script is gone gets
+       pruned here.
+
+    2. A hook registered before the launcher existed runs the script directly,
+       so a later branch switch or deletion breaks it. Every remaining command
+       gets wrapped through hook-run.py, which no-ops a missing script instead of
+       breaking. Idempotent: already wrapped commands are left alone.
+
+    Runs near the end of install, and because ClaudeBoost's setup.py delegates to
+    this installer as its last step, setup.py inherits the heal for free.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.get("hooks", {})
+    if not hooks:
+        return
+
+    pruned = 0
+    wrapped = 0
+    for event, entries in list(hooks.items()):
+        kept = []
+        for entry in entries:
+            drop_entry = False
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if not cmd or ".py" not in cmd:
+                    continue
+                target = _hook_target_script(cmd)
+                if target is not None and not target.exists():
+                    # Deleted or deprecated script. Drop the whole entry so it
+                    # can't fire a missing file.
+                    drop_entry = True
+                    pruned += 1
+                    break
+                new_cmd = _wrap_command(cmd)
+                if new_cmd != cmd:
+                    h["command"] = new_cmd
+                    wrapped += 1
+            if not drop_entry:
+                kept.append(entry)
+        hooks[event] = kept
+
+    if pruned or wrapped:
+        write_json(SETTINGS_PATH, settings)
+        _ok(f"healed hooks: pruned {pruned} dead, wrapped {wrapped} through hook-run.py")
+    else:
+        _ok("hooks healthy: none dead, all wrapped")
+
+
 def _register_hook(
     settings: dict,
     hook_type: str,
@@ -107,6 +285,12 @@ def _register_hook(
     hook_list = hooks.get(hook_type, [])
     if not isinstance(hook_list, list):
         hook_list = []
+
+    # Every registration funnels through here, so wrapping in this one place
+    # covers hooks that don't exist yet too.
+    for h in hook_entry.get("hooks", []):
+        if "command" in h:
+            h["command"] = _wrap_command(h["command"])
 
     new_cmd = ""
     for h in hook_entry.get("hooks", []):
@@ -145,21 +329,6 @@ def _register_hook(
     _ok(f"{label} registered ({hook_type})")
 
 
-# ---------------------------------------------------------------------------
-# Step 3: Register proof gate hook (PreToolUse)
-# ---------------------------------------------------------------------------
-def register_proof_gate_hook() -> None:
-    settings = read_json(SETTINGS_PATH)
-    # Use env var for portability across machines
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/proof-gate.py"'
-    hook_entry = {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": hook_command}],
-    }
-    _register_hook(
-        settings, "PreToolUse", PROOF_GATE_SENTINEL,
-        hook_entry, prepend=True, label="proof-gate",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +356,56 @@ def set_env_var() -> None:
     settings = read_json(SETTINGS_PATH)
     env = settings.setdefault("env", {})
     env["CLEAN_RAG_HOME"] = CLEAN_RAG_HOME.as_posix()
+    # Default proof-gate to batched (once-per-turn) checking everywhere, not
+    # just for local models. proof-gate.py's own default is "pretooluse"
+    # (blocks every Edit/Write/MultiEdit individually) unless this env var
+    # says otherwise -- "stop" defers checking to the Stop hook instead.
+    # Settings.json's env block is visible to hook subprocesses (confirmed
+    # by LocalAI's manage-claude-settings.ps1, which sets this same var to
+    # gate local-model burst writes), so no real OS-level env var is needed
+    # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
+    # Code's own autocompact logic can't see through settings.json.
+    env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+
+
+def protect_research_state() -> None:
+    """Deny the Edit/Write tools on the research gate's state directory.
+
+    Front door lock for the tamper evidence. state/research/ holds the turn
+    stamps and the hash chained audit log, all machine written. Nothing has a
+    legitimate reason to edit them by hand, so denying the model's Edit/Write
+    tools there stops the reflexive "just write the stamp" shortcut and shows a
+    block message instead, which is the moment it should spawn research instead.
+
+    This is a speed bump, not a wall. The harness enforces deny on its own file
+    tools, but a python subprocess run through Bash can still open the file, so
+    a determined bypass remains. That's fine: the hash chained audit
+    (cli/audit.py verify) makes any bypass permanent and greppable. Cheap lock
+    plus audit, the same shape as chattr +a over an append only log. Verified
+    worth keeping via /research this session (defense in depth, non adversarial
+    threat model, zero false positives).
+
+    Idempotent: adds each rule only if absent.
+    """
+    settings = read_json(SETTINGS_PATH)
+    deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+    rules = [
+        "Edit(**/clean-rag/state/research/**)",
+        "Write(**/clean-rag/state/research/**)",
+    ]
+    added = 0
+    for rule in rules:
+        if rule not in deny:
+            deny.append(rule)
+            added += 1
+    if added:
+        write_json(SETTINGS_PATH, settings)
+        _ok(f"research state protected ({added} deny rule(s) added)")
+    else:
+        _ok("research state deny rules already present")
+    _ok("CLEAN_RAG_GATE_MODE defaulted to 'stop' (batched proof-checking once per turn)")
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +414,10 @@ def set_env_var() -> None:
 def register_session_prompt() -> None:
     # SessionStart: prompt-type hooks are NOT supported (SessionStart fires before any conversation)
     # Enforcement moved to:
-    #   - UserPromptSubmit: rag-enforce.py (injects mandate + topic tree every turn)
-    #   - Stop: research-stop-gate (blocks unresearched responses)
-    #   - PreToolUse: proof-gate.py (blocks edits without proof)
+    #   UserPromptSubmit: rag-enforce.py (real query search, web fallback, git auto index every turn)
+    #   PreToolUse: code-pattern-inject.py, rag-search-on-edit.py (forced research before edits)
     # No hook registered here.
-    _ok("SessionStart enforcement via UserPromptSubmit + Stop hooks")
+    _ok("SessionStart enforcement via UserPromptSubmit + PreToolUse hooks")
 
 
 # ---------------------------------------------------------------------------
@@ -238,165 +454,139 @@ def register_reindex_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5d: Register Stop hook (research gate) — prompt type for actual enforcement
+# Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
-def register_stop_hook() -> None:
-    settings = read_json(SETTINGS_PATH)
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    prompt_text = (
-        "CLEAN-RAG RESEARCH GATE: Did Claude cite research in this response?\n\n"
-        "PASS (ok: true) ONLY if:\n"
-        "- Claude cited specific RAG results (topic name + score from "
-        "POST http://127.0.0.1:{port}/search), OR\n"
-        "- Claude cited specific direct research (named files read, "
-        "Grep results shown, WebSearch results referenced), OR\n"
-        "- Response is a short clarification question asking the user "
-        "for input (no factual claims), OR\n"
-        "- Response is pure task coordination: 'I will do X next', "
-        "status of running commands, acknowledging instructions, OR\n"
-        "- Response is ONLY executing tools (file ops, tests, commands) "
-        "with no technical explanation attached\n\n"
-        "FAIL (ok: false) if ANY of these:\n"
-        "- Any factual statement about how a technology, library, "
-        "framework, or protocol works without citing a source\n"
-        "- Any code pattern, architecture, or approach recommendation "
-        "without citing where it came from\n"
-        "- Any explanation of existing code that adds interpretation "
-        "beyond what the code literally says, without research\n"
-        "- Any 'best practice' or 'you should' statement without "
-        "a cited source\n"
-        "- Describing trade-offs between approaches without research\n"
-        "- Using phrases like 'typically', 'generally', 'usually', "
-        "'in most cases' as substitutes for actual research\n\n"
-        "Be strict. When in doubt, FAIL. The cost of one extra search "
-        "is low. The cost of ungrounded advice is high.\n\n"
-        "When failing, set reason to: "
-        "'You made factual claims without citing research. "
-        "Search first: POST http://127.0.0.1:{port}/search "
-        "then cite topic:score before responding.'"
-    ).format(port=port)
+def register_spec_compliance_gate_hook() -> None:
+    """Register the spec-compliance Stop hook.
 
+    Always registered, default on -- cheap (regex only, no LLM call) with
+    no false-block risk beyond the fixed keyword list in
+    scripts/spec-compliance-gate.py. Checks whether a technology named in
+    the task prompt (react, vue, typescript, etc.) shows up anywhere in
+    the files changed this session; proof-gate.py has no equivalent check
+    since it only verifies edits are research-backed, not that they
+    satisfy what was actually asked for.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
     hook_entry = {
-        "hooks": [{"type": "prompt", "prompt": prompt_text}],
+        "hooks": [{"type": "command", "command": hook_command}],
     }
     _register_hook(
-        settings, "Stop", STOP_SENTINEL,
-        hook_entry, label="research-stop-gate",
+        settings, "Stop", SPEC_COMPLIANCE_GATE_SENTINEL,
+        hook_entry, label="spec-compliance-gate",
     )
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Pre-seed topic databases (optional)
+# Step 5i: Configure web search env vars
 # ---------------------------------------------------------------------------
-def seed_topics(topic_filter: list[str] | None = None) -> None:
-    # Add clean-rag root to sys.path so research/ is importable
-    import sys as _sys
-    _crag_root = str(CLEAN_RAG_HOME)
-    if _crag_root not in _sys.path:
-        _sys.path.insert(0, _crag_root)
-    from research.source_map import SEED_TOPICS
+def configure_web_search_env() -> None:
+    """Set web search configuration env vars in settings.json."""
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
 
-    topics_to_seed = SEED_TOPICS
-    if topic_filter:
-        topics_to_seed = [t for t in SEED_TOPICS if t["topic"] in topic_filter]
+    env.setdefault("CLEAN_RAG_WEB_SEARCH", "true")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_TIMEOUT", "4.0")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_MAX_RESULTS", "3")
+    env.setdefault("CLEAN_RAG_WEB_SEARCH_THRESHOLD", "0.4")
 
-    if not topics_to_seed:
-        _warn("No matching seed topics found")
-        return
+    write_json(SETTINGS_PATH, settings)
+    _ok("Web search env vars configured (can be overridden in settings.json)")
 
-    # Group by category for organized output
-    by_category: dict[str, list] = {}
-    for entry in topics_to_seed:
-        cat = entry.get("category", "uncategorized")
-        by_category.setdefault(cat, []).append(entry)
 
-    total = len(topics_to_seed)
-    _say(f"Pre-seeding {total} topics across {len(by_category)} categories...")
+# ---------------------------------------------------------------------------
+# Step 5k: Configure metrics env vars
+# ---------------------------------------------------------------------------
+def configure_metrics_env() -> None:
+    """Set code quality metrics configuration env vars in settings.json.
 
-    seeded = 0
-    indexed = 0
-    failed = 0
-    for cat, entries in sorted(by_category.items()):
-        _say(f"\n  [{cat}/] ({len(entries)} topics)")
-        for entry in entries:
-            topic = entry["topic"]
-            repo = entry["repo"]
-            path = entry["path"]
-            extensions = entry.get("extensions", ".md,.mdx,.rst")
-            category = entry.get("category", "uncategorized")
+    METRICS_CACHE_DIR/TTL are genuinely used by server/metrics.py (real,
+    working code behind the code_metrics MCP tool). CLEAN_RAG_METRICS_INJECT
+    itself has no remaining consumer — metrics_inject.py was dead code
+    (wrong hook signature, confirmed to never actually run) and has been
+    removed; git-root auto-index detection was folded into rag-enforce.py.
+    """
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
 
-            # Tree path: knowledge/<category>/<topic>/
-            kb_dir = CLEAN_RAG_HOME / "knowledge" / category / topic
+    env.setdefault("METRICS_CACHE_DIR", "state/metrics-cache")
+    env.setdefault("METRICS_CACHE_TTL", "3600")
 
-            # Check if already cloned (has 5+ files)
-            already_cloned = False
-            if kb_dir.exists():
-                existing = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
-                if existing >= 5:
-                    already_cloned = True
-                    seeded += 1
+    write_json(SETTINGS_PATH, settings)
+    _ok("Metrics env vars configured (can be overridden in settings.json)")
 
-            # Clone if needed
-            if not already_cloned:
-                _say(f"    {topic} <- {repo}")
-                try:
-                    from research.clone_docs import clone_docs
-                    extensions_set = {e.strip() for e in extensions.split(",")}
-                    branch = entry.get("branch", "main")
-                    stats = clone_docs(
-                        repo=repo, docs_path=path, topic=topic,
-                        branch=branch, extensions=extensions_set, kb_dir=kb_dir,
-                    )
-                    seeded += 1
-                    _ok(f"    {topic}: {stats['files_copied']} files -> knowledge/{category}/{topic}/")
-                    if stats["errors"]:
-                        for err in stats["errors"][:3]:
-                            _warn(f"      {err}")
-                except Exception as e:
-                    failed += 1
-                    _warn(f"    {topic}: {e}")
-                    continue
 
-            # Index into ChromaDB (skip if already indexed)
-            chroma_dir = CLEAN_RAG_HOME / "databases" / category / topic / "chroma"
-            if chroma_dir.exists():
-                if already_cloned:
-                    _ok(f"    {topic}: already seeded and indexed")
-                else:
-                    _ok(f"    {topic}: already indexed")
-                indexed += 1
-                continue
+# ---------------------------------------------------------------------------
+# Step 5m: Register code pattern inject hook (PreToolUse) — enforce on Claude
+# ---------------------------------------------------------------------------
+def register_code_pattern_inject_hook() -> None:
+    """Register hook to enforce pattern detection + research before edits.
 
-            # Only index if knowledge dir has files
-            if not kb_dir.exists():
-                continue
-            file_count = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
-            if file_count < 1:
-                continue
+    This blocks CLAUDE from editing without automatic pattern detection
+    and research injection. Non-blocking in background threads.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", CODE_PATTERN_INJECT_SENTINEL,
+        hook_entry, label="code-pattern-inject",
+    )
 
-            try:
-                from server.indexing import index_topic
-                # Load embedding model once on first index
-                if not hasattr(seed_topics, '_embedder'):
-                    _say("    Loading embedding model (one-time)...")
-                    from server.embedding import SentenceTransformerEmbedding
-                    from server.config import EMBEDDING_MODEL
-                    seed_topics._embedder = SentenceTransformerEmbedding(EMBEDDING_MODEL)
-                    _ok("    Embedding model loaded")
-                _say(f"    {topic}: indexing {file_count} files...")
-                result = index_topic(topic, embedder=seed_topics._embedder, category=category)
-                chunks = result.get("chunks_created", 0)
-                ram = result.get("ram_mb", 0)
-                indexed += 1
-                _ok(f"    {topic}: indexed ({chunks} chunks, RAM={ram} MB)")
-            except Exception as e:
-                _warn(f"    {topic}: indexing failed: {e}")
 
-            # GC between topics to prevent RAM accumulation
-            import gc
-            gc.collect()
+# ---------------------------------------------------------------------------
+# The research gate. Blocks a code edit unless a research or triage agent has
+# actually run and declared that it covered this file.
+#
+# Prepended, because it should refuse before the other pre edit hooks bother
+# doing their searches. No point injecting research context into an edit that
+# is about to be blocked anyway.
+# ---------------------------------------------------------------------------
+def register_research_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", RESEARCH_GATE_SENTINEL,
+        hook_entry, prepend=True, label="research-gate",
+    )
 
-    _say(f"\n  Seeding complete: {seeded} cloned, {indexed} indexed, {failed} failed out of {total}")
+
+# ---------------------------------------------------------------------------
+# The other half of the gate: stamps the turn record when a research or triage
+# agent finishes. Without this the gate has nothing to check and blocks
+# everything, so the two are useless apart.
+# ---------------------------------------------------------------------------
+def register_research_record_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-record.py"'
+    hook_entry = {
+        "matcher": "Task|Agent",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", RESEARCH_RECORD_SENTINEL,
+        hook_entry, label="research-record",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5n: Configure code pattern injection environment
+# ---------------------------------------------------------------------------
+def configure_code_pattern_inject_env() -> None:
+    """Enable pattern-based research injection on all Claude edits."""
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
+    env.setdefault("CLEAN_RAG_PATTERN_INJECT", "true")
+    write_json(SETTINGS_PATH, settings)
+    _ok("Code pattern injection enabled (CLEAN_RAG_PATTERN_INJECT=true)")
 
 
 def setup_gpu_memory_manager():
@@ -428,8 +618,8 @@ def setup_gpu_memory_manager():
         # Configure Python embedding settings with GPU memory awareness
         try:
             from server.embedding import configure_gpu_aware_embedding
-            from server.config import EMBEDDING_MODEL
-            configure_gpu_aware_embedding(EMBEDDING_MODEL)
+            from server.config import CODE_EMBEDDING_MODEL
+            configure_gpu_aware_embedding(CODE_EMBEDDING_MODEL)
             _ok("GPU-aware embedding configured for dynamic batch sizing")
         except Exception as e:
             _say(f"Optional: GPU-aware embedding setup: {e}")
@@ -445,10 +635,6 @@ def setup_gpu_memory_manager():
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Install clean-rag")
-    parser.add_argument("--no-seed", action="store_true",
-                        help="Skip pre-seeding topic databases")
-    parser.add_argument("--seed", default="",
-                        help="Comma-separated list of topics to seed (default: all)")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
     args = parser.parse_args()
@@ -461,6 +647,11 @@ def main():
     # Step 1
     print("Step 1: Creating directories...")
     ensure_directories()
+    ensure_env_file()
+
+    # Step 1b
+    print("\nStep 1b: Installing agents, skills, and the hook launcher into ~/.claude...")
+    install_user_assets()
 
     # Step 2
     if not args.skip_deps:
@@ -470,15 +661,18 @@ def main():
         print("\nStep 2: Skipped (--skip-deps)")
 
     # Step 3
-    print("\nStep 3: Registering proof gate hook...")
-    register_proof_gate_hook()
+    print("\nStep 3: Registering the research gate...")
+    register_research_gate_hook()
+    register_research_record_hook()
 
+    # Step 3b
     print("\nStep 3b: Registering graph-context-inject hook...")
     register_graph_context_hook()
 
     # Step 4
     print("\nStep 4: Setting environment variables...")
     set_env_var()
+    protect_research_state()
 
     # Step 5
     print("\nStep 5: Registering session prompt...")
@@ -492,21 +686,36 @@ def main():
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
 
-    # Step 5d
-    print("\nStep 5d: Registering research stop gate...")
-    register_stop_hook()
-
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")
     setup_gpu_memory_manager()
 
-    # Step 6
-    if not args.no_seed:
-        print("\nStep 6: Pre-seeding topic databases...")
-        topic_filter = [t.strip() for t in args.seed.split(",") if t.strip()] if args.seed else None
-        seed_topics(topic_filter)
-    else:
-        print("\nStep 6: Skipped (--no-seed)")
+    # Step 5f
+    print("\nStep 5f: Registering spec-compliance-gate hook...")
+    register_spec_compliance_gate_hook()
+
+    # Step 5i
+    print("\nStep 5i: Configuring web search environment variables...")
+    configure_web_search_env()
+
+    # Step 5k
+    print("\nStep 5k: Configuring metrics environment variables...")
+    configure_metrics_env()
+
+    # Step 5m
+    print("\nStep 5m: Registering code-pattern-inject hook (enforce on Claude)...")
+    register_code_pattern_inject_hook()
+
+    # Step 5n
+    print("\nStep 5n: Configuring code pattern injection environment...")
+    configure_code_pattern_inject_env()
+
+    # Step 6: heal a stale settings.json from an older install. Runs LAST so it
+    # sees every hook this run registered, prunes any that point at a deleted
+    # script, and wraps the rest through hook-run.py. This is what stops a
+    # re-install inheriting a broken hook (research-task-nudge was the real one).
+    print("\nStep 6: Healing hook registrations...")
+    heal_stale_hooks()
 
     print()
     print("=" * 60)
@@ -514,16 +723,14 @@ def main():
     print()
     print(f"  Home:    {CLEAN_RAG_HOME}")
     print(f"  Hooks:")
-    print(f"    PreToolUse:        proof-gate.py (blocks edits without proof)")
-    print(f"    PreToolUse:        graph-context-inject.py (auto-fetches caller context + reflective nudge, never blocks)")
-    print(f"    UserPromptSubmit:  rag-enforce.py (injects topic tree every turn)")
+    print(f"    PreToolUse:        graph-context-inject.py (auto-fetches caller context)")
+    print(f"    PreToolUse:        code-pattern-inject.py (forces research on Edit/Write/MultiEdit)")
+    print(f"    UserPromptSubmit:  rag-enforce.py (real-query search, web fallback, git auto-index)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
-    print(f"    Stop:              research-stop-gate (blocks unresearched responses)")
-    print(f"    SessionStart:      enforcement rules prompt")
     print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
     print()
-    print("Start the server, then every code edit will require verified proof.")
+    print("Start the server to enable RAG-backed research and code quality metrics injection.")
     print("GPU memory manager provides dynamic batch sizing for embeddings.")
     print("=" * 60)
 

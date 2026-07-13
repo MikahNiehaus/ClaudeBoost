@@ -36,7 +36,7 @@ esac
 ```
 
 **Output interpretation:**
-- **start**: Reports PID and port, waits for readiness
+- **start**: Reports PID and port, waits for readiness. For auto restart on crash, start clean-rag through the supervisor instead: `python scripts/rag-supervisor.py start` (or `/rag`).
 - **stop**: Reports termination, cleans up PID file
 - **status**: Shows embedding models, topics, projects, uptime
 

@@ -6,8 +6,8 @@ RAG tier briefing into the session: workspace path, project path, full tier
 breakdown with token budgets, and Tier 3c status (EXISTS vs NOT BUILT).
 
 This gives Claude a clear picture of what context is available before it
-calls POST /context or spawns agents. When Tier 3c is missing, it nudges
-to run /research-task before delegating to implementation agents.
+calls POST /context or spawns agents. Tier 3c task research is built
+automatically by the research gate as agents edit code.
 
 Silent when no workspace is active.
 """
@@ -110,8 +110,8 @@ def main() -> int:
         t3c_line = f"  Tier 3c  Task research           ~400 tok  [EXISTS - {t3c_files} index files]\n"
         t3c_action = "Tier 3c is ready. Task research auto-loads when workspace_path is in /context.\n"
     else:
-        t3c_line = f"  Tier 3c  Task research           ~400 tok  [NOT BUILT - run /research-task {workspace_id}]\n"
-        t3c_action = f"Tier 3c is NOT BUILT. Run /research-task {workspace_id} before delegating to implementation agents.\n"
+        t3c_line = "  Tier 3c  Task research           ~400 tok  [NOT BUILT - research gate builds it on code edits]\n"
+        t3c_action = "Tier 3c is NOT BUILT yet. The research gate builds it automatically as agents edit code.\n"
 
     project_info = ""
     if project_path:

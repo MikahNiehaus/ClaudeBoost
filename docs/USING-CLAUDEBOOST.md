@@ -56,7 +56,6 @@ Most slash commands are used internally by agents — you rarely call them direc
 | `/audit` | Verify a plan, a config, a document, or agent output |
 | `/index-project` | Once per project, then after major structural changes |
 | `/qa` | Full QA session — browser testing with screenshot evidence (auto-detects server), or general code/artifact QA with `--code` / file path / workspace ID. Both modes write a report with explicit coverage gaps. |
-| `/research-task` | Before implementing against an external API or unfamiliar library — pass URLs for manual curation or `--approve` for the approval gate |
 
 Everything else in the tables below is available, but most of it runs automatically — you won't need to invoke it by name unless you have a specific reason.
 
@@ -82,7 +81,6 @@ Everything else in the tables below is available, but most of it runs automatica
 | `/create-prd` | Generates a PRD and task checklist for large features or new subsystems (>15 source files or a new subsystem). | `/create-prd new notifications system` |
 | `/ws [id]` | Shows all workspaces for the current project with status and last-edited time. Pass a workspace ID or partial name to switch the active workspace. Pass `off` to clear the active workspace. | `/ws` or `/ws add-auth` |
 | `/graph [task-id]` | Builds a "Files in Scope" map by running both vector and graph RAG seeded from ticket entities. Vector search finds semantically similar files; graph search finds structural neighbors. Use at task start to get a navigation map before agents begin. | `/graph add-auth-2026-06-01` |
-| `/research-project [path] [urls]` | Reads the project's dependency files, discovers the full tech stack, and builds a deep indexed knowledge base for every technology found. Agents can then search through hundreds of authoritative docs instead of guessing. Run once at project start, then again after major tech additions. | `/research-project` or `/research-project /path/to/app https://docs.example.com` |
 
 
 ### Code Quality
@@ -114,7 +112,6 @@ Everything else in the tables below is available, but most of it runs automatica
 |---------|-------------|---------|
 | `/index-project` | Indexes your project's source code for semantic search. Run once per project, then again after major structural changes. | `/index-project /path/to/myapp` |
 | `/index-boost` | Reindexes ClaudeBoost's own agents and knowledge bases. Run after pulling a ClaudeBoost update. | `/index-boost` |
-| `/research-task` | Auto-discovers and indexes sources for a task from ticket entities. Pass URLs to curate sources manually; add `--approve` for the approval gate. | `/research-task my-workspace https://docs.stripe.com/webhooks` |
 
 ### Documentation
 
@@ -440,30 +437,9 @@ For a dedicated security pass on your current branch changes, use `/security-rev
 
 ### 6. Research an external API or library before implementing
 
-```
-/research-task my-feature-workspace
-/research-task my-feature-workspace https://docs.stripe.com/connect https://docs.stripe.com/api
-/research-task my-feature-workspace --approve
-```
+There's nothing to run. The research gate handles this for you. When an agent is about to edit code, the gate fires, the triage-agent decides whether the change needs research, and if it does, the research-agent digs into the relevant APIs, libraries, and patterns and makes the findings searchable during implementation. Trivial edits skip the step. It all happens automatically as you work.
 
-Builds a per-task research index from external sources and makes it searchable during implementation.
-
-**Automatic mode** (no URLs, no `--approve`): reads the ticket, extracts entities from the ticket, your project's dependency manifest, and the codebase graph, then runs multi-angle web searches across up to 6 dimensions per entity (official docs, security, performance, migration, integration, pitfalls). Indexes without pausing. Good for routine pre-task research.
-
-**Manual mode** (pass URLs or `--approve`): discovers sources the same way, then shows a source table with tier ratings (A = official docs/arxiv; B = Stack Overflow, vendor blogs; C = personal blogs). Waits for you to approve the list before indexing. You can also paste extra URLs to add to the list.
-
-**After indexing:**
-Both of these searches are mandatory on every query — the skill enforces it:
-- `POST /search scope=research` — finds content from the indexed external docs
-- `POST /search scope=codebase mode=graph` — finds structural neighbors in your own project
-
-Research finds external context the codebase doesn't have. Graph search finds what imports or inherits from the code you're about to touch. They're complementary.
-
-The index is scoped to the task — it doesn't pollute the global ClaudeBoost RAG or other task workspaces. Re-running the same task-id is incremental; unchanged sources are skipped.
-
-PDF support is automatic — pass a PDF URL directly and it gets chunked. If it's a scanned image PDF (0 chunks), you'll need an OCR'd version.
-
-For quick, one-off research (comparing two libraries, answering a specific question), just ask. That goes to `research-agent` which does a web lookup and synthesizes an answer without building a persistent index.
+For quick, one-off research (comparing two libraries, answering a specific question), just ask, or use the `/research` skill. That goes to `research-agent`, which does a web lookup and synthesizes an answer.
 
 ### 7. Index your project for semantic search
 

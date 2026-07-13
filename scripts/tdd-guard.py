@@ -28,7 +28,7 @@ _BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve(
 
 GATED_TOOLS = {"Edit", "Write", "MultiEdit"}
 
-# Directories where TDD enforcement does not apply (same as proof-gate.py:270-278)
+# Directories where TDD enforcement does not apply.
 EXEMPT_SEGMENTS = [
     "workspace",
     "knowledge",
@@ -99,7 +99,9 @@ def _get_mode() -> str:
 
 def _path_has_segment(canonical_path: str, segment: str) -> bool:
     """Check if a path contains a segment at a directory boundary.
-    Same logic as proof-gate.py:75-85.
+
+    Splits on "/" and matches whole segments so "docs" hits a docs/ dir but
+    not a docsomething.py file.
     """
     seg = segment.strip("/").lower()
     parts = canonical_path.split("/")
@@ -108,7 +110,9 @@ def _path_has_segment(canonical_path: str, segment: str) -> bool:
 
 def _is_temp_path(canonical_path: str) -> bool:
     """Check if a file is in a system temp directory.
-    Same logic as proof-gate.py:88-124.
+
+    Collects the resolved temp dirs from tempfile plus the TEMP/TMP/TMPDIR
+    env vars and /tmp, /var/tmp, then checks whether the path sits under one.
     """
     temp_dirs = set()
     try:

@@ -92,22 +92,25 @@ netstat -ano | findstr :8613
 ```
 Report the conflicting process and stop (needs user intervention).
 
-## Step 3: Topic Health Check
+## Step 3: Project Index Health Check
 
-Parse the /status response to get the topic list.
+Parse the /status response to get the list of indexed projects. clean-rag searches
+projects only now, so there are no topics to check. Each entry lists a project path
+and its vector and graph stats.
 
-For each topic:
+Run one real search against each project to confirm it returns scored results:
 ```bash
-curl -s -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"test","sources":["topic:<name>"],"limit":1}'
+curl -s -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"test","sources":["project:<abs path>"],"mode":"both","limit":1}'
 ```
 
-If a topic search returns an error (not empty results, but an actual error response):
-- The ChromaDB collection may be corrupt
-- If DIAGNOSE_ONLY: report which topic is corrupt, skip fix
-- If fixing: delete and reindex:
+If a project search returns an error (not empty results, but an actual error response):
+- The vector index or graph.db may be out of sync with the files on disk
+- If DIAGNOSE_ONLY: report which project errored, skip fix
+- If fixing: reindex it. Reindex the whole project, or just one file:
 ```bash
-curl -s -X DELETE http://127.0.0.1:8613/topics/<name>
-curl -s -X POST http://127.0.0.1:8613/index-topic -H "Content-Type: application/json" -d '{"topic":"<name>","force":true}'
+curl -s -X POST http://127.0.0.1:8613/index-project -H "Content-Type: application/json" -d '{"project_path":"<abs path>","force":true}'
+# or a single file:
+curl -s -X POST http://127.0.0.1:8613/reindex-file -H "Content-Type: application/json" -d '{"file_path":"<abs path>"}'
 ```
 
 ## Step 4: Report
@@ -115,10 +118,10 @@ curl -s -X POST http://127.0.0.1:8613/index-topic -H "Content-Type: application/
 End your response with ## Summary (under 300 words):
 - Server status: running / recovered / failed
 - Recovery action taken: none / restarted / killed+restarted / PID cleanup
-- Topics checked: N total
-- Topics healthy: N
-- Topics repaired: N (list which ones)
-- Topics failed: N (list which ones and why)
+- Projects checked: N total
+- Projects healthy: N
+- Projects reindexed: N (list which ones)
+- Projects failed: N (list which ones and why)
 - Issues needing user intervention: (port conflicts, missing models, etc.)
 - Time taken for recovery: Ns
 ```
@@ -132,7 +135,7 @@ After spawning, tell the user:
 
 | If... | Then run... |
 |-------|------------|
-| Server is fixed and you need to research a topic | `/research-rag <topic> <category>` |
+| Server is fixed and a project needs reindexing | `POST /index-project` with `{"project_path":"<abs path>","force":true}` |
 | Server keeps failing | Check `clean-rag/state/server.json` and server logs manually |
 | You want to verify the fix | `curl http://127.0.0.1:8613/status` |
 | The ClaudeBoost RAG server (8612) is also down | `/rag` (separate server, separate fix) |

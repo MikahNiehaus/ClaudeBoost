@@ -9,10 +9,8 @@ REM fallback order here, make the matching change in install.sh too (and
 REM vice versa), or the two platforms will drift out of sync silently.
 REM
 REM Usage:
-REM   clean-rag\install.bat                     :: full install with pre-seeding
-REM   clean-rag\install.bat --no-seed           :: skip pre-seeding (fast)
-REM   clean-rag\install.bat --seed react,fastapi :: seed specific topics
-REM   clean-rag\install.bat --skip-deps         :: skip pip install
+REM   clean-rag\install.bat                :: full install (idempotent, safe to re-run)
+REM   clean-rag\install.bat --skip-deps    :: skip pip install
 
 setlocal
 

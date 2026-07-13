@@ -12,6 +12,20 @@ state/server.json
 state/telemetry.jsonl
 state/debug-mode.json
 state/debug-fix-required.json
+state/*.log
+
+# Isolated venvs for heavy/conflicting dependencies (torch, transformers).
+# Confirmed this session: installing these in the shared Python env breaks
+# other projects' pinned versions (open-webui's pyarrow==20.0.0). Each
+# machine builds its own via install.py, never committed.
+.venv-router/
+.venv-coref/
+
+# Machine specific config. Each checkout keeps its own. The committed template
+# is .env.example.
+.env
+.env.*
+!.env.example
 
 # Python
 __pycache__/

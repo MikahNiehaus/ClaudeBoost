@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""clean-rag uninstaller. Removes hooks, env vars, and optionally databases.
+"""clean-rag uninstaller. Un-enforces clean-rag. Keeps your data and dependencies.
+
+Its whole job is to make sure nothing clean-rag installed is still enforcing
+anything, so editing code is never blocked by a gate whose server or agents are
+gone. It does NOT pip-uninstall anything and does NOT delete your indexes unless
+you ask.
 
 Usage:
-  python clean-rag/uninstall.py            # remove hooks + env, keep knowledge/databases
+  python clean-rag/uninstall.py            # remove hooks, env, deny rules, agents, skills
   python clean-rag/uninstall.py --purge    # also delete databases/ and state/
+
+Kept always: pip dependencies, knowledge/. Kept unless --purge: databases/, state/.
+Left in place: ~/.claude/hook-run.py, which ClaudeBoost's other hooks also use.
+ClaudeBoost's own scripts/uninstall.py owns removing that shared launcher.
 """
 
 import argparse
@@ -16,9 +25,45 @@ CLEAN_RAG_HOME = Path(__file__).resolve().parent
 CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
-HOOK_SENTINEL = "proof-gate.py"
-RAG_ENFORCE_SENTINEL = "rag-enforce.py"
+# Every hook clean-rag's install.py registers, by the inner script name. The
+# command may be wrapped through hook-run.py, so match on the substring rather
+# than the exact command. Old names kept too, so this cleans up stale installs.
+HOOK_SCRIPTS = (
+    "research-gate.py",
+    "research-record.py",
+    "rag-enforce.py",
+    "reindex-after-edit.py",
+    "code-pattern-inject.py",
+    "graph-context-inject.py",
+    "spec-compliance-gate.py",
+    # legacy, deleted this era but may linger in an old settings.json
+    "proof-gate.py",
+    "rag-search-on-edit.py",
+)
+
+# SessionStart prompt from the old proof era.
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
+
+# Env vars clean-rag's install sets. CLAUDEBOOST_* are NOT ours, leave them.
+ENV_VARS = (
+    "CLEAN_RAG_HOME",
+    "CLEAN_RAG_GATE_MODE",
+    "CLEAN_RAG_WEB_SEARCH",
+    "CLEAN_RAG_WEB_SEARCH_TIMEOUT",
+    "CLEAN_RAG_WEB_SEARCH_MAX_RESULTS",
+    "CLEAN_RAG_WEB_SEARCH_THRESHOLD",
+    "CLEAN_RAG_PATTERN_INJECT",
+)
+
+# The two permission deny rules install.py's protect_research_state adds.
+DENY_RULES = (
+    "Edit(**/clean-rag/state/research/**)",
+    "Write(**/clean-rag/state/research/**)",
+)
+
+# User assets install_user_assets copies. hook-run.py is deliberately NOT here.
+USER_AGENTS = ("research-agent.md", "triage-agent.md")
+USER_SKILLS = ("research", "research-routing")
 
 
 def _ok(msg: str) -> None:
@@ -42,112 +87,106 @@ def write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def remove_hook() -> None:
-    """Remove the proof-gate.py PreToolUse hook from settings.json."""
+def _entry_runs_a_clean_rag_hook(entry: dict) -> bool:
+    for h in entry.get("hooks", []):
+        cmd = h.get("command", "")
+        if any(script in cmd for script in HOOK_SCRIPTS):
+            return True
+    return False
+
+
+def _entry_is_session_prompt(entry: dict) -> bool:
+    for h in entry.get("hooks", []):
+        if SESSION_SENTINEL in h.get("prompt", ""):
+            return True
+    return False
+
+
+def remove_hooks() -> None:
+    """Strip every clean-rag hook registration from every event.
+
+    This is the load bearing part. If research-gate.py stays registered after an
+    uninstall, every code edit keeps getting blocked with no way to satisfy the
+    gate. Un-enforcing means removing these, full stop.
+    """
     settings = read_json(SETTINGS_PATH)
     hooks = settings.get("hooks", {})
-    pre_tool = hooks.get("PreToolUse", [])
-
-    if not isinstance(pre_tool, list):
-        _skip("PreToolUse hooks not a list")
+    if not isinstance(hooks, dict) or not hooks:
+        _skip("no hooks in settings.json")
         return
 
-    original_len = len(pre_tool)
-    filtered = []
-    for entry in pre_tool:
-        keep = True
-        for h in entry.get("hooks", []):
-            if HOOK_SENTINEL in h.get("command", ""):
-                keep = False
-                break
-        if keep:
-            filtered.append(entry)
+    removed = 0
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+        kept = []
+        for entry in entries:
+            if _entry_runs_a_clean_rag_hook(entry) or _entry_is_session_prompt(entry):
+                removed += 1
+            else:
+                kept.append(entry)
+        hooks[event] = kept
 
-    if len(filtered) < original_len:
-        hooks["PreToolUse"] = filtered
+    if removed:
         write_json(SETTINGS_PATH, settings)
-        _ok("Removed proof-gate hook from PreToolUse")
+        _ok(f"removed {removed} clean-rag hook registration(s)")
     else:
-        _skip("proof-gate hook not found in PreToolUse")
+        _skip("no clean-rag hooks registered")
 
 
-def remove_session_prompt() -> None:
-    """Remove the clean-rag SessionStart prompt."""
+def remove_deny_rules() -> None:
     settings = read_json(SETTINGS_PATH)
-    hooks = settings.get("hooks", {})
-    session = hooks.get("SessionStart", [])
-
-    if not isinstance(session, list):
-        _skip("SessionStart hooks not a list")
+    deny = settings.get("permissions", {}).get("deny", [])
+    if not isinstance(deny, list):
+        _skip("no deny list")
         return
-
-    original_len = len(session)
-    filtered = []
-    for entry in session:
-        keep = True
-        for h in entry.get("hooks", []):
-            if SESSION_SENTINEL in h.get("prompt", ""):
-                keep = False
-                break
-        if keep:
-            filtered.append(entry)
-
-    if len(filtered) < original_len:
-        hooks["SessionStart"] = filtered
+    kept = [d for d in deny if d not in DENY_RULES]
+    if len(kept) < len(deny):
+        settings["permissions"]["deny"] = kept
         write_json(SETTINGS_PATH, settings)
-        _ok("Removed clean-rag SessionStart prompt")
+        _ok(f"removed {len(deny) - len(kept)} research-state deny rule(s)")
     else:
-        _skip("clean-rag SessionStart prompt not found")
+        _skip("no research-state deny rules present")
 
 
-def remove_rag_enforce_hook() -> None:
-    """Remove the rag-enforce.py UserPromptSubmit hook from settings.json."""
-    settings = read_json(SETTINGS_PATH)
-    hooks = settings.get("hooks", {})
-    prompt_hooks = hooks.get("UserPromptSubmit", [])
-
-    if not isinstance(prompt_hooks, list):
-        _skip("UserPromptSubmit hooks not a list")
-        return
-
-    original_len = len(prompt_hooks)
-    filtered = []
-    for entry in prompt_hooks:
-        keep = True
-        for h in entry.get("hooks", []):
-            if RAG_ENFORCE_SENTINEL in h.get("command", ""):
-                keep = False
-                break
-        if keep:
-            filtered.append(entry)
-
-    if len(filtered) < original_len:
-        hooks["UserPromptSubmit"] = filtered
-        write_json(SETTINGS_PATH, settings)
-        _ok("Removed rag-enforce hook from UserPromptSubmit")
-    else:
-        _skip("rag-enforce hook not found in UserPromptSubmit")
-
-
-def remove_env_var() -> None:
-    """Remove CLEAN_RAG_HOME from settings.json env."""
+def remove_env_vars() -> None:
     settings = read_json(SETTINGS_PATH)
     env = settings.get("env", {})
-    if "CLEAN_RAG_HOME" in env:
-        del env["CLEAN_RAG_HOME"]
+    dropped = [k for k in ENV_VARS if k in env]
+    for k in dropped:
+        del env[k]
+    if dropped:
         write_json(SETTINGS_PATH, settings)
-        _ok("Removed CLEAN_RAG_HOME env var")
+        _ok(f"removed env vars: {', '.join(dropped)}")
     else:
-        _skip("CLEAN_RAG_HOME not in settings env")
+        _skip("no clean-rag env vars set")
+
+
+def remove_user_assets() -> None:
+    """Remove the agents and skills install_user_assets copied. Not hook-run.py."""
+    removed = 0
+    for name in USER_AGENTS:
+        p = CLAUDE_DIR / "agents" / name
+        if p.exists():
+            p.unlink()
+            removed += 1
+    for name in USER_SKILLS:
+        d = CLAUDE_DIR / "skills" / name
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+    if removed:
+        _ok(f"removed {removed} agent/skill asset(s) from ~/.claude")
+    else:
+        _skip("no clean-rag agents/skills in ~/.claude")
+    _skip("left ~/.claude/hook-run.py in place (shared launcher, ClaudeBoost owns it)")
 
 
 def stop_server() -> None:
-    """Stop the clean-rag server if running."""
     server_json = CLEAN_RAG_HOME / "state" / "server.json"
     if not server_json.exists():
-        _skip("No server PID file")
+        _skip("no server PID file")
         return
-
     try:
         import os
         import signal
@@ -157,65 +196,64 @@ def stop_server() -> None:
         if pid:
             try:
                 os.kill(pid, signal.SIGTERM)
-                _ok(f"Sent SIGTERM to server PID {pid}")
+                _ok(f"sent SIGTERM to server PID {pid}")
             except (OSError, ProcessLookupError):
-                _skip(f"Server PID {pid} not running")
+                _skip(f"server PID {pid} not running")
         server_json.unlink(missing_ok=True)
     except Exception as e:
-        _skip(f"Could not stop server: {e}")
+        _skip(f"could not stop server: {e}")
 
 
 def purge_data() -> None:
-    """Delete databases/ and state/ directories."""
-    for dirname in ["databases", "state"]:
+    for dirname in ("databases", "state"):
         target = CLEAN_RAG_HOME / dirname
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
-            _ok(f"Deleted {dirname}/")
+            _ok(f"deleted {dirname}/")
         else:
             _skip(f"{dirname}/ not found")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Uninstall clean-rag")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Un-enforce clean-rag. Keeps data and deps.")
     parser.add_argument("--purge", action="store_true",
-                        help="Also delete databases/ and state/ (keeps knowledge/)")
+                        help="also delete databases/ and state/ (keeps knowledge/)")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("clean-rag uninstaller")
+    print("clean-rag uninstaller (un-enforce, keep data and dependencies)")
     print("=" * 60)
     print()
 
     print("Step 1: Stopping server...")
     stop_server()
 
-    print("\nStep 2: Removing proof-gate hook...")
-    remove_hook()
+    print("\nStep 2: Removing hook registrations...")
+    remove_hooks()
 
-    print("\nStep 3: Removing SessionStart prompt...")
-    remove_session_prompt()
+    print("\nStep 3: Removing research-state deny rules...")
+    remove_deny_rules()
 
-    print("\nStep 3b: Removing rag-enforce hook...")
-    remove_rag_enforce_hook()
+    print("\nStep 4: Removing clean-rag env vars...")
+    remove_env_vars()
 
-    print("\nStep 4: Removing CLEAN_RAG_HOME env var...")
-    remove_env_var()
+    print("\nStep 5: Removing agents and skills from ~/.claude...")
+    remove_user_assets()
 
     if args.purge:
-        print("\nStep 5: Purging databases and state...")
+        print("\nStep 6: Purging databases/ and state/...")
         purge_data()
     else:
-        print("\nStep 5: Keeping databases/ and state/ (use --purge to remove)")
+        print("\nStep 6: Keeping databases/ and state/ (use --purge to remove)")
 
     print()
     print("=" * 60)
-    print("clean-rag uninstalled.")
+    print("clean-rag un-enforced. Nothing it installed is still gating edits.")
     print()
-    print("  Knowledge files kept at: clean-rag/knowledge/")
+    print("  Kept: pip dependencies, knowledge/")
     if not args.purge:
-        print("  Databases kept at: clean-rag/databases/")
-        print("  Run with --purge to delete databases and state.")
+        print("  Kept: databases/ and state/ (run with --purge to delete)")
+    print("  Left: ~/.claude/hook-run.py (shared; removed by ClaudeBoost uninstall)")
     print("=" * 60)
 
 

@@ -75,24 +75,59 @@ def _is_pid_alive(pid: int) -> bool:
             return False
 
 
-def start_server(port: int) -> subprocess.Popen:
-    """Launch the RAG server as a detached background process."""
+SUPERVISOR_SCRIPT = BOOST_HOME / "scripts" / "rag-supervisor.py"
+SUPERVISOR_JSON = RAG_INDEX_DIR / ".supervisor.json"
+
+
+def _supervisor_has_rag_server() -> bool:
+    """Check if the supervisor is already running and managing the RAG server."""
+    if not SUPERVISOR_JSON.exists():
+        return False
+    try:
+        state = json.loads(SUPERVISOR_JSON.read_text(encoding="utf-8"))
+        sup_pid = state.get("supervisor_pid", 0)
+        if not _is_pid_alive(sup_pid):
+            return False
+        for s in state.get("servers", []):
+            if s.get("name") == "rag-server" and s.get("alive"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def start_server(port: int) -> subprocess.Popen | None:
+    """Launch the RAG server via the supervisor for crash recovery.
+
+    Falls back to direct launch if the supervisor script is missing.
+    Returns the supervisor process (or direct server process on fallback).
+    """
+    # If supervisor already manages it, nothing to do
+    if _supervisor_has_rag_server():
+        print("RAG server already managed by supervisor.")
+        return None
+
     python = sys.executable
+
+    if SUPERVISOR_SCRIPT.exists():
+        # Launch through supervisor for auto restart on crash
+        cmd = [python, str(SUPERVISOR_SCRIPT), "start", "--only", "rag"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.returncode != 0 and result.stderr:
+            print(result.stderr.strip(), file=sys.stderr)
+        return None
+
+    # Fallback: direct launch (no crash recovery)
+    print("Warning: supervisor not found, launching directly (no auto restart).")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(RAG_SERVER_SRC)
-    # The server manages its own telemetry via _TelemetryMiddleware; it should not
-    # inherit DISABLE_TELEMETRY from the parent Claude Code session, which may have
-    # the env var set from a previous settings.json state that has since been corrected.
     env.pop("DISABLE_TELEMETRY", None)
-    # Disable tqdm/HF progress bars — they crash when stdout is a log file (closed fd)
     env["TQDM_DISABLE"] = "1"
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     env["TOKENIZERS_PARALLELISM"] = "false"
     env["TRANSFORMERS_VERBOSITY"] = "error"
-    # Windows fix: prevent OpenMP from spawning threads that conflict with the
-    # asyncio ThreadPoolExecutor. Without this, model.encode() segfaults (exit 139)
-    # when called from a thread pool thread. Batch size is always 1 for RAG queries
-    # so single-threaded BLAS has no performance cost.
     env.setdefault("OMP_NUM_THREADS", "1")
     env.setdefault("MKL_NUM_THREADS", "1")
     env.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -124,15 +159,19 @@ def main() -> int:
     args = parser.parse_args()
     port = args.port
 
-    # Check if already running
+    # Check if already running (direct process or via supervisor)
+    if _supervisor_has_rag_server() and _is_server_alive(port):
+        print(f"RAG server already running via supervisor (port={port})")
+        return 0
+
     info = _server_info()
     if info and info.get("port") == port:
         pid = info.get("pid", 0)
         if _is_pid_alive(pid) and _is_server_alive(port):
             print(f"RAG server already running (pid={pid}, port={port})")
             return 0
-        # PID gone or port not responding — stale info, restart
-        print(f"Stale server info (pid={pid}) — restarting...")
+        # PID gone or port not responding; stale info, restart
+        print(f"Stale server info (pid={pid}), restarting...")
 
     print(f"Starting RAG HTTP server on port {port}...")
     # Wait briefly for Windows to release the port after killing the old process

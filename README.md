@@ -145,9 +145,7 @@ the session, and shows recent workspaces. From there:
 /boost                   Start a session
 /ws                      Show all workspaces for this project — description + last edited
 /index-project           Index your codebase for semantic search
-/research-project        Become an expert in the full project stack (reads deps, researches each tech deeply)
 /workspace <task>        Create a workspace + implementation plan
-/research-task           Index task-specific docs into the workspace (auto or manual URL mode)
 /xray                    Quick A-F grade by default; add --deep for full 16-pass parallel review
 /qa                      Full QA session — app inventory, risk-based test plan, screenshot evidence
 /security-review         OWASP-grounded security audit
@@ -322,23 +320,11 @@ your-project/
         └── gotchas.md         # things that tripped agents up before
 ```
 
-Run `/research-project` to build it. The command reads your dependency files
-(`package.json`, `requirements.txt`, `go.mod`, etc.), extracts the full tech stack,
-then runs deep multi-angle web research on each technology — official docs, security
-advisories, performance guides, common pitfalls. Six angles per library, expert-level
-content written to KB files and reindexed permanently.
-
-The two research commands serve different purposes:
-
-| Command | When to use | Source discovery | Approval gate |
-|---------|------------|-----------------|---------------|
-| `/research-project` | Become an expert in everything the project uses | Dependency manifests → web | No (add URLs to enable) |
-| `/research-task` | Deep research for a specific ticket | Ticket entities → web | No (add `--approve` or pass URLs to enable) |
-
-Both write to indexed storage and surface in agent context automatically. The difference
-is scope and lifetime: `/research-project` builds permanent expertise for the full stack;
-`/research-task` builds per-ticket expertise that lives in the workspace only.
-Pass URLs directly to either: `/research-project /path/to/project https://docs.example.com`.
+The research gate builds it for you. When an agent is about to edit code, the gate
+fires, the research-agent digs into the technologies and patterns in play, and the
+findings land in these KB files. The triage-agent decides up front whether a change
+even needs research, so trivial edits skip the step. It all happens automatically as
+you work, no separate command to run.
 
 KB files are indexed as part of the project codebase. When relevant to a query they
 surface in `POST /context` Tier 4 results alongside source code. Run `/index-project`
@@ -385,7 +371,7 @@ Commands organized by workflow:
 `/boost` `/rag` `/rag-health` `/uninstall` `/index-project` `/index-boost` `/low-token`
 
 **Planning & Workspace**
-`/ws` `/workspace` `/create-prd` `/explore` `/research-project` `/research-task` `/graph`
+`/ws` `/workspace` `/create-prd` `/explore` `/graph`
 
 **Code Quality**
 `/xray` `/security-review` `/audit` `/self-improve` `/simplify`

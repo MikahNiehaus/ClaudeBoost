@@ -43,9 +43,9 @@
       <signal>User says: "I just cloned", "new project", "starting on this repo", "haven't worked in this before"</signal>
       <signal>No project RAG index exists for the path</signal>
     </triggers>
-    <skill>/index-project then /research-project</skill>
-    <why>/index-project enables semantic codebase search; /research-project builds domain expertise about the stack and patterns before any code changes</why>
-    <sample>What's next: since this is a new codebase, run /index-project &lt;path&gt; to enable semantic search, then /research-project to build a stack overview before making changes.</sample>
+    <skill>/index-project</skill>
+    <why>/index-project enables semantic codebase search so agents can find relevant code before any changes</why>
+    <sample>What's next: since this is a new codebase, run /index-project &lt;path&gt; to enable semantic search before making changes.</sample>
   </route>
 
   <route id="large-feature-new-subsystem">
@@ -65,9 +65,9 @@
       <signal>User says: "I'm not sure how X works", "haven't used this before", "researching", "figuring out"</signal>
       <signal>Task has external dependencies the team hasn't used yet</signal>
     </triggers>
-    <skill>/workspace then /research-task</skill>
-    <why>Builds a curated knowledge base from relevant docs and sources; agents get those docs automatically via /context so they don't guess. /workspace must come first to create the workspace-id that /research-task requires.</why>
-    <sample>What's next: run /workspace to set up a plan, then /research-task [workspace-id] to index relevant docs — agents will pull from that knowledge automatically.</sample>
+    <skill>/workspace</skill>
+    <why>Sets up a plan and workspace so agents share scope and a definition of done. The research gate handles research automatically on code edits.</why>
+    <sample>What's next: run /workspace to set up a plan. Research happens automatically through the research gate as agents edit code.</sample>
   </route>
 
   <!-- ============================================================
@@ -232,16 +232,6 @@
   <!-- ============================================================
        INDEXING / RAG
        ============================================================ -->
-
-  <route id="after-index-project">
-    <triggers>
-      <signal>User just ran /index-project successfully</signal>
-      <signal>Project RAG index was just created for the first time</signal>
-    </triggers>
-    <skill>/research-project</skill>
-    <why>Now that the codebase is indexed, /research-project builds a domain-expert summary of the stack, patterns, and conventions — agents get this context automatically</why>
-    <sample>What's next: run /research-project to build a stack overview — now that the codebase is indexed, this gives agents expert context about your project's patterns.</sample>
-  </route>
 
   <route id="rag-stale">
     <triggers>

@@ -293,19 +293,6 @@ def _active_workspace_reminder(
             f"  [1] CODEBASE NOT INDEXED - run Skill(skill='index-project', args='{project_path}')"
             f" as your FIRST action. Tiers 3+4 are offline until indexed."
         )
-    if not t3c_exists:
-        req_num = len(required_actions) + 1
-        required_actions.append(
-            f"  [{req_num}] RESEARCH NOT BUILT - run Skill(skill='research-task', args='{ws_id}')"
-            f" as your FIRST action. Tier 5 task research is offline until built."
-        )
-    if project_path and not project_kb_exists:
-        req_num = len(required_actions) + 1
-        required_actions.append(
-            f"  [{req_num}] PROJECT KB NOT BUILT - run Skill(skill='research-project', args='{project_path}')"
-            f" to build the project knowledge base. Agents will lack project-specific context until it exists."
-        )
-
     lines = []
 
     # Show candidates when detection is ambiguous
@@ -624,7 +611,7 @@ def main() -> int:
         "Do not let findings accumulate in context only. "
         "(G) Dynamic RAG tiers — POST /context loads knowledge in layers. "
         "project_path enables Tier 3 stack-boosted knowledge + Tier 4 codebase search. "
-        "workspace_path enables Tier 3c task research (built by /research-task). "
+        "workspace_path enables Tier 3c task research. "
         "Omit a param and that tier is skipped. "
         "Always pass both when you have them. "
         "If no workspace exists yet, pass project_path alone to get Tier 3 + Tier 4. "
