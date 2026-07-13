@@ -4,8 +4,9 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -25,6 +26,48 @@ DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 
 # User agent to avoid blocks
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# Source quality ranking. There was no filtering here at all before, results
+# came back in DuckDuckGo's raw order, which routinely put SEO content farms
+# above primary sources. Primary sources first, content farms last.
+PREFERRED_DOMAINS = (
+    "github.com",
+    "githubusercontent.com",
+    "stackoverflow.com",
+    "stackexchange.com",
+    "developer.mozilla.org",
+    "docs.python.org",
+    "react.dev",
+    "developer.chrome.com",
+    "web.dev",
+    "arxiv.org",
+)
+
+# Not banned, just ranked below anything else. These are scraped, ad heavy, and
+# frequently wrong on the details, but they occasionally cover a topic nothing
+# else does, so dropping them outright loses real coverage.
+DEMOTED_DOMAINS = (
+    "w3schools.com",
+    "geeksforgeeks.org",
+    "tutorialspoint.com",
+    "javatpoint.com",
+    "codegrepper.com",
+)
+
+
+def _source_rank(url: str) -> int:
+    """Lower is better. Used to sort results before truncating to max_results."""
+    host = urlparse(url).netloc.lower()
+    if any(host == d or host.endswith("." + d) for d in PREFERRED_DOMAINS):
+        return 0
+    if any(host == d or host.endswith("." + d) for d in DEMOTED_DOMAINS):
+        return 2
+    return 1
+
+
+def _rank_by_source(results: list) -> list:
+    """Sort by source quality, keeping the engine's own relevance order within a tier."""
+    return sorted(results, key=lambda r: _source_rank(r.get("url", "")))
 
 
 def web_search(
@@ -112,7 +155,7 @@ def web_search(
 
         if results:
             return {
-                "results": results[:max_results],
+                "results": _rank_by_source(results)[:max_results],
                 "error": None,
             }
 
@@ -171,8 +214,12 @@ def _web_search_html(query: str, max_results: int, timeout: float) -> dict:
             re.DOTALL,
         )
 
+        # Take a wider slice than we need. Source ranking below can only promote
+        # a primary source into the top N if it actually fetched that far down.
+        candidate_limit = max(max_results * 4, 12)
+
         results = []
-        for raw_url, raw_title, raw_snippet in result_blocks[:max_results]:
+        for raw_url, raw_title, raw_snippet in result_blocks[:candidate_limit]:
             url = _extract_redirect_target(raw_url)
             title = _clean_snippet(raw_title)
             snippet = _clean_snippet(raw_snippet)
@@ -182,7 +229,7 @@ def _web_search_html(query: str, max_results: int, timeout: float) -> dict:
         if not results:
             logger.warning("HTML search returned no parseable results for query: %s", query)
 
-        return {"results": results, "error": None}
+        return {"results": _rank_by_source(results)[:max_results], "error": None}
 
     except httpx.TimeoutException:
         return {"results": [], "error": f"HTML web search timed out after {timeout}s"}
@@ -204,7 +251,20 @@ def _extract_redirect_target(raw_url: str) -> str:
 
 
 def _clean_snippet(text: str) -> str:
-    """Clean HTML entities and truncate snippet."""
+    """Clean HTML entities, strip hidden characters, truncate.
+
+    These snippets get injected straight into a model's context, so they're an
+    indirect prompt injection surface. Stripping HTML tags isn't enough on its
+    own: the standard trick is to hide instructions in zero width characters or
+    homoglyphs, which sail right through tag removal and stay invisible to
+    anyone eyeballing the output. NFKC folds homoglyphs to their canonical
+    forms, and the explicit strip below kills the zero width and bidi control
+    characters NFKC leaves alone.
+
+    This is one layer, not a fix. The injected block is also labelled as
+    untrusted reference data (see the hook formatters), because sanitizing
+    text you're going to feed to a model is leaky by nature.
+    """
     if not text:
         return ""
 
@@ -214,6 +274,16 @@ def _clean_snippet(text: str) -> str:
     text = text.replace("&#39;", "'")
     text = text.replace("&amp;", "&")
     text = re.sub(r"<[^>]+>", "", text)
+
+    # Fold homoglyphs and lookalike forms to canonical characters
+    text = unicodedata.normalize("NFKC", text)
+
+    # Zero width spaces/joiners, BOM, and the bidi overrides used to visually
+    # reorder text so what renders isn't what the model actually reads
+    text = re.sub(r"[​-‏‪-‮⁠-⁤﻿]", "", text)
+
+    # Any other invisible control characters, keeping normal whitespace
+    text = "".join(c for c in text if unicodedata.category(c) != "Cc" or c in "\t\n\r")
 
     # Remove extra whitespace
     text = re.sub(r"\s+", " ", text).strip()

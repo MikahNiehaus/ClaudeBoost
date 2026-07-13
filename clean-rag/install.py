@@ -503,6 +503,69 @@ def setup_gpu_memory_manager():
 
 
 # ---------------------------------------------------------------------------
+# Step 6b: StackExchange dev-subset seed (opt-in only, ~28GB, multi-hour)
+# ---------------------------------------------------------------------------
+def setup_stackexchange_seed(enabled: bool) -> None:
+    """Download, convert, and index the StackExchange dev-relevant subset.
+
+    Real, verified sizes (direct HEAD requests to archive.org, not the
+    dump's own documentation, which was checked and found inaccurate for
+    at least one site this session): stackoverflow.com-Posts.7z is 23.0GB
+    alone, the other 8 dev-relevant sites total roughly 5GB, for a real
+    combined total of about 28GB. This never runs automatically — always
+    opt-in via --seed-stackexchange, since it is a genuinely multi-hour
+    operation (download, py7zr extraction, streaming XML parse, markdown
+    conversion, then embedding).
+    """
+    if not enabled:
+        return
+
+    research_dir = CLEAN_RAG_HOME / "research"
+    download_script = research_dir / "stackexchange_download.py"
+    convert_script = research_dir / "stackexchange_convert.py"
+
+    if not download_script.exists() or not convert_script.exists():
+        _warn("StackExchange pipeline scripts not found, skipping")
+        return
+
+    _say("Downloading StackExchange dev-subset (~28GB, this will take a while)...")
+    result = subprocess.run([sys.executable, str(download_script)], cwd=str(research_dir))
+    if result.returncode != 0:
+        _warn("StackExchange download had errors, check output above before continuing")
+        return
+    _ok("StackExchange download complete")
+
+    _say("Converting Posts.xml to markdown Q&A pairs (extraction + streaming parse, also slow)...")
+    result = subprocess.run([sys.executable, str(convert_script)], cwd=str(research_dir))
+    if result.returncode != 0:
+        _warn("StackExchange conversion had errors, check output above")
+        return
+    _ok("StackExchange conversion complete, knowledge/qa/<site>/ populated")
+
+    _say("Indexing each StackExchange site as its own topic...")
+    port = os.environ.get("CLEAN_RAG_PORT", "8613")
+    qa_dir = CLEAN_RAG_HOME / "knowledge" / "qa"
+    if qa_dir.exists():
+        for site_dir in sorted(qa_dir.iterdir()):
+            if not site_dir.is_dir():
+                continue
+            try:
+                import urllib.request
+                payload = json.dumps({"topic": site_dir.name, "category": "qa"}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/index-topic",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=1800) as resp:
+                    json.loads(resp.read().decode("utf-8"))
+                _ok(f"Indexed topic: {site_dir.name}")
+            except Exception as e:
+                _warn(f"Failed to index {site_dir.name}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -513,6 +576,9 @@ def main():
                         help="Comma-separated list of topics to seed (default: all)")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
+    parser.add_argument("--seed-stackexchange", action="store_true",
+                        help="Download and index the StackExchange dev-subset dataset "
+                             "(~28GB download, multi-hour, opt-in only, never automatic)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -600,6 +666,13 @@ def main():
         seed_topics(topic_filter)
     else:
         print("\nStep 6: Skipped (--no-seed)")
+
+    # Step 6b
+    if args.seed_stackexchange:
+        print("\nStep 6b: Seeding StackExchange dev-subset (opt-in, ~28GB)...")
+        setup_stackexchange_seed(enabled=True)
+    else:
+        print("\nStep 6b: Skipped (pass --seed-stackexchange to enable)")
 
     print()
     print("=" * 60)

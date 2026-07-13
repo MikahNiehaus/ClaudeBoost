@@ -13,7 +13,9 @@ Exit codes:
   0 = always (PostToolUse hooks should not block)
 """
 
+import hashlib
 import json
+import logging
 import os
 import sys
 import threading
@@ -26,6 +28,28 @@ def _clean_rag_home() -> Path:
     if env:
         return Path(env)
     return Path(__file__).resolve().parent.parent
+
+
+def _setup_logger() -> logging.Logger:
+    """File only. This hook runs in a background thread on every edit, so
+    anything it prints would land in the middle of the editing flow.
+    """
+    log = logging.getLogger("reindex-after-edit")
+    if log.handlers:
+        return log
+    log.setLevel(logging.INFO)
+    try:
+        log_dir = _clean_rag_home() / "state"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_dir / "reindex.log", encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(handler)
+    except Exception:
+        log.addHandler(logging.NullHandler())
+    return log
+
+
+logger = _setup_logger()
 
 
 def _read_project_registry() -> dict:
@@ -59,27 +83,43 @@ def _find_project_for_file(file_path: str) -> str | None:
     return None
 
 
-def _should_force_reindex(project_path: str) -> bool:
-    """Check if force reindexing is needed."""
+def _manifest_path(project_path: str) -> Path:
+    """Where the manifest actually lives.
+
+    Mirrors _project_paths() in server/indexing.py:684. The manifest is stored
+    inside clean-rag's own databases dir, keyed by a hash of the resolved
+    project path. It is NOT a dotfile in the project root.
+    """
     home = _clean_rag_home()
+    project_root = Path(project_path).resolve()
+    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
+    return home / "databases" / "_projects" / pid / "manifest.json"
 
-    # Check 1: Project manifest exists
-    manifest_path = Path(project_path) / ".rag-manifest.json"
+
+def _should_force_reindex(project_path: str) -> bool:
+    """True only when the project has never been indexed, or its manifest is unreadable.
+
+    This used to look for "<project>/.rag-manifest.json", a file nothing in this
+    codebase has ever written. So it always returned True, and every single edit
+    kicked off a force reindex of the entire repository instead of the cheap
+    single file path right below it. The manifest it wanted was always over in
+    databases/_projects/<pid>/manifest.json.
+    """
+    manifest_path = _manifest_path(project_path)
     if not manifest_path.exists():
-        return True  # First time or corrupted
+        return True  # never indexed, so there's nothing to incrementally update
 
-    # Check 2: clean-rag databases dir exists
-    db_root = home / "databases" / "_projects"
-    if not db_root.exists():
-        return True  # No indexed projects yet
-
-    # Check 3: Try to detect manifest corruption
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict) or "files" not in manifest:
-            return True  # Corrupted manifest
     except Exception:
-        return True  # Can't read manifest
+        logger.warning("Manifest unreadable at %s, forcing full reindex", manifest_path)
+        return True
+
+    # Real shape is {"__project_path__": "...", "<rel_path>": "<hash>", ...}.
+    # Anything else means it's corrupt and a full rebuild is the honest response.
+    if not isinstance(manifest, dict) or "__project_path__" not in manifest:
+        logger.warning("Manifest malformed at %s, forcing full reindex", manifest_path)
+        return True
 
     return False
 

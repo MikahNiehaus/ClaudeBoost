@@ -240,8 +240,12 @@ async def handle_search(request: web.Request) -> web.Response:
             web_search_results = web_result["results"]
             fallback_triggered = True
             logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
-            # Spawn background indexer (not blocking)
-            _spawn_web_indexer(query, web_search_results)
+            # Background indexing on fallback deprecated: casual conversational
+            # queries were triggering this fallback and getting permanently
+            # written into the KB (confirmed real pollution — medical
+            # content indexed from a message using "injection" in the RAG
+            # sense, among others). Web results still returned for this
+            # call, just no longer auto-indexed.
 
     response = {
         "results": results,
@@ -392,29 +396,6 @@ def _query_words(query: str) -> set[str]:
     return {t for t in tokens if t not in _QUERY_STOPWORDS and len(t) > 2}
 
 
-def _spawn_web_indexer(query: str, web_results: list[dict]) -> None:
-    """Spawn a background thread to crawl and index web results (no LLM).
-
-    Args:
-        query: original search query (used as topic slug)
-        web_results: list of {title, url, snippet} dicts from web search
-    """
-    import threading
-    from .web_crawler import crawl_and_index_urls
-
-    topic_slug = re.sub(r"[^a-z0-9]+", "_", query.lower()).strip("_")[:32]
-
-    def _index_worker():
-        try:
-            urls = [r["url"] for r in web_results if r.get("url")]
-            if urls:
-                crawl_and_index_urls(urls, topic_slug, query)
-                logger.info("Web indexing complete for topic: %s (%d URLs)", topic_slug, len(urls))
-        except Exception as e:
-            logger.warning("Web indexing failed for topic %s: %s", topic_slug, e)
-
-    thread = threading.Thread(target=_index_worker, daemon=True, name=f"web-indexer-{topic_slug}")
-    thread.start()
 
 
 def _has_repeated_query_pattern(entries: list[dict]) -> bool:
@@ -1052,6 +1033,42 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     return _json_response(result, status)
 
 
+async def handle_web_search(request: web.Request) -> web.Response:
+    """POST /web-search: DuckDuckGo search, source ranked and sanitized.
+
+    Exists so a reasoning agent can run its own web searches. The agent picks
+    the query, and that's the whole point. The hook's keyword extraction has no
+    judgment and produced junk like PCMag browser reviews for a message that
+    merely mentioned duckduckgo. An agent choosing its own query doesn't have
+    that failure mode.
+
+    web_search is blocking, so it runs in an executor to keep the loop free.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+
+    max_results = min(int(body.get("max_results", 5)), 10)
+    timeout = min(float(body.get("timeout", 8.0)), 20.0)
+
+    from server.web_search import web_search
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: web_search(query, max_results=max_results, timeout=timeout)
+    )
+
+    if result.get("error"):
+        logger.error("Web search failed for %r: %s", query, result["error"])
+
+    return _json_response({"query": query, **result})
+
+
 async def handle_topics(request: web.Request) -> web.Response:
     """GET /topics: list all topic databases with stats."""
     topics = _list_topics()
@@ -1375,6 +1392,7 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
+    app.router.add_post("/web-search", handle_web_search)
     app.router.add_post("/prove", handle_prove)
     app.router.add_post("/log-direct-research", handle_log_direct_research)
     app.router.add_post("/index-topic", handle_index_topic)

@@ -1,15 +1,22 @@
 """Server control CLI for clean-rag.
 
 Usage:
-  python clean-rag/cli/server_ctl.py start
+  python clean-rag/cli/server_ctl.py start     # headed, own console window
   python clean-rag/cli/server_ctl.py stop
+  python clean-rag/cli/server_ctl.py restart
   python clean-rag/cli/server_ctl.py status
+
+Or just double click runragserver.bat.
+
+start is single instance and checks the port, so running it twice (or running
+the .bat while a server is already up) is safe and does nothing.
 """
 
 import argparse
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -35,47 +42,88 @@ def _port() -> int:
     return STANDALONE_PORT
 
 
+def _port_in_use(port: int) -> bool:
+    """Is anything already listening on this port?
+
+    This, not the PID file, is the real single instance guard. The PID file
+    lies: it goes stale when a server dies badly, and it knows nothing about a
+    server someone started by hand or from the .bat. Observed for real this
+    session, "stop" cheerfully reported success while a different live process
+    was still holding 8613.
+
+    Binding is the only honest test. If the bind fails, someone's home.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        # No SO_REUSEADDR on purpose. We want this to fail when the port is taken.
+        try:
+            sock.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def cmd_start(args):
     state = _state_dir()
     state.mkdir(parents=True, exist_ok=True)
     server_json = state / "server.json"
 
-    # Check if already running
-    if server_json.exists():
-        try:
-            info = json.loads(server_json.read_text(encoding="utf-8"))
-            pid = info.get("pid")
-            if pid and _is_process_alive(pid):
-                print(f"clean-rag server already running (PID {pid}, port {info.get('port')})")
-                return
-        except Exception:
-            pass
-
-    # Start the server as a background process
     port = _port()
+
+    # Single instance. Checked against the port, not the PID file.
+    if _port_in_use(port):
+        pid = None
+        if server_json.exists():
+            try:
+                pid = json.loads(server_json.read_text(encoding="utf-8")).get("pid")
+            except Exception:
+                pass
+        who = f"PID {pid}" if pid and _is_process_alive(pid) else "an unknown process"
+        print(f"clean-rag server already running on port {port} ({who}). Not starting a second one.")
+        return
+
     clean_rag_home = str(_CLEAN_RAG_HOME)
     server_script = str(_CLEAN_RAG_HOME / "server" / "__main__.py")
 
     env = os.environ.copy()
     env["CLEAN_RAG_HOME"] = clean_rag_home
 
+    # Headed by default: the server gets its own console window and its logs
+    # stream there live, so indexing and search problems are visible while they
+    # happen instead of being reconstructed afterwards from state/server.log.
+    #
+    # DETACHED_PROCESS was what suppressed the window, and it's mutually
+    # exclusive with CREATE_NEW_CONSOLE, so it has to go. The DEVNULL redirects
+    # go too, otherwise the new console just sits there blank.
+    #
+    # Tradeoff, stated plainly: closing that window now kills the server. Set
+    # CLEAN_RAG_HEADLESS=1 to get the old detached behaviour back.
+    headless = os.environ.get("CLEAN_RAG_HEADLESS") == "1"
+
     if sys.platform == "win32":
-        proc = subprocess.Popen(
-            [sys.executable, server_script],
-            cwd=clean_rag_home,
-            env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if headless:
+            proc = subprocess.Popen(
+                [sys.executable, server_script],
+                cwd=clean_rag_home,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.Popen(
+                [sys.executable, server_script],
+                cwd=clean_rag_home,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NEW_CONSOLE,
+            )
     else:
         proc = subprocess.Popen(
             [sys.executable, server_script],
             cwd=clean_rag_home,
             env=env,
             start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=None if not headless else subprocess.DEVNULL,
+            stderr=None if not headless else subprocess.DEVNULL,
         )
 
     # Write PID file
@@ -139,6 +187,18 @@ def cmd_stop(args):
     print("Server stopped.")
 
 
+def cmd_restart(args):
+    """Stop then start.
+
+    This existed as a caller before it existed as a command: rag-enforce.py:157
+    shells out to "server_ctl.py restart" for self healing, and argparse just
+    printed help and exited 0. Self heal had never once worked.
+    """
+    cmd_stop(args)
+    time.sleep(2)
+    cmd_start(args)
+
+
 def cmd_status(args):
     port = _port()
     try:
@@ -147,12 +207,8 @@ def cmd_status(args):
         data = resp.json()
         print(f"Status: {data.get('status', 'unknown')}")
         print(f"Uptime: {data.get('uptime_s', 0):.0f}s")
-        print(f"Embedding: {data.get('embedding_model', '?')} "
-              f"(loaded: {data.get('embedding_loaded', False)})")
         print(f"Code embedding: {data.get('code_embedding_model', '?')} "
               f"(loaded: {data.get('code_embedding_loaded', False)})")
-        topics = data.get("topics", {})
-        print(f"Topics: {topics.get('count', 0)} ({', '.join(topics.get('names', []))})")
         projects = data.get("projects", {})
         print(f"Projects: {projects.get('count', 0)}")
     except Exception:
@@ -186,8 +242,9 @@ def _is_process_alive(pid: int) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="clean-rag server control")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("start", help="Start the server")
+    sub.add_parser("start", help="Start the server in its own console window")
     sub.add_parser("stop", help="Stop the server")
+    sub.add_parser("restart", help="Stop then start. Used by hook self healing")
     sub.add_parser("status", help="Check server status")
 
     args = parser.parse_args()
@@ -195,6 +252,8 @@ def main():
         cmd_start(args)
     elif args.command == "stop":
         cmd_stop(args)
+    elif args.command == "restart":
+        cmd_restart(args)
     elif args.command == "status":
         cmd_status(args)
     else:

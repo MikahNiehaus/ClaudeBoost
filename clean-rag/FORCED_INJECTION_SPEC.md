@@ -185,4 +185,146 @@ Retested on a deliberately unrelated task (a Python CSV watcher CLI, not
 Flappy Bird, so the fix is verified general rather than tuned to one
 example) with the same 5-aspects-explicit-per-item structure.
 
+## Research Agent Template: Explicit Depth Versus Breadth Routing
+
+Extends the per-aspect coverage fix above. That fix made research agents
+cover every requested aspect instead of over-digging one rich vein. This
+adds a second, previously unenforced rule on top: which source to search
+for each aspect.
+
+The design principle (agreed on, but not written into any actual prompt
+until now): clean-rag's vector DB should serve as **depth**, general
+software engineering principles and patterns that generalize across many
+unrelated projects (test organization, separation of concerns, standard
+algorithmic approaches). Web search should serve as **breadth**,
+practical, task-specific guidance (how people actually build this exact
+kind of thing, common mistakes in this specific genre, what the best way
+to structure this particular tool looks like).
+
+This split was never actually enforced before this section existed. It
+emerged by coincidence in the Flappy Bird and CSV watcher test runs
+(clean-rag happened to surface general principles, WebSearch happened to
+surface task-specific tips) because that is roughly what each source
+naturally contains, not because any research agent was told to route that
+way.
+
+**The rule, to include verbatim in every research agent spawn prompt:**
+
+For each listed aspect, first decide: would the same answer apply across
+many unrelated projects (depth), or is the answer specific to this one
+kind of task (breadth)? Breadth includes not just pitfalls but also "what
+is the best/recommended way to build this specific kind of thing" —
+generality is what separates the two, not phrasing. Depth aspects search
+clean-rag first (`POST http://127.0.0.1:8613/search`, `all_topics`), only
+falling through to WebSearch if clean-rag genuinely returns nothing
+relevant (confirmed this happens routinely: 3 of 5 CSV-watcher aspects had
+zero useful clean-rag hits). Breadth aspects go straight to WebSearch — a
+docs-and-patterns focused KB is unlikely to hold task-specific practical
+tips, and forcing a clean-rag search first just wastes a round trip
+(confirmed: clean-rag returned off-topic noise for "common Flappy Bird
+implementation mistakes," an explicitly breadth aspect). The existing
+per-aspect coverage requirement still applies on top of this — one finding
+or an explicit "nothing found" note per aspect, never silently dropped.
+
+## Root Cause: Retrieval Is Only As Good As The Query
+
+The single finding this session keeps re-deriving, now measured rather than
+argued. Every bad injection traces back to one thing: the query was built
+mechanically, with no reasoning behind it. Not "web search is bad," not "the
+KB is bad." The query.
+
+Scores measured on garbage, all with mechanically built queries:
+
+| Query source | What it retrieved | Score |
+|---|---|---|
+| "is it done" (keywords) | Azure Functions `context.done()` docs | 0.82 |
+| "duck duck go" (keywords) | react-query docs, then PCMag browser reviews | 0.80 |
+| a function with a SQL injection in it (canned pattern) | Go stack trace docs | 0.86 |
+| `MAX_RETRIES = 5` (raw code) | PowerShell retry docs | 0.86 |
+| that same SQL injection (raw code) | Flask query docs, no mention of the vuln | 0.87 |
+
+**`min_score` does not save you.** Every one of those cleared 0.5 comfortably.
+Cosine similarity always returns a nearest neighbour, and it's always confident.
+A wrong query gets a confident wrong answer, not an empty result.
+
+Two things follow, and both were assumed wrong earlier in this session:
+
+**"Vector search degrades gracefully" is false.** It was stated in this doc and
+in the code, and the table above falsifies it. A keyword soup query embeds into
+*something*, and something is always nearby.
+
+**Embedding search retrieves text that looks like the query, not a critique of
+it.** Feeding it SQL injecting code returns more SQL code. Getting the warning
+would require searching "SQL string concatenation vulnerability", which requires
+having already read the code and noticed the bug. That's reasoning, and a hook
+does not have it.
+
+### The architecture that follows
+
+Hooks cannot reason, and they cannot spawn something that can
+(claude-code#64898 is open, not shipped). So:
+
+- **Hooks enforce, they do not retrieve.** They print the reuse check and the
+  research mandate (depth and breadth), and name the tools. They do not guess a
+  query.
+- **One exception, the project index.** `project:<git_root>` is still searched,
+  because a hit there is a real file in the repo that can be opened and checked.
+  It's checkable noise rather than confident fiction. The topic KB
+  (`all_topics`) is off in both hooks.
+- **Reasoning models retrieve**, because only they can write a query worth
+  running. research-agent picks its own queries and has been reliably good all
+  session, precisely for that reason: rate limiter query returned real ASP.NET
+  rate limiting docs at 0.85, Flappy Bird research covered all five aspects with
+  real sources.
+
+## Test Variant: Web Covers Both Depth and Breadth (One Off Test)
+
+User asked to try a simpler variant before committing to the split above:
+since `web_search.py` already filters to good sources, let WebSearch alone
+cover both depth and breadth aspects for one retest, skip clean-rag
+routing entirely for this run, and see how the output compares. This is a
+one time comparison, not a replacement for the routing rule above.
+
+Concrete Flappy Bird framing the user gave for the split itself (kept for
+future use once routing is turned back on): depth is code structure, things
+like separation of responsibility and TDD, and the specific choice to
+implement the bird as a React-based animation. Breadth is what a Flappy
+Bird game should look like and feel like: which parts should be animated,
+general visual and design choices, not the code shape underneath them.
+
+## Deprecated: Web Crawler Automatic Indexing
+
+Removed entirely, both call sites (`rag-enforce.py`'s
+`_spawn_background_crawler`, `app.py`'s `_spawn_web_indexer`), plus the now
+orphaned `server/web_crawler.py` and `hooks/_crawl_runner.py` files
+themselves. Confirmed no remaining callers anywhere in the codebase before
+deleting either file.
+
+**Why:** casual conversational messages were triggering the web search
+fallback and getting permanently written into the knowledge base under
+auto generated topic names. Confirmed real, not hypothetical: a message
+using the word "injection" in the RAG sense got real medical cortisone
+shot content crawled and indexed under a topic slugged from that message.
+Twenty two such fallback topics had accumulated in a single session before
+this was caught and removed.
+
+**Cleanup performed:** stopped the running server (a stale PID file meant
+`server_ctl.py stop` did not actually kill the live process, found and
+killed the real one directly via the port), deleted `knowledge/fallback/`
+and `databases/fallback/` entirely, then found the topic list is cached in
+`state/topics.json` independent of the database files on disk (a restart
+alone did not clear it), removed all 22 entries tagged
+`"category": "fallback"` from that file directly, confirmed via a fresh
+server restart that the topic count dropped from 83 to the real 61
+curated topics.
+
+**What still works:** the client side fallback (`_web_search_fallback` in
+`rag-enforce.py`) still runs and still displays real web results for the
+current turn when local RAG is weak. It just no longer writes anything to
+the permanent knowledge base afterward. Verified live: a repeat of the
+Flappy Bird fallback query after this change still returned three real
+web results, and `knowledge/fallback/` stayed empty afterward.
+
+## Verification Method
+
 Every claim in this spec was checked against actual code (`rag-enforce.py`, `code-pattern-inject.py`, `rag-search-on-edit.py`) or actual test runs (`curl`, direct Python `urllib` calls, subprocess hook invocations) in this session — not assumed from documentation or training data. Any future change to these hooks should be verified the same way: run the hook directly with a crafted stdin payload, capture actual stdout/stderr, don't trust that a code change "should" work.
