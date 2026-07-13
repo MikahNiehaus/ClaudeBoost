@@ -22,6 +22,7 @@ SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 # Hook sentinels: unique strings in hook commands for idempotent registration
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
+VERIFY_AFTER_EDIT_SENTINEL = "verify-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
@@ -123,6 +124,12 @@ def install_user_assets() -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
+
+    # The global instructions describing the research gate and the agents. Both
+    # this installer and ClaudeBoost's setup.py (which delegates here) keep it
+    # current. A newer local edit is preserved by _copy_file, so hand tweaks
+    # survive a re-install.
+    _copy_file(portable / "CLAUDE.md", CLAUDE_DIR / "CLAUDE.md")
 
     # The branch safety launcher. Lives outside the repo on purpose, so a branch
     # switch can't remove it out from under a live hook registration.
@@ -453,6 +460,21 @@ def register_reindex_hook() -> None:
     )
 
 
+def register_verify_after_edit_hook() -> None:
+    # The post write half of the gate: after code is written, nudge to verify it
+    # by running a check, not by self reviewing. See verify-after-edit.py.
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verify-after-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", VERIFY_AFTER_EDIT_SENTINEL,
+        hook_entry, label="verify-after-edit",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
@@ -685,6 +707,7 @@ def main():
     # Step 5c
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
+    register_verify_after_edit_hook()
 
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")

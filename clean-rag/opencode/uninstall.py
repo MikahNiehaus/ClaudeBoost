@@ -22,7 +22,11 @@ def clean_rag_home() -> Path:
 
 
 def opencode_config_dir() -> Path:
-    return Path.home() / ".config" / "opencode"
+    # Match install: honor XDG_CONFIG_HOME so uninstall targets the same dir
+    # OpenCode actually reads.
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "opencode"
 
 
 def config_file(cfg_dir: Path) -> Path:

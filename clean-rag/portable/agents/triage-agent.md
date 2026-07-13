@@ -61,6 +61,18 @@ build this" is breadth too, not just pitfalls.
 Cap it at 5 aspects. Fewer is better. Each one should be a question a search
 could actually answer, not a topic heading.
 
+## Run the quality lenses
+
+When you decide RESEARCH, check the change against these before you finalize the
+aspect list. Add an aspect for any that genuinely apply. Don't force all of them,
+but a bug that ships is usually one of these nobody looked at:
+
+- **Correctness / edge cases**: the real failure modes of this exact thing.
+- **Security**: does it touch user input, a query, auth, a file path, a
+  subprocess? If yes, that's an aspect. If no, don't add it.
+- **Test quality**: which specific cases deserve a test.
+- **Maintainability**: is there a simpler shape.
+
 ## Always flag the existence question
 
 If the task involves writing something new, add an aspect asking whether it

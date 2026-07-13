@@ -32,7 +32,12 @@ def clean_rag_home() -> Path:
 
 
 def opencode_config_dir() -> Path:
-    return Path.home() / ".config" / "opencode"
+    # OpenCode honors XDG_CONFIG_HOME. If it's set, OpenCode reads from there,
+    # not ~/.config, so we have to write to the same place or the config lands
+    # somewhere OpenCode never looks.
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "opencode"
 
 
 def config_file(cfg_dir: Path) -> Path:
