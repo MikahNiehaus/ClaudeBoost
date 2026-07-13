@@ -256,6 +256,40 @@ def _rerank_results(results: list[dict]) -> list[dict]:
     return [r for _, r in scored]
 
 
+def _filter_by_keyword_relevance(query: str, results: list[dict]) -> list[dict]:
+    """Per result keyword check, applied after score based reranking.
+
+    _keyword_overlap_ratio() only ever checked the combined top 3 as one
+    aggregate number, used solely to decide whether to trigger web
+    fallback — it never touched which individual result sits at rank 1.
+    That's why a result like "BigBird" (an unrelated ML model, sharing only
+    the substring "bird" with a "flappy bird" query) could still show up
+    first even on turns where the aggregate check didn't trigger fallback:
+    vector score alone decided the order. This checks each result on its
+    own and demotes ones sharing zero real keywords with the query, so a
+    high vector score can no longer outrank actual keyword relevance.
+
+    Keeps zero hit results at the bottom rather than dropping them outright
+    — if nothing in the whole result set shares a keyword with the query,
+    showing the highest scoring option is still better than showing
+    nothing.
+    """
+    query_words = {w for w in re.findall(r'\b[a-z]+\b', query.lower()) if len(w) > 3}
+    if not query_words:
+        return results
+
+    def hit_count(result: dict) -> int:
+        content = result.get("content", "").lower()
+        return sum(1 for w in query_words if w in content)
+
+    scored = [(hit_count(r), r) for r in results]
+    # Stable sort: descending hit count, ties keep their existing (score
+    # based) order since Python's sort is stable and results arrive here
+    # already sorted by _rerank_results().
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored]
+
+
 def _keyword_overlap_ratio(query: str, results: list[dict], top_n: int = 3) -> float:
     """Fraction of query keywords that actually appear in the top results' content.
 
@@ -420,6 +454,7 @@ def main() -> int:
         return 0
 
     reranked = _rerank_results(rag_results)
+    reranked = _filter_by_keyword_relevance(search_query, reranked)
 
     best_score = reranked[0].get("score", 0) if reranked else 0
     overlap = _keyword_overlap_ratio(search_query, reranked) if reranked else 0.0
