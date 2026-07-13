@@ -21,6 +21,12 @@ state/*.log
 .venv-router/
 .venv-coref/
 
+# Machine specific config. Each checkout keeps its own. The committed template
+# is .env.example.
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.pyc

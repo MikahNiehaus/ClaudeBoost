@@ -3,9 +3,50 @@
 import os
 from pathlib import Path
 
+_MODULE_DIR = Path(__file__).resolve().parent          # clean-rag/server/
+
+
+def _load_env_files() -> None:
+    """Load config from .env files, so a machine can be configured without
+    touching settings.json or exporting shell vars.
+
+    Separated and conjoined: clean-rag reads its OWN clean-rag/.env first
+    (separated), then falls back to a ClaudeBoost/.env one level up when it's
+    bundled there (conjoined). Precedence, highest wins:
+
+        real env vars (settings.json)  >  clean-rag/.env  >  ClaudeBoost/.env  >  code defaults
+
+    Real env vars win because setdefault never overwrites an already set key.
+    clean-rag/.env wins over ClaudeBoost/.env because it's loaded first, and the
+    first file to set a key keeps it.
+
+    Both .env files are gitignored, so each machine has its own. The committed
+    templates are .env.example. Hand rolled on purpose, a KEY=VALUE reader isn't
+    worth a python-dotenv dependency.
+    """
+    clean_rag_root = _MODULE_DIR.parent                # clean-rag/
+    for env_path in (clean_rag_root / ".env", clean_rag_root.parent / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for raw in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key:
+                    os.environ.setdefault(key, value)
+        except OSError:
+            # A missing or unreadable .env is not fatal, defaults still apply.
+            pass
+
+
+_load_env_files()
+
 # clean-rag home: the root of the clean-rag installation.
 # Set via CLEAN_RAG_HOME env var, or derive from this file's location.
-_MODULE_DIR = Path(__file__).resolve().parent          # clean-rag/server/
 CLEAN_RAG_HOME = Path(os.environ.get(
     "CLEAN_RAG_HOME",
     str(_MODULE_DIR.parent),                           # clean-rag/

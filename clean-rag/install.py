@@ -71,6 +71,26 @@ def ensure_directories() -> None:
     _ok("Directories created")
 
 
+def ensure_env_file() -> None:
+    """Seed clean-rag/.env from the template on first install.
+
+    The .env is gitignored, so a fresh checkout has none. Copy the committed
+    .env.example over, but never clobber an existing .env, that's the machine's
+    own config. config.py reads it (and a ClaudeBoost/.env one level up) at
+    startup.
+    """
+    env = CLEAN_RAG_HOME / ".env"
+    example = CLEAN_RAG_HOME / ".env.example"
+    if env.exists():
+        _ok(".env already present, left as is")
+        return
+    if not example.is_file():
+        _warn(".env.example missing, skipping .env seed")
+        return
+    shutil.copy2(example, env)
+    _ok("created clean-rag/.env from template")
+
+
 # ---------------------------------------------------------------------------
 # Copy the pieces that have to live under ~/.claude, not in the repo.
 #
@@ -627,6 +647,7 @@ def main():
     # Step 1
     print("Step 1: Creating directories...")
     ensure_directories()
+    ensure_env_file()
 
     # Step 1b
     print("\nStep 1b: Installing agents, skills, and the hook launcher into ~/.claude...")
