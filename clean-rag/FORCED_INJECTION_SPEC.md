@@ -156,6 +156,33 @@ injected research, the orchestrating model has to build and pass it in the
 agent's own prompt explicitly — there is no hook-level mechanism that
 reaches into Task-spawned agents, and none is exposed to configure.
 
-## Verification Method
+## Root Cause: Research Agents Skip Requested Aspects Under an Open Quota
+
+Found by direct investigation, not assumption, after a research agent's
+output was missing coverage of one of five aspects it was explicitly asked
+to research (code organization and testability for a Flappy Bird build).
+Confirmed this was not a retrieval gap: a direct search against clean-rag
+for "separate game logic from rendering, testable, pure functions"
+returned real, relevant results at 0.83 to 0.87 score, sourced from
+`react` and `testing-library`. The content existed and was reachable. The
+research agent simply never searched for it, and never reported its
+absence either.
+
+**Root cause:** the research agent's prompt listed 5 aspects to cover but
+asked for "the 3-5 best, most specific, most actionable findings." An open
+quota like that rewards depth on whichever aspect surfaces the richest
+vein first (here, React `requestAnimationFrame` pitfalls), and gives no
+structural reason to come back and search the remaining aspects once the
+quota is filled. This is a prompt design flaw in how research agents get
+instructed, not something specific to Flappy Bird or to this one research
+agent's judgment.
+
+**Fix, not a band aid:** research agent prompts must require one finding
+(or an explicit "searched X, found nothing relevant" note) per listed
+aspect, not an open ended top N across all aspects combined. Coverage is
+enforced by structure, not left to the agent's own prioritization.
+Retested on a deliberately unrelated task (a Python CSV watcher CLI, not
+Flappy Bird, so the fix is verified general rather than tuned to one
+example) with the same 5-aspects-explicit-per-item structure.
 
 Every claim in this spec was checked against actual code (`rag-enforce.py`, `code-pattern-inject.py`, `rag-search-on-edit.py`) or actual test runs (`curl`, direct Python `urllib` calls, subprocess hook invocations) in this session — not assumed from documentation or training data. Any future change to these hooks should be verified the same way: run the hook directly with a crafted stdin payload, capture actual stdout/stderr, don't trust that a code change "should" work.
