@@ -104,6 +104,58 @@ Options, none implemented yet:
 
 This choice affects cost, reliability, and setup complexity — it needs a decision, not a silent pick.
 
+## Tried and Reverted: Zero Shot Query Classifier
+
+Built, tested, and removed in the same session. Worth recording so it isn't
+tried again the same way without knowing why it didn't hold up.
+
+**What it was:** a persistent HTTP server (`server/classifier_server.py`)
+running `MoritzLaurer/deberta-v3-large-zeroshot-v2.0` in an isolated venv
+(`.venv-router`, CPU-only torch, needed to avoid a real confirmed conflict
+with `open-webui`'s pinned `pyarrow==20.0.0` in the shared Python
+environment). It classified each prompt into "programming or coding",
+"small talk", or "explaining how a tool works", and `rag-enforce.py` used
+that to skip injection on small talk and add project-scoped search sources
+for tool questions.
+
+**What worked:** clear cases were genuinely well handled. "thanks" correctly
+classified as small talk and skipped injection. "how do I handle async
+errors in javascript" classified as programming at 1.00 confidence. Self
+healing was confirmed working (killed the server mid session, it
+auto-restarted, the request still completed via graceful fallback).
+
+**Why it was removed:** confirmed weak on borderline/ambiguous real
+messages, the exact category causing the original problem this session
+started from. One concrete example, reproduced in testing: a message
+about the injection system's own architecture scored 0.52 "programming or
+coding" vs 0.46 "explaining how a tool works", different runs of the same
+kind of message could tip either way. The model was not unreliable due to
+a bug, it was genuinely uncertain, and that uncertainty landed exactly on
+the hardest cases this system needed to get right.
+
+**Replacement direction:** since a background hook subprocess cannot spawn
+a Claude agent (confirmed architectural limit, not a config gap, see
+`Sub-Agents Do Not Inherit Hooks` below), the judgment call moves to the
+orchestrating model itself: spawn a parallel research agent alongside any
+real work agent to determine what is actually worth researching, using
+real conversation understanding instead of a three-label classifier.
+
+## Sub-Agents Do Not Inherit Hooks
+
+Confirmed via direct research against Claude Code's own documentation and
+a tracked GitHub issue (`anthropics/claude-code#27661`), not guessed: Task
+tool spawned sub-agents do not inherit `UserPromptSubmit` or `PreToolUse`
+hooks from the parent session's `settings.json`. This was independently
+confirmed empirically in this session too — two real Task agent spawns
+produced zero corresponding entries in `rag-enforce.log`, the hook simply
+never fired for them.
+
+This means `rag-enforce.py` and `code-pattern-inject.py` only ever run in
+the main conversation, never inside a spawned agent. If a sub-agent needs
+injected research, the orchestrating model has to build and pass it in the
+agent's own prompt explicitly — there is no hook-level mechanism that
+reaches into Task-spawned agents, and none is exposed to configure.
+
 ## Verification Method
 
 Every claim in this spec was checked against actual code (`rag-enforce.py`, `code-pattern-inject.py`, `rag-search-on-edit.py`) or actual test runs (`curl`, direct Python `urllib` calls, subprocess hook invocations) in this session — not assumed from documentation or training data. Any future change to these hooks should be verified the same way: run the hook directly with a crafted stdin payload, capture actual stdout/stderr, don't trust that a code change "should" work.

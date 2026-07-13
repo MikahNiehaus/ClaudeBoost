@@ -163,87 +163,6 @@ def _trigger_self_heal(port: str) -> None:
         logger.error(f"Self-heal trigger failed: {type(e).__name__}: {e}")
 
 
-CLASSIFIER_PORT = os.environ.get("CLEAN_RAG_CLASSIFIER_PORT", "8614")
-
-
-def _classifier_health_check() -> str:
-    """Returns 'ready', 'loading', 'down', or 'error'."""
-    try:
-        req = urllib.request.Request(f"http://127.0.0.1:{CLASSIFIER_PORT}/health", method="GET")
-        with urllib.request.urlopen(req, timeout=1) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("status", "error")
-    except Exception:
-        return "down"
-
-
-def _trigger_classifier_self_heal() -> None:
-    """Start the classifier server if it's not running. Runs under the
-    isolated .venv-router interpreter (torch + transformers), never the
-    shared Python environment — confirmed this session that installing
-    those there breaks open-webui's pinned pyarrow version.
-    """
-    home = _clean_rag_home()
-    venv_python = home / ".venv-router" / "Scripts" / "python.exe"
-    server_script = home / "server" / "classifier_server.py"
-
-    if not venv_python.exists():
-        logger.error(f"Classifier venv not found at {venv_python}, cannot self heal")
-        return
-    if not server_script.exists():
-        logger.error(f"Classifier server script not found at {server_script}")
-        return
-
-    try:
-        log_path = home / "state" / "classifier-server.log"
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            subprocess.Popen(
-                [str(venv_python), str(server_script)],
-                stdout=log_file,
-                stderr=log_file,
-                stdin=subprocess.DEVNULL,
-            )
-        logger.info("Classifier server self heal: start triggered")
-    except Exception as e:
-        logger.error(f"Classifier self heal failed: {type(e).__name__}: {e}")
-
-
-def _classify_query(text: str, timeout: float = 3.0) -> dict:
-    """Classify text via the persistent classifier server.
-
-    Graceful degradation, not a hard requirement: if the server is down,
-    still loading, or errors, returns {"label": None} and the caller falls
-    back to the mechanical keyword approach. Classification is a quality
-    improvement layer on top of the mechanical system, never a blocker —
-    the mechanical path must keep working with zero dependency on this.
-    """
-    status = _classifier_health_check()
-
-    if status == "down":
-        logger.info("Classifier server down, triggering self heal, falling back to mechanical")
-        _trigger_classifier_self_heal()
-        return {"label": None, "score": 0.0, "status": "down"}
-
-    if status != "ready":
-        logger.info(f"Classifier server not ready (status={status}), falling back to mechanical")
-        return {"label": None, "score": 0.0, "status": status}
-
-    try:
-        payload = json.dumps({"text": text}).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{CLASSIFIER_PORT}/classify",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            logger.info(f"Classified {text[:50]!r} -> {result.get('label')} ({result.get('score', 0):.2f})")
-            return result
-    except Exception as e:
-        logger.error(f"Classify call failed: {type(e).__name__}: {e}")
-        return {"label": None, "score": 0.0, "status": "error"}
-
 
 def _search_rag(
     query: str, port: str, limit: int = 10, retries: int = 2, sources: list[str] | None = None
@@ -306,8 +225,24 @@ def _search_rag(
     return [], False, []
 
 
+
+# Prescriptive language: tells the reader what to DO, not just how something
+# works. Confirmed this session as the actual difference between injected
+# content that visibly changed an agent's output ("game logic should be kept
+# separate from rendering") versus content that got ignored (pure API
+# explanations of requestAnimationFrame). Boosts actionable advice over
+# reference material, independent of doc-type/file-path signals.
+PRESCRIPTIVE_PATTERNS = [
+    "should be", "should not", "recommended", "best practice", "avoid",
+    "must be", "always use", "never use", "prefer", "instead of",
+    "anti-pattern", "pitfall", "common mistake", "keep separate",
+    "don't", "do not", "make sure to",
+]
+
+
 def _rerank_results(results: list[dict]) -> list[dict]:
-    """Rerank results by: score, official docs preference, practical examples.
+    """Rerank results by: score, official docs preference, practical examples,
+    prescriptive language.
 
     Based on research (docker/manuals/ai/docker-agent/rag.md score 0.818):
     Prioritize official documentation over community, practical examples over
@@ -332,6 +267,10 @@ def _rerank_results(results: list[dict]) -> list[dict]:
             boost += 0.05
         if any(x in content for x in ["theory", "concept", "explain", "describe"]):
             boost -= 0.02
+
+        prescriptive_hits = sum(1 for p in PRESCRIPTIVE_PATTERNS if p in content)
+        if prescriptive_hits:
+            boost += min(0.15, prescriptive_hits * 0.05)
 
         reranked_score = max(0, min(1, base_score + boost))
         scored.append((reranked_score, result))
@@ -597,22 +536,6 @@ def main() -> int:
     user_prompt = hook_payload.get("prompt", "")
     keywords = _extract_keywords(user_prompt) if user_prompt else []
 
-    # Classifier is a quality layer on top of the mechanical system, never
-    # a hard requirement. If the server is down, loading, or errors, this
-    # returns label=None and every branch below falls back to the existing
-    # mechanical keyword logic unchanged, confirmed working this session.
-    classification = _classify_query(user_prompt) if user_prompt else {"label": None}
-    label = classification.get("label")
-    conf = classification.get("score", 0)
-
-    if label == "small talk" and conf >= 0.5:
-        # Confirmed real failure case this session: "did u fix it" has one
-        # mechanical keyword ("fix") and would search anyway under the old
-        # logic, returning noise (Go's fix command, unrelated). Classifier
-        # catches this even when a stray keyword survives extraction.
-        logger.info(f"Classified as small talk ({conf:.2f}), skipping injection. prompt={user_prompt!r}")
-        return 0
-
     if not keywords:
         # No usable keywords (empty prompt, or a short conversational
         # message like "did u fix it" / "thanks" / "ok"). Confirmed this
@@ -639,17 +562,17 @@ def main() -> int:
 
     search_query = " ".join(keywords)
 
-    # When the message is about the tool/system itself, prefer the
-    # indexed project (if one exists and is indexed) alongside general
-    # topics — this is the original ask this session: meta questions
-    # about clean-rag should surface project docs (e.g. this file's own
-    # FORCED_INJECTION_SPEC.md), not generic unrelated topic matches.
+    # Always include the indexed project (if one exists) alongside general
+    # topics. No classifier gate needed: including an extra cheap source
+    # costs almost nothing, and _filter_by_keyword_relevance() already
+    # sorts out anything not actually relevant. This is the original ask
+    # this session: meta questions about clean-rag should be able to
+    # surface project docs (e.g. this file's own FORCED_INJECTION_SPEC.md),
+    # not just generic unrelated topic matches.
     search_sources = ["all_topics"]
-    if label == "explaining how a tool works" and conf >= 0.5:
-        git_root = _find_git_root()
-        if git_root:
-            search_sources.append(f"project:{git_root}")
-            logger.info(f"Classified as tool explanation ({conf:.2f}), adding project source: {git_root}")
+    git_root = _find_git_root()
+    if git_root:
+        search_sources.append(f"project:{git_root}")
 
     rag_results, is_healthy, server_web_results = _search_rag(
         search_query, port, limit=10, sources=search_sources
