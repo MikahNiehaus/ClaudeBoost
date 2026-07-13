@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 """PostToolUse on Task and Agent. Stamps the turn record when research finishes.
 
-This is the half of the gate the model cannot forge. research-gate.py refuses an
-edit unless this hook has fired, and this hook only fires after Claude Code has
-actually run a research or triage agent to completion. There is no path from
-"claim you researched" to a stamped record.
+This is the half of the gate the model cannot simply skip. research-gate.py
+refuses an edit unless this hook has fired, and this hook only fires after Claude
+Code has actually run a research or triage agent to completion.
 
-Never blocks. Its only job is to write the record down.
+To be clear about what that is and isn't: it stops the model forgetting or
+drifting, which is the real failure. It is not a security boundary. A model with
+Write access can author a stamp file directly if it sets out to. The only actual
+security control here is the bash guard on the research agents themselves.
+
+Never blocks. Its only job is to write down what happened.
 """
 
 import json
@@ -27,24 +31,43 @@ def _agent_type(payload: dict) -> str:
     )
 
 
-def _verdict(payload: dict) -> str:
-    """Pull the agent's verdict out of its response, for the record.
+def _report(payload: dict) -> str:
+    """The agent's report, flattened to plain text.
 
-    Only used for the log. The gate cares that an agent ran, not what it said,
-    because a triage NONE and a full research report both mean the work got
-    looked at.
+    tool_response is not a string. It arrives as a list of content blocks,
+    [{"type": "text", "text": "..."}], and str() on that gives a Python repr
+    where newlines are escaped as literal backslash-n. Anything downstream doing
+    splitlines() then sees one enormous line and matches nothing, which would
+    make the COVERS scope undiscoverable and leave the gate blocking every edit
+    forever. Found by reading a real stamped record rather than trusting the
+    shape the docs implied.
+
+    Passed through whole rather than reduced to a verdict line, because the gate
+    needs COVERS, and that's what names the files the research actually looked at.
     """
     response = payload.get("tool_response", "")
-    if isinstance(response, dict):
-        response = response.get("content") or response.get("output") or str(response)
-    if not isinstance(response, str):
-        response = str(response)
 
-    for line in response.splitlines():
-        stripped = line.strip()
-        if stripped.upper().startswith("VERDICT:"):
-            return stripped
-    return response[:200]
+    if isinstance(response, str):
+        return response
+
+    if isinstance(response, list):
+        parts = []
+        for block in response:
+            if isinstance(block, dict):
+                parts.append(block.get("text") or block.get("content") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(p for p in parts if p)
+
+    if isinstance(response, dict):
+        inner = response.get("content") or response.get("output") or response.get("text")
+        if inner is None:
+            return ""
+        if isinstance(inner, (str, list, dict)):
+            return _report({"tool_response": inner})
+        return str(inner)
+
+    return str(response)
 
 
 def main() -> int:
@@ -63,7 +86,7 @@ def main() -> int:
     record_agent(
         session_id=payload.get("session_id", ""),
         agent_type=agent_type,
-        verdict=_verdict(payload),
+        report=_report(payload),
     )
     return 0
 

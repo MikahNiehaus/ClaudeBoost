@@ -38,42 +38,18 @@ except Exception:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-# Pattern detection rules: (pattern_keywords, search_query)
-PATTERN_RULES = [
-    (["for ", "while "], "loop patterns performance off-by-one edge cases iteration"),
-    (["try:", "except", "catch"], "error handling logging recovery stack traces debugging"),
-    (["def ", "function "], "function design documentation parameters testing"),
-    (["class "], "SOLID principles class design inheritance composition"),
-    (["async ", "await", "Promise"], "async patterns race conditions concurrency deadlock"),
-    (["sql", ".query(", "select ", "insert ", "delete ", "update "],
-     "SQL security injection parameterized queries transactions"),
-    (["password", "token", "secret", "api_key", "private_key"],
-     "security hashing encoding OWASP authentication secrets"),
-    (["if ", "else", "elif", "switch"], "branching patterns edge cases conditional logic"),
-    (["[", "]", ".append", ".push"], "array indexing bounds off-by-one performance"),
-    (["dict", "{", "map", ".get("], "dictionary patterns key handling defaults"),
-    (["regex", "match", "search", "replace"], "regex patterns escaping injection performance"),
-    (["file", "open", "read", "write"], "file handling paths security permissions edge cases"),
-    (["http", "request", "response", "fetch", "get(", "post("],
-     "HTTP patterns status codes error handling timeouts"),
-    (["json", ".parse(", ".loads("], "JSON parsing validation error handling security"),
-    (["sort", "reverse", "shuffle"], "sorting algorithms performance stability comparison"),
-    (["import", "require", "include"], "module patterns dependencies circular imports"),
-    (["test", "assert", "mock"], "testing patterns mocking fixtures TDD"),
-    (["print", "console", "log", "logger"], "logging structured logging debug levels"),
-]
-
-
-def _detect_patterns(code_text: str) -> list:
-    """Detect code patterns in the added/modified code."""
-    code_lower = code_text.lower()
-    detected = []
-
-    for keywords, query in PATTERN_RULES:
-        if any(kw.lower() in code_lower for kw in keywords):
-            detected.append(query)
-
-    return detected
+# PATTERN_RULES and _detect_patterns lived here: a table mapping keywords in the
+# code to a canned search query, so "except" meant "error handling logging
+# recovery stack traces debugging".
+#
+# Deleted, because canned queries are the exact bug this whole system exists to
+# fix. Asked to research a function containing a plain SQL injection, the table
+# matched on "except", searched its error handling string, and returned Go stack
+# trace docs at 0.86. High score, wrong thing, vulnerability sailed straight
+# past. A keyword is not a question.
+#
+# The query is now the code being written. It's the only query in this system
+# that isn't guessed at, so its embedding actually means something.
 
 
 # Only source code gets research injected. Editing a markdown file, a config,
@@ -119,7 +95,7 @@ def _search_rag(query: str, sources: list[str] | None = None) -> dict:
     try:
         payload = json.dumps({
             "query": query,
-            "sources": sources or ["all_topics"],
+            "sources": sources or [],
             "limit": 2,
             "min_score": 0.5,
         }).encode("utf-8")

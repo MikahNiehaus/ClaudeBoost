@@ -23,7 +23,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import turn_has_research  # noqa: E402
+import research_audit  # noqa: E402
+from research_state import check_file_researched  # noqa: E402
 
 # Only these get gated. Everything else, including .md, .json, .yaml, and configs,
 # passes. A markdown edit has nothing to research.
@@ -69,17 +70,21 @@ def _is_exempt(file_path: str) -> tuple[bool, str]:
 
 def _block(file_path: str, reason: str) -> int:
     print(
-        f"BLOCKED: no research has run this turn ({reason}).\n\n"
+        f"BLOCKED: {reason}.\n\n"
         f"About to edit: {file_path}\n\n"
-        "Every code edit gets researched first. Not asked for, required.\n\n"
-        "Spawn triage-agent now. It is cheap and fast, and for a trivial edit it\n"
-        "will come straight back with NONE, which satisfies this gate. Give it:\n"
-        "  - what you are about to change and why\n"
-        "  - the file path\n"
-        "  - the code you intend to write\n\n"
-        "If it returns RESEARCH with a list of aspects, spawn research-agent with\n"
-        "those aspects and wait for it before editing.\n\n"
-        "Do not work around this by editing a .md file instead, and do not ask the\n"
+        "Every code edit has to be covered by research. Not asked for, required.\n\n"
+        "Spawn triage-agent. It is cheap and fast, and for a trivial edit it comes\n"
+        "straight back with NONE, which satisfies this gate. Tell it what you are\n"
+        "changing, why, and the code you intend to write.\n\n"
+        "Its report MUST end with a line naming every file the research covers:\n\n"
+        "    COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py\n\n"
+        "That scope is what this gate checks. One research run can cover a whole\n"
+        "coherent change across many files, so you do not need one agent per file.\n"
+        "But a file nobody researched still blocks, which is the point: researching\n"
+        "one thing and then editing something else is the failure this catches.\n\n"
+        "If triage returns RESEARCH with aspects, spawn research-agent with those\n"
+        "aspects and wait for it before editing.\n\n"
+        "Do not route around this by editing a .md file instead, and do not ask the\n"
         "user to disable it. Spawn the agent.",
         file=sys.stderr,
     )
@@ -107,7 +112,24 @@ def main() -> int:
         return 0
 
     session_id = payload.get("session_id", "")
-    ok, reason = turn_has_research(session_id)
+    ok, reason = check_file_researched(session_id, file_path)
+
+    # Every code edit gets a line, allowed or blocked, chained to the one before.
+    #
+    # This is the part that survives a forged stamp. Someone can hand themselves
+    # a pass in the moment, but they cannot go back and quietly unwrite this
+    # entry: the hash chain means editing or deleting it breaks every entry that
+    # follows, the same way rewriting an old git commit changes every commit id
+    # after it. Prevention isn't achievable at this privilege level. Making the
+    # lie permanent and greppable is.
+    research_audit.append(
+        file_path=file_path,
+        session_id=session_id,
+        allowed=ok,
+        reason=reason,
+        covering_agent=reason.replace("covered by ", "") if ok else "",
+    )
+
     if ok:
         return 0
 

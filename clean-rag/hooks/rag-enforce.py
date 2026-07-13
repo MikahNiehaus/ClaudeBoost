@@ -186,7 +186,7 @@ def _search_rag(
 
     req_data = json.dumps({
         "query": query,
-        "sources": sources or ["all_topics"],
+        "sources": sources or [],
         "limit": limit,
         "min_score": 0.4
     }).encode("utf-8")

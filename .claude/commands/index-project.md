@@ -1,136 +1,98 @@
 ---
-description: Index a project's codebase for semantic search
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion
+description: Index a project's codebase into clean-rag for vector and import graph search
+allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion
 ---
 
-# Index Project for Codebase RAG
+# Index a project into clean-rag
 
-Index the target project's source code into a per-project vector database for semantic search.
+Builds two things for the target project: a vector index for semantic search, and an import graph for structural search ("what breaks if I change this"). Both live inside clean-rag. Once indexed, the project reindexes itself automatically.
+
+This targets clean-rag on **port 8613**. It used to index into the ClaudeBoost RAG server on 8612 and merely register the path with clean-rag afterwards, which left a registry entry pointing at a project clean-rag had no data for: no vectors, no graph, and an auto reindex sweep with no manifest to diff against.
 
 ## Arguments
 
-$ARGUMENTS — flexible, any of:
-- Empty → use the current working directory
-- A full path → `/index-project /home/user/myapp` (Linux/Mac) or `/index-project C:/Development/MyApp` (Windows)
-- A short project name → `/index-project PantryEasy`
-- A fuzzy description → `/index-project the benefits app` or `/index-project nectar`
-- Any of the above plus language filter → `PantryEasy python,typescript`
-- Any of the above plus `force` → `PantryEasy force`
+`$ARGUMENTS` — any of:
+- Empty → the current working directory
+- A path → `/index-project C:/prj/MyApp`
+- A short name → `/index-project LocalAI` (resolve against `clean-rag/state/projects.json` and sibling directories)
+- Plus `force` → full rebuild instead of incremental
 
-## Instructions
+## Where everything goes
 
-1. **Health check** — Before calling `GET http://127.0.0.1:8612/status`, output this exact line to the user:
-   > Checking RAG server health...
+Nothing is written into the target project. It all lives under clean-rag, keyed by a hash of the project's absolute path:
 
-   Then call `GET http://127.0.0.1:8612/status`. If the tool call is rejected, interrupted, times out, or returns any error — immediately output:
-   > RAG server not connected — run `/rag` to start the server, then retry.
+```
+clean-rag/databases/_projects/<sha256(project_path)[:12]>/
+  chroma/         vector index
+  graph.db        SQLite import graph (imports, inherits, implements, calls) + PageRank
+  manifest.json   per file content hashes, used for incremental reindex
+```
 
-   Stop. Do not proceed further.
+The registry of indexed projects is `clean-rag/state/projects.json`. The auto reindex loop reads that file, so **a project is only kept fresh once it is in there**. `POST /index-project` adds it for you.
 
-2. **Resolve the project path** from `$ARGUMENTS`:
+## Steps
 
-   a. **Empty** → use the primary working directory as the project path. Done.
+**1. Make sure the server is up.**
 
-   b. **Full path** (starts with a drive letter like `C:/` or `/`) → use as-is.
+```bash
+curl -s -m 5 http://127.0.0.1:8613/status
+```
 
-   c. **Short name or fuzzy description** → search for a matching directory.
-      - Derive the projects root dynamically:
-        ```bash
-        GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-        DEV_DIR=$(dirname "$GIT_ROOT")
-        ls "$DEV_DIR/"
-        [ -d "$HOME/source/repos" ] && ls "$HOME/source/repos/"
-        ```
-      - This finds the parent of the current git repo (your dev folder), regardless of where that is on any machine.
-      - Pick the folder whose name best matches the argument — exact match first, then case-insensitive substring, then fuzzy (e.g. "nectar" matches "NectarBenefits").
-      - If exactly one good match: use it, tell the user which path you resolved to.
-      - If multiple plausible matches: show them and use `AskUserQuestion` to ask which one.
-      - If no match: tell the user and ask them to provide the full path.
+If it does not answer, start it. It runs headed, in its own window, so the user can watch it work:
 
-   Strip language and `force` tokens from the argument before doing path resolution:
-   - Languages look like `python`, `typescript`, `csharp`, `javascript` (comma-separated)
-   - `force` is the literal word `force`
+```bash
+python "$CLEAN_RAG_HOME/cli/server_ctl.py" start
+```
 
-3. Parse remaining tokens after path resolution:
-   - If languages specified (comma-separated), pass as `languages` array
-   - If `force` is specified, set `force=true`
+`start` is single instance and checks the port, so running it when a server is already up is safe and does nothing. Give it about 15 seconds to load the embedding model, then check `/status` again. Do not proceed until it returns `"status": "ready"`.
 
-3. **Scan first** — call `POST http://127.0.0.1:8612/scan with project_path, languages` before indexing.
+**2. Resolve the project path.** Must be absolute, and must exist. If the argument is fuzzy and more than one candidate matches, use AskUserQuestion rather than guessing.
 
-4. Show the scan summary to the user in a concise table:
-   - Files by language (e.g. typescript: 312, csharp: 48)
-   - Skipped: gitignore count, too-large count, generated count
-   - Estimated size in KB
-   - Total files that will be indexed
+**3. Index it.**
 
-5. **Show summary and proceed**: Display the scan summary to the user, then index automatically. No confirmation needed.
+```bash
+curl -s -X POST http://127.0.0.1:8613/index-project \
+  -H "Content-Type: application/json" \
+  -d '{"project_path": "<ABSOLUTE PATH>"}'
+```
 
-6. call POST http://127.0.0.1:8612/index with the confirmed parameters.
+Add `"force": true` for a full rebuild. Without it, files whose content hash is unchanged are skipped, which is what makes reindexing cheap.
 
-   **Force decision — use `force=true` ONLY when there is a genuine health problem. Never force just because the incremental run returns 0 new files.**
+This is not instant. A few hundred files takes a minute or two: every chunk is embedded, and every file is parsed with tree-sitter to extract graph edges. Watch the server's console window for progress.
 
-   | Signal | Action |
-   |--------|--------|
-   | User passed `force` as argument | Force — **already have permission, proceed immediately** |
-   | `needs_reindex: true` in response | **STOP — ask permission** before forcing |
-   | `GET /status` shows `files_indexed` < 50% of scan's `files_to_index`, AND incremental returned 0 | **STOP — ask permission** before forcing |
-   | Graph resolution < 5% (edges > 0 but resolved ≈ 0) | **STOP — ask permission** before forcing |
-   | Manifest file missing | **STOP — ask permission** before forcing |
-   | Incremental returns 0 (all files skipped) AND coverage looks healthy | **Do NOT force** — files haven't changed, index is current |
-   | Branch just switched with N changed files → incremental returned N updates | **Do NOT force** — incremental correctly picked up only the changed files |
-   | Branch just switched → incremental returned 0 AND GET /status shows healthy file count | **Do NOT force** — branch contents match what's indexed |
+**4. Read the result honestly.**
 
-   **Permission gate for auto-force** — when any signal above says "STOP — ask permission":
-   - Explain what health issue was detected
-   - Use `AskUserQuestion` to ask: "Force re-index will wipe and rebuild the index from scratch. Proceed?"
-   - Only call `POST http://127.0.0.1:8612/index with force=true` after the user confirms YES
-   - Never auto-force without explicit user confirmation
+- `files_indexed` — embedded and stored
+- `files_unchanged` — skipped, hash matched
+- `files_failed` — **above zero means something went wrong.** Read `errors[]` and report it. A 200 response does not mean a healthy index.
+- `graph.edges_total` / `graph.edges_resolved` — if `edges_total` is 0, the graph is empty and `mode: "graph"` will quietly fall back to plain vector search. Usually the tree-sitter grammar for that language isn't installed.
 
-   **If the result contains `needs_reindex: true`** (broken index detected):
-   - Show the user the `health_issues` list explaining what's wrong
-   - **Stop and tell the user**: "Run `/index-project force` to rebuild the index."
-   - Do NOT auto-run `force=true` — always wait for explicit user confirmation.
+**5. Prove search works before declaring success.**
 
-   **Large project handling** — when `force=true` AND scan shows > 500 files:
-   1. Warn the user before starting: "Large project (N files) — indexing may take several minutes."
-   2. Run the index in the background and poll `/index/progress` every 30 seconds for live updates:
-      ```bash
-      curl -s -X POST http://127.0.0.1:8612/index \
-        -H "Content-Type: application/json" \
-        -d '{"project_path": "<path>", "force": true}' \
-        -o "${TEMP}/rag_index_result.json" &
-      INDEX_PID=$!
-      echo "Indexing started (background PID $INDEX_PID)..."
-      while kill -0 "$INDEX_PID" 2>/dev/null; do
-        curl -s http://127.0.0.1:8612/index/progress
-        sleep 30
-      done
-      wait "$INDEX_PID"
-      cat "${TEMP}/rag_index_result.json"
-      ```
-   3. Report progress to the user every poll: show `files_done/files_total`, `pct%`, `eta_s`, and `current_file`.
-   4. When complete, read the result from `${TEMP}/rag_index_result.json`.
+```bash
+curl -s -X POST http://127.0.0.1:8613/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"<something you know is in this codebase>","sources":["project:<ABSOLUTE PATH>"],"mode":"both","limit":3}'
+```
 
-   **Note on progress endpoint:** `GET http://127.0.0.1:8612/index/progress` returns live indexing state including `active`, `pct`, `files_done`, `files_total`, `eta_s`, and `current_file`. Use it to confirm the index is actually progressing, not stalled.
+You want real results, with `relation` and `seed_file` on the graph hits. If it comes back empty, the index did not work, whatever the index response claimed.
 
-7. Report results concisely:
-   - Files indexed / chunks created / files skipped
-   - Total time if notable
+## What gets skipped
 
-8. **Register with clean-rag** — after successful indexing, register the project with clean-rag's system wide registry so it tracks all RAG databases:
+Defined once in `clean-rag/server/indexing.py` and applied everywhere, including the auto reindex sweep: `SKIP_DIRS`, `SKIP_FILES`, `SKIP_SUFFIXES`, an allowlist of `CODE_EXTENSIONS`, and a 500KB per file cap. Everything goes through `scan_project()`. If a file type should or shouldn't be indexed, change it there, not here.
 
-   ```bash
-   curl -s -X POST http://127.0.0.1:8613/register-project \
-     -H "Content-Type: application/json" \
-     -d '{"project_path": "<resolved_path>", "source": "claudeboost-rag", "server": "http://127.0.0.1:8612", "files_indexed": <N>, "chunks_created": <N>}'
-   ```
+## Reindexing happens on its own
 
-   If clean-rag server is not running (connection refused), skip silently. This is best effort registration, not a blocker.
+Once the project is in `state/projects.json`, three things keep it fresh and you do not have to do anything:
 
-9. **Post-index quality check** — run `/rag-health project` to validate the index end to end.
+1. **After every edit Claude makes.** `hooks/reindex-after-edit.py` reindexes just that file.
+2. **Every 10 minutes.** `server/auto_reindex.py` sweeps every registered project, diffs file hashes against the manifest, and reindexes only what changed. This catches edits from another editor, a `git pull`, or a branch switch. If files were deleted, or 50-plus changed, it rebuilds fully instead, because stale chunks can't be cleared file by file.
+3. **On demand.** Re-run this command with `force`.
 
-   `/rag-health project` covers all checks in one pass: coverage, graph liveness, relevance quality, manifest integrity, context pipeline, .ragignore compliance, partial index ratio, and community summaries. Any failure or warning includes the specific action needed. Follow those actions rather than running ad-hoc fixes.
+All three take the index lock, so they can't race each other. You will see every sweep in the server's console window.
 
-   > Legacy inline checks (coverage, graph, relevance, manifest, context, .ragignore, summaries, partial ratio) have been replaced by `/rag-health project`. Do not run them separately.
+So index a project **once**. Don't re-run this on a schedule or "just to be safe" — that's what the loop is for, and a forced rebuild is expensive.
 
+## After indexing
 
+Search with `mode: "both"`. Vector and graph surface different files; running only one leaves a gap.

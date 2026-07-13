@@ -1,344 +1,164 @@
 # clean-rag
 
-Research-verified editing enforcement for Claude Code. Every source code edit requires verified proof from indexed research or codebase patterns.
+Forced research before code edits, plus semantic and structural search over your indexed projects.
 
-## How It Works
+Two things live here:
 
-clean-rag maintains separate ChromaDB databases organized by topic. Each topic (e.g., `fastapi`, `react-hooks`, `jwt-tokens`) has its own database at `databases/<topic>/chroma/`. Project source code is indexed separately at `databases/_projects/<hash>/chroma/`.
+1. **The research gate.** Every code edit is blocked until a research agent has actually run this turn. Not asked for. Required.
+2. **The project index.** Each project you index gets a vector database and an import graph, both stored inside clean-rag.
 
-When you try to edit a source file, the `proof-gate.py` hook blocks the edit unless you've searched RAG and written a proof file with mechanical verification checks (score >= 0.5, content hash, freshness).
+There is no topic knowledge base. There used to be, and it was removed. See "Why the KB is gone" below, because the reasoning matters and will otherwise get rebuilt by someone with good intentions.
 
-## The Proof Cycle
+## The research gate
 
-Every Edit, Write, or MultiEdit on source code follows this cycle:
+`hooks/research-gate.py` (PreToolUse on Edit, Write, MultiEdit) blocks any edit to a code file unless a research or triage agent completed during the current turn.
 
-1. **Search for proof**: `POST http://127.0.0.1:8613/search` with a query about what you're changing and why. You need at least one result with score >= 0.5.
-2. **Auto-research if needed**: If search returns nothing or scores below 0.5, call `POST http://127.0.0.1:8613/acquire-topic {"topic": "<slug>"}` to acquire docs automatically, then re-search. You can also do targeted research directly (reading the specific doc you need) while a parallel agent handles broader category indexing.
-3. **Write the proof file**: Use `write_pending_proof()` from `verifier/log.py`. Each file gets its own keyed proof file (not a single shared file). Include `content_hash` (SHA-256 of the edit content) and `min_score` (best RAG result score, must be >= 0.5). Set verdict to "VERIFIED" and include a summary of the RAG results that justify the edit.
-4. **Retry the edit**: The hook atomically consumes the keyed proof file and passes if:
-   - verdict == VERIFIED
-   - content_hash matches the proposed edit (prevents reuse for different edits)
-   - min_score >= 0.5 (mechanical quality threshold)
-   - timestamp is timezone-aware and within 120 seconds (naive timestamps rejected)
+The gate keys off a real agent run, not a claim of one. That distinction is the whole design:
 
-No independent verifier agent is needed. The mechanical checks (score threshold, content hash binding, freshness) catch the same issues faster and cheaper.
+- `hooks/rag-enforce.py` (UserPromptSubmit) opens a fresh turn record on every message.
+- `hooks/research-record.py` (PostToolUse on Task and Agent) stamps that record when a `research-agent` or `triage-agent` finishes.
+- `hooks/research-gate.py` reads the record and refuses the edit if nothing stamped it.
 
-## Research-First Mandate
+Only Claude Code can start an agent, and the stamp only lands after one completes. There is no path from "say you researched" to a stamped record. This replaced an earlier proof file design where the model wrote a JSON blob attesting it had researched, which proves nothing: the model writes the file, so the file says whatever the model wants it to say.
 
-Everything Claude says or does must be grounded in indexed research. RAG is not optional. Before responding to any question, making any decision, or editing any file:
+**Exempt:** anything that isn't source code (`.md`, `.json`, `.yaml`, configs), plus `workspace/`, `state/`, `plans/`, `docs/`, `.claude/`, `node_modules/`, and temp directories. A markdown edit has nothing to research.
 
-1. **Check the topic tree**: Look at indexed topics to find relevant databases.
-2. **Search RAG**: `POST http://127.0.0.1:8613/search` with your specific question.
-3. **If nothing found**: Do direct research (see Fast Path below), then write proof.
-4. **Base your response on RAG results**, not training data. Cite which topic and score backed each claim.
+**Escape hatch:** `CLEAN_RAG_RESEARCH_GATE=off`. Use it when the gate itself is broken, not when it's inconvenient.
 
-For edits, the proof-gate hook mechanically blocks until you've done this. For responses, the research-stop-gate (a `type: "prompt"` Stop hook evaluated by Haiku) mechanically blocks Claude from finishing a response that makes unsourced technical claims. The rag-enforce hook also reminds you every turn.
+## The two agents
 
-## Smart Topic Routing
+**`triage-agent`** (Haiku, 12 turn cap) is the cheap first pass. It gets the message or the diff and answers in seconds: either `NONE`, or a short list of what's worth researching. `NONE` is the common case and it satisfies the gate. Measured at roughly 12k tokens and 15 seconds, against 44 to 52k and 2 to 8 minutes for full research. That gap is what makes gating *every* edit affordable.
 
-Before searching all topics, check the topic tree (injected by rag-enforce.py every turn) to find the right database. Search the specific topic first (`topic:<name>`), then fall back to `all_topics` only if the specific topic misses.
+**`research-agent`** (Sonnet) runs only when triage says it's worth it. It picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources.
 
-When a topic is missing or the existing results don't answer your specific question, use the **Fast Path** (seconds, not minutes):
+Both are defined in `~/.claude/agents/` and preload the `research-routing` skill.
 
-1. **Research the specific question directly** (Grep codebase, read a doc file, WebSearch). This gets you the answer NOW.
-2. **Save what you found** to `clean-rag/knowledge/<category>/<topic>/` (even one file is enough).
-3. **Quick-index**: `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}` (indexes a few files in under 2 seconds).
-4. **Search the new topic** (will return high scores now). Write proof and continue.
+### Neither agent can write, and their shell is caged
 
-**Background enrichment** (parallel, non-blocking): Spawn an Agent to run `POST http://127.0.0.1:8613/acquire-topic {"topic": "<slug>"}` for full topic coverage. Do NOT wait for it. Do NOT spawn a second agent for a topic already being researched. The agent fills the database for future queries while you continue working now.
+They read untrusted web content, which makes them the obvious target for an indirect prompt injection. Sanitizing that text is leaky by nature, so the defense isn't filtering, it's capability removal:
 
-## Search API
+- No `Write`, no `Edit`. They cannot touch a file.
+- `hooks/research-agent-bash-guard.py` (a PreToolUse hook in their own frontmatter) restricts Bash to `curl` against `127.0.0.1` clean-rag only. Verified against 15 cases: `rm -rf`, remote exfil, `;` and `&&` chaining, piping into `sh`, `>` redirects, `python -c`, command substitution, cloud metadata endpoints, and lookalike hosts such as `127.0.0.1.evil.com`.
+
+A fully compromised research agent can search. That is all it can do.
+
+## Search
 
 ```
 POST http://127.0.0.1:8613/search
-Content-Type: application/json
-
 {
-    "query": "FastAPI dependency injection with Depends()",
-    "sources": ["topic:fastapi", "all_topics", "project:/path/to/project"],
-    "limit": 5,
-    "min_score": 0.5,
-    "mode": "vector"
+  "query": "how does the research gate decide to block",
+  "sources": ["project:C:/prj/ClaudeBoost"],
+  "mode": "both",
+  "limit": 5,
+  "min_score": 0.3
 }
 ```
 
-Source specifiers:
-- `topic:<name>` searches one topic database
-- `all_topics` searches every topic database and ranks by cosine similarity
-- `project:<path>` searches the project's codebase index
+`sources` takes `project:<absolute path>`. There is no `all_topics` and no `topic:<name>`; they were removed and now fall through to an unknown-specifier branch that returns nothing.
 
-Mode (applies to project sources only, topics always use vector):
-- `vector` (default) searches by embedding similarity
-- `graph` finds structural neighbors (imports, callers, inheritance) of vector-matched seed files
-- `both` runs vector and graph, deduplicates, returns merged results sorted by score
+`mode`:
+- `vector` (default) is embedding similarity.
+- `graph` walks the import graph from the vector matches: what imports this, what does this import, what inherits from it.
+- `both` runs the two together, dedupes, and merges by score. **Use this.** They surface different files, and one without the other leaves a gap.
 
-Results include `score`, `file`, `tree_path`, `section`, and `content`. Higher score = better match. Graph results also include `relation` (edge type) and `seed_file` (the vector match that led to this neighbor).
+`depth` (1 to 5, default 2) and `direction` (`callers`, `dependencies`, `both`) tune the graph walk.
 
-## Writing Proof
+Graph results carry `relation` (`imports`, `inherits`, `implements`, `calls`), `seed_file` (the vector match that led there), and `is_caller`.
 
-**Use `POST /prove`, not `write_pending_proof()` directly.** `write_pending_proof()` accepts whatever
-score/count/angle values the caller passes with no independent check that they're real -- that's fine
-for the server's own internal use, but an agent calling it directly means the agent is both doing the
-research and self-certifying that research as sufficient, with nothing to stop a rushed or careless call
-from typing in numbers that were never actually returned by a search. `POST /prove` closes that gap:
-every real `/search` call is logged server-side (`clean-rag/state/search-log.jsonl`, not editable by the
-caller) with a `search_id` in its response, and `/prove` only accepts `search_id` references -- it looks
-up the real score/sources itself instead of trusting a client-typed number.
-
-1. Run your real searches first. Each `POST /search` response includes a `"search_id"` field -- keep it.
-2. Call `POST /prove`:
-
-```bash
-curl -X POST http://127.0.0.1:8613/prove -H "Content-Type: application/json" -d '{
-  "file_path": "path/to/file.py",
-  "search_ids": ["<id from a technology/topic search>", "<id from a project: search>"],
-  "quality_aspects": [
-    {"aspect": "architecture", "assertion": "New endpoint goes in routes/auth.py alongside existing auth routes. Controller layer only."},
-    {"aspect": "patterns", "assertion": "Project uses Depends() for DI everywhere (auth.py:23, users.py:15). Following same pattern."}
-  ]
-}'
-```
-
-Requirements enforced server-side (not by you self-reporting them): >=2 `search_ids`, all found in the
-real search log and not expired (30 min window), at least one from a `sources` entry starting with
-`"project:"` (the codebase angle), and >=2 `quality_aspects` with at least one `aspect` of `architecture`
-or `patterns`. `min_score`/`rag_results_count`/`topics_cited`/`research_angles` are all computed by the
-server from the logged entries, not from anything in your request body. Returns `verdict: "VERIFIED"`
-and writes the proof file itself on success; returns a 400 with the specific reason on failure (missing
-search_ids, no codebase angle, score too low) so you know exactly what to search for next.
-
-`quality_aspects` stay caller-written -- they're judgment calls about code fit ("does this belong in this
-file, does it follow existing patterns"), not measurable facts a server can look up, so self-attestation
-is the right model for that part specifically. Only the research-scoring side needed independent
-verification.
-
-`write_pending_proof()` (`clean-rag/verifier/log.py`) still exists and is still what actually writes the
-proof file -- `/prove`'s handler calls it internally after validating against the search log. It's no
-longer something agents should call directly via a script; do that and Claude Code's own safety layer
-will (correctly) flag it as a self-authored verification artifact, since from the outside a script that
-manufactures a `"VERIFIED"` JSON blob and a script that manufactures a genuinely-researched one look
-identical -- the only way to tell them apart is to make the server compute the parts that matter.
-
-The proof file is keyed per target file (uses a hash of the canonical path), so concurrent edits to different files each get their own proof. The gate atomically renames the proof file during consumption to prevent TOCTOU races.
-
-**Required fields the gate checks:**
-- `file` must be present and match the file being edited (normalized to lowercase POSIX path)
-- `verdict` must be `"VERIFIED"`
-- `ts` must be timezone-aware ISO format (Z suffix or +00:00) and within 120 seconds
-- `content_hash` must match the SHA-256 of the actual edit being applied
-- `min_score` must be >= 0.5 (best RAG result score from the search)
-- `research_angles` must have >= 2 entries (multiple search perspectives required)
-- `research_angles` must include at least one entry with `angle: "codebase"` (callers, imports, dependents of the target file must be researched)
-- `quality_aspects` must have >= 2 entries (multiple quality perspectives required)
-- `quality_aspects` must include at least one entry with `aspect: "architecture"` or `aspect: "patterns"` (macro quality proving the code fits the project)
-
-### Research Angles
-
-Every proof must include at least 2 research angles, and one of them **must** be a `codebase` angle. The codebase angle proves you searched the surrounding codebase (callers, imports, files that depend on the target) before editing, not just the target file itself.
-
-| Angle | What to search | Required? |
-|-------|---------------|-----------|
-| `codebase` | Callers, imports, dependents of the target file. Use mode=both when project is indexed. | **Yes, always** |
-| `technology` | How does this tech work? Search the topic docs | No |
-| `methodology` | Code quality practices: clean code, SOLID, patterns, code smells | Recommended when changing logic |
-| `pitfalls` | What commonly goes wrong with this approach? | No |
-| `security` | Any security implications? (when applicable) | No |
-| `best_practices` | What is the recommended pattern? | No |
-
-Each angle entry is `{"angle": "<name>", "query": "<what you searched>", "score": <best_score>}`. The gate rejects proofs with fewer than 2 angles or missing a codebase angle.
-
-### Quality Aspects
-
-Every proof must include at least 2 quality aspects, and at least one must be `architecture` or `patterns` (macro quality). Quality aspects prove you considered code quality at multiple levels, not just whether the code runs correctly. There is a difference between writing a good for loop and understanding the architecture around that for loop.
-
-| Aspect | What to verify | Required? |
-|--------|---------------|-----------|
-| `architecture` | Does the change fit the project structure? Right file, right layer, right separation of concerns. | **At least one of architecture or patterns is required** |
-| `patterns` | Does the code follow existing project patterns, not invent new ones? | **At least one of architecture or patterns is required** |
-| `maintainability` | Will the code be easy to change later? Clear naming, low coupling, reasonable complexity. | No |
-| `security` | Does this introduce any vulnerabilities? (when applicable) | No |
-| `performance` | Any unnecessary performance costs? (when applicable) | No |
-| `testing` | Is this testable? How will it be tested? | No |
-
-Each aspect entry is `{"aspect": "<name>", "assertion": "<what you verified>"}`. The assertion is freeform text describing what you checked and found. You can verify quality aspects by reading the codebase (Grep, Read) without needing RAG. The gate rejects proofs with fewer than 2 aspects or missing a macro quality aspect (architecture or patterns).
-
-## Auto-Research (builds knowledge permanently)
-
-When your search returns no results, scores below 0.5, or results that don't cover your specific question, use the Fast Path first, then enrich in the background.
-
-### Fast Path (use THIS, not acquire-topic)
-
-1. **Research the specific question directly**: Grep the codebase, read a doc file, or WebSearch. Just enough to answer what you need. This takes seconds.
-2. **Save what you found** to `clean-rag/knowledge/<category>/<topic>/` (even one file works).
-3. **Quick-index**: `POST http://127.0.0.1:8613/index-topic {"topic": "<name>", "category": "<category>"}` (under 2 seconds for a few files).
-4. **Search the new topic** (will return high scores). Write proof and continue.
-
-### Background Enrichment (parallel, non-blocking)
-
-After using the Fast Path, spawn a background Agent to acquire full topic coverage for future queries:
+## Web search
 
 ```
-Agent(model="haiku", run_in_background=true, prompt="
-  POST http://127.0.0.1:8613/acquire-topic {\"topic\": \"<slug>\"}
-  This runs the 4-layer waterfall: GitHub sparse checkout, llms.txt,
-  BFS doc crawl. Report what was indexed when done.
-")
+POST http://127.0.0.1:8613/web-search
+{"query": "fixed timestep accumulator game loop", "max_results": 5}
 ```
 
-Do NOT wait for this agent. Do NOT spawn a second agent for a topic already being researched. The main agent continues working immediately.
+DuckDuckGo, no API key. Results are ranked so GitHub, StackOverflow, and official docs come first and content farms come last, and snippets are sanitized (NFKC normalized, zero-width and bidi and control characters stripped, since those survive HTML tag removal and are how payloads get smuggled into a model's context).
 
-The 4-layer waterfall (run by acquire-topic):
-- Layer 1: GitHub sparse checkout (if source_map has the repo)
-- Layer 2: llms.txt / llms-full.txt check (if doc_root known)
-- Layer 3: BFS crawl of documentation site
-- Layer 4: (you handle this) WebSearch fallback
+Snippets run about 200 characters. Survey with this, then `WebFetch` only the page that actually matters. That ordering is what took research runs from ~50k tokens down to ~5-10k.
 
-### Why this saves tokens
+## Project indexing
 
-First edit touching FastAPI? Fast Path costs ~5 seconds. Background agent enriches the full topic for future queries. Every subsequent FastAPI edit hits the local vector index in milliseconds. No re-research, no re-downloading. Proof comes from local search, not training data.
-
-### Categorization Rules
-
-When saving docs from WebSearch or creating a new topic, place it in the correct category directory. These categories are based on the established taxonomy:
-
-| Category | What goes here | Examples |
-|----------|---------------|---------|
-| `ai` | ML frameworks, LLM tools, model serving | huggingface, langchain, ollama |
-| `api` | API protocols and specifications | graphql, grpc, openapi, rest |
-| `cloud` | Cloud provider services | azure-functions, aws-lambda, gcp |
-| `databases` | Database engines and ORMs (non-dotnet) | postgresql, redis, chromadb, mongodb |
-| `dotnet` | All .NET ecosystem | aspnet, blazor, efcore, signalr, maui, nunit |
-| `frontend` | Browser frameworks and client libraries | react, vue, angular, svelte, nextjs, astro |
-| `infrastructure` | DevOps, containers, CI/CD | docker, kubernetes, github-actions, terraform |
-| `languages` | Programming language docs | python, typescript, rust, go, csharp, swift |
-| `node-frameworks` | Server-side Node.js frameworks | express, nestjs, fastify |
-| `php-frameworks` | PHP frameworks | laravel, symfony |
-| `python-frameworks` | Python web/data frameworks | fastapi, django, flask, pydantic |
-| `ruby-frameworks` | Ruby frameworks | rails, sinatra |
-| `security` | Security standards and checklists | owasp, cve-databases |
-| `testing` | Testing frameworks | playwright, pytest, cypress, vitest, jest |
-| `tools` | Build tools, linters, dev tools | vite, eslint, webpack, prettier |
-| `ui` | CSS frameworks and design systems | sass, tailwind, bootstrap |
-
-If a technology doesn't fit any category, create a new category with a clear name. Don't use `other/`.
-
-## Exempt Files
-
-The proof gate does NOT apply to:
-- Files under directories named: workspace/, knowledge/, plans/, docs/, state/, .claudeboost/, .claude/ (checked at directory boundaries, not substrings)
-- Files in the system temp directory ($TEMP, %TMP%, /tmp) including subdirectories
-- Files outside any git repository (not project code, just scratch/output files)
-- When ClaudeBoost AUTO mode is active (logged to proof-log.jsonl for audit trail)
-
-**No file extension exemptions.** Every file type requires research proof, including .md, .json, .yaml, .toml, .xml, and all source code. The only exemptions are directory based (workspace, state, etc.) and temp paths.
-
-Files under `clean-rag/` also require proof (the enforcement system does not exempt itself).
-
-## Database Organization
-
-Each topic is a separate ChromaDB database. The tree looks like:
-
-```
-databases/
-  fastapi/
-    chroma/         # ChromaDB for FastAPI docs
-    manifest.json   # File hash manifest for incremental indexing
-  react-hooks/
-    chroma/
-    manifest.json
-  jwt-tokens/
-    chroma/
-    manifest.json
-  _projects/
-    a1b2c3d4e5f6/   # Project hash
-      chroma/       # ChromaDB for project source code
-      manifest.json
-```
-
-Knowledge files mirror this structure with subdirectories preserved:
-
-```
-knowledge/
-  fastapi/
-    tutorial/
-      dependencies.md
-      security.md
-    advanced/
-      events.md
-    reference/
-      parameters.md
-  react-hooks/
-    guides/
-      useState.md
-      useEffect.md
-    patterns/
-      custom-hooks.md
-```
-
-The search module queries each database independently, collects results from all matching databases, then sorts by cosine similarity score to return the best matches.
-
-## Server Management
-
-```bash
-python clean-rag/cli/server_ctl.py start    # Start on port 8613
-python clean-rag/cli/server_ctl.py stop     # Stop
-python clean-rag/cli/server_ctl.py status   # Health check
-```
-
-## Topic Management
-
-```bash
-python clean-rag/cli/topic.py list                      # List all topics
-python clean-rag/cli/topic.py create <name>             # Create topic dir
-python clean-rag/cli/topic.py index <name>              # Index a topic
-python clean-rag/cli/topic.py search <name> "query"     # Search a topic
-python clean-rag/cli/topic.py delete <name>             # Delete a topic
-python clean-rag/cli/topic.py acquire <name>            # Auto-research + index
-```
-
-## Project Registry (System Wide)
-
-clean-rag maintains a central registry of ALL indexed projects across all RAG servers at `state/projects.json`. Each entry tracks the project path, which RAG system indexed it, and stats.
-
-**Automatic registration:** When clean-rag indexes a project (`POST /index-project`), it auto-registers with `source: "clean-rag"`. When the ClaudeBoost RAG server (port 8612) indexes a project via the `/index-project` skill, it calls `POST /register-project` to register with `source: "claudeboost-rag"`.
-
-**API:**
-- `GET /projects` returns the full registry
-- `POST /register-project` registers an externally indexed project:
-  ```json
-  {"project_path": "/path", "source": "claudeboost-rag", "server": "http://127.0.0.1:8612", "files_indexed": 200, "chunks_created": 1000}
-  ```
-
-## Project Indexing
-
-```bash
-python clean-rag/cli/index.py /path/to/project          # Index project code
-python clean-rag/cli/index.py /path/to/project --force   # Full reindex
-```
-
-Or via the server API:
 ```
 POST http://127.0.0.1:8613/index-project
-{"project_path": "/path/to/project"}
+{"project_path": "C:/path/to/project"}
 ```
 
-### Auto-Index Detection
+Everything for a project lives inside clean-rag, keyed by a hash of its absolute path:
 
-When the proof gate blocks an edit, it detects the project root (by walking up to find `.git`) and checks whether the project is indexed. The block message includes one of three guidance sections:
+```
+clean-rag/databases/_projects/<sha256(path)[:12]>/
+  chroma/         vector index
+  graph.db        SQLite import graph, plus PageRank scores
+  manifest.json   per file content hashes, for incremental reindex
+```
 
-- **NOT INDEXED**: tells you to either index the project first (`POST /index-project`) or use Grep as a fallback for the codebase research angle
-- **INDEXED**: reminds you to include `project:<path>` in your search sources
-- **UNKNOWN**: could not detect the project root; use Grep as the codebase angle
+The registry of what's indexed is `state/projects.json`.
 
-This means Claude always knows whether codebase search is available and what to do about it.
+**What gets skipped** (`server/indexing.py`): `SKIP_DIRS`, `SKIP_FILES`, `SKIP_SUFFIXES`, an allowlist of `CODE_EXTENSIONS`, and a 500KB per file cap. Every path into the index goes through `scan_project()`, so the skip rules are defined once and apply everywhere, including the auto reindex sweep.
 
-## Auto-Reindex After Edits
+**The graph is built automatically at index time.** Tree-sitter parses each file's AST and extracts `imports`, `inherits`, `implements`, and `calls` edges across 15 languages, then PageRank ranks the nodes. No LLM is involved. This is the cheap kind of code graph, the same approach as Aider's repo map, not the expensive GraphRAG kind where a model reads your whole codebase to extract entities.
 
-A PostToolUse hook (`reindex-after-edit.py`) fires after every successful Edit, Write, or MultiEdit. It sends the changed file to the server for incremental reindexing via `POST /reindex-file`. This keeps the project index fresh without full rescans.
+### Reindexing keeps itself honest
 
-The hook runs in a background thread so it never blocks the editing flow. If the server is down or the file isn't in an indexed project, it silently does nothing.
+Three layers, so the index never silently drifts:
 
-Files that are skipped:
-- Files inside the clean-rag directory (internal, not project code)
+1. **After every edit.** `hooks/reindex-after-edit.py` (PostToolUse) reindexes just the changed file.
+2. **Every 10 minutes.** `server/auto_reindex.py` walks every project in the registry, diffs file hashes against the manifest, and reindexes only what changed. This is what catches edits from another editor, a `git pull`, or a branch switch. A deletion, or 50-plus changed files, triggers a full rebuild instead, because stale chunks can't be cleared file by file and a branch switch is cheaper to rebuild wholesale.
+3. **On demand.** `POST /index-project` with `"force": true`.
 
-The single file reindex only re-embeds the changed file (checks content hash against the manifest to skip unchanged files), making it fast enough to run after every edit.
+All three take `acquire_index_lock()` so they can't race each other.
+
+## Server
+
+```bash
+python clean-rag/cli/server_ctl.py start     # headed, own console window
+python clean-rag/cli/server_ctl.py stop
+python clean-rag/cli/server_ctl.py restart
+python clean-rag/cli/server_ctl.py status
+```
+
+Or double click `clean-rag/runragserver.bat`.
+
+It runs **headed**, in its own console window, so you can watch indexing and search happen instead of reconstructing it from a log afterwards. Set `CLEAN_RAG_HEADLESS=1` for the old detached behaviour.
+
+`start` is single instance and checks the **port**, not the PID file. The PID file lies: it goes stale when a server dies badly and knows nothing about one started by hand. Running `start` twice is safe and does nothing the second time.
+
+Logs stream to the console and to `state/server.log`.
+
+## Endpoints
+
+| Route | What it does |
+|---|---|
+| `GET /status` | Health, model state, every indexed project with its graph stats |
+| `POST /search` | Vector, graph, or both, over `project:` sources |
+| `POST /web-search` | DuckDuckGo, source ranked, sanitized |
+| `POST /index-project` | Index a project, build its graph |
+| `POST /reindex-file` | Reindex one file |
+| `GET /projects` | The project registry |
+| `POST /register-project` | Register a project indexed by another RAG server |
+
+## Why the KB is gone
+
+clean-rag used to carry a topic knowledge base: dozens of scraped documentation sets, searchable by `all_topics`. It was deleted, along with `research/`, `cli/topic.py`, `server/index_queue.py`, and six endpoints.
+
+It was removed because **it confidently returned wrong answers, and no threshold could catch them.** Measured, not guessed:
+
+| Query | What came back | Score |
+|---|---|---|
+| "is it done" | Azure Functions `context.done()` docs | 0.82 |
+| "duck duck go" | react-query docs, then PCMag browser reviews | 0.80 |
+| a function containing a SQL injection | Go stack trace docs | 0.86 |
+| `MAX_RETRIES = 5` | PowerShell retry docs | 0.86 |
+
+`min_score: 0.5` caught none of it. Cosine similarity always hands back a confident nearest neighbour; there is no "I don't know". A wrong query gets a wrong answer that *looks* right.
+
+Two things follow, and both were believed false until they were measured:
+
+**Vector search does not degrade gracefully.** A keyword soup query embeds into *something*, and something is always nearby.
+
+**Embedding search retrieves text resembling your query, never a critique of it.** Feed it SQL-injecting code and you get more SQL code, not the vulnerability warning. Getting the warning would mean searching "SQL string concatenation vulnerability", which means having already read the code and spotted the bug. That is reasoning, and a hook does not have any.
+
+So retrieval moved to the only thing that can write a decent query: a reasoning agent. The project index stayed, because a hit there is a real file you can open and check, and because the import graph answers a question no web search can ("what breaks if I change this").
+
+**Do not rebuild the topic KB.** If local docs seem necessary, the failure above will reproduce, because the problem was never corpus quality. It was that a mechanical query has no judgment behind it.

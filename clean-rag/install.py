@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""clean-rag installer. Registers hooks and optionally seeds topics.
+"""clean-rag installer. Registers hooks and sets up the environment.
 
 Usage:
-  python clean-rag/install.py                    # full install with pre-seeding
-  python clean-rag/install.py --no-seed          # skip pre-seeding (fast)
-  python clean-rag/install.py --seed react,fastapi  # seed only specific topics
+  python clean-rag/install.py                # full install
+  python clean-rag/install.py --skip-deps    # skip pip install
 """
 
 import argparse
@@ -24,7 +23,6 @@ REINDEX_SENTINEL = "reindex-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
-RAG_SEARCH_ON_EDIT_SENTINEL = "rag-search-on-edit.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 
 
@@ -63,7 +61,7 @@ def write_json(path: Path, data) -> None:
 # ---------------------------------------------------------------------------
 def ensure_directories() -> None:
     dirs = ["knowledge", "databases", "databases/_projects", "state",
-            "server", "hooks", "verifier", "research", "cli"]
+            "server", "hooks", "cli"]
     for d in dirs:
         (CLEAN_RAG_HOME / d).mkdir(parents=True, exist_ok=True)
     _ok("Directories created")
@@ -298,23 +296,6 @@ def configure_metrics_env() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 5l: Register RAG search on edit hook (PreToolUse)
-# ---------------------------------------------------------------------------
-def register_rag_search_on_edit_hook() -> None:
-    """Register hook to trigger RAG search when editing files."""
-    settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/rag-search-on-edit.py"'
-    hook_entry = {
-        "matcher": "Edit|Write",
-        "hooks": [{"type": "command", "command": hook_command}],
-    }
-    _register_hook(
-        settings, "PreToolUse", RAG_SEARCH_ON_EDIT_SENTINEL,
-        hook_entry, label="rag-search-on-edit",
-    )
-
-
-# ---------------------------------------------------------------------------
 # Step 5m: Register code pattern inject hook (PreToolUse) — enforce on Claude
 # ---------------------------------------------------------------------------
 def register_code_pattern_inject_hook() -> None:
@@ -347,120 +328,6 @@ def configure_code_pattern_inject_env() -> None:
     _ok("Code pattern injection enabled (CLEAN_RAG_PATTERN_INJECT=true)")
 
 
-# ---------------------------------------------------------------------------
-# Step 6: preseed topic databases (optional)
-# ---------------------------------------------------------------------------
-def seed_topics(topic_filter: list[str] | None = None) -> None:
-    # Add clean-rag root to sys.path so research/ is importable
-    import sys as _sys
-    _crag_root = str(CLEAN_RAG_HOME)
-    if _crag_root not in _sys.path:
-        _sys.path.insert(0, _crag_root)
-    from research.source_map import SEED_TOPICS
-
-    topics_to_seed = SEED_TOPICS
-    if topic_filter:
-        topics_to_seed = [t for t in SEED_TOPICS if t["topic"] in topic_filter]
-
-    if not topics_to_seed:
-        _warn("No matching seed topics found")
-        return
-
-    # Group by category for organized output
-    by_category: dict[str, list] = {}
-    for entry in topics_to_seed:
-        cat = entry.get("category", "uncategorized")
-        by_category.setdefault(cat, []).append(entry)
-
-    total = len(topics_to_seed)
-    _say(f"Pre-seeding {total} topics across {len(by_category)} categories...")
-
-    seeded = 0
-    indexed = 0
-    failed = 0
-    for cat, entries in sorted(by_category.items()):
-        _say(f"\n  [{cat}/] ({len(entries)} topics)")
-        for entry in entries:
-            topic = entry["topic"]
-            repo = entry["repo"]
-            path = entry["path"]
-            extensions = entry.get("extensions", ".md,.mdx,.rst")
-            category = entry.get("category", "uncategorized")
-
-            # Tree path: knowledge/<category>/<topic>/
-            kb_dir = CLEAN_RAG_HOME / "knowledge" / category / topic
-
-            # Check if already cloned (has 5+ files)
-            already_cloned = False
-            if kb_dir.exists():
-                existing = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
-                if existing >= 5:
-                    already_cloned = True
-                    seeded += 1
-
-            # Clone if needed
-            if not already_cloned:
-                _say(f"    {topic} <- {repo}")
-                try:
-                    from research.clone_docs import clone_docs
-                    extensions_set = {e.strip() for e in extensions.split(",")}
-                    branch = entry.get("branch", "main")
-                    stats = clone_docs(
-                        repo=repo, docs_path=path, topic=topic,
-                        branch=branch, extensions=extensions_set, kb_dir=kb_dir,
-                    )
-                    seeded += 1
-                    _ok(f"    {topic}: {stats['files_copied']} files -> knowledge/{category}/{topic}/")
-                    if stats["errors"]:
-                        for err in stats["errors"][:3]:
-                            _warn(f"      {err}")
-                except Exception as e:
-                    failed += 1
-                    _warn(f"    {topic}: {e}")
-                    continue
-
-            # Index into ChromaDB (skip if already indexed)
-            chroma_dir = CLEAN_RAG_HOME / "databases" / category / topic / "chroma"
-            if chroma_dir.exists():
-                if already_cloned:
-                    _ok(f"    {topic}: already seeded and indexed")
-                else:
-                    _ok(f"    {topic}: already indexed")
-                indexed += 1
-                continue
-
-            # Only index if knowledge dir has files
-            if not kb_dir.exists():
-                continue
-            file_count = sum(1 for _ in kb_dir.rglob("*") if _.is_file())
-            if file_count < 1:
-                continue
-
-            try:
-                from server.indexing import index_topic
-                # Load embedding model once on first index
-                if not hasattr(seed_topics, '_embedder'):
-                    _say("    Loading embedding model (one-time)...")
-                    from server.embedding import SentenceTransformerEmbedding
-                    from server.config import EMBEDDING_MODEL
-                    seed_topics._embedder = SentenceTransformerEmbedding(EMBEDDING_MODEL)
-                    _ok("    Embedding model loaded")
-                _say(f"    {topic}: indexing {file_count} files...")
-                result = index_topic(topic, embedder=seed_topics._embedder, category=category)
-                chunks = result.get("chunks_created", 0)
-                ram = result.get("ram_mb", 0)
-                indexed += 1
-                _ok(f"    {topic}: indexed ({chunks} chunks, RAM={ram} MB)")
-            except Exception as e:
-                _warn(f"    {topic}: indexing failed: {e}")
-
-            # GC between topics to prevent RAM accumulation
-            import gc
-            gc.collect()
-
-    _say(f"\n  Seeding complete: {seeded} cloned, {indexed} indexed, {failed} failed out of {total}")
-
-
 def setup_gpu_memory_manager():
     """Configure GPU memory management for embeddings.
 
@@ -490,8 +357,8 @@ def setup_gpu_memory_manager():
         # Configure Python embedding settings with GPU memory awareness
         try:
             from server.embedding import configure_gpu_aware_embedding
-            from server.config import EMBEDDING_MODEL
-            configure_gpu_aware_embedding(EMBEDDING_MODEL)
+            from server.config import CODE_EMBEDDING_MODEL
+            configure_gpu_aware_embedding(CODE_EMBEDDING_MODEL)
             _ok("GPU-aware embedding configured for dynamic batch sizing")
         except Exception as e:
             _say(f"Optional: GPU-aware embedding setup: {e}")
@@ -503,102 +370,18 @@ def setup_gpu_memory_manager():
 
 
 # ---------------------------------------------------------------------------
-# Step 6b: StackExchange dev-subset seed (opt-in only, ~28GB, multi-hour)
-# ---------------------------------------------------------------------------
-def setup_stackexchange_seed(enabled: bool) -> None:
-    """Download, convert, and index the StackExchange dev-relevant subset.
-
-    Real, verified sizes (direct HEAD requests to archive.org, not the
-    dump's own documentation, which was checked and found inaccurate for
-    at least one site this session): stackoverflow.com-Posts.7z is 23.0GB
-    alone, the other 8 dev-relevant sites total roughly 5GB, for a real
-    combined total of about 28GB. This never runs automatically — always
-    opt-in via --seed-stackexchange, since it is a genuinely multi-hour
-    operation (download, py7zr extraction, streaming XML parse, markdown
-    conversion, then embedding).
-    """
-    if not enabled:
-        return
-
-    research_dir = CLEAN_RAG_HOME / "research"
-    download_script = research_dir / "stackexchange_download.py"
-    convert_script = research_dir / "stackexchange_convert.py"
-
-    if not download_script.exists() or not convert_script.exists():
-        _warn("StackExchange pipeline scripts not found, skipping")
-        return
-
-    _say("Downloading StackExchange dev-subset (~28GB, this will take a while)...")
-    result = subprocess.run([sys.executable, str(download_script)], cwd=str(research_dir))
-    if result.returncode != 0:
-        _warn("StackExchange download had errors, check output above before continuing")
-        return
-    _ok("StackExchange download complete")
-
-    _say("Converting Posts.xml to markdown Q&A pairs (extraction + streaming parse, also slow)...")
-    result = subprocess.run([sys.executable, str(convert_script)], cwd=str(research_dir))
-    if result.returncode != 0:
-        _warn("StackExchange conversion had errors, check output above")
-        return
-    _ok("StackExchange conversion complete, knowledge/qa/<site>/ populated")
-
-    _say("Indexing each StackExchange site as its own topic...")
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    qa_dir = CLEAN_RAG_HOME / "knowledge" / "qa"
-    if qa_dir.exists():
-        for site_dir in sorted(qa_dir.iterdir()):
-            if not site_dir.is_dir():
-                continue
-            try:
-                import urllib.request
-                payload = json.dumps({"topic": site_dir.name, "category": "qa"}).encode("utf-8")
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{port}/index-topic",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=1800) as resp:
-                    json.loads(resp.read().decode("utf-8"))
-                _ok(f"Indexed topic: {site_dir.name}")
-            except Exception as e:
-                _warn(f"Failed to index {site_dir.name}: {e}")
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Install clean-rag")
-    parser.add_argument("--no-seed", action="store_true",
-                        help="Skip pre-seeding topic databases")
-    parser.add_argument("--seed", default="",
-                        help="Comma-separated list of topics to seed (default: all)")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
-    parser.add_argument("--seed-stackexchange", action="store_true",
-                        help="Download and index the StackExchange dev-subset dataset "
-                             "(~28GB download, multi-hour, opt-in only, never automatic)")
     args = parser.parse_args()
 
     print("=" * 60)
     print("clean-rag installer")
     print("=" * 60)
     print()
-
-    # Interactive seed choice, only when neither --no-seed nor --seed was
-    # explicitly passed on the command line (so scripted/automated installs
-    # still work unattended) and only when running in a real terminal (not
-    # piped input, which would hang waiting for a line that never comes).
-    seed_explicitly_set = args.no_seed or bool(args.seed)
-    if not seed_explicitly_set and sys.stdin.isatty():
-        print("Seed topic databases now?")
-        print("  1) Yes, seed with the default topic set (slower first install)")
-        print("  2) No, skip seeding (fast install, seed later with --seed)")
-        choice = input("Choose [1/2]: ").strip()
-        if choice == "2":
-            args.no_seed = True
-        print()
 
     # Step 1
     print("Step 1: Creating directories...")
@@ -647,10 +430,6 @@ def main():
     print("\nStep 5k: Configuring metrics environment variables...")
     configure_metrics_env()
 
-    # Step 5l
-    print("\nStep 5l: Registering rag-search-on-edit hook...")
-    register_rag_search_on_edit_hook()
-
     # Step 5m
     print("\nStep 5m: Registering code-pattern-inject hook (enforce on Claude)...")
     register_code_pattern_inject_hook()
@@ -658,21 +437,6 @@ def main():
     # Step 5n
     print("\nStep 5n: Configuring code pattern injection environment...")
     configure_code_pattern_inject_env()
-
-    # Step 6
-    if not args.no_seed:
-        print("\nStep 6: Pre-seeding topic databases...")
-        topic_filter = [t.strip() for t in args.seed.split(",") if t.strip()] if args.seed else None
-        seed_topics(topic_filter)
-    else:
-        print("\nStep 6: Skipped (--no-seed)")
-
-    # Step 6b
-    if args.seed_stackexchange:
-        print("\nStep 6b: Seeding StackExchange dev-subset (opt-in, ~28GB)...")
-        setup_stackexchange_seed(enabled=True)
-    else:
-        print("\nStep 6b: Skipped (pass --seed-stackexchange to enable)")
 
     print()
     print("=" * 60)
@@ -682,7 +446,6 @@ def main():
     print(f"  Hooks:")
     print(f"    PreToolUse:        graph-context-inject.py (auto-fetches caller context)")
     print(f"    PreToolUse:        code-pattern-inject.py (forces research on Edit/Write/MultiEdit)")
-    print(f"    PreToolUse:        rag-search-on-edit.py (searches RAG on Edit/Write)")
     print(f"    UserPromptSubmit:  rag-enforce.py (real-query search, web fallback, git auto-index)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
     print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")

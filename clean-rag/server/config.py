@@ -12,13 +12,8 @@ CLEAN_RAG_HOME = Path(os.environ.get(
 ))
 
 # Subdirectories
-KNOWLEDGE_DIR = CLEAN_RAG_HOME / "knowledge"
 DATABASES_DIR = CLEAN_RAG_HOME / "databases"
 STATE_DIR = CLEAN_RAG_HOME / "state"
-
-# Embedding model for knowledge/topic search (prose).
-# BAAI/bge-base-en-v1.5 (768d) with asymmetric retrieval prefixes.
-EMBEDDING_MODEL = os.environ.get("CLEAN_RAG_EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
 
 # Embedding model for project codebase indexing.
 # st-codesearch-distilroberta-base (768d) trained on code-query pairs.

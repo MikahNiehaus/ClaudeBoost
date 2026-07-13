@@ -123,13 +123,35 @@ class OpenCodeRAGServer:
             },
         ]
 
-    def rag_search(self, query: str, limit: int = 3, min_score: float = 0.5) -> dict:
-        """Search RAG knowledge base."""
+    def rag_search(
+        self, query: str, limit: int = 3, min_score: float = 0.5, project_path: str = ""
+    ) -> dict:
+        """Search the indexed project.
+
+        Used to search "all_topics", the topic knowledge base, which no longer
+        exists. That source now falls through to the unknown-specifier branch in
+        search() and returns nothing, so this tool was quietly dead.
+
+        Searches the project index instead, with mode "both" so a caller gets
+        the import graph neighbours alongside the vector matches. Without a
+        project_path there's nothing to search, so say so rather than returning
+        an empty list that looks like "no matches".
+        """
+        if not project_path:
+            return {
+                "results": [],
+                "search_id": "",
+                "total": 0,
+                "error": "project_path is required. The topic knowledge base is gone; "
+                         "there is nothing to search without an indexed project.",
+            }
+
         try:
             payload = json.dumps(
                 {
                     "query": query,
-                    "sources": ["all_topics"],
+                    "sources": [f"project:{project_path}"],
+                    "mode": "both",
                     "limit": limit,
                     "min_score": min_score,
                 }
