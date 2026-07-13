@@ -278,6 +278,43 @@ def set_env_var() -> None:
     env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+
+
+def protect_research_state() -> None:
+    """Deny the Edit/Write tools on the research gate's state directory.
+
+    Front door lock for the tamper evidence. state/research/ holds the turn
+    stamps and the hash chained audit log, all machine written. Nothing has a
+    legitimate reason to edit them by hand, so denying the model's Edit/Write
+    tools there stops the reflexive "just write the stamp" shortcut and shows a
+    block message instead, which is the moment it should spawn research instead.
+
+    This is a speed bump, not a wall. The harness enforces deny on its own file
+    tools, but a python subprocess run through Bash can still open the file, so
+    a determined bypass remains. That's fine: the hash chained audit
+    (cli/audit.py verify) makes any bypass permanent and greppable. Cheap lock
+    plus audit, the same shape as chattr +a over an append only log. Verified
+    worth keeping via /research this session (defense in depth, non adversarial
+    threat model, zero false positives).
+
+    Idempotent: adds each rule only if absent.
+    """
+    settings = read_json(SETTINGS_PATH)
+    deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+    rules = [
+        "Edit(**/clean-rag/state/research/**)",
+        "Write(**/clean-rag/state/research/**)",
+    ]
+    added = 0
+    for rule in rules:
+        if rule not in deny:
+            deny.append(rule)
+            added += 1
+    if added:
+        write_json(SETTINGS_PATH, settings)
+        _ok(f"research state protected ({added} deny rule(s) added)")
+    else:
+        _ok("research state deny rules already present")
     _ok("CLEAN_RAG_GATE_MODE defaulted to 'stop' (batched proof-checking once per turn)")
 
 
