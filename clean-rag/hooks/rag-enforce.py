@@ -383,6 +383,98 @@ exists, and reports back with sources.
 """
 
 
+# The research gate only blocks code edits. A question with no edit behind it
+# sails straight through, and gets answered from whatever the model happens to
+# remember. This nudge is for that gap.
+#
+# It's a heuristic, and heuristics are exactly what caused every bad injection in
+# this codebase, so the distinction matters: a WRONG NUDGE COSTS NOTHING. The
+# model reads it and ignores it. Wrong retrieved CONTENT is different, it sits
+# mid prompt and actively drags the answer toward the wrong thing (arXiv
+# 2505.06914, the distracting effect). Cheap keyword matching is fine when the
+# worst case is a suggestion nobody takes.
+_DECISION_NUDGE = """
+## This looks like a decision. Research it before you answer.
+
+The research gate only fires on code edits, so nothing is forcing you here. That
+is the point of this nudge: answering a design question from memory is how you
+end up confidently wrong in a way nobody catches.
+
+Spawn research-agent, or run the /research skill. Before you answer, not after.
+Answering first and then pasting findings underneath just anchors you on what you
+already believed.
+
+Cover both axes. **Depth**: the general engineering question, the one an unrelated
+project would get the same answer to. **Breadth**: how this exact kind of thing
+actually gets built, and what people get wrong with it.
+
+And aspect zero, always: **does this already exist?** In this project, in the
+stdlib, in a dependency that's already installed, on GitHub. That is the question
+that most often makes the rest of the work unnecessary.
+
+If it turns out to be trivial, triage-agent will come back with NONE in about 15
+seconds and you have lost nothing.
+"""
+
+# Question shapes that mean a real decision is being made. Deliberately loose:
+# a false positive costs a suggestion nobody takes.
+#
+# Spelling is loose on purpose too. Real messages have typos, and "beter to be per
+# tern or per edit" is a genuine architecture question that a strict pattern would
+# sail right past. Better to catch it with a sloppy regex than miss it with a tidy
+# one.
+_DECISION_PATTERNS = re.compile(
+    r"\b(should i|should we|what'?s the best|whats the best|best way|bet+er to|"
+    r"which (one|approach|library|option|way)|is there a (library|package|tool|way)|"
+    r"how (do|should|would) (i|we|you)|what do you (think|recommend)|"
+    r"research|look ?up|find out|"
+    r"recommend|worth (it|doing)|trade ?offs?|pros and cons|vs\.?|versus|"
+    r"design|architect|approach|alternative|does .* (already )?exist)\b",
+    re.IGNORECASE,
+)
+
+# "X or Y?" is a choice being made, whatever words are in it.
+_COMPARISON = re.compile(r"\bor\b.*\?|\?.*\bor\b", re.IGNORECASE)
+
+# Conversational filler and plain instructions. If the WHOLE message is one of
+# these, say nothing. Anchored at both ends on purpose: "can you set that up?" is
+# an instruction and gets no nudge, but "can you tell me the best way?" is a
+# question and does.
+_CHITCHAT = re.compile(
+    r"^\W*(is (it|this|that) (done|finished|ready|working|good)|are (we|you) done|"
+    r"did (it|that|u|you) work|thanks?|thank you|ok(ay)?|yes|no|yep|nope|sure|"
+    r"cool|nice|good|great|got it|continue|go on|keep going|next|"
+    r"do (it|that|all)|redo|again|status|hows? it going|"
+    r"(can |could |please )?(u |you )?(set|do|make|put|add|fix) (that|it|this|them)"
+    r"( up| in| now)?)\W*$",
+    re.IGNORECASE,
+)
+
+
+def _nudge_for(message: str) -> str:
+    """Which nudge, if any, does this message deserve?
+
+    Returns "" to stay quiet. Silence is a real answer here: printing a research
+    mandate under "is it done" trains the reader to skip the block entirely, and
+    then it's worthless when it matters.
+    """
+    text = (message or "").strip()
+    if not text:
+        return ""
+
+    if _CHITCHAT.match(text):
+        return ""
+
+    # Very short and not a question: almost certainly conversational.
+    if len(text.split()) <= 3 and "?" not in text:
+        return ""
+
+    if _DECISION_PATTERNS.search(text) or _COMPARISON.search(text):
+        return _DECISION_NUDGE
+
+    return _RESEARCH_REQUIRED
+
+
 def _format_rag_results(results: list[dict]) -> str:
     """Format search results as markdown context.
 
@@ -546,7 +638,9 @@ def main() -> int:
     git_root = _find_git_root()
     if not git_root:
         logger.info(f"No git root, nothing to search. query={search_query!r}")
-        print(_RESEARCH_REQUIRED)
+        nudge = _nudge_for(user_prompt)
+        if nudge:
+            print(nudge)
         return 0
 
     search_sources = [f"project:{git_root}"]
@@ -573,6 +667,11 @@ def main() -> int:
     rag_context = _format_rag_results(reranked)
     if rag_context:
         print(rag_context)
+        # Project code turning up is useful, and it is also not research. If the
+        # message is a real decision, still say so: the repo can tell you what
+        # the code does, never whether it is the right thing to do.
+        if _nudge_for(user_prompt) is _DECISION_NUDGE:
+            print(_DECISION_NUDGE)
         return 0
 
     # No usable local research. We deliberately do NOT web search here.
@@ -594,7 +693,9 @@ def main() -> int:
     # lives one level up: tell the orchestrator, let it choose. research-agent
     # picks its own query and calls POST /web-search.
     logger.info(f"No local research. best_score={best_score:.2f} query={search_query!r}")
-    print(_RESEARCH_REQUIRED)
+    nudge = _nudge_for(user_prompt)
+    if nudge:
+        print(nudge)
     return 0
 
 
