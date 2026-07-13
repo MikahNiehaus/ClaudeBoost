@@ -9,10 +9,8 @@
 # vice versa), or the two platforms will drift out of sync silently.
 #
 # Usage:
-#   ./clean-rag/install.sh                     # full install with pre-seeding
-#   ./clean-rag/install.sh --no-seed           # skip pre-seeding (fast)
-#   ./clean-rag/install.sh --seed react,fastapi # seed specific topics
-#   ./clean-rag/install.sh --skip-deps         # skip pip install
+#   ./clean-rag/install.sh                # full install (idempotent, safe to re-run)
+#   ./clean-rag/install.sh --skip-deps    # skip pip install
 
 set -euo pipefail
 

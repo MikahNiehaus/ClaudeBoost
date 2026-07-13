@@ -178,6 +178,76 @@ def _wrap_command(command: str) -> str:
     return f'{interpreter} "{runner}" {rest}'
 
 
+def _hook_target_script(command: str) -> Path | None:
+    """The .py a hook command actually runs (ignoring the hook-run.py wrapper)."""
+    scripts = [m for m in re.findall(r'"([^"]*\.py)"', command)
+               if "hook-run.py" not in m]
+    if not scripts:
+        scripts = [m for m in re.findall(r'(\S+\.py)', command)
+                   if "hook-run.py" not in m]
+    if not scripts:
+        return None
+    raw = scripts[-1]
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    return Path(expanded.replace("\\", "/"))
+
+
+def heal_stale_hooks() -> None:
+    """Make a re-install repair a broken or stale settings.json.
+
+    Two failure modes this fixes, both seen for real:
+
+    1. A registration left over from an older install points at a script that no
+       longer exists (research-task-nudge was the one that bit). If that command
+       isn't wrapped, the missing script exits nonzero and, on a PreToolUse hook,
+       blocks the tool. So any registration whose target script is gone gets
+       pruned here.
+
+    2. A hook registered before the launcher existed runs the script directly,
+       so a later branch switch or deletion breaks it. Every remaining command
+       gets wrapped through hook-run.py, which no-ops a missing script instead of
+       breaking. Idempotent: already wrapped commands are left alone.
+
+    Runs near the end of install, and because ClaudeBoost's setup.py delegates to
+    this installer as its last step, setup.py inherits the heal for free.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.get("hooks", {})
+    if not hooks:
+        return
+
+    pruned = 0
+    wrapped = 0
+    for event, entries in list(hooks.items()):
+        kept = []
+        for entry in entries:
+            drop_entry = False
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if not cmd or ".py" not in cmd:
+                    continue
+                target = _hook_target_script(cmd)
+                if target is not None and not target.exists():
+                    # Deleted or deprecated script. Drop the whole entry so it
+                    # can't fire a missing file.
+                    drop_entry = True
+                    pruned += 1
+                    break
+                new_cmd = _wrap_command(cmd)
+                if new_cmd != cmd:
+                    h["command"] = new_cmd
+                    wrapped += 1
+            if not drop_entry:
+                kept.append(entry)
+        hooks[event] = kept
+
+    if pruned or wrapped:
+        write_json(SETTINGS_PATH, settings)
+        _ok(f"healed hooks: pruned {pruned} dead, wrapped {wrapped} through hook-run.py")
+    else:
+        _ok("hooks healthy: none dead, all wrapped")
+
+
 def _register_hook(
     settings: dict,
     hook_type: str,
@@ -618,6 +688,13 @@ def main():
     # Step 5n
     print("\nStep 5n: Configuring code pattern injection environment...")
     configure_code_pattern_inject_env()
+
+    # Step 6: heal a stale settings.json from an older install. Runs LAST so it
+    # sees every hook this run registered, prunes any that point at a deleted
+    # script, and wraps the rest through hook-run.py. This is what stops a
+    # re-install inheriting a broken hook (research-task-nudge was the real one).
+    print("\nStep 6: Healing hook registrations...")
+    heal_stale_hooks()
 
     print()
     print("=" * 60)
