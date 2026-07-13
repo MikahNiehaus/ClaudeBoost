@@ -9,6 +9,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,8 @@ SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
+RESEARCH_GATE_SENTINEL = "research-gate.py"
+RESEARCH_RECORD_SENTINEL = "research-record.py"
 
 
 def _say(msg: str) -> None:
@@ -89,6 +92,43 @@ def install_deps() -> None:
 # ---------------------------------------------------------------------------
 # Hook registration helpers
 # ---------------------------------------------------------------------------
+
+# Lives in ~/.claude/, deliberately outside the repo, because that's the whole
+# point of it.
+HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
+
+
+def _wrap_command(command: str) -> str:
+    """Route a hook command through hook-run.py so a branch switch can't brick Claude.
+
+    Hook commands are registered in the global settings.json, which does not
+    change when you check out a different branch. The scripts they point at do
+    live in the repo. So a branch that predates a hook leaves a live registration
+    aimed at nothing, python exits 2, and Claude Code reads exit 2 from a
+    PreToolUse hook as "block this tool call". Not a warning. Every Edit, Write,
+    and Bash refused until you switch back.
+
+    Measured on this repo's real branches: switching to main breaks 4 live hooks,
+    2 of them blocking. The two feature branches break 11, with 4 blocking.
+
+    hook-run.py runs the script if it's there, exits 0 if it isn't, and passes
+    real exit codes straight through so a genuine gate can still block a genuine
+    edit. It only swallows absence.
+    """
+    if not command or ".py" not in command or "hook-run.py" in command:
+        return command
+
+    runner = str(HOOK_RUNNER).replace("\\", "/")
+
+    # Split the interpreter off the front, keep whatever it was.
+    match = re.match(r'^\s*("[^"]*"|\S+)\s+(.*)$', command)
+    if not match:
+        return command
+
+    interpreter, rest = match.group(1), match.group(2).strip()
+    return f'{interpreter} "{runner}" {rest}'
+
+
 def _register_hook(
     settings: dict,
     hook_type: str,
@@ -106,6 +146,12 @@ def _register_hook(
     hook_list = hooks.get(hook_type, [])
     if not isinstance(hook_list, list):
         hook_list = []
+
+    # Every registration funnels through here, so wrapping in this one place
+    # covers hooks that don't exist yet too.
+    for h in hook_entry.get("hooks", []):
+        if "command" in h:
+            h["command"] = _wrap_command(h["command"])
 
     new_cmd = ""
     for h in hook_entry.get("hooks", []):
@@ -317,6 +363,45 @@ def register_code_pattern_inject_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The research gate. Blocks a code edit unless a research or triage agent has
+# actually run and declared that it covered this file.
+#
+# Prepended, because it should refuse before the other pre edit hooks bother
+# doing their searches. No point injecting research context into an edit that
+# is about to be blocked anyway.
+# ---------------------------------------------------------------------------
+def register_research_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", RESEARCH_GATE_SENTINEL,
+        hook_entry, prepend=True, label="research-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The other half of the gate: stamps the turn record when a research or triage
+# agent finishes. Without this the gate has nothing to check and blocks
+# everything, so the two are useless apart.
+# ---------------------------------------------------------------------------
+def register_research_record_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-record.py"'
+    hook_entry = {
+        "matcher": "Task|Agent",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", RESEARCH_RECORD_SENTINEL,
+        hook_entry, label="research-record",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 5n: Configure code pattern injection environment
 # ---------------------------------------------------------------------------
 def configure_code_pattern_inject_env() -> None:
@@ -395,7 +480,12 @@ def main():
         print("\nStep 2: Skipped (--skip-deps)")
 
     # Step 3
-    print("\nStep 3: Registering graph-context-inject hook...")
+    print("\nStep 3: Registering the research gate...")
+    register_research_gate_hook()
+    register_research_record_hook()
+
+    # Step 3b
+    print("\nStep 3b: Registering graph-context-inject hook...")
     register_graph_context_hook()
 
     # Step 4
