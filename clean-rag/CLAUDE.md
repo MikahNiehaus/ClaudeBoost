@@ -31,7 +31,7 @@ Only Claude Code can start an agent, and the stamp only lands after one complete
 
 **`research-agent`** (Sonnet) runs only when triage says it's worth it. It picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources.
 
-Both are defined in `~/.claude/agents/` and preload the `research-routing` skill.
+Both are defined in `~/.claude/agents/`. research-agent preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check). triage-agent doesn't: its job is just NONE versus RESEARCH, and it runs on every message, so its context floor is kept as thin as possible.
 
 ### Neither agent can write, and their shell is caged
 

@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -68,6 +69,54 @@ def ensure_directories() -> None:
     for d in dirs:
         (CLEAN_RAG_HOME / d).mkdir(parents=True, exist_ok=True)
     _ok("Directories created")
+
+
+# ---------------------------------------------------------------------------
+# Copy the pieces that have to live under ~/.claude, not in the repo.
+#
+# The research agents, the two skills, and the hook launcher can't stay only in
+# the repo: Claude Code reads agents from ~/.claude/agents, skills from
+# ~/.claude/skills, and the launcher is referenced from ~/.claude/settings.json.
+# So the repo holds the canonical copies under clean-rag/portable/, and this
+# copies them into place. A clone plus one install run reproduces the whole
+# setup on a new machine, which it could not before: the hooks were wired to run
+# a launcher that nothing created and to satisfy a gate with agents that didn't
+# exist.
+# ---------------------------------------------------------------------------
+def install_user_assets() -> None:
+    portable = CLEAN_RAG_HOME / "portable"
+    if not portable.is_dir():
+        _warn("clean-rag/portable not found, skipping user asset install")
+        return
+
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _copy_file(src: Path, dst: Path) -> None:
+        if not src.is_file():
+            _warn(f"missing bundled file: {src.name}")
+            return
+        # Don't silently stomp a copy the user edited to be newer than the repo's.
+        # Note it and skip, so a local tweak survives a re-run.
+        if dst.exists() and dst.stat().st_mtime > src.stat().st_mtime:
+            _warn(f"{dst.name} in ~/.claude is newer than the repo copy, leaving it")
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
+
+    # The branch safety launcher. Lives outside the repo on purpose, so a branch
+    # switch can't remove it out from under a live hook registration.
+    _copy_file(portable / "hook-run.py", CLAUDE_DIR / "hook-run.py")
+
+    # Agents. research-agent (Sonnet) and triage-agent (Haiku).
+    for md in (portable / "agents").glob("*.md"):
+        _copy_file(md, CLAUDE_DIR / "agents" / md.name)
+
+    # Skills. Copied whole so a skill can carry more than one file later.
+    skills_src = portable / "skills"
+    if skills_src.is_dir():
+        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True)
+        _ok("installed .claude/skills (research, research-routing)")
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +520,10 @@ def main():
     # Step 1
     print("Step 1: Creating directories...")
     ensure_directories()
+
+    # Step 1b
+    print("\nStep 1b: Installing agents, skills, and the hook launcher into ~/.claude...")
+    install_user_assets()
 
     # Step 2
     if not args.skip_deps:
