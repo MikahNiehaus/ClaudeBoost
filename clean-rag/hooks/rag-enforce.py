@@ -410,14 +410,76 @@ def _format_web_results(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _read_user_prompt() -> str:
-    """Read the user's actual prompt from stdin (UserPromptSubmit payload)."""
+def _read_hook_payload() -> dict:
+    """Read the full UserPromptSubmit payload from stdin, not just the prompt.
+
+    Other hooks in this codebase (human-voice-guard.py, compaction-save.py)
+    already read payload["transcript_path"] to see conversation history —
+    this hook never had, and only ever searched the current message in
+    isolation. That is the real root cause behind today's bad injections:
+    "wired up" searched literally into electrical wiring results, "really
+    sure" into grammar advice, with zero awareness that the conversation
+    was actually about hook registration and injection reliability. Reading
+    the transcript lets recent context ground vague follow ups.
+    """
     try:
-        payload = json.loads(sys.stdin.read())
-        return payload.get("prompt", "")
+        return json.loads(sys.stdin.read())
     except Exception as e:
-        logger.error(f"Failed to read prompt from stdin: {type(e).__name__}: {e}")
+        logger.error(f"Failed to read hook payload from stdin: {type(e).__name__}: {e}")
+        return {}
+
+
+def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
+    """Read the last assistant message text from the transcript, tail only.
+
+    This session's transcript is 15MB / 6936 lines (confirmed by direct
+    ls/wc). Reading the whole file on every single message would be slow
+    and wasteful. Seeking from the end and reading only the last ~200KB is
+    enough to reliably contain the most recent assistant turn even with
+    large tool outputs in between, without the full-file cost.
+    """
+    if not transcript_path:
         return ""
+
+    try:
+        path = Path(transcript_path)
+        size = path.stat().st_size
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            if size > tail_bytes:
+                f.seek(size - tail_bytes)
+                f.readline()  # discard partial line from the seek
+            lines = f.readlines()
+    except Exception as e:
+        logger.error(f"Failed to read transcript tail: {type(e).__name__}: {e}")
+        return ""
+
+    last_text = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+
+        message = entry.get("message", entry)
+        if message.get("role") != "assistant":
+            continue
+
+        content = message.get("content", "")
+        if isinstance(content, str):
+            last_text = content
+        elif isinstance(content, list):
+            parts = [
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
+            if parts:
+                last_text = " ".join(parts)
+
+    return last_text
 
 
 def main() -> int:
@@ -427,7 +489,8 @@ def main() -> int:
     if git_context:
         print(git_context)
 
-    user_prompt = _read_user_prompt()
+    hook_payload = _read_hook_payload()
+    user_prompt = hook_payload.get("prompt", "")
     keywords = _extract_keywords(user_prompt) if user_prompt else []
 
     if not keywords:
@@ -439,6 +502,20 @@ def main() -> int:
         # from. Skip injection entirely instead of guessing.
         logger.info(f"No usable keywords, skipping injection. prompt={user_prompt!r}")
         return 0
+
+    # Blend in recent conversation context for short/vague messages only.
+    # A message with 3+ real keywords already carries a clear topic and
+    # doesn't need help. A short follow up ("did that fix it") does — this
+    # is the mechanical, zero cost half of "query contextualization"
+    # (confirmed real technique, researched this session): it can't resolve
+    # pronouns like a real rewrite would, but it grounds the search in
+    # whatever was actually just discussed instead of searching the bare
+    # words alone.
+    if len(keywords) <= 2:
+        transcript_path = hook_payload.get("transcript_path", "")
+        recent_text = _get_recent_context(transcript_path)
+        context_keywords = _extract_keywords(recent_text, limit=4) if recent_text else []
+        keywords = keywords + [w for w in context_keywords if w not in keywords]
 
     search_query = " ".join(keywords)
 
