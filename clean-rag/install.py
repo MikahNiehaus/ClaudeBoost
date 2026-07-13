@@ -29,6 +29,7 @@ SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 RESEARCH_GATE_SENTINEL = "research-gate.py"
 RESEARCH_RECORD_SENTINEL = "research-record.py"
+AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
 
 
 def _say(msg: str) -> None:
@@ -501,6 +502,24 @@ def register_spec_compliance_gate_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5h: register the autotest gate Stop hook, the execution feedback loop.
+# When code changed this turn, it runs the project's tests and blocks the stop
+# once on a real failure so the model fixes from the actual output. Loop safe:
+# it honors stop_hook_active and caps blocks per session.
+# ---------------------------------------------------------------------------
+def register_auto_test_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/auto-test-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", AUTO_TEST_GATE_SENTINEL,
+        hook_entry, label="auto-test-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 5i: Configure web search env vars
 # ---------------------------------------------------------------------------
 def configure_web_search_env() -> None:
@@ -716,6 +735,10 @@ def main():
     # Step 5f
     print("\nStep 5f: Registering spec-compliance-gate hook...")
     register_spec_compliance_gate_hook()
+
+    # Step 5h
+    print("\nStep 5h: Registering auto-test-gate hook...")
+    register_auto_test_gate_hook()
 
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")

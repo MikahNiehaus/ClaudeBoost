@@ -104,6 +104,20 @@ class OpenCodeRAGServer:
                 },
             },
             {
+                "name": "run_tests",
+                "description": "Run the project's tests and return the REAL failure output (assertion diff, stack trace). Call this after writing code, then fix from the actual output, not by rereading your own diff.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_path": {
+                            "type": "string",
+                            "description": "Absolute path to the project to test (its test command is auto detected: npm test, vitest, jest, or pytest)",
+                        },
+                    },
+                    "required": ["project_path"],
+                },
+            },
+            {
                 "name": "inject_full_context",
                 "description": "Process a prompt and inject RAG + metrics + web context in one call",
                 "inputSchema": {
@@ -236,6 +250,41 @@ class OpenCodeRAGServer:
         except Exception as e:
             logger.error(f"RAG search error: {e}")
             return {"results": [], "search_id": "", "error": str(e)}
+
+    def run_tests(self, project_path: str) -> dict:
+        """Run the project's tests via the clean-rag /run-tests endpoint.
+
+        Hands the model the real failure text, which is the execution feedback a
+        weak model actually needs to fix its own code. Starts the server if it is
+        down, same as rag_search. Without a project_path there is nothing to run.
+        """
+        if not project_path:
+            return {"has_tests": False, "passed": None, "error": "project_path is required"}
+
+        self._ensure_server_up()
+
+        try:
+            payload = json.dumps({"project_path": project_path}).encode("utf-8")
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.rag_port}/run-tests",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            # The run is capped at 120s server side, so give it a little more.
+            with urllib.request.urlopen(req, timeout=140) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                logger.info(
+                    "run_tests %s: has_tests=%s passed=%s",
+                    project_path, data.get("has_tests"), data.get("passed"),
+                )
+                return data
+        except urllib.error.URLError as e:
+            logger.error(f"run_tests connection failed: {e}")
+            return {"has_tests": False, "passed": None, "error": "RAG server unavailable"}
+        except Exception as e:
+            logger.error(f"run_tests error: {e}")
+            return {"has_tests": False, "passed": None, "error": str(e)}
 
     def code_metrics(self, filepath: str) -> dict:
         """Get code metrics for a file."""
@@ -390,6 +439,9 @@ class OpenCodeRAGServer:
                 tool_input.get("min_score", 0.5),
                 tool_input.get("project_path", ""),
             )
+
+        elif tool_name == "run_tests":
+            return self.run_tests(tool_input.get("project_path", ""))
 
         elif tool_name == "code_metrics":
             return self.code_metrics(tool_input.get("filepath", ""))

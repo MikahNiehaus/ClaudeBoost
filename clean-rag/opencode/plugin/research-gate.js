@@ -196,6 +196,21 @@ function ragHasResults(outputStr) {
   return s.trim().length > 0;
 }
 
+// A run_tests tool result counts as "tests passed this session" only when it
+// actually passed. The MCP server returns {"has_tests":true,"passed":true,...} as
+// a JSON string. Anything else (failed, no tests, an error, unparseable) reads as
+// not passed, so the reminder keeps nudging.
+function runTestsPassed(outputStr) {
+  if (!outputStr) return false;
+  try {
+    const data = JSON.parse(outputStr);
+    if (data && typeof data === "object") return data.passed === true;
+  } catch (_) {
+    // Not JSON. Fall back to a substring check so a wrapped payload still reads.
+  }
+  return /"passed"\s*:\s*true\b/.test(String(outputStr));
+}
+
 export const ResearchGate = async () => {
   // Files each session's research has named via COVERS lines.
   const coveredScopes = new Map(); // sessionID -> string[]
@@ -204,6 +219,9 @@ export const ResearchGate = async () => {
   // Last code file written that has not been followed by a test. Best effort,
   // used only to append the verify by running reminder onto a block message.
   const untestedCode = new Map(); // sessionID -> filePath
+  // Sessions where the run_tests tool came back passed=true. Best effort, so the
+  // reminder can say "tests have not passed this session" only when true.
+  const testsPassed = new Set(); // sessionID
 
   return {
     // After a tool runs, read its result text. Two things can happen:
@@ -228,6 +246,33 @@ export const ResearchGate = async () => {
           gateLog("rag-search-nonzero", { session, tool });
         } else {
           gateLog("rag-search-zero-ignored", { session, tool });
+        }
+      }
+
+      // A non empty web search is real research too, and for a FRESH project it's
+      // the ONLY research available: rag_search always returns 0 on an unindexed
+      // project, so without this a new project could never satisfy the gate except
+      // by a COVERS line, which a weak model rarely produces. A web search that
+      // finds a real reference (grounding, the lever that lifts weak models) is
+      // exactly what should unlock. Same session wide allow as a non zero rag_search.
+      if (tool.includes("web_search") || tool.includes("web-search")) {
+        if (ragHasResults(text)) {
+          ragProject.add(session);
+          gateLog("web-search-nonzero", { session, tool });
+        } else {
+          gateLog("web-search-zero-ignored", { session, tool });
+        }
+      }
+
+      // run_tests coming back passed=true is the execution feedback signal. Mark
+      // the session and clear the untested flag so the reminder stops nagging.
+      if (tool.includes("run_tests")) {
+        if (runTestsPassed(text)) {
+          testsPassed.add(session);
+          untestedCode.delete(session);
+          gateLog("run-tests-passed", { session, tool });
+        } else {
+          gateLog("run-tests-not-passed", { session, tool });
         }
       }
     },
@@ -280,8 +325,10 @@ export const ResearchGate = async () => {
       }
 
       const pending = untestedCode.get(session);
-      const testReminder = pending
-        ? "\n\nAlso: you wrote " + pending + " and have not run a test on it. Do that, then fix from the real failure."
+      const testReminder = pending && !testsPassed.has(session)
+        ? "\n\nAlso: you wrote " + pending + " and run_tests has not passed this "
+          + "session. Call the run_tests tool on what you wrote, then fix from the "
+          + "real failure output."
         : "";
 
       gateLog("blocked-not-in-scope", { session, tool, file: filePath, covered, untested: pending || null });
@@ -289,10 +336,14 @@ export const ResearchGate = async () => {
         "BLOCKED by clean-rag research gate: this file is not in a researched scope.\n\n" +
         "About to edit: " + filePath + "\n" +
         scopeMsg + "\n\n" +
-        "To proceed: call the clean-rag rag_search MCP tool with a query about this " +
-        "file (a non zero result covers the whole project), or spawn research-agent, " +
-        "which emits a COVERS: line naming the files it researched. Then retry the " +
-        "edit. Markdown and config files are never gated." + testReminder
+        "To proceed, do ONE of these, then retry the edit:\n" +
+        "  1. Call rag_search about this file. If it returns 0 results, the project " +
+        "is not indexed yet, so that alone will NOT unlock the gate.\n" +
+        "  2. When rag_search is empty (a fresh project), call web_search_fallback " +
+        "to research it. A web search that finds real references DOES unlock the " +
+        "gate, and its results are exactly the grounding you should build from.\n" +
+        "  3. Or spawn research-agent, which emits a COVERS: line naming files.\n\n" +
+        "Markdown and config files are never gated." + testReminder
       );
     },
   };

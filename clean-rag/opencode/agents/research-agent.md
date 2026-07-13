@@ -54,6 +54,22 @@ Cover two directions:
   project, the standard library, an installed dependency, or on GitHub. That last
   one is the aspect people skip and regret.
 
+## Ground a known genre task in a real reference
+
+If the task is a known genre, a game (Flappy Bird, Snake, Tetris), a common
+algorithm, or a standard widget, get ONE real working reference implementation
+before anyone writes code. Use `clean-rag_web_search_fallback` to find it (GitHub
+first), then read that one page. Pull out the patterns that are easy to get wrong
+from memory: the physics constants, the collision math, the game loop timing, the
+edge cases. Feed those real working patterns into the build. A weak model guessing
+gravity and jump velocity from memory produces a game that feels wrong. Handed the
+real numbers from a working repo, the same model does not. Grounding helps a weak
+model more than a strong one, so it is not optional busywork.
+
+After the build agent writes the code, it should call the `run_tests` tool and fix
+from the real failure output, not from rereading its own diff. Say so in your
+recommendations.
+
 ## Report
 
 End with `## Summary` (300 words max): findings per aspect with sources, the

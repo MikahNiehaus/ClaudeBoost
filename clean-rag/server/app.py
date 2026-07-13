@@ -338,6 +338,125 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     return _json_response(result, status)
 
 
+def _has_pytest_tests(root: Path) -> bool:
+    """True if this looks like a pytest project worth running.
+
+    pyproject/pytest.ini or any test_*.py / *_test.py at the root or under
+    tests/. Kept cheap on purpose so it never walks a huge tree.
+    """
+    if (root / "pyproject.toml").is_file() or (root / "pytest.ini").is_file():
+        return True
+    for pat in ("test_*.py", "*_test.py"):
+        for _ in root.glob(pat):
+            return True
+    tests_dir = root / "tests"
+    if tests_dir.is_dir():
+        for _ in tests_dir.rglob("test_*.py"):
+            return True
+    return False
+
+
+def _run_project_tests(project_path: str) -> dict:
+    """Detect the project's test command, run it, report the real result.
+
+    Blocking (subprocess), so callers run it in an executor. Returns
+    has_tests False when there's nothing to run, which is the signal the Stop
+    hook needs to tell "tests passed" apart from "no tests here" and never
+    block on the latter.
+
+    Command strings are fixed literals run with shell=True so npm/npx/python
+    resolve the same way on Windows and posix. project_path is never spliced
+    into the command, it's only the cwd, so there's no shell injection surface.
+    """
+    root = Path(project_path)
+    cmd = None
+    label = ""
+
+    pkg = root / "package.json"
+    if pkg.is_file():
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        scripts = data.get("scripts") or {}
+        test_script = scripts.get("test") or ""
+        # The npm init default is a placeholder that always exits 1. Running it
+        # would report a fake failure, so skip it and fall through to a real runner.
+        if test_script and "no test specified" not in test_script:
+            cmd, label = "npm test", "npm test"
+        else:
+            deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+            if "vitest" in deps:
+                cmd, label = "npx vitest run", "vitest"
+            elif "jest" in deps:
+                cmd, label = "npx jest", "jest"
+
+    if cmd is None and _has_pytest_tests(root):
+        cmd, label = "python -m pytest -q", "pytest"
+
+    if cmd is None:
+        return {"has_tests": False, "passed": None, "summary": "no test command found"}
+
+    import os
+    import subprocess
+    # CI=true stops watch mode runners (create-react-app, vitest) from hanging.
+    env = {**os.environ, "CI": "true"}
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(root), shell=True, capture_output=True, text=True,
+            timeout=120, env=env, errors="replace",
+        )
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or "") + (e.stderr or "") if isinstance(e.stdout, str) else ""
+        return {
+            "has_tests": True, "passed": False, "exit_code": None,
+            "summary": f"{label} timed out after 120s",
+            "failures": out[-2000:],
+        }
+    except Exception as e:
+        return {
+            "has_tests": True, "passed": None, "exit_code": None,
+            "summary": f"could not run {label}: {e}",
+            "failures": str(e)[-2000:],
+        }
+
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    passed = proc.returncode == 0
+    summary = f"{label}: {'passed' if passed else f'failed (exit {proc.returncode})'}"
+    return {
+        "has_tests": True,
+        "passed": passed,
+        "exit_code": proc.returncode,
+        "summary": summary,
+        # Tail only. The full log is noise, the tail is where the assertion diff
+        # and stack trace live, which is the feedback a weak model actually needs.
+        "failures": "" if passed else combined[-2000:],
+    }
+
+
+async def handle_run_tests(request: web.Request) -> web.Response:
+    """POST /run-tests: detect and run a project's tests, return the real result.
+
+    Body: {"project_path": "<abs>"}. Runs the detected command in an executor so
+    the event loop stays free. See _run_project_tests for detection order.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(_run_project_tests, project_path))
+    return _json_response(result)
+
+
 async def handle_web_search(request: web.Request) -> web.Response:
     """POST /web-search: DuckDuckGo search, source ranked and sanitized.
 
@@ -526,6 +645,7 @@ def create_app() -> web.Application:
     app.router.add_post("/web-search", handle_web_search)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)
+    app.router.add_post("/run-tests", handle_run_tests)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/register-project", handle_register_project)
     app.on_startup.append(_on_startup)

@@ -62,6 +62,14 @@ Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
 confirms it.
 
+This verify step is now partly enforced. `hooks/auto-test-gate.py` (a Stop hook)
+runs the project's tests when code changed this turn, and if they really fail it
+blocks the stop once and hands you back the real failure output to fix from. It is
+loop safe: it honors `stop_hook_active`, caps blocks per session, and allows on
+anything ambiguous (no tests, a missing runner, an environment problem). So on a
+project with tests you will often get the actual assertion diff or stack trace
+pushed back at you automatically. Fix from that, do not self review.
+
 ## clean-rag (the search backend, port 8613)
 
 Search runs over projects you've indexed, plus live web search. There is no
