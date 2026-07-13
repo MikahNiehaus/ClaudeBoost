@@ -11,7 +11,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/clean-rag/hooks/research-agent-bash-guard.py\""
+          command: "python \"$CLEAN_RAG_HOME/hooks/research-agent-bash-guard.py\""
 color: cyan
 ---
 

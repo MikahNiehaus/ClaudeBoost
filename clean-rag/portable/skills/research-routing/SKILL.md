@@ -25,6 +25,27 @@ exists, say that explicitly. "I searched GitHub and the stdlib, found nothing,
 so writing it is the right call" is a real finding. Silence here reads as though
 you never checked, and you'll be assumed not to have.
 
+## Quality lenses, run every task through these
+
+Depth and breadth are about the topic. These are about not shipping a bug. Not
+every lens applies every time, but the point is to CHECK, not assume. A bug that
+ships is usually one of these that nobody looked at.
+
+- **Correctness and edge cases.** What are the real failure modes of this exact
+  thing? Off by one, empty input, concurrency, the backgrounded tab, the huge
+  file, the null. "What people get wrong with X" is a real search, run it.
+- **Security.** Does this touch a trust boundary: user input, a query, auth, a
+  file path, a subprocess, a deserialization? If yes, research the standard
+  defense (parameterized queries, input validation, escaping, least privilege),
+  never from memory. If no, say so.
+- **Test quality.** Not just "is it testable" but which cases earn a test: the
+  edge cases above, the security path, the thing that broke last time. Name them.
+- **Maintainability.** Will the next person understand it, and is there a simpler
+  shape? This is the "what good looks like" half of breadth.
+
+Skip a lens out loud ("no trust boundary here, security not applicable") rather
+than silently. A deliberate skip is a finding. A silent one reads as an oversight.
+
 ## Cover every aspect
 
 You'll be given a list of aspects. Every one gets a finding, or an explicit

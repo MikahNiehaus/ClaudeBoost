@@ -52,6 +52,10 @@ class OpenCodeRAGServer:
                             "type": "string",
                             "description": "Search query (e.g., 'error handling patterns', 'SQL injection prevention')",
                         },
+                        "project_path": {
+                            "type": "string",
+                            "description": "Absolute path to the indexed project to search. Required: without it there is nothing to search.",
+                        },
                         "limit": {
                             "type": "integer",
                             "description": "Max results (default 3)",
@@ -63,7 +67,7 @@ class OpenCodeRAGServer:
                             "default": 0.5,
                         },
                     },
-                    "required": ["query"],
+                    "required": ["query", "project_path"],
                 },
             },
             {
@@ -336,6 +340,7 @@ class OpenCodeRAGServer:
                 tool_input.get("query", ""),
                 tool_input.get("limit", 3),
                 tool_input.get("min_score", 0.5),
+                tool_input.get("project_path", ""),
             )
 
         elif tool_name == "code_metrics":
@@ -357,51 +362,104 @@ class OpenCodeRAGServer:
             return {"error": f"Unknown tool: {tool_name}"}
 
 
+# The MCP protocol version we speak. OpenCode's client sends its own in the
+# initialize request; we answer with the one we implement.
+PROTOCOL_VERSION = "2024-11-05"
+SERVER_INFO = {"name": "clean-rag-opencode", "version": "1.0.0"}
+
+
+def _result(request_id: Any, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _error(request_id: Any, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _send(response: dict) -> None:
+    sys.stdout.write(json.dumps(response) + "\n")
+    sys.stdout.flush()
+
+
 def main():
-    """MCP server main loop."""
+    """MCP server main loop, speaking JSON-RPC 2.0 over stdio.
+
+    The old loop read bare {id, method, params} frames and answered without a
+    "jsonrpc" field or an initialize handshake, so a real MCP client (OpenCode's
+    included) rejected it before ever listing a tool. This handles the full
+    handshake: initialize, the notifications/initialized ack, then tools/list and
+    tools/call. Notifications carry no id and get no reply, per JSON-RPC. Anything
+    else comes back as a -32601 method-not-found error.
+    """
     server = OpenCodeRAGServer()
     logger.info("OpenCode RAG MCP Server starting...")
 
-    # Read from stdin, process requests, write to stdout
     while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        line = line.strip()
+        if not line:
+            continue
+
         try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-
             request = json.loads(line)
-            request_id = request.get("id")
-            method = request.get("method")
-
-            if method == "tools/list":
-                response = {
-                    "id": request_id,
-                    "result": {"tools": server.tools},
-                }
-
-            elif method == "tools/call":
-                tool_name = request.get("params", {}).get("name")
-                tool_input = request.get("params", {}).get("arguments", {})
-
-                result = server.handle_tool_call(tool_name, tool_input)
-                response = {
-                    "id": request_id,
-                    "result": result,
-                }
-
-            else:
-                response = {
-                    "id": request_id,
-                    "error": {"code": -32601, "message": f"Unknown method: {method}"},
-                }
-
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
-
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
+            # No id to echo, so per spec send a parse error with a null id.
+            _send(_error(None, -32700, f"Parse error: {e}"))
+            continue
+
+        request_id = request.get("id")
+        method = request.get("method")
+        # A request with no "id" is a notification and must never get a response.
+        is_notification = "id" not in request
+
+        try:
+            if method == "initialize":
+                response = _result(request_id, {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "serverInfo": SERVER_INFO,
+                    "capabilities": {"tools": {}},
+                })
+
+            elif method == "notifications/initialized":
+                # Client's ack that the handshake finished. It's a notification, so
+                # we stay silent and wait for the first real request.
+                continue
+
+            elif method == "tools/list":
+                response = _result(request_id, {"tools": server.tools})
+
+            elif method == "tools/call":
+                params = request.get("params", {})
+                tool_name = params.get("name")
+                tool_input = params.get("arguments", {})
+                result = server.handle_tool_call(tool_name, tool_input)
+                is_error = isinstance(result, dict) and bool(result.get("error"))
+                response = _result(request_id, {
+                    "content": [{"type": "text", "text": json.dumps(result)}],
+                    "isError": is_error,
+                })
+
+            elif is_notification:
+                # Some other notification we don't act on. Silence is the correct
+                # answer to a notification.
+                continue
+
+            else:
+                response = _error(request_id, -32601, f"Unknown method: {method}")
+
+            if is_notification:
+                # A handled method that arrived without an id: still no reply.
+                continue
+
+            _send(response)
+
         except Exception as e:
-            logger.error(f"Unhandled error: {e}")
+            logger.error(f"Unhandled error handling {method}: {e}")
+            if not is_notification:
+                _send(_error(request_id, -32603, f"Internal error: {e}"))
 
 
 if __name__ == "__main__":
