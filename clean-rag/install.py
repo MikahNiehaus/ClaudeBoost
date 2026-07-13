@@ -503,6 +503,98 @@ def setup_gpu_memory_manager():
 
 
 # ---------------------------------------------------------------------------
+# Step 5o: Set up the query classifier (isolated venv, CPU-only torch)
+# ---------------------------------------------------------------------------
+def setup_query_classifier(skip: bool = False) -> None:
+    """Build .venv-router and start the classifier server.
+
+    Isolated venv, not the shared Python environment: confirmed this
+    session that installing torch/transformers in the shared env breaks
+    other projects' pinned dependencies (open-webui's pyarrow==20.0.0
+    conflicts with the datasets>=5.0.0 that fastcoref/transformers pull
+    in). rag-enforce.py degrades gracefully to the mechanical keyword
+    system if this venv or server is missing, so a failure here is not
+    fatal to the rest of clean-rag.
+
+    Downloads a real ~1.5GB model (deberta-v3-large) on first run — this
+    is real, not exaggerated, so it is skippable.
+    """
+    if skip:
+        _say("Query classifier setup skipped (--skip-classifier)")
+        return
+
+    venv_dir = CLEAN_RAG_HOME / ".venv-router"
+    venv_python = venv_dir / "Scripts" / "python.exe"
+
+    if not venv_python.exists():
+        _say("Creating isolated venv for query classifier (.venv-router)...")
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            _warn(f"venv creation failed: {result.stderr[:200]}")
+            _say("Query classifier will be unavailable — rag-enforce.py falls back to mechanical keyword search")
+            return
+        _ok("Isolated venv created")
+
+    _say("Installing torch (CPU) + transformers in isolated venv (this can take a few minutes)...")
+    result = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-q", "torch",
+         "--index-url", "https://download.pytorch.org/whl/cpu"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _warn(f"torch install failed: {result.stderr[:300]}")
+        _say("Query classifier will be unavailable — rag-enforce.py falls back to mechanical keyword search")
+        return
+
+    result = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-q", "transformers==4.40.0"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _warn(f"transformers install failed: {result.stderr[:300]}")
+        _say("Query classifier will be unavailable — rag-enforce.py falls back to mechanical keyword search")
+        return
+
+    _ok("Query classifier dependencies installed (CPU-only torch, confirmed via --index-url)")
+
+    settings = read_json(SETTINGS_PATH)
+    env = settings.setdefault("env", {})
+    env.setdefault("CLEAN_RAG_CLASSIFIER_PORT", "8614")
+    write_json(SETTINGS_PATH, settings)
+    _ok("Classifier port configured (CLEAN_RAG_CLASSIFIER_PORT=8614)")
+
+    # Idempotency check: re-running install.py while the server is already
+    # up would otherwise spawn a second process bound to the same port,
+    # which fails since ThreadingHTTPServer cannot share a port.
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://127.0.0.1:8614/health", method="GET")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            json.loads(resp.read().decode("utf-8"))
+        _ok("Classifier server already running, skipping start")
+        return
+    except Exception:
+        pass  # not running, fall through to start it
+
+    _say("Starting classifier server in background (model downloads on first start, ~1.5GB)...")
+    try:
+        log_path = CLEAN_RAG_HOME / "state" / "classifier-server.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            subprocess.Popen(
+                [str(venv_python), str(CLEAN_RAG_HOME / "server" / "classifier_server.py")],
+                stdout=log_file, stderr=log_file, stdin=subprocess.DEVNULL,
+            )
+        _ok("Classifier server starting (check state/classifier-server.log for progress)")
+    except Exception as e:
+        _warn(f"Failed to start classifier server: {e}")
+        _say("rag-enforce.py will self-heal and start it on first use instead")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -513,6 +605,8 @@ def main():
                         help="Comma-separated list of topics to seed (default: all)")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
+    parser.add_argument("--skip-classifier", action="store_true",
+                        help="Skip query classifier setup (isolated venv, ~1.5GB model download)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -578,6 +672,10 @@ def main():
     # Step 5n
     print("\nStep 5n: Configuring code pattern injection environment...")
     configure_code_pattern_inject_env()
+
+    # Step 5o
+    print("\nStep 5o: Setting up query classifier (isolated venv)...")
+    setup_query_classifier(skip=args.skip_classifier)
 
     # Step 6
     if not args.no_seed:

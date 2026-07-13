@@ -85,6 +85,14 @@ The model must never decide "I don't need RAG for this, I know it cold." That de
 ### 7. Background crawler still applies
 When web search fallback fires, the existing `_spawn_background_crawler()` behavior stays: index crawled results without LLM summarization, so future queries on the same topic hit local RAG instead of re-searching the web every time.
 
+### 8. Agent correction when injected results are clearly wrong (user approved, not yet actually practiced)
+
+The hook's mechanical search has a real, confirmed failure mode: casual or vague messages get searched literally and can return nonsense (this session alone: "really sure" returned grammar advice, "wired up" returned electrical wiring instructions, "would it be better" returned a Dickens quote and a Bible verse, then wrote that content into the permanent KB via the background crawler). The hook cannot fix this on its own — it has no real conversation understanding, only a transcript file it can parse for keywords.
+
+The agreed fix: the hook still fires first, every time, as the fast mechanical default. But when the injected results are obviously wrong given the actual conversation, the model itself must spawn an Agent with real context (not a re-parsed transcript, the actual conversation state) to run a corrected search before treating the bad injection as final. The hook cannot do this itself since it has no access to the Agent or Task tool, that only exists in the model's own turn.
+
+This was approved but not implemented. A user check on 2026-07-12 confirmed it had not actually been practiced even once, despite several visibly bad injections occurring in the same session after approval. The gap: noticing an injection is bad is not the same as acting on it. This section exists specifically so that gap does not repeat silently again.
+
 ## Open Decision: Search Backend
 
 Every layer of the injection pipeline is confirmed working end to end (real query, correct timeout, retries with logging, mechanical topical relevance check, in-process fallback call). The one remaining gap is `server/web_search.py`'s use of DuckDuckGo's Instant Answer API, which returns empty results for tutorial/how-to queries by design, not by failure. This was verified with a direct call, not assumed.
