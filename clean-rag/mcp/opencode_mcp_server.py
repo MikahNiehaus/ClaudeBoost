@@ -127,6 +127,50 @@ class OpenCodeRAGServer:
             },
         ]
 
+    def _ensure_server_up(self, timeout_s: float = 30.0) -> bool:
+        """Reachable check, and start the clean-rag server if it isn't.
+
+        OpenCode users don't run server_ctl by hand, so a search that hits a
+        dead server is a dead end. Start it for them, once, lazily on the first
+        search that needs it. Bounded: if it won't come up we log and let the
+        caller fall through to its "unavailable" path rather than hang.
+        """
+        import subprocess
+        import time
+
+        status_url = f"http://127.0.0.1:{self.rag_port}/status"
+
+        def _reachable() -> bool:
+            try:
+                with urllib.request.urlopen(status_url, timeout=2) as r:
+                    return r.status == 200
+            except Exception:
+                return False
+
+        if _reachable():
+            return True
+
+        logger.info("clean-rag server not reachable on port %s, starting it", self.rag_port)
+        try:
+            server_ctl = _CLEAN_RAG_HOME / "cli" / "server_ctl.py"
+            subprocess.Popen(
+                [sys.executable, str(server_ctl), "start"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.error("could not launch clean-rag server: %s", e)
+            return False
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            time.sleep(2)
+            if _reachable():
+                logger.info("clean-rag server is up")
+                return True
+        logger.error("clean-rag server did not come up within %.0fs", timeout_s)
+        return False
+
     def rag_search(
         self, query: str, limit: int = 3, min_score: float = 0.5, project_path: str = ""
     ) -> dict:
@@ -149,6 +193,10 @@ class OpenCodeRAGServer:
                 "error": "project_path is required. The topic knowledge base is gone; "
                          "there is nothing to search without an indexed project.",
             }
+
+        # Start the server if it's down. If it still can't come up, the request
+        # below fails and we return the existing unavailable response.
+        self._ensure_server_up()
 
         try:
             payload = json.dumps(

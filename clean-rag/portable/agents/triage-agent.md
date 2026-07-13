@@ -70,7 +70,9 @@ but a bug that ships is usually one of these nobody looked at:
 - **Correctness / edge cases**: the real failure modes of this exact thing.
 - **Security**: does it touch user input, a query, auth, a file path, a
   subprocess? If yes, that's an aspect. If no, don't add it.
-- **Test quality**: which specific cases deserve a test.
+- **Testing and QA**: unless the change is untestable (pure config or docs), add
+  an aspect for how to test it and what QA applies, the test approach and the
+  specific cases worth covering, not just "is it testable".
 - **Maintainability**: is there a simpler shape.
 
 ## Always flag the existence question

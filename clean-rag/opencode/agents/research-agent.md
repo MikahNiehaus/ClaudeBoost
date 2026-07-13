@@ -33,6 +33,18 @@ Use the clean-rag MCP tools. They are the same server Claude Code uses:
   world rather than this codebase. Survey with the snippets, then fetch only the
   one page that actually matters.
 
+If `clean-rag_rag_search` comes back with zero results, that does not mean there
+is nothing to find. It almost always means the project is not indexed yet. Do not
+stop there. Fall back to `clean-rag_web_search_fallback`, do the research from the
+web, and still emit a COVERS line at the end. A zero result search is not an
+excuse to skip research.
+
+One rag_search is not research. Cover depth and breadth, and run the quality
+lenses too: correctness and edge cases, security, and testing/QA (how to test this kind of
+thing and what QA applies, unless untestable). Ask what
+breaks this code, not just how to write the happy path. If you only fired one
+query and moved on, you have not researched.
+
 Cover two directions:
 
 - **Depth**: the general engineering question. Structure, separation of

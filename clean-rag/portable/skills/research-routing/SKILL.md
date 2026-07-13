@@ -38,8 +38,14 @@ ships is usually one of these that nobody looked at.
   file path, a subprocess, a deserialization? If yes, research the standard
   defense (parameterized queries, input validation, escaping, least privilege),
   never from memory. If no, say so.
-- **Test quality.** Not just "is it testable" but which cases earn a test: the
-  edge cases above, the security path, the thing that broke last time. Name them.
+- **Testing and QA.** When the thing can be tested or exercised (most code can),
+  make it a real research question, not an afterthought: how is this kind of thing
+  normally tested, and what QA applies? Name the approach (unit, integration,
+  property, snapshot, browser or end to end) and the specific cases that earn a
+  test, the edge cases above, the security path, the thing that broke last time.
+  If there's a natural way to actually run or drive it, say so, since running it
+  beats reviewing it. Skip this lens out loud only when nothing is testable (a
+  pure config or docs change), not by default.
 - **Maintainability.** Will the next person understand it, and is there a simpler
   shape? This is the "what good looks like" half of breadth.
 

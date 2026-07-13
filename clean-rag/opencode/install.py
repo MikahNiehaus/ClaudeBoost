@@ -89,6 +89,7 @@ def main() -> int:
     mcp_server = home / "mcp" / "opencode_mcp_server.py"
     plugin_src = home / "opencode" / "plugin" / "research-gate.js"
     agents_src = home / "opencode" / "agents"
+    agents_md_src = home / "opencode" / "AGENTS.md"
 
     if not mcp_server.exists():
         print(f"ERROR: MCP server not found at {mcp_server}. Is CLEAN_RAG_HOME right?")
@@ -118,6 +119,11 @@ def main() -> int:
     # Agents.
     for md in sorted(agents_src.glob("*.md")):
         print(_copy_if_newer(md, cfg_dir / "agents" / md.name))
+
+    # AGENTS.md: the soft enforcement rules file OpenCode reads. Copy it into the
+    # config dir next to the plugin and agents, same copy if newer behaviour.
+    if agents_md_src.exists():
+        print(_copy_if_newer(agents_md_src, cfg_dir / "AGENTS.md"))
 
     print("\nDone. Restart OpenCode (or start a new session) to pick up the changes.")
     print("The clean-rag server must be running on port 8613 for search to work.")

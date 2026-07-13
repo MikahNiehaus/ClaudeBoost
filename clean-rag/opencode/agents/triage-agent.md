@@ -45,6 +45,15 @@ always add an aspect asking whether it already exists (project, stdlib, installe
 dependency, GitHub). If a project is indexed, use `clean-rag_rag_search` with the
 code being changed as the query to see what the change touches before you guess.
 
+If `clean-rag_rag_search` returns zero results, the project is not indexed, not
+empty of anything worth knowing. Say RESEARCH and note that research should fall
+back to `clean-rag_web_search_fallback`. A zero result search is not a reason to
+answer NONE.
+
+When you do say RESEARCH, name aspects that cover depth and breadth plus the
+quality lenses: correctness and edge cases, security, and testing/QA (the test approach and
+the cases worth covering, unless the change is untestable). Not just the happy path.
+
 ## You MUST declare a file scope
 
 Your report ends with a `COVERS:` line naming every file your verdict applies to.
