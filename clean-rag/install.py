@@ -581,6 +581,7 @@ def main():
     # Step 4
     print("\nStep 4: Setting environment variables...")
     set_env_var()
+    protect_research_state()
 
     # Step 5
     print("\nStep 5: Registering session prompt...")
