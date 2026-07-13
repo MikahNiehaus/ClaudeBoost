@@ -474,9 +474,9 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
 
 
 # ---------------------------------------------------------------------------
-# clean-rag bundled integration: registers proof-gate hook and SessionStart
-# prompt when clean-rag/ exists alongside ClaudeBoost. Detection is read-only:
-# setup.py never writes into clean-rag/.
+# clean-rag bundled integration: when clean-rag/ exists alongside ClaudeBoost,
+# main() runs its installer (install_clean_rag below). setup.py detects it but
+# does not register clean-rag's hooks itself, clean-rag/install.py owns those.
 # ---------------------------------------------------------------------------
 def _clean_rag_detected() -> bool:
     return (BOOST_HOME / "clean-rag" / "install.py").exists()
@@ -486,36 +486,29 @@ def _clean_rag_home_posix() -> str:
     return (BOOST_HOME / "clean-rag").as_posix()
 
 
-def _install_clean_rag_hooks(settings: dict) -> None:
+# setup.py used to hand register clean-rag's hooks itself, and it went stale:
+# it wired proof-gate.py (deleted, now a placeholder stub) and a pending-proof
+# workflow that no longer exists. Rather than keep a second copy of clean-rag's
+# hook list in sync by hand, ClaudeBoost setup now just runs clean-rag's own
+# installer, which is the single source of truth for the current gate
+# (research-gate, research-record, rag-enforce, reindex, code-pattern-inject,
+# graph-context-inject) and also copies the agents, skills, and hook launcher
+# into ~/.claude. clean-rag/install.py is idempotent, so this is safe to re-run.
+def install_clean_rag() -> None:
     if not _clean_rag_detected():
+        _say("clean-rag not present, skipping", "yellow")
         return
 
-    crag_home = _clean_rag_home_posix()
-
-    # proof-gate.py must run standalone (no $CLAUDEBOOST_PYTHON fallback needed,
-    # it uses only stdlib). Use the same interpreter-resolution helper as every
-    # other hook for consistency (see _py_cmd docstring for why this isn't a
-    # plain `||` chain).
-    gate_cmd = _py_cmd("proof-gate.py", base_dir="clean-rag/hooks")
-
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": gate_cmd}],
-    }, sentinel="proof-gate.py", label="clean-rag proof gate (bundled)")
-
-    # SessionStart prompt so sub-agents know about proof enforcement
-    port = os.environ.get("CLEAN_RAG_PORT", "8613")
-    prompt_text = (
-        "CLEAN-RAG ENFORCEMENT: Every Edit/Write/MultiEdit on source code "
-        "requires verified proof. Before editing:\n"
-        f"1. Search via POST http://127.0.0.1:{port}/search\n"
-        "2. Spawn a Haiku verification agent with your proof\n"
-        f"3. Write verification to {crag_home}/state/pending-proof.json\n"
-        "4. Retry the edit. Exempt: workspace/, knowledge/, .md, .json, .yaml files."
-    )
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{"type": "prompt", "prompt": prompt_text}],
-    }, sentinel="CLEAN-RAG ENFORCEMENT", label="clean-rag enforcement prompt")
+    installer = BOOST_HOME / "clean-rag" / "install.py"
+    _say(f"Running clean-rag installer: {installer}")
+    code, out = run_cmd([sys.executable, str(installer)])
+    if out:
+        for line in out.splitlines():
+            print(f"    {line}")
+    if code == 0:
+        _ok("clean-rag installed")
+    else:
+        _err(f"clean-rag installer exited {code}")
 
 
 # Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
@@ -632,7 +625,7 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="rag-session-reset.py", label="RAG session reset (command-type)")
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
-    # Lives under clean-rag/hooks/ alongside proof-gate.py etc., but enforces
+    # Lives under clean-rag/hooks/, but enforces
     # core ClaudeBoost RAG (port 8612) — installed unconditionally here, not
     # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
     # concern even though it's physically colocated with clean-rag's hooks.
@@ -670,17 +663,15 @@ def _install_all_hooks(settings: dict) -> None:
     }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
 
     # --- PreToolUse: TDD guard (blocks source edits without test changes) ---
-    # Runs BEFORE proof-gate so test-first is checked before research proof.
     # Default mode is "soft" (nudge, not block) until user opts into strict.
     _install_hook(settings, "PreToolUse", {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": _py_cmd("tdd-guard.py")}],
     }, sentinel="tdd-guard.py", label="TDD guard (command-type)")
 
-    # --- PreToolUse: clean-rag proof gate (bundled mode) ---
-    # Detects clean-rag at BOOST_HOME/clean-rag/. When present, registers the
-    # proof-gate hook BEFORE consult-gate so proof verification fires first.
-    _install_clean_rag_hooks(settings)
+    # clean-rag hooks are no longer registered here. When clean-rag is present,
+    # main() runs its own installer (install_clean_rag), which owns the current
+    # hook list. Registering them here too would just duplicate and drift.
 
     # --- PreToolUse: CONSULT gate on Edit/Write/Bash (command-type) ---
     _install_hook(settings, "PreToolUse", {
@@ -826,10 +817,8 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("session-primer.py"), "timeout": 10000}],
     }, sentinel="session-primer.py", label="RAG session primer (command-type)")
 
-    # --- UserPromptSubmit: research-task nudge ---
-    _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": _py_cmd("research-task-nudge.py"), "timeout": 5000}],
-    }, sentinel="research-task-nudge.py", label="research-task reminder")
+    # research-task-nudge removed: the /research-task command it advertised was
+    # retired in favor of the clean-rag research setup.
 
     # --- UserPromptSubmit: TTS interrupt ---
     _install_hook(settings, "UserPromptSubmit", {
@@ -1654,6 +1643,7 @@ def main() -> int:
     register_ponytail_plugin()
     install_edge_tts()
     install_netcoredbg()
+    install_clean_rag()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")

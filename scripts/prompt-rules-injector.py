@@ -108,7 +108,7 @@ def main() -> None:
             f"4. Workspace KB ({('indexed' if has_workspace_kb else 'not yet indexed')}): {workspace_kb_path} [{workspace_id}]"
         )
         lines.append(
-            f"   Intent: Task-scoped research docs fetched for this specific ticket. Search this when working on tasks that had /research-task run against them."
+            f"   Intent: Task-scoped research docs for this specific ticket, built automatically by the research gate. Search this when working on the task."
         )
     else:
         lines.append("4. Workspace KB: none active (run /ws <id> to set one)")

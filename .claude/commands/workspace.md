@@ -435,7 +435,6 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `observability-agent` | Logging strategy, tracing, metrics, error handling, alerting | Sonnet |
 | `docs-agent` | Documentation, README, API docs, changelogs, inline comments | Sonnet |
 | `research-agent` | Web research, library comparison, technical investigation, fact-checking | Sonnet |
-| `research-rag-agent` | Build a persistent research RAG from URLs/PDFs, then query during implementation | Sonnet |
 | `explore-agent` | Codebase discovery, file mapping, dependency tracing, usage search | Sonnet |
 | `workflow-agent` | Multi-step task orchestration, process design, coordination | Sonnet |
 | `compliance-agent` | Standards compliance, rule enforcement, policy and convention checks | Sonnet |
@@ -453,7 +452,6 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/review` | Code review — quick A-F grade by default; add `--deep` for full 15-pass parallel review |
 | `/security-review` | Security-focused review of pending branch changes |
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
-| `/research-task [workspace-id] [url1 url2 ...]` | Auto-discover and index sources for a task — pass URLs to curate manually, add `--approve` for the approval gate |
 | `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8612/search with scope="codebase"` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
@@ -480,7 +478,6 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | Debugging | `knowledge/debugging.xml` | Root cause analysis, error tracing |
 | Documentation | `knowledge/documentation.xml` | Doc strategy, README, API docs |
 | Research | `knowledge/research.xml` | Investigation methodology |
-| Research RAG | `knowledge/research-rag.xml` | Persistent research index workflows |
 | Code Exploration | `knowledge/code-exploration.xml` | Codebase navigation strategy |
 | Workflow | `knowledge/workflow.xml` | Multi-step orchestration |
 | API Design | `knowledge/api-design.xml` | REST/GraphQL API conventions |
@@ -589,13 +586,7 @@ If no entities are found in the ticket, or the project is not indexed: skip sile
 
 ## Phase 4.5: Research Primer
 
-For any ticket-based task (Feature, Bug Fix, Architecture, or Research work type), suggest running `/research-task` to build Tier 3c before handing off to implementation agents.
-
-Tell the user:
-
-> "Before I spawn implementation agents, run `/research-task $WORKSPACE_ID` to build a task-specific research index (Tier 3c). Agents get those docs automatically via `/context`. Add URLs as arguments to curate sources manually (`/research-task $WORKSPACE_ID https://...`). Skip this if the task is a simple config change or typo fix with no external dependencies."
-
-Do NOT block on this — if the user wants to skip it, proceed to Phase 5.
+Research happens automatically. The research gate fires on code edits and pulls in what an agent needs before it writes, so there's no separate priming step to run here. Proceed to Phase 5.
 
 ---
 
@@ -888,8 +879,7 @@ Once the plan is in place, these are the most common next moves:
 
 | If you... | Run |
 |-----------|-----|
-| Want to build domain expertise before agents start | `/research-task [workspace-id]` — indexes relevant docs so agents get them automatically |
-| Are working in an unfamiliar codebase | `/index-project <path>` first, then `/research-project` for a stack overview |
+| Are working in an unfamiliar codebase | `/index-project <path>` to enable semantic search |
 | Have a new subsystem or >15 files | Consider `/create-prd` to lock down scope before implementation |
 | Want a dependency map seeded from ticket entities | `/graph [workspace-id]` |
 | Just want to start | Copy the "To start executing" command from the plan and run it |

@@ -148,7 +148,7 @@ When estimating multiple tickets, interleave agents across tickets to maximize p
 ```
 Your FIRST action: call POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="estimate dimension: <DIMENSION_NAME> for ticket <TICKET_ID>", project_path="<PROJECT_PATH>", max_tokens=2000
 
-Before editing any file, search clean-rag (POST http://127.0.0.1:8613/search) for relevant research, write proof to clean-rag/state/, then retry the edit. The proof-gate hook will block edits without verified proof.
+This is a read-only analysis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file. Spawn one first; it must emit a COVERS line naming the file. Markdown and other non-code files are exempt.
 
 You are an estimation analyst for ONE specific dimension: **<DIMENSION_NAME>**
 
@@ -285,7 +285,7 @@ After ALL analysis agents complete, collect their JSON outputs as `ANALYSIS_RESU
 ```
 Your FIRST action: call POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="synthesize story point estimates from analysis dimensions", project_path="<PROJECT_PATH>", max_tokens=3000
 
-Before editing any file, search clean-rag (POST http://127.0.0.1:8613/search) for relevant research, write proof to clean-rag/state/, then retry the edit.
+This is a read-only synthesis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file.
 
 You are the Estimation Synthesis Agent. You do NOT re-analyze the codebase. You synthesize the findings from all 5 dimension analysts into final story point estimates.
 

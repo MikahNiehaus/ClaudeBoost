@@ -313,8 +313,8 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 |---------|--------|
 | Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
 | Complex feature (>5 files) | `/workspace` — creates plan, workspace, and agent routing |
-| Before delegating agents | Run `/research-task [task-id]` to build Tier 3c workspace research — agents get task-specific docs auto-loaded via `/context`. Add URLs as arguments to curate sources manually; add `--approve` for the approval gate. |
-| New codebase / first time in repo | `/index-project <path>` to enable semantic search, then `/research-project` for stack overview |
+| Before delegating agents | Nothing to run. The research gate handles research automatically on code edits, so agents get what they need without a separate step. |
+| New codebase / first time in repo | `/index-project <path>` to enable semantic search |
 | New subsystem or >15 files | `/create-prd` before `/workspace` — locks down scope and acceptance criteria |
 | Explaining architecture or flow | `/visualize` — interactive board in browser |
 | Code just changed | `/xray` to check quality, then `/qa --code` to run tests + edge cases, then `/qa <url>` for browser verification if there's a UI |
@@ -327,7 +327,6 @@ When in doubt, create the tasks first. It keeps the user informed and preserves 
 | Want to see what changed | `/changes` — interactive branch change explorer |
 | Performance bottleneck | Spawn performance-agent |
 | Logging / metrics gaps | Spawn observability-agent |
-| After indexing a project | `/research-project` — builds domain expertise from the indexed codebase |
 
 ## Proactive Skill Suggestions
 

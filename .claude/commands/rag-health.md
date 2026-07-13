@@ -257,7 +257,7 @@ curl -s -X POST http://127.0.0.1:8612/search \
   -d '{"query": "research task documentation", "scope": "research", "workspace_path": "<path>", "limit": 3}'
 ```
 - ✅ PASS if results returned with score > 0
-- ⚠️ WARN if no results → "No research indexed for this workspace — run /research-task if needed"
+- ⚠️ WARN if no results → "No research indexed for this workspace yet — the research gate populates it on code edits"
 
 ---
 
