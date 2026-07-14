@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import research_audit  # noqa: E402
+from manifest_files import is_gated_file  # noqa: E402
 from research_state import check_file_researched, is_quick_turn  # noqa: E402
 
 # Only these get gated. Everything else, including .md, .json, .yaml, and configs,
@@ -49,7 +50,7 @@ def _is_exempt(file_path: str) -> tuple[bool, str]:
 
     path = Path(file_path)
 
-    if path.suffix.lower() not in CODE_EXTENSIONS:
+    if not is_gated_file(path, CODE_EXTENSIONS):
         return True, f"{path.suffix or 'no extension'} is not code"
 
     parts = {p.lower() for p in path.parts}

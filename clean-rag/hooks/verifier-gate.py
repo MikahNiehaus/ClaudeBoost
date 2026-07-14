@@ -57,6 +57,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import high_stakes  # noqa: E402
+from manifest_files import is_gated_file  # noqa: E402
 from research_state import is_quick_turn  # noqa: E402
 from turn_edits import edited_code_files, git_root as _git_root_of  # noqa: E402
 from verifier_state import check_file_verified  # noqa: E402
@@ -119,7 +120,7 @@ def _diff(root: str, files=None):
         for line in proc.stdout.splitlines():
             if line.startswith("+++ b/"):
                 f = line[6:].strip()
-                is_code = Path(f).suffix.lower() in CODE_EXTENSIONS
+                is_code = is_gated_file(f, CODE_EXTENSIONS)
                 if is_code:
                     paths.append(f)
             elif line.startswith("+++"):

@@ -23,7 +23,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import check_file_researched, is_quick_turn  # noqa: E402
+from manifest_files import is_gated_file  # noqa: E402
+from research_state import (  # noqa: E402
+    check_file_researched,
+    has_any_research_this_turn,
+    is_quick_turn,
+)
 
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
@@ -36,6 +41,29 @@ EXEMPT_SEGMENTS = {
     "workspace", "state", "plans", "docs", "node_modules",
     ".claude", ".claudeboost", ".git", "__pycache__", "scratchpad",
 }
+
+# Removing a dependency is a destructive action on its own, whether or not it
+# happens to also rewrite a manifest file through a shell redirect (most of the
+# time it doesn't; the package manager edits the manifest internally). Real
+# aliases, verified against each tool's own docs or source, not memorized:
+# npm's rm/r/un/unlink, pnpm's rm/un, cargo's rm (built in since 1.66), and
+# composer's rm/uninstall (confirmed straight from RemoveCommand.php).
+DESTRUCTIVE_DEP_PATTERNS = [
+    re.compile(r'\bpip3?\s+uninstall\b'),
+    re.compile(r'\bnpm\s+(?:uninstall|unlink|remove|rm|r|un)(?=\s|$)'),
+    re.compile(r'\byarn\s+remove\b'),
+    re.compile(r'\bpnpm\s+(?:remove|rm|uninstall|un)(?=\s|$)'),
+    re.compile(r'\bpoetry\s+remove\b'),
+    re.compile(r'\bcargo\s+(?:remove|rm)\b'),
+    re.compile(r'\bbundle\s+remove\b'),
+    re.compile(r'\bgo\s+mod\s+edit\s+\S*-droprequire'),
+    re.compile(r'\bgo\s+get\s+\S+@none\b'),
+    re.compile(r'\bcomposer\s+(?:remove|rm|uninstall)\b'),
+]
+
+
+def is_destructive_dep_command(command: str) -> bool:
+    return any(p.search(command) for p in DESTRUCTIVE_DEP_PATTERNS)
 
 
 def write_targets(command: str) -> set:
@@ -61,7 +89,7 @@ def write_targets(command: str) -> set:
         for _q, tok in re.findall(r'(["\']?)([^\s|&;"\']+)\1', command):
             targets.add(tok)
 
-    return {t for t in targets if t and Path(t).suffix.lower() in CODE_EXTENSIONS}
+    return {t for t in targets if t and is_gated_file(t, CODE_EXTENSIONS)}
 
 
 def _is_exempt(target: str, cwd: str) -> bool:
@@ -133,6 +161,26 @@ def main() -> int:
                 "the hook that stamps this record never fires for it. If it's "
                 "genuinely trivial, start the turn with /ps instead. Writing code "
                 "through the shell does not get around the gate.",
+                file=sys.stderr,
+            )
+            return 2
+
+    # Removing a dependency this way never touches a file through a redirect, tee,
+    # or sed the loop above would catch, the package manager edits the manifest
+    # internally. There's no single file to scope research against here, so this
+    # checks whether research ran at all this turn, not a specific COVERS entry.
+    if is_destructive_dep_command(command) and not _is_exempt(cwd, cwd):
+        ok, reason = has_any_research_this_turn(session_id)
+        if not ok:
+            print(
+                f"BLOCKED: {reason}.\n\n"
+                "This command removes a dependency, which is a destructive action: "
+                "whatever used it may still need it, or the removal may not be the "
+                "actual fix for whatever problem prompted it. Spawn research-agent "
+                "first to check whether removing it is really correct, then run the "
+                "command. Spawn it in the foreground: run_in_background: false, "
+                "never true. If it's genuinely trivial, start the turn with /ps "
+                "instead.",
                 file=sys.stderr,
             )
             return 2

@@ -250,6 +250,33 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
+def has_any_research_this_turn(session_id: str) -> tuple[bool, str]:
+    """Did research-agent run at all this turn? For actions with no single file to
+    scope against, a destructive package manager command, not an edit to a file.
+    Same freshness rule as check_file_researched, just without the per file scope
+    check, since "which file does this cover" does not apply to a shell command.
+    """
+    path = _record_path(session_id)
+    if not path.exists():
+        return False, "no research agent has run this turn"
+
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "the research record is unreadable"
+
+    stamps = record.get("stamps", [])
+    last_activity = max([record.get("started_at", 0)] + [s.get("at", 0) for s in stamps])
+    age = time.time() - last_activity
+    if age > TURN_MAX_AGE_S:
+        return False, f"the research record is stale ({age / 60:.0f} minutes old)"
+
+    if not stamps:
+        return False, "no research agent has run this turn"
+
+    return True, f"research ran this turn ({stamps[-1].get('agent')})"
+
+
 def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     """Was this specific file covered by research this turn?
 

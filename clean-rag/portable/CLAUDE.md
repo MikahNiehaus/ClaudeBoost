@@ -21,6 +21,12 @@ When the gate blocks an edit:
    never backgrounded — a backgrounded completion arrives later as a
    `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
    record never fires for it and the gate stays blocked no matter how long you wait.
+   Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
+   verbatim quoted reference as the literal starting point and make only the
+   smallest set of changes that fixes the actual issue — no rewrite, no restyle,
+   no swapped libraries or approaches, no added structure the reference didn't
+   have. That's a hard ceiling on the diff, not a suggestion. `adapt` and
+   `pattern-only` allow a real diff; `clone-and-patch` does not.
 2. There is no cheap triage tier anymore. The old one decided whether a change
    needed research WITHOUT reading the code, and that blind guess was wrong often
    enough to remove. research-agent looks first, so its judgment is grounded. It

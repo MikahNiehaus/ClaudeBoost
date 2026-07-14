@@ -13,7 +13,11 @@ must not break a hook.
 import hashlib
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest_files import is_gated_file  # noqa: E402
 
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
@@ -39,7 +43,7 @@ def record_edit(session_id: str, file_path: str) -> None:
     if not file_path:
         return
     try:
-        if Path(file_path).suffix.lower() not in CODE_EXTENSIONS:
+        if not is_gated_file(file_path, CODE_EXTENSIONS):
             return
         with open(_path(session_id), "a", encoding="utf-8") as f:
             f.write(str(Path(file_path).resolve()) + "\n")

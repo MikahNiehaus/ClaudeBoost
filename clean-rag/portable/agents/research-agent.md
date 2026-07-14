@@ -111,6 +111,42 @@ block. If you cannot produce one because the fetched file was not actually a
 close match after all, say that plainly instead of declaring `GITHUB_FILE_READ`
 for it.
 
+Then declare what the match implies for how the builder should act:
+
+```
+MATCH_STRATEGY: clone-and-patch | adapt | pattern-only
+```
+
+Always required, even when nothing was fetched (write `pattern-only` rather than
+omitting the line, the same fail closed rule `COVERS:` already follows). This is
+the fix for a real observed failure: research handed a builder a verbatim,
+shipping ready reference for a one bug fix task, and the builder rewrote the
+whole thing from its own understanding anyway, switched rendering approaches,
+and added structure nobody asked for. Naming the strategy explicitly is what
+stops that.
+
+- **`clone-and-patch`**: the fetched reference is functionally the same thing
+  the project needs, same language, same architecture, same approach, and the
+  task is a small, localized defect against it. The builder's job is to copy the
+  verbatim quoted block as the literal starting point, find the smallest set of
+  concrete changes that actually fixes the issue (sometimes one line, sometimes
+  a handful of small edits, never a rewrite), and make only those changes. No
+  restyling, no renaming, no switching libraries or approaches, no added
+  overlays or options the reference did not already have. If you are tempted to
+  change more than the fix requires, that is the sign you have drifted into
+  `adapt`, say so instead of doing it quietly.
+- **`adapt`**: the reference solves the same class of problem in a different
+  context (different framework, different scale, a real gap the project has
+  that the reference does not cover). Port its design and concrete decisions to
+  this project's stack; expect a real diff, but still nothing beyond what the
+  task asked for. Grounded still means grounded: port FROM the verbatim quoted
+  block you fetched, line by line, not from your own paraphrase or memory of what
+  it does. A one line description of the pattern is not the reference, the fetched
+  code is. If you catch yourself working off the description instead of the actual
+  quoted lines, go back to the quote.
+- **`pattern-only`**: no close match was found. Build from the correctness
+  properties below, not from a copied file. There is nothing to clone.
+
 Then hand the builder these, derived from the reference and the domain, never
 invented from taste and never a hardcoded checklist:
 
