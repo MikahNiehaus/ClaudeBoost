@@ -1,5 +1,6 @@
 """Web search client for fallback injection. Uses DuckDuckGo (no API key needed)."""
 
+import html
 import json
 import logging
 import re
@@ -291,5 +292,43 @@ def _clean_snippet(text: str) -> str:
     # Truncate to ~200 chars
     if len(text) > 200:
         text = text[:197] + "..."
+
+    return text
+
+
+def _clean_code(text: str, is_html: bool = False, max_chars: int = 40000) -> str:
+    """Sanitize a code file or an answer body for a model's context without wrecking it.
+
+    _clean_snippet collapses whitespace, which is fine for a prose snippet and fatal
+    for code, it flattens every newline and indent. This is the version for a
+    fetched source file or a Stack Overflow answer: same injection defense (fold
+    homoglyphs with NFKC, strip the invisible zero width, bidi, and control chars a
+    payload hides in), but it NEVER collapses the whitespace that carries the code's
+    structure. Cap by size and truncate whole, do not cut mid line.
+    """
+    if not text:
+        return ""
+
+    if is_html:
+        # Pull the text out of <pre> blocks first, keeping their newlines, and fence
+        # them, then strip the remaining tags from the surrounding prose. This keeps
+        # the code an answer is about instead of flattening it into one line.
+        parts = []
+        last = 0
+        for m in re.finditer(r"<pre[^>]*>(.*?)</pre>", text, re.DOTALL | re.IGNORECASE):
+            parts.append(re.sub(r"<[^>]+>", "", text[last:m.start()]))
+            parts.append("\n```\n" + re.sub(r"<[^>]+>", "", m.group(1)).strip("\n") + "\n```\n")
+            last = m.end()
+        parts.append(re.sub(r"<[^>]+>", "", text[last:]))
+        text = html.unescape("".join(parts))
+
+    text = unicodedata.normalize("NFKC", text)
+    # Zero width, bidi overrides, word joiners, BOM: the invisible injection vector.
+    text = re.sub(r"[​-‏‪-‮⁠-⁤﻿]", "", text)
+    # Any other control characters, keeping tab, newline, and carriage return.
+    text = "".join(c for c in text if unicodedata.category(c) != "Cc" or c in "\t\n\r")
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... [truncated]"
 
     return text

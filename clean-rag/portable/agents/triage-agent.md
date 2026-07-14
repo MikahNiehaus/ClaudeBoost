@@ -46,6 +46,18 @@ read untrusted content, so you get no ability to act on it.
 Say `NONE` and one line of why. Do not pad it. NONE is the common case and it is
 a good outcome, not a failure to find something.
 
+## When you are not sure, research
+
+The NONE list is for cases you are actually confident about. `NONE` is a claim
+that you looked and there is nothing worth researching, so do not make that claim
+out of uncertainty. If you are on the fence, if an edit looks mechanical but
+touches something whose full shape you cannot see, if the graph shows real
+dependents, if it brushes a trust boundary (auth, a query, a subprocess, money),
+default to `RESEARCH`. A needless research run costs some tokens; a wrong `NONE`
+ships an unresearched change, which is the exact failure this gate exists to
+catch. When the two verdicts feel balanced, research. Escalate on doubt, do not
+skip on doubt.
+
 ## Otherwise, name what to research
 
 Do not do the research. Just say what's worth researching, split two ways:

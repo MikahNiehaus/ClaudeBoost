@@ -110,3 +110,48 @@ A FREE model (deepseek-v4-flash-free) matched a build a capable model produced,
 because the gate forced real research, the research-agent grounded it, and the
 prescriptive AGENTS.md plus the new-file gate removed the friction that made
 earlier rounds fail. Five iterations, five real setup bugs fixed, all kept.
+
+## Closing the last gap: test-suite parity
+
+Deep side by side against injection found one difference, and only one: injection
+had a "does not mutate the state it is given" purity test, iter5 did not. The
+iter5 `step` IS pure (it clones `state.bird` and `state.pipes` and never reassigns
+`state`), it just wasn't tested for it. Added that test through the real loop:
+research-gate blocked the edit, triage-agent returned NONE and stamped
+`COVERS: src/engine.test.js`, edit went through, `npm test` = 6 passed (6). Now
+the OpenCode build has literal test-suite parity with injection plus one extra
+test (deterministic rng). Done.
+
+## The real correction: chasing Flappy Bird parity WAS the bandaid
+
+Everything above optimized the wrong target. The system is not meant to be good at
+making Flappy Bird, it is meant to make a weak model produce correct code in ANY
+domain: an API, an auth flow, a banking path. Every game specific rule that got
+added to the bar (input model, flap sets velocity, render interpolation, pipe gap
+tuning) was a bandaid. It made the harness good at one game and taught it nothing
+general, and worse, it hid the real gap: a weak model ships plausible but wrong
+code that passes its own shallow tests, in every domain, not just games.
+
+So all of that was ripped back out. The bar no longer carries a per domain
+checklist (the whole point: a checklist fits one domain and misleads on the next).
+The general mechanism, the same in every domain and grounded in research (CodeT
+arXiv 2207.10397, PGS arXiv 2506.18315, Meta ACH mutation testing arXiv
+2501.12862):
+
+1. Ground the build in ONE real reference and derive the domain's correctness
+   rules FROM it, never from a baked in list. Physics falls out of reading a real
+   game the same way idempotency falls out of reading a real payment service.
+2. State the properties as invariants ("for any X, Y holds"), and sensitivity
+   check each: name the wrong implementation it would catch, or drop it as
+   decorative.
+3. Write the adversarial test per property, asserting the contract, not the exact
+   output the code happens to produce.
+4. Prove each test bites by breaking the code on purpose (flip a comparison, drop
+   a guard, wrong sign) and confirming it goes red. This mutation check is the one
+   defence against shallow tests that needs zero domain knowledge, so it is the
+   generalizable fix, not a game rule.
+
+Applied to both Claude Code and OpenCode: AGENTS.md, both research-agent.md
+copies, and the research-routing skill. Do not re-add a per genre quality bar. If
+a build needs domain specifics, research derives them per task; the harness stays
+domain blind on purpose.

@@ -54,17 +54,37 @@ Cover two directions:
   project, the standard library, an installed dependency, or on GitHub. That last
   one is the aspect people skip and regret.
 
-## Ground a known genre task in a real reference
+## Ground the build in a real reference, then derive what "correct" means
 
-If the task is a known genre, a game (Flappy Bird, Snake, Tetris), a common
-algorithm, or a standard widget, get ONE real working reference implementation
-before anyone writes code. Use `clean-rag_web_search_fallback` to find it (GitHub
-first), then read that one page. Pull out the patterns that are easy to get wrong
-from memory: the physics constants, the collision math, the game loop timing, the
-edge cases. Feed those real working patterns into the build. A weak model guessing
-gravity and jump velocity from memory produces a game that feels wrong. Handed the
-real numbers from a working repo, the same model does not. Grounding helps a weak
-model more than a strong one, so it is not optional busywork.
+Before anyone writes non-trivial code, find ONE real, production-grade reference
+for this class of thing and study what it does that you would not think of from
+memory. This is how you learn a domain's correctness rules instead of guessing
+them, and it works the same whatever the domain: a real payment service shows you
+idempotency keys and row locks, a real auth flow shows you token handling and
+constant-time comparison, a real game loop shows you the fixed timestep and how
+input is fed. You are not expected to already know a domain's rules. You are
+expected to find the reference and extract them. Use
+`clean-rag_web_search_fallback` to find it (GitHub and official docs first), read
+the one or two pages that matter, and pull out the concrete decisions that
+reference made, plus the way the obvious naive version breaks.
+
+Then hand the builder these, derived from the reference and the domain, never
+invented from taste and never a hardcoded checklist:
+
+1. **The correctness properties this thing must hold**, as invariants: what must
+   be true for ALL valid inputs and what must never happen ("for any X, Y holds",
+   "A then B returns to the start"), not a feature list. You get these by asking
+   how this class of thing actually fails, not how it works on the happy path. For
+   each one, name the wrong implementation it would catch; if you cannot name one,
+   the property is decorative, drop it.
+2. **The adversarial tests** that check those properties against the bad input,
+   the concurrent call, the replay, the missing auth, the empty and huge and null,
+   asserting the contract, not the exact output the code happens to produce.
+3. **One to three mutants**: deliberately broken versions of the intended logic
+   (off by one, swapped comparison, wrong sign, a dropped guard). The builder's
+   tests must FAIL on each mutant before the code is trusted. A suite that cannot
+   tell correct code from an almost-correct sibling protects nothing, and this
+   check needs no domain knowledge, so it works for any build.
 
 After the build agent writes the code, it should call the `run_tests` tool and fix
 from the real failure output, not from rereading its own diff. Say so in your
@@ -92,7 +112,8 @@ mechanism exists to remove.
 **Building a NEW project or module (files do not exist yet)?** You cannot know
 the exact filenames the builder will choose, and guessing them wrong blocks the
 build. So scope by AREA with globs, not by predicted names. For a new app under
-src/, that is `COVERS: src/**, tests/**, *.config.*, index.html, run.bat`. This
-still scopes the research (it does not cover files outside those areas), but it
-covers whatever structure the builder actually picks, flat or nested. Use exact
-filenames only when editing files that already exist.
+src/, that is `COVERS: src/**, tests/**, *.config.*`, plus the entry point and
+run script whatever they turn out to be named. This still scopes the research (it
+does not cover files outside those areas), but it covers whatever structure the
+builder actually picks, flat or nested. Use exact filenames only when editing
+files that already exist.

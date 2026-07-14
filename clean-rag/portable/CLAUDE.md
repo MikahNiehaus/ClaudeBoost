@@ -55,8 +55,15 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   and sometimes makes things worse. Running the code is grounded. Re reading it
   is not.
 - **A real separate context review is for high stakes surfaces only**: auth,
-  money, SQL, a subprocess, anything at a trust boundary. It costs like a second
-  write, so it is not the default.
+  money, SQL, a subprocess, concurrency, anything at a trust boundary. It costs
+  like a second write, so it is not the default. When it is warranted, spawn
+  `verifier-agent`, a fresh context critic, NOT the research agent (that one reads
+  untrusted web and stays capability stripped, and any agent that wrote or
+  researched the change inherits its own blind spot on review). Give the verifier
+  the requirements, the correctness properties, and the diff, never your reasoning
+  for the change, since that reasoning is exactly what biases a reviewer into
+  agreeing. `hooks/verifier-gate.py` (a Stop hook) already detects these surfaces
+  in the diff and nudges you to spawn it, after the tests pass, not before.
 
 Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
@@ -69,6 +76,22 @@ loop safe: it honors `stop_hook_active`, caps blocks per session, and allows on
 anything ambiguous (no tests, a missing runner, an environment problem). So on a
 project with tests you will often get the actual assertion diff or stack trace
 pushed back at you automatically. Fix from that, do not self review.
+
+If the logic you changed has no test at all, writing one IS part of verifying it,
+not an optional extra. Do not skip verification because none exists, that is the
+gap the tests were supposed to close. Write the missing test, then prove it bites
+(next paragraph), because a test written without that proof reliably asserts the
+current behavior instead of catching a bug, which is worse than no test.
+
+Passing tests are necessary, not proof the tests catch bugs. For non trivial logic
+on a real bug surface, after the tests pass run the mutation check on just the
+files you changed: `POST http://127.0.0.1:8613/mutation-test` with
+`{"project_path": "<abs>", "changed_files": [...]}`. It runs the language's real
+mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a
+surviving mutant is a test that would pass on broken code, so tighten it. When the
+edge cases matter, let the language's property based library (`Hypothesis`,
+`fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
+guessing which inputs to test, which is the weak version the research warned about.
 
 ## clean-rag (the search backend, port 8613)
 

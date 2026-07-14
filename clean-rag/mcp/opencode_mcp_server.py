@@ -44,7 +44,7 @@ class OpenCodeRAGServer:
         return [
             {
                 "name": "rag_search",
-                "description": "Search clean-rag knowledge base for code quality patterns, security, error handling, refactoring",
+                "description": "Search an indexed project's vector database and import graph together (semantic similarity plus structural neighbours, mode both). Requires project_path, an absolute path to an indexed project. Returns nothing for a project that is not indexed, which is the signal to fall back to web search, not an error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

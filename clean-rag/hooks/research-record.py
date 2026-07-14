@@ -15,10 +15,16 @@ Never blocks. Its only job is to write down what happened.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import RESEARCH_AGENTS, record_agent  # noqa: E402
+from research_state import (  # noqa: E402
+    RESEARCH_AGENTS,
+    clean_rag_home,
+    extract_covered_files,
+    record_agent,
+)
 
 
 def _agent_type(payload: dict) -> str:
@@ -70,6 +76,42 @@ def _report(payload: dict) -> str:
     return str(response)
 
 
+def _log_triage_decision(session_id: str, report: str) -> None:
+    """Append the triage verdict to a persistent log, for a future skip classifier.
+
+    The plan is a classifier fine tuned on real NONE vs RESEARCH decisions, which
+    beats a zero shot one, and that needs labeled data. So record every triage
+    verdict with its context here. Append only, and it never raises: logging must
+    not break the gate.
+    """
+    verdict = ""
+    for line in report.splitlines():
+        s = line.strip().upper()
+        if s.startswith("VERDICT:"):
+            if "NONE" in s:
+                verdict = "NONE"
+            elif "RESEARCH" in s:
+                verdict = "RESEARCH"
+            break
+    if not verdict:
+        return
+
+    entry = {
+        "at": time.time(),
+        "session_id": session_id,
+        "verdict": verdict,
+        "covers": extract_covered_files(report),
+        "report": report[:2000],
+    }
+    try:
+        path = clean_rag_home() / "state" / "triage-decisions.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
@@ -83,11 +125,11 @@ def main() -> int:
     if agent_type not in RESEARCH_AGENTS:
         return 0
 
-    record_agent(
-        session_id=payload.get("session_id", ""),
-        agent_type=agent_type,
-        report=_report(payload),
-    )
+    session_id = payload.get("session_id", "")
+    report = _report(payload)
+    record_agent(session_id=session_id, agent_type=agent_type, report=report)
+    if agent_type == "triage-agent":
+        _log_triage_decision(session_id, report)
     return 0
 
 

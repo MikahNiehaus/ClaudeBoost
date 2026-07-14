@@ -22,51 +22,57 @@ as a quick check, but if it comes back empty (the scraper rate limits rapid
 repeats), do not call it again, spawn `research-agent` instead. Hammering
 web_search gets you rate limited and gets you nowhere.
 
-## For a known genre, ground it in a real reference first
+## Ground anything not trivial in a real reference, then derive the bar
 
-If what you are building is a known genre, a game (Flappy Bird, Snake, Tetris), a
-common algorithm, or a standard widget, do not build it from memory. Call
-`web_search_fallback` for one real working implementation (GitHub first), read it,
-and copy the patterns that are easy to get wrong: physics constants, collision
-math, game loop timing, edge cases. A weak model guessing gravity and jump
-velocity produces a game that feels wrong. Handed real numbers from a working
-repo, it does not. This grounding step helps a weak model most, so it is worth
-the one search.
+Do not build from memory. Whatever it is, an API, an auth flow, a payment path, a
+parser, a game, find ONE real, production-grade reference for this class of thing
+(GitHub and official docs first, via `web_search_fallback` or by spawning
+`research-agent`) and study what it does that you would not think of yourself. A
+real reference is where the non-obvious correctness rules of a domain live: a
+payment service shows idempotency keys and row locks, an auth flow shows token
+handling and constant-time comparison, a game loop shows the fixed timestep and
+how input is fed. You are not expected to already know a domain's rules. You find
+the reference and copy the decisions it made.
 
-## Quality bar for a game or simulation (hit every one of these)
+Grounding helps a weak model more than a strong one. A model guessing a domain's
+specifics from memory produces something that looks right and is subtly wrong;
+handed the real decisions from a working system, the same model does not. So this
+system does not hand you a per-domain checklist, that would only ever fit one kind
+of thing. It makes you go derive the bar for THIS thing from a real reference.
 
-A game or physics simulation is only good if it has all of this. Build to it, do
-not settle for less. This is what separates a real game from a toy that feels
-wrong and cannot be tested:
+## Derive the correctness properties, then prove your tests bite
 
-- **Pure engine module, no React and no DOM.** One file exports a pure function
-  `step(state, dt, input, rng)` that takes the old state and returns the NEW state.
-  It does not mutate its input and it does not import react, document, or window.
-  This is what makes it testable.
-- **Inject the random source.** `step(..., rng = Math.random)`. Pipe gaps and
-  spawns call `rng()`, not `Math.random()` directly, so a test can pass a fixed
-  rng and get reproducible pipes. `Math.random()` inside the engine makes it
-  untestable, which is a fail.
-- **Fixed timestep accumulator, not variable dt.** The loop accumulates real
-  elapsed time and runs `step(state, FIXED_DT)` in a `while (acc >= STEP) { ...;
-  acc -= STEP }` loop, then renders once. Clamp the raw frame dt (about 250ms) so
-  a backgrounded tab cannot tunnel through a wall. `pos += vel * dt` with a
-  variable dt is the weak version, it is non deterministic and cannot be unit
-  tested for frame rate independence.
-- **Forgiving hitbox.** The collision box is smaller than the sprite, about 75%,
-  derived from the sprite size, not a magic constant. A hitbox that matches the
-  sprite makes deaths feel unfair.
-- **Rendering separate from logic.** A draw only module or function reads state
-  and draws, never mutates it.
+This is what separates code that looks right from code that is right, and it is
+the same move in every domain:
 
-## Tests you must write for a game (before you are done)
+1. **State the properties as invariants, before you write the code.** From the
+   reference and from how this class of thing actually FAILS (not how it works on
+   the happy path), write down what must hold for ALL valid inputs and what must
+   never happen. Phrase them as "for any X, Y holds" or "A then B returns to the
+   start," not as a feature list. A transfer: never goes negative, atomic,
+   idempotent on retry, no double spend under concurrency. An endpoint: rejects
+   unauthenticated calls, rejects malformed input, parameterized queries. A
+   real-time sim: the same inputs give the same result. You DERIVE these from
+   research; there is deliberately no list of them here, because a list would fit
+   one domain and mislead on the next.
+2. **Sensitivity check each property: name the wrong implementation it catches.**
+   If you cannot name a plausible broken version this property would flag, the
+   property is decorative, drop it. A property that only ever holds on the happy
+   path proves nothing.
+3. **Write one adversarial test per property**, feeding the bad input, the
+   concurrent call, the replay, the missing auth, the empty and the huge and the
+   null, asserting the property still holds. Assert the CONTRACT, never the exact
+   output your current code happens to produce, a test pinned to your
+   implementation passes just as happily on a broken one.
+4. **Prove each test bites by breaking the code on purpose.** Flip a comparison,
+   drop a guard, use the wrong sign, delete the validation branch, then confirm
+   the test FAILS. A test that still passes on the deliberately broken version is
+   worthless, no matter that it is green on your real code. This mutation check is
+   the one defence against shallow tests that needs zero domain knowledge, so it
+   applies to everything. Put the code back once you have seen the test fail.
 
-- Frame rate independence: one `step` at 1/30s lands the same place as two `step`
-  calls at 1/60s (within a small tolerance). This is the test that proves the
-  fixed timestep is real.
-- Scoring: passing a pipe increments the score exactly once.
-- Collision: a bird in the gap does not collide, a bird clipping the pipe does.
-- Inject the rng so pipes are deterministic in these tests.
+The damning mistake to avoid: writing a test that asserts the buggy behavior you
+just wrote. The test comes from the property, and it must fail on wrong code.
 
 ## Research the whole problem, not the happy path
 
@@ -92,18 +98,21 @@ you passively. Beat it to the punch: run the tests yourself.
 Trivial one liners do not need a test. Anything with a branch, a loop, a parser, or
 a money or security path does.
 
-**You are not done until a real test exists AND `run_tests` comes back passed.**
-For a game that means the frame rate independence, scoring, and collision tests
-above actually run and pass. If you write the code and stop without a passing
-test, the job is not finished, no matter how right the code looks to you.
+**You are not done until a real test exists, `run_tests` comes back passed, AND
+that test fails on a deliberately broken version of the code.** A green test that
+you never proved can go red is not evidence. If you write the code and stop
+without a passing, biting test, the job is not finished, no matter how right the
+code looks to you.
 
 ## Standards that are never optional
 
 These apply automatically. They are not up for debate and not something research
 decides:
 
-- Parameterized queries. Never build SQL by string concatenation.
+- Parameterize or escape every query language you touch (SQL, shell, HTML,
+  GraphQL, a path). Never build one by string concatenation.
 - `logger.error` (or the language equivalent) in every catch or error block.
 - No secrets in logs, URLs, or source.
-- Validate input at the boundary.
-- Auth and authorization checks on every endpoint.
+- Validate input at every trust boundary.
+- Authorize every entry point, whatever its shape: an endpoint, a command, a
+  handler, a job.

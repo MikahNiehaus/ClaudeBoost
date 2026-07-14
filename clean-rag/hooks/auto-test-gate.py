@@ -32,6 +32,8 @@ import urllib.request
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from turn_edits import edited_code_files, git_root as _git_root_of  # noqa: E402
 
 CLEAN_RAG_HOME = Path(os.environ.get("CLEAN_RAG_HOME") or Path(__file__).resolve().parent.parent)
 STATE_DIR = CLEAN_RAG_HOME / "state"
@@ -153,12 +155,16 @@ def main() -> int:
     session_id = payload.get("session_id", "")
 
     root = _git_root(cwd)
-    if not root:
-        return 0
-
-    # No code changed this turn means there is nothing to verify. Allow.
-    if not _code_changed(root):
-        return 0
+    if not root or not _code_changed(root):
+        # cwd based detection found nothing: the cwd is not a repo, or the edits
+        # landed in a different repo than the cwd. Fall back to the files actually
+        # edited this session and test the repo they live in.
+        edited = edited_code_files(session_id)
+        if not edited:
+            return 0
+        root = _git_root_of(edited[0]) or root
+        if not root:
+            return 0
 
     result = _run_tests(root)
     if not result:

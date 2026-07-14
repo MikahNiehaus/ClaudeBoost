@@ -28,8 +28,12 @@ from .config import (
     WEB_SEARCH_SCORE_THRESHOLD,
 )
 from .embedding import SentenceTransformerEmbedding
+from .github_search import github_fetch_file, github_search
 from .indexing import index_project, reindex_file
+from .mutation import run_mutation
 from .search import search
+from .stackexchange import stackoverflow_search
+from .wikipedia import wikipedia_search
 
 logger = logging.getLogger(__name__)
 
@@ -457,6 +461,37 @@ async def handle_run_tests(request: web.Request) -> web.Response:
     return _json_response(result)
 
 
+async def handle_mutation_test(request: web.Request) -> web.Response:
+    """POST /mutation-test: prove the tests bite, by running the mutation tool.
+
+    Body: {"project_path": "<abs>", "changed_files": ["src/a.py", ...]}. Runs the
+    detected tool (mutmut, StrykerJS, cargo mutants) scoped to changed_files in an
+    executor. A surviving mutant means a test that should have caught a broken
+    version did not. No tool for the language reports has_tool false, which is a
+    real answer rather than a silent skip. See server/mutation.py.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    changed_files = body.get("changed_files") or []
+    if not isinstance(changed_files, list):
+        return _json_response({"error": "'changed_files' must be a list"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, partial(run_mutation, project_path, changed_files)
+    )
+    return _json_response(result)
+
+
 async def handle_web_search(request: web.Request) -> web.Response:
     """POST /web-search: DuckDuckGo search, source ranked and sanitized.
 
@@ -490,6 +525,115 @@ async def handle_web_search(request: web.Request) -> web.Response:
     if result.get("error"):
         logger.error("Web search failed for %r: %s", query, result["error"])
 
+    return _json_response({"query": query, **result})
+
+
+async def handle_github_search(request: web.Request) -> web.Response:
+    """POST /github-search: search GitHub repositories, best maintained first.
+
+    For finding a real repo to adopt, ranked by stars and recency that GitHub
+    knows and DuckDuckGo does not. Token optional via GITHUB_TOKEN in .env (10 per
+    minute unauthenticated, 30 with a token). Blocking, so run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+
+    max_results = min(int(body.get("max_results", 5)), 50)
+    sort = body.get("sort", "stars")
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: github_search(query, max_results=max_results, sort=sort)
+    )
+
+    if result.get("error"):
+        logger.error("GitHub search failed for %r: %s", query, result["error"])
+
+    return _json_response({"query": query, **result})
+
+
+async def handle_github_file(request: web.Request) -> web.Response:
+    """POST /github-file: fetch one file's text from a public GitHub repo.
+
+    Body: {"owner", "repo", "path", "ref"?}. For pulling a real reference file to
+    study once the repo search finds the repo. Code is returned intact (only the
+    invisible injection characters stripped) and is untrusted reference data.
+    Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    owner = (body.get("owner") or "").strip()
+    repo = (body.get("repo") or "").strip()
+    path = (body.get("path") or "").strip()
+    if not (owner and repo and path):
+        return _json_response({"error": "owner, repo, and path are required"}, 400)
+    ref = body.get("ref") or None
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: github_fetch_file(owner, repo, path, ref=ref)
+    )
+    if result.get("error"):
+        logger.error("GitHub file fetch failed for %s/%s %s: %s", owner, repo, path, result["error"])
+    return _json_response(result)
+
+
+async def handle_stackoverflow_search(request: web.Request) -> web.Response:
+    """POST /stackoverflow-search: top accepted StackOverflow answers, with code.
+
+    Body: {"query", "max_results"?}. For the few lines that do X, human voted. Key
+    optional via STACKEXCHANGE_KEY in .env. Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+    max_results = min(int(body.get("max_results", 3)), 10)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: stackoverflow_search(query, max_results=max_results)
+    )
+    if result.get("error"):
+        logger.error("StackOverflow search failed for %r: %s", query, result["error"])
+    return _json_response({"query": query, **result})
+
+
+async def handle_wikipedia_search(request: web.Request) -> web.Response:
+    """POST /wikipedia-search: human curated general knowledge, free and keyless.
+
+    Body: {"query", "max_results"?}. The high quality general info tier, a fact or
+    concept from a human edited encyclopedia. Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+    max_results = min(int(body.get("max_results", 3)), 10)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: wikipedia_search(query, max_results=max_results)
+    )
+    if result.get("error"):
+        logger.error("Wikipedia search failed for %r: %s", query, result["error"])
     return _json_response({"query": query, **result})
 
 
@@ -643,9 +787,14 @@ def create_app() -> web.Application:
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
     app.router.add_post("/web-search", handle_web_search)
+    app.router.add_post("/github-search", handle_github_search)
+    app.router.add_post("/github-file", handle_github_file)
+    app.router.add_post("/stackoverflow-search", handle_stackoverflow_search)
+    app.router.add_post("/wikipedia-search", handle_wikipedia_search)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)
     app.router.add_post("/run-tests", handle_run_tests)
+    app.router.add_post("/mutation-test", handle_mutation_test)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/register-project", handle_register_project)
     app.on_startup.append(_on_startup)

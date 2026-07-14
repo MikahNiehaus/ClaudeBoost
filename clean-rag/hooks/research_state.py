@@ -227,11 +227,18 @@ def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     except (OSError, json.JSONDecodeError):
         return False, "the research record is unreadable"
 
-    age = time.time() - record.get("started_at", 0)
+    stamps = record.get("stamps", [])
+
+    # Freshness keys off the most recent research activity, not the turn open time.
+    # A long turn that keeps researching is not stale; only a genuinely abandoned
+    # record is (its newest stamp, or its start if nothing stamped, has aged out).
+    # Keying staleness to started_at alone bricked every edit in a session that ran
+    # past TURN_MAX_AGE_S, even right after a valid triage stamped this file.
+    last_activity = max([record.get("started_at", 0)] + [s.get("at", 0) for s in stamps])
+    age = time.time() - last_activity
     if age > TURN_MAX_AGE_S:
         return False, f"the research record is stale ({age / 60:.0f} minutes old)"
 
-    stamps = record.get("stamps", [])
     if not stamps:
         return False, "no research agent has run this turn"
 

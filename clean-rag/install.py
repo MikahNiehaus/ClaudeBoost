@@ -28,8 +28,11 @@ GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 RESEARCH_GATE_SENTINEL = "research-gate.py"
+RESEARCH_GATE_BASH_SENTINEL = "research-gate-bash.py"
 RESEARCH_RECORD_SENTINEL = "research-record.py"
 AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
+VERIFIER_GATE_SENTINEL = "verifier-gate.py"
+RECORD_EDIT_SENTINEL = "record-edit.py"
 
 
 def _say(msg: str) -> None:
@@ -476,6 +479,22 @@ def register_verify_after_edit_hook() -> None:
     )
 
 
+def register_record_edit_hook() -> None:
+    # Records which files an edit touched, so the Stop gates fire even when the
+    # session cwd is not the repo being edited. See record-edit.py and
+    # turn_edits.py.
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/record-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", RECORD_EDIT_SENTINEL,
+        hook_entry, label="record-edit",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
@@ -516,6 +535,24 @@ def register_auto_test_gate_hook() -> None:
     _register_hook(
         settings, "Stop", AUTO_TEST_GATE_SENTINEL,
         hook_entry, label="auto-test-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5h2: register the verifier gate Stop hook. On a high stakes diff (auth,
+# money, SQL, subprocess, concurrency) it nudges the main agent to spawn the
+# fresh verifier-agent, after the tests pass. Same loop safe shape as the test
+# gate: stop_hook_active guard, per session block cap, fail open.
+# ---------------------------------------------------------------------------
+def register_verifier_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", VERIFIER_GATE_SENTINEL,
+        hook_entry, label="verifier-gate",
     )
 
 
@@ -597,6 +634,24 @@ def register_research_gate_hook() -> None:
     _register_hook(
         settings, "PreToolUse", RESEARCH_GATE_SENTINEL,
         hook_entry, prepend=True, label="research-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The other half of the pre edit gate: catch a code file written through the
+# shell (echo >, tee, sed -i, python open), which the Edit/Write matcher never
+# sees. Same rule, applied to Bash. Closes Claude Code issue #29709.
+# ---------------------------------------------------------------------------
+def register_research_gate_bash_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate-bash.py"'
+    hook_entry = {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", RESEARCH_GATE_BASH_SENTINEL,
+        hook_entry, label="research-gate-bash",
     )
 
 
@@ -704,6 +759,7 @@ def main():
     # Step 3
     print("\nStep 3: Registering the research gate...")
     register_research_gate_hook()
+    register_research_gate_bash_hook()
     register_research_record_hook()
 
     # Step 3b
@@ -727,6 +783,7 @@ def main():
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
     register_verify_after_edit_hook()
+    register_record_edit_hook()
 
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")
@@ -739,6 +796,10 @@ def main():
     # Step 5h
     print("\nStep 5h: Registering auto-test-gate hook...")
     register_auto_test_gate_hook()
+
+    # Step 5h2
+    print("\nStep 5h2: Registering verifier-gate hook...")
+    register_verifier_gate_hook()
 
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")
