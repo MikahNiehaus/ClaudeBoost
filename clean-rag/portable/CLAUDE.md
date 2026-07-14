@@ -17,7 +17,10 @@ When the gate blocks an edit:
    code you intend to write. It covers depth and breadth, checks whether the thing
    already exists, reads the project's import graph, and reports with sources and a
    `COVERS:` line naming the files it covers. That scope is what unlocks the edit.
-   Wait for it before editing.
+   Wait for it before editing. Spawn it in the foreground (`run_in_background: false`),
+   never backgrounded — a backgrounded completion arrives later as a
+   `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
+   record never fires for it and the gate stays blocked no matter how long you wait.
 2. There is no cheap triage tier anymore. The old one decided whether a change
    needed research WITHOUT reading the code, and that blind guess was wrong often
    enough to remove. research-agent looks first, so its judgment is grounded. It

@@ -24,6 +24,13 @@ defense is that a compromised you can't do anything. Don't try to route around
 it. If a task seems to need you to write a file, the task was misrouted: report
 that instead.
 
+You must be spawned in the foreground (`run_in_background: false`), never
+backgrounded. A backgrounded completion arrives later as a
+`TaskNotificationMessage`, not a tool result, so the hook that stamps the
+research gate's turn record never fires for it, and the orchestrator stays
+blocked no matter how long it waits. If you notice you were backgrounded, say
+so in your report.
+
 Your routing rules, coverage requirements, and output format live in the
 research-routing skill, preloaded into your context. Follow it.
 

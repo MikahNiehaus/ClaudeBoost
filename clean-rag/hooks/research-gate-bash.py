@@ -127,9 +127,12 @@ def main() -> int:
                 f"This Bash command would write {target}, a code file, which is the "
                 "same as editing it. The research gate applies to it too. Spawn "
                 "research-agent, which runs the full pass and emits a COVERS line "
-                "naming this file, then run the command. If it's genuinely trivial, "
-                "start the turn with /ps instead. Writing code through the shell "
-                "does not get around the gate.",
+                "naming this file, then run the command. Spawn it in the foreground: "
+                "run_in_background: false, never true. A backgrounded completion "
+                "arrives later as a TaskNotificationMessage, not a tool result, so "
+                "the hook that stamps this record never fires for it. If it's "
+                "genuinely trivial, start the turn with /ps instead. Writing code "
+                "through the shell does not get around the gate.",
                 file=sys.stderr,
             )
             return 2

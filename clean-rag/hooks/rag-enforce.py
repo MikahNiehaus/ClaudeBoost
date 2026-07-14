@@ -580,12 +580,28 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
 # for this turn. \b so /pset and the like don't false match.
 _QUICK_RE = re.compile(r"^\s*/ps\b", re.IGNORECASE)
 
+# Claude Code delivers a background task's completion (a backgrounded Bash
+# command, a Monitor watch, any subagent) as a synthetic UserPromptSubmit event
+# too, with no field distinguishing it from a real human message -- the SDK's
+# UserPromptSubmitHookInput only has hook_event_name and prompt. Its prompt text
+# is literally this XML wrapper (confirmed against upstream reports of the same
+# shape: claude-code#39027, #21700). Treating it as a real new turn would call
+# open_turn() below, which unconditionally resets stamps to [], wiping every
+# research clearance already earned this turn for a background task nobody was
+# waiting on. .search(), not an anchored match, since Claude Code may prefix
+# this with whitespace or its own preamble before the tag.
+_TASK_NOTIFICATION_RE = re.compile(r"<task-notification\b", re.IGNORECASE)
+
 
 def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
 
     hook_payload = _read_hook_payload()
     user_prompt = hook_payload.get("prompt", "")
+
+    if _TASK_NOTIFICATION_RE.search(user_prompt or ""):
+        logger.info("Synthetic task-notification prompt, skipping turn reset and injection.")
+        return 0
 
     # Open a fresh turn. Research done for the last message does not carry over
     # to this one, so research-gate.py starts refusing code edits again until an
