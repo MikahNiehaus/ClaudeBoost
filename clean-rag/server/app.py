@@ -29,6 +29,7 @@ from .config import (
 )
 from .embedding import SentenceTransformerEmbedding
 from .github_search import github_fetch_file, github_search
+from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
 from .indexing import index_project, reindex_file
 from .mutation import run_mutation
 from .search import search
@@ -637,6 +638,61 @@ async def handle_wikipedia_search(request: web.Request) -> web.Response:
     return _json_response({"query": query, **result})
 
 
+async def handle_graphrag_build(request: web.Request) -> web.Response:
+    """POST /graphrag-build: start the GraphRAG build for a project (manual, overnight).
+
+    Body: {"project_path": "<abs>"}. Returns immediately; poll /graphrag-status for
+    percent. Proxies to the isolated graph service (auto started) in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+    project_path = (body.get("project_path") or "").strip()
+    if not project_path:
+        return _json_response({"error": "project_path is required"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_build, project_path))
+    return _json_response(result)
+
+
+async def handle_graphrag_query(request: web.Request) -> web.Response:
+    """POST /graphrag-query: ask the built semantic graph a cross file question.
+
+    Body: {"project_path": "<abs>", "query": "..."}. The semantic layer, for the
+    why and intent a query the import graph cannot answer. Proxied in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+    project_path = (body.get("project_path") or "").strip()
+    q = (body.get("query") or "").strip()
+    if not project_path or not q:
+        return _json_response({"error": "project_path and query are required"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_query, project_path, q))
+    return _json_response(result)
+
+
+async def handle_graphrag_status(request: web.Request) -> web.Response:
+    """GET /graphrag-status?project_path=<abs> (or POST body): build progress."""
+    project_path = (request.query.get("project_path") or "").strip()
+    if not project_path and request.method == "POST":
+        try:
+            body = await request.json()
+            project_path = (body.get("project_path") or "").strip()
+        except Exception:
+            pass
+    if not project_path:
+        return _json_response({"error": "project_path is required"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_status, project_path))
+    return _json_response(result)
+
+
 async def handle_projects(request: web.Request) -> web.Response:
     """GET /projects: list indexed projects."""
     projects = _list_projects()
@@ -791,6 +847,10 @@ def create_app() -> web.Application:
     app.router.add_post("/github-file", handle_github_file)
     app.router.add_post("/stackoverflow-search", handle_stackoverflow_search)
     app.router.add_post("/wikipedia-search", handle_wikipedia_search)
+    app.router.add_post("/graphrag-build", handle_graphrag_build)
+    app.router.add_post("/graphrag-query", handle_graphrag_query)
+    app.router.add_get("/graphrag-status", handle_graphrag_status)
+    app.router.add_post("/graphrag-status", handle_graphrag_status)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)
     app.router.add_post("/run-tests", handle_run_tests)

@@ -495,6 +495,62 @@ def register_record_edit_hook() -> None:
     )
 
 
+def setup_graphrag() -> None:
+    """Set up the isolated GraphRAG stack: venv, fast-graphrag, and Ollama models.
+
+    Idempotent and best effort: it skips whatever is already present and never
+    aborts the install if an optional piece fails. Matches the per machine venv
+    convention (these isolated venvs are built here, never committed).
+    """
+    import shutil
+    import subprocess
+
+    home = Path(__file__).resolve().parent
+    venv = home / "graphrag-venv"
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    venv_py = venv / scripts / ("python.exe" if os.name == "nt" else "python")
+
+    try:
+        if not venv_py.is_file():
+            print("  creating graphrag-venv ...")
+            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [skip] could not create graphrag-venv: {e}")
+        return
+
+    try:
+        probe = subprocess.run(
+            [str(venv_py), "-c", "import importlib.util as u; print(u.find_spec('fast_graphrag') is not None)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "True" in probe.stdout:
+            print("  fast-graphrag already installed")
+        else:
+            print("  installing fast-graphrag into graphrag-venv (moderate download) ...")
+            subprocess.run([str(venv_py), "-m", "pip", "install", "--quiet", "fast-graphrag"], check=True, timeout=600)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] fast-graphrag install failed: {e}")
+
+    if not shutil.which("ollama"):
+        print("  [action needed] Ollama not found. Install it, then pull the models:")
+        print("    ollama pull qwen2.5:7b-instruct")
+        print("    ollama pull nomic-embed-text")
+        return
+    try:
+        listed = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=15).stdout
+    except Exception:  # noqa: BLE001
+        listed = ""
+    for model in ("qwen2.5:7b-instruct", "nomic-embed-text"):
+        if model in listed:
+            print(f"  {model} already pulled")
+            continue
+        try:
+            print(f"  pulling {model} (this can be large) ...")
+            subprocess.run(["ollama", "pull", model], check=True, timeout=3600)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] could not pull {model}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
@@ -784,6 +840,10 @@ def main():
     register_reindex_hook()
     register_verify_after_edit_hook()
     register_record_edit_hook()
+
+    # Step 5d
+    print("\nStep 5d: Setting up GraphRAG (isolated venv + models; may download)...")
+    setup_graphrag()
 
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")
