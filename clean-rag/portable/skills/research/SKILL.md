@@ -16,17 +16,9 @@ answered from whatever I happen to remember. This closes it on request.
 `$ARGUMENTS` is the question. If it's empty, use whatever the user was just
 asking about, and say which question you took.
 
-**1. Decide if this needs the full agent or just triage.**
-
-Spawn `triage-agent` first when the question is small or might not need research
-at all. It answers in about 15 seconds. If it says `NONE`, tell the user that and
-answer directly instead of burning a full research run.
-
-Skip triage and go straight to `research-agent` when the question is obviously
-substantial: an architecture decision, a library choice, "what's the best way to
-build X", anything where being wrong is expensive.
-
-**2. Spawn `research-agent`** with the question broken into aspects. Give it:
+**1. Spawn `research-agent`** with the question broken into aspects. There's no
+triage tier to pre-filter with anymore: if the user invoked /research, they want it
+researched, so research it. Give it:
 
 - The actual question, verbatim.
 - 3 to 5 aspects, each one a question a search could really answer.
@@ -38,11 +30,11 @@ build X", anything where being wrong is expensive.
 The agent handles depth versus breadth routing itself. That's in its preloaded
 skill, so don't restate it.
 
-**3. Wait for it.** Don't answer the question while it's running and then paste
+**2. Wait for it.** Don't answer the question while it's running and then paste
 the findings underneath. That defeats the point, and you'll anchor on whatever
 you already believed.
 
-**4. Report what it actually found**, not what you expected it to find. If it
+**3. Report what it actually found**, not what you expected it to find. If it
 contradicts you, say so plainly. If it found the thing already exists, lead with
 that. If it found nothing useful, say that too. "I searched and found nothing, so
 building it is the right call" is a real answer and worth reporting.

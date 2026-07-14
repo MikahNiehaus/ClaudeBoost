@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """PreToolUse gate on Edit, Write, and MultiEdit.
 
-Blocks a code edit unless a research or triage agent actually ran this turn.
+Blocks a code edit unless research-agent actually ran this turn.
 
 This replaces the old proof gate idea outright. That one asked the model to
 write a proof file attesting it had researched, which proves nothing: the model
@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import research_audit  # noqa: E402
-from research_state import check_file_researched  # noqa: E402
+from research_state import check_file_researched, is_quick_turn  # noqa: E402
 
 # Only these get gated. Everything else, including .md, .json, .yaml, and configs,
 # passes. A markdown edit has nothing to research.
@@ -73,17 +73,17 @@ def _block(file_path: str, reason: str) -> int:
         f"BLOCKED: {reason}.\n\n"
         f"About to edit: {file_path}\n\n"
         "Every code edit has to be covered by research. Not asked for, required.\n\n"
-        "Spawn triage-agent. It is cheap and fast, and for a trivial edit it comes\n"
-        "straight back with NONE, which satisfies this gate. Tell it what you are\n"
-        "changing, why, and the code you intend to write.\n\n"
+        "Spawn research-agent. Tell it what you are changing, why, and the code you\n"
+        "intend to write. It reads the real file and covers depth and breadth every\n"
+        "time; it does not shortcut a change it judges trivial. If this genuinely is\n"
+        "trivial, that call is yours: start the turn with /ps to skip research (and\n"
+        "the verifier) for the whole turn. Do not expect the agent to skip it.\n\n"
         "Its report MUST end with a line naming every file the research covers:\n\n"
         "    COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py\n\n"
         "That scope is what this gate checks. One research run can cover a whole\n"
         "coherent change across many files, so you do not need one agent per file.\n"
         "But a file nobody researched still blocks, which is the point: researching\n"
         "one thing and then editing something else is the failure this catches.\n\n"
-        "If triage returns RESEARCH with aspects, spawn research-agent with those\n"
-        "aspects and wait for it before editing.\n\n"
         "Do not route around this by editing a .md file instead, and do not ask the\n"
         "user to disable it. Spawn the agent.",
         file=sys.stderr,
@@ -112,6 +112,16 @@ def main() -> int:
         return 0
 
     session_id = payload.get("session_id", "")
+
+    # A /ps turn is the human's explicit skip. Allow the edit, but still chain an
+    # audit entry so a quick turn is permanently visible, not an invisible bypass.
+    if is_quick_turn(session_id):
+        research_audit.append(
+            file_path=file_path, session_id=session_id,
+            allowed=True, reason="quick mode (/ps)", covering_agent="",
+        )
+        return 0
+
     ok, reason = check_file_researched(session_id, file_path)
 
     # Every code edit gets a line, allowed or blocked, chained to the one before.

@@ -20,8 +20,7 @@ an edit, then checked that file before allowing the edit.
 That design proves nothing. The model writes the file, so the file says whatever
 the model wants it to say. It was replaced by hooks/research-gate.py, which keys
 off something the model cannot fabricate: an agent completion, stamped by a
-PostToolUse hook only after Claude Code has actually run a research or triage
-agent to the end.
+PostToolUse hook only after Claude Code has actually run research-agent to the end.
 
 So this was deleted on purpose. It was not lost. Do not restore it. If you want
 the enforcement, it is in research-gate.py, and it is stricter.

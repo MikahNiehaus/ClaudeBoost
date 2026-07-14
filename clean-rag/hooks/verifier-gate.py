@@ -1,24 +1,29 @@
 #!/usr/bin/env python
-"""Stop hook: nudge a fresh verifier on high stakes changes, bounded and loop safe.
+"""Stop hook: nudge a fresh verifier after a code-changing turn, bounded and loop safe.
 
 The test run (auto-test-gate) proves the tests pass. It does not prove the tests
-catch the bug, and on some surfaces a passing test never could: auth, money, SQL,
-subprocess boundaries, concurrency. There, "green" and "correct" are different
-questions. When a change touched one of those surfaces, this asks the main agent
-to spend one fresh reviewer on it.
+catch the bug. So when a turn changed code, this asks the main agent to spend one
+fresh reviewer on it before finishing. The user's rule: always verify a real code
+change, the one exception being a turn the human marked /ps (quick mode), which
+opts out of research and verification alike.
+
+high_stakes.scan_diff still runs, but only to LABEL the change (auth, money, SQL,
+subprocess, concurrency) so the nudge can point at the sharpest risk. It is no
+longer the trigger: a change with no high stakes surface still gets a general
+correctness review, because "green tests" and "correct" are different questions
+everywhere, not only on those surfaces.
 
 A Stop hook cannot spawn a subagent itself, it can only hand text back to the main
-agent, which then spawns one. So this detects the surface, then blocks once with a
-reason telling the agent to spawn verifier-agent. Same nudge shape as
-auto-test-gate.py, and the same hard safety rules, because a looping Stop hook has
-burned this user before:
+agent, which then spawns one. So this blocks once with a reason telling the agent
+to spawn verifier-agent. Same nudge shape as auto-test-gate.py, and the same hard
+safety rules, because a looping Stop hook has burned this user before:
 
   - stop_hook_active true means we are already inside a block we raised. Exit 0.
+  - A /ps turn opts out entirely. Exit 0.
   - Block at most twice per session, counter under state/. Bounded, cannot loop.
-  - Detection is deterministic (high_stakes.scan_diff), no LLM, cheap.
+  - No code changed this turn means nothing to review. Allow.
   - If the tests are currently FAILING, allow: auto-test-gate owns that, and a
     reviewer on broken code is wasted. Verify only once the code runs.
-  - No high stakes surface touched means nothing to review. Allow.
   - Any error exits 0 (fail open). A broken gate must never trap the session.
 
 Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
@@ -34,6 +39,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import high_stakes  # noqa: E402
+from research_state import is_quick_turn  # noqa: E402
 from turn_edits import edited_code_files, git_root as _git_root_of  # noqa: E402
 
 CLEAN_RAG_HOME = Path(os.environ.get("CLEAN_RAG_HOME") or Path(__file__).resolve().parent.parent)
@@ -148,6 +154,10 @@ def main() -> int:
     cwd = payload.get("cwd") or os.getcwd()
     session_id = payload.get("session_id", "")
 
+    # A /ps turn opts out of everything, the verifier included.
+    if is_quick_turn(session_id):
+        return 0
+
     root = _git_root(cwd)
     added, paths = ([], [])
     if root:
@@ -166,9 +176,9 @@ def main() -> int:
         if not added and not paths:
             return 0
 
+    # scan_diff no longer decides whether to review, it only labels the sharpest
+    # risk so the nudge can point at it. Any real code change gets a reviewer.
     hits = high_stakes.scan_diff(added, paths)
-    if not hits:
-        return 0
 
     # A reviewer on failing code is wasted; the test gate owns that case.
     if _tests_failing(root):
@@ -176,23 +186,28 @@ def main() -> int:
 
     if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
         print(
-            "[verifier-gate] High stakes change still unreviewed after "
+            "[verifier-gate] Code change still unreviewed after "
             f"{MAX_BLOCKS_PER_SESSION} nudges this session. Not blocking again "
             "(anti loop).",
             file=sys.stderr,
         )
         return 0
 
-    cats = ", ".join(sorted(hits))
     files = ", ".join(sorted({p for p in paths})) or "the changed files"
-    evidence = "\n".join(
-        f"  {cat}: {ex[0]}" for cat, ex in sorted(hits.items()) if ex
-    )
+    if hits:
+        surface = ("high stakes surfaces where a passing test does not prove the "
+                   "property: " + ", ".join(sorted(hits)))
+        evidence = "\n".join(
+            f"  {cat}: {ex[0]}" for cat, ex in sorted(hits.items()) if ex
+        )
+    else:
+        surface = "code this turn; a passing test is not proof the test catches the bug"
+        evidence = ""
 
     _bump_block_count(session_id)
     print(
-        "[verifier-gate] This change touched high stakes surfaces where a passing "
-        f"test does not prove the property: {cats}.\n"
+        "[verifier-gate] This change should go through a fresh reviewer before you "
+        f"finish: {surface}.\n"
         f"Files: {files}\n"
         f"{evidence}\n\n"
         "Spawn verifier-agent (a fresh context, NOT the research agent) on those "
@@ -200,7 +215,9 @@ def main() -> int:
         "correctness properties this change must satisfy, and the diff. Do NOT give "
         "it your reasoning for the change, that is what biases a reviewer into "
         "agreeing with it. It reports findings it can quote from the diff and a "
-        "verdict. Fix any Critical or High it returns, then finish.",
+        "verdict. Fix any Critical or High it returns, then finish.\n\n"
+        "If this really was trivial and needed no reviewer, that was a /ps turn's "
+        "call to make up front, not this one's.",
         file=sys.stderr,
     )
     return 2

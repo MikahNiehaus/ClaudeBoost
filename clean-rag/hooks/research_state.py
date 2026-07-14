@@ -36,8 +36,13 @@ import sys
 import time
 from pathlib import Path
 
-# Agents whose completion counts as research having happened.
-RESEARCH_AGENTS = {"research-agent", "triage-agent"}
+# Agents whose completion counts as research having happened. One grounded agent,
+# not a cheap classifier tier: triage-agent was removed because it judged trivial
+# vs not without reading the file, a routing call made blind. research-agent always
+# runs the full pass, depth and breadth, every time; it never decides a change is
+# trivial on its own. That call belongs to the human, via /ps, which skips this
+# turn's research and verification entirely.
+RESEARCH_AGENTS = {"research-agent"}
 
 # A record older than this is treated as gone, covering an abandoned turn whose
 # edits arrive much later without a fresh prompt.
@@ -160,13 +165,21 @@ def extract_covered_files(text: str) -> list[str]:
     return []
 
 
-def open_turn(session_id: str, prompt: str) -> None:
-    """Called on UserPromptSubmit. Starts a fresh turn with no research in it."""
+def open_turn(session_id: str, prompt: str, quick: bool = False) -> None:
+    """Called on UserPromptSubmit. Starts a fresh turn with no research in it.
+
+    `quick` marks a /ps turn: the human's explicit "skip the ceremony" for this
+    turn. It is set deterministically from the raw prompt text by the caller, never
+    by the model, so it can't be forged the way a model written marker could. It
+    rides the same per-turn record as `stamps`, so it can't leak into the next turn:
+    the next prompt overwrites this whole record.
+    """
     path = _record_path(session_id)
     record = {
         "session_id": session_id,
         "started_at": time.time(),
         "prompt_preview": (prompt or "")[:200],
+        "quick": bool(quick),
         "stamps": [],
     }
     try:
@@ -178,8 +191,29 @@ def open_turn(session_id: str, prompt: str) -> None:
         pass
 
 
+def is_quick_turn(session_id: str) -> bool:
+    """Did this turn start with /ps? Then the gates and the verifier stand down.
+
+    Fail closed: a missing, malformed, or stale record returns False, so a broken
+    record means "still require research and verification", never a silent skip. The
+    age guard (same TURN_MAX_AGE_S the research check uses) also stops a quick flag
+    leaking into a later turn if a following open_turn write failed and left the old
+    record in place.
+    """
+    path = _record_path(session_id)
+    if not path.exists():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or not record.get("quick", False):
+            return False
+        return (time.time() - record.get("started_at", 0)) <= TURN_MAX_AGE_S
+    except Exception:  # noqa: BLE001 -- any failure means "not quick", enforce the gate
+        return False
+
+
 def record_agent(session_id: str, agent_type: str, report: str = "") -> None:
-    """Called on PostToolUse after a research or triage agent finishes."""
+    """Called on PostToolUse after research-agent finishes."""
     if agent_type not in RESEARCH_AGENTS:
         return
 
@@ -233,7 +267,7 @@ def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     # A long turn that keeps researching is not stale; only a genuinely abandoned
     # record is (its newest stamp, or its start if nothing stamped, has aged out).
     # Keying staleness to started_at alone bricked every edit in a session that ran
-    # past TURN_MAX_AGE_S, even right after a valid triage stamped this file.
+    # past TURN_MAX_AGE_S, even right after a valid research stamp landed for this file.
     last_activity = max([record.get("started_at", 0)] + [s.get("at", 0) for s in stamps])
     age = time.time() - last_activity
     if age > TURN_MAX_AGE_S:

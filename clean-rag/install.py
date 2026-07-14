@@ -139,7 +139,8 @@ def install_user_assets() -> None:
     # switch can't remove it out from under a live hook registration.
     _copy_file(portable / "hook-run.py", CLAUDE_DIR / "hook-run.py")
 
-    # Agents. research-agent (Sonnet) and triage-agent (Haiku).
+    # Agents. research-agent (Sonnet) is the gatekeeper; verifier-agent (Opus)
+    # validates the diff afterward.
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
@@ -177,8 +178,19 @@ def install_deps() -> None:
 # point of it.
 HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
 
+# Portable launcher for clean-rag's own hooks: an env var each install resolves
+# per machine, living in the repo so it can't drift from the hooks it wraps.
+# Foreign hooks keep the shared ~/.claude/hook-run.py.
+PORTABLE_HOOK_RUNNER = "$CLEAN_RAG_HOME/portable/hook-run.py"
 
-def _wrap_command(command: str) -> str:
+# A hook is clean-rag's to wipe and rebuild if its command or prompt carries one
+# of these. Every clean-rag command references $CLEAN_RAG_HOME; the lone prompt
+# hook carries the session sentinel. ClaudeBoost ($CLAUDEBOOST_HOME) and user
+# hooks match neither, so they're left alone.
+CLEAN_RAG_OWNED_MARKERS = ("$CLEAN_RAG_HOME", SESSION_SENTINEL)
+
+
+def _wrap_command(command: str, runner: str | None = None) -> str:
     """Route a hook command through hook-run.py so a branch switch can't brick Claude.
 
     Hook commands are registered in the global settings.json, which does not
@@ -198,7 +210,8 @@ def _wrap_command(command: str) -> str:
     if not command or ".py" not in command or "hook-run.py" in command:
         return command
 
-    runner = str(HOOK_RUNNER).replace("\\", "/")
+    if runner is None:
+        runner = str(HOOK_RUNNER).replace("\\", "/")
 
     # Split the interpreter off the front, keep whatever it was.
     match = re.match(r'^\s*("[^"]*"|\S+)\s+(.*)$', command)
@@ -221,6 +234,38 @@ def _hook_target_script(command: str) -> Path | None:
     raw = scripts[-1]
     expanded = os.path.expandvars(os.path.expanduser(raw))
     return Path(expanded.replace("\\", "/"))
+
+
+def wipe_clean_rag_hooks() -> None:
+    """Remove every hook clean-rag owns, so the registrations that follow rebuild
+    the whole set from a clean slate.
+
+    Ownership is by marker (CLEAN_RAG_OWNED_MARKERS): clean-rag's command hooks all
+    carry $CLEAN_RAG_HOME and its one prompt hook carries the session sentinel.
+    ClaudeBoost ($CLAUDEBOOST_HOME) and user hooks match neither, so they survive.
+    This makes a re-install deterministic: no stale entry lingers, and no duplicate
+    forms appear when a command path or launcher changed. heal_stale_hooks still
+    handles foreign dead hooks afterward.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.get("hooks", {})
+    if not hooks:
+        return
+    removed = 0
+    for event, entries in list(hooks.items()):
+        kept = []
+        for entry in entries:
+            text = "".join(
+                h.get("command", "") + h.get("prompt", "")
+                for h in entry.get("hooks", [])
+            )
+            if any(marker in text for marker in CLEAN_RAG_OWNED_MARKERS):
+                removed += 1
+            else:
+                kept.append(entry)
+        hooks[event] = kept
+    write_json(SETTINGS_PATH, settings)
+    _ok(f"wiped {removed} clean-rag hook(s) for a clean reinstall")
 
 
 def heal_stale_hooks() -> None:
@@ -298,10 +343,11 @@ def _register_hook(
         hook_list = []
 
     # Every registration funnels through here, so wrapping in this one place
-    # covers hooks that don't exist yet too.
+    # covers hooks that don't exist yet too. clean-rag's own hooks get the
+    # portable env-var launcher, not a machine-specific absolute path.
     for h in hook_entry.get("hooks", []):
         if "command" in h:
-            h["command"] = _wrap_command(h["command"])
+            h["command"] = _wrap_command(h["command"], runner=PORTABLE_HOOK_RUNNER)
 
     new_cmd = ""
     for h in hook_entry.get("hooks", []):
@@ -673,8 +719,8 @@ def register_code_pattern_inject_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The research gate. Blocks a code edit unless a research or triage agent has
-# actually run and declared that it covered this file.
+# The research gate. Blocks a code edit unless research-agent has actually run
+# and declared that it covered this file.
 #
 # Prepended, because it should refuse before the other pre edit hooks bother
 # doing their searches. No point injecting research context into an edit that
@@ -712,9 +758,9 @@ def register_research_gate_bash_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The other half of the gate: stamps the turn record when a research or triage
-# agent finishes. Without this the gate has nothing to check and blocks
-# everything, so the two are useless apart.
+# The other half of the gate: stamps the turn record when research-agent
+# finishes. Without this the gate has nothing to check and blocks everything, so
+# the two are useless apart.
 # ---------------------------------------------------------------------------
 def register_research_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
@@ -814,6 +860,7 @@ def main():
 
     # Step 3
     print("\nStep 3: Registering the research gate...")
+    wipe_clean_rag_hooks()  # clean slate: drop clean-rag's own hooks, then rebuild them all
     register_research_gate_hook()
     register_research_gate_bash_hook()
     register_research_record_hook()

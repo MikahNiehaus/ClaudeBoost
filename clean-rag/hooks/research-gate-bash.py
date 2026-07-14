@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import check_file_researched  # noqa: E402
+from research_state import check_file_researched, is_quick_turn  # noqa: E402
 
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
@@ -108,6 +108,10 @@ def main() -> int:
     cwd = payload.get("cwd") or os.getcwd()
     session_id = payload.get("session_id", "")
 
+    # A /ps turn skips the gate, shell writes included.
+    if is_quick_turn(session_id):
+        return 0
+
     try:
         targets = write_targets(command)
     except Exception:
@@ -122,9 +126,10 @@ def main() -> int:
                 f"BLOCKED: {reason}.\n\n"
                 f"This Bash command would write {target}, a code file, which is the "
                 "same as editing it. The research gate applies to it too. Spawn "
-                "triage-agent (it returns NONE for a trivial change) so its COVERS "
-                "line names this file, then run the command. Writing code through "
-                "the shell does not get around the gate.",
+                "research-agent, which runs the full pass and emits a COVERS line "
+                "naming this file, then run the command. If it's genuinely trivial, "
+                "start the turn with /ps instead. Writing code through the shell "
+                "does not get around the gate.",
                 file=sys.stderr,
             )
             return 2

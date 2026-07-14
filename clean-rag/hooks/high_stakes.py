@@ -1,15 +1,19 @@
-"""Deterministic high stakes detector for the verifier gate.
+"""Deterministic high stakes labeler for the verifier gate.
 
-The verifier-agent costs about what the change cost to write, so it only earns
-its keep on surfaces where a passing test does not prove the property: auth,
-money, SQL, subprocess boundaries, and concurrency. This decides, cheaply and
-without an LLM, whether a diff touched one of those.
+Surfaces where a passing test especially fails to prove the property: auth, money,
+SQL, subprocess boundaries, and concurrency. This flags, cheaply and without an
+LLM, which of those a diff touched.
+
+It no longer decides WHETHER to run the verifier. The verifier now fires on any
+code change (unless the turn was /ps), so this is a labeler: its hits tell the
+nudge which risk to name so the reviewer is pointed at the sharpest thing. An empty
+result no longer means "skip the review", just "no named high stakes surface, do a
+general correctness pass".
 
 Detection is deterministic on purpose. A keyword match has no judgment behind it,
-but that is fine here: its only job is to decide whether to spend a real reviewer,
-and the judgment happens in the verifier, not here. Never put an LLM in the
-detection path, that is the mechanical query mistake the topic knowledge base died
-of.
+but that is fine here: it only labels, and the judgment happens in the verifier,
+not here. Never put an LLM in the detection path, that is the mechanical query
+mistake the topic knowledge base died of.
 
 Two failure modes to tune against, both real: over trigger (flag every file, the
 gate gets ignored) and under trigger (miss the one risky line). So the keyword sets

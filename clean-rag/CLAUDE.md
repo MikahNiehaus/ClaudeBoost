@@ -11,12 +11,12 @@ There is no topic knowledge base. There used to be, and it was removed. See "Why
 
 ## The research gate
 
-`hooks/research-gate.py` (PreToolUse on Edit, Write, MultiEdit) blocks any edit to a code file unless a research or triage agent completed during the current turn.
+`hooks/research-gate.py` (PreToolUse on Edit, Write, MultiEdit) blocks any edit to a code file unless `research-agent` completed during the current turn.
 
 The gate keys off a real agent run, not a claim of one. That distinction is the whole design:
 
 - `hooks/rag-enforce.py` (UserPromptSubmit) opens a fresh turn record on every message.
-- `hooks/research-record.py` (PostToolUse on Task and Agent) stamps that record when a `research-agent` or `triage-agent` finishes.
+- `hooks/research-record.py` (PostToolUse on Task and Agent) stamps that record when `research-agent` finishes.
 - `hooks/research-gate.py` reads the record and refuses the edit if nothing stamped it.
 
 Only Claude Code can start an agent, and the stamp only lands after one completes. There is no path from "say you researched" to a stamped record. This replaced an earlier proof file design where the model wrote a JSON blob attesting it had researched, which proves nothing: the model writes the file, so the file says whatever the model wants it to say.
@@ -25,17 +25,15 @@ Only Claude Code can start an agent, and the stamp only lands after one complete
 
 **Escape hatch:** `CLEAN_RAG_RESEARCH_GATE=off`. Use it when the gate itself is broken, not when it's inconvenient.
 
-## The two agents
+## The research agent
 
-**`triage-agent`** (Haiku, 12 turn cap) is the cheap first pass. It gets the message or the diff and answers in seconds: either `NONE`, or a short list of what's worth researching. `NONE` is the common case and it satisfies the gate. Measured at roughly 12k tokens and 15 seconds, against 44 to 52k and 2 to 8 minutes for full research. That gap is what makes gating *every* edit affordable.
+**`research-agent`** (Sonnet) is the gatekeeper. When the gate blocks an edit you spawn it; it picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources and a `COVERS:` line. It runs real research every time it fires (roughly 44 to 52k tokens and 2 to 8 minutes for a full pass) and does NOT guess whether a change is trivial. It's defined in `~/.claude/agents/` and preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check).
 
-**`research-agent`** (Sonnet) runs only when triage says it's worth it. It picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources.
+There used to be a cheap `triage-agent` (Haiku) in front of it that answered NONE-versus-RESEARCH in seconds. It was removed: it decided whether a change needed research *without reading the code*, and that blind guess was wrong often enough to be worse than useless. The call about what deserves a full research pass is now the human's, exposed as the `/ps` skill (a quick turn that skips both the gate and the verifier), not a model's to guess. After a full pass, research-agent may itself recommend `/ps` for that kind of change next time if the research turned out functionally unneeded, but it never skips on its own.
 
-Both are defined in `~/.claude/agents/`. research-agent preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check). triage-agent doesn't: its job is just NONE versus RESEARCH, and it runs on every message, so its context floor is kept as thin as possible.
+### The research agent can't write, and its shell is caged
 
-### Neither agent can write, and their shell is caged
-
-They read untrusted web content, which makes them the obvious target for an indirect prompt injection. Sanitizing that text is leaky by nature, so the defense isn't filtering, it's capability removal:
+It reads untrusted web content, which makes it the obvious target for an indirect prompt injection. Sanitizing that text is leaky by nature, so the defense isn't filtering, it's capability removal:
 
 - No `Write`, no `Edit`. They cannot touch a file.
 - `hooks/research-agent-bash-guard.py` (a PreToolUse hook in their own frontmatter) restricts Bash to `curl` against `127.0.0.1` clean-rag only. Verified against 15 cases: `rm -rf`, remote exfil, `;` and `&&` chaining, piping into `sh`, `>` redirects, `python -c`, command substitution, cloud metadata endpoints, and lookalike hosts such as `127.0.0.1.evil.com`.

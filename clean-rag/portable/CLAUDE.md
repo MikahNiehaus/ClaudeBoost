@@ -6,24 +6,26 @@ knowledge base. Works standalone or with Gas Town.
 
 ## The research gate (this is the operative rule)
 
-Every edit to a code file is blocked until a research or triage agent has run
-this turn and declared that it covered that file. Not asked for. Required. The
-gate is a PreToolUse hook that keys off a real agent completion, so there is no
-way to satisfy it by claiming you researched.
+Every edit to a code file is blocked until `research-agent` has run this turn and
+declared that it covered that file. Not asked for. Required. The gate is a
+PreToolUse hook that keys off a real agent completion, so there is no way to
+satisfy it by claiming you researched.
 
 When the gate blocks an edit:
 
-1. **Spawn `triage-agent`** (Haiku, cheap, fast). Tell it what you're changing,
-   why, and the code you intend to write. It answers in about 15 seconds with
-   either `NONE` (trivial, no research needed) or a short list of what to
-   research. Its report ends with a `COVERS:` line naming the files it covers.
-   That scope is what unlocks the edit.
-2. If triage says `RESEARCH`, **spawn `research-agent`** (Sonnet) with those
-   aspects. It researches depth and breadth, checks whether the thing already
-   exists, reads the project's import graph, and reports with sources and its
-   own `COVERS:` line. Wait for it before editing.
-3. `NONE` is a real answer and the common case. A trivial edit is not a failure
-   to find something.
+1. **Spawn `research-agent`** (Sonnet). Tell it what you're changing, why, and the
+   code you intend to write. It covers depth and breadth, checks whether the thing
+   already exists, reads the project's import graph, and reports with sources and a
+   `COVERS:` line naming the files it covers. That scope is what unlocks the edit.
+   Wait for it before editing.
+2. There is no cheap triage tier anymore. The old one decided whether a change
+   needed research WITHOUT reading the code, and that blind guess was wrong often
+   enough to remove. research-agent looks first, so its judgment is grounded. It
+   does real research every time it runs; do not build a triviality shortcut into
+   it or any other agent.
+3. Genuinely trivial work that needs no research is the human's call, not a
+   model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
+   you already know the change is trivial.
 
 Markdown and non code files are exempt. So are `workspace/`, `state/`, `plans/`,
 `docs/`, `.claude/`, and temp dirs.
@@ -36,9 +38,9 @@ Markdown and non code files are exempt. So are `workspace/`, `state/`, `plans/`,
   built, what people get wrong with it, what good looks like. "What's the best
   way to build this" is breadth too, not just pitfalls.
 
-The two research agents cannot write files, and their Bash is caged to the local
-clean-rag server. They read untrusted web content, so removing their ability to
-act is the real defense against a prompt injection.
+research-agent cannot write files, and its Bash is caged to the local clean-rag
+server. It reads untrusted web content, so removing its ability to act is the real
+defense against a prompt injection.
 
 ## Verify by running, not by reviewing (the post write half)
 
@@ -54,16 +56,19 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   says intrinsic self critique without external grounding is close to useless
   and sometimes makes things worse. Running the code is grounded. Re reading it
   is not.
-- **A real separate context review is for high stakes surfaces only**: auth,
-  money, SQL, a subprocess, concurrency, anything at a trust boundary. It costs
-  like a second write, so it is not the default. When it is warranted, spawn
-  `verifier-agent`, a fresh context critic, NOT the research agent (that one reads
-  untrusted web and stays capability stripped, and any agent that wrote or
-  researched the change inherits its own blind spot on review). Give the verifier
-  the requirements, the correctness properties, and the diff, never your reasoning
-  for the change, since that reasoning is exactly what biases a reviewer into
-  agreeing. `hooks/verifier-gate.py` (a Stop hook) already detects these surfaces
-  in the diff and nudges you to spawn it, after the tests pass, not before.
+- **A real separate context review runs on every real code change**, unless the
+  human marked the turn `/ps`. It used to be reserved for high stakes surfaces
+  (auth, money, SQL, a subprocess, concurrency); now it's the default after any
+  code change, because green tests and correct code are different questions
+  everywhere, not only there. Spawn `verifier-agent`, a fresh context critic, NOT
+  the research agent (that one reads untrusted web and stays capability stripped,
+  and any agent that wrote or researched the change inherits its own blind spot on
+  review). Give the verifier the requirements, the correctness properties, and the
+  diff, never your reasoning for the change, since that reasoning is exactly what
+  biases a reviewer into agreeing. `hooks/verifier-gate.py` (a Stop hook) nudges
+  you to spawn it after the tests pass, and `high_stakes.py` labels which surface
+  it touched so the review points at the sharpest risk. A `/ps` turn skips it, the
+  same quick mode escape that skips the research gate.
 
 Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
@@ -140,9 +145,8 @@ ui, docs, test, and the rest) are available for focused work. They are spawned
 as needed, not on every task.
 
 ### Model Routing
-- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent.
+- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent, verifier-agent.
 - **Sonnet**: research-agent and all other specialists.
-- **Haiku**: triage-agent.
 
 ### Parallel Limits
 - Context below 50%: up to 3 agents.

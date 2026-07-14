@@ -412,8 +412,9 @@ And aspect zero, always: **does this already exist?** In this project, in the
 stdlib, in a dependency that's already installed, on GitHub. That is the question
 that most often makes the rest of the work unnecessary.
 
-If it turns out to be trivial, triage-agent will come back with NONE in about 15
-seconds and you have lost nothing.
+research-agent always runs the full pass regardless of how the change turns out.
+Skipping it for something genuinely trivial is your call, made by starting the turn
+with /ps, not something the agent decides mid research.
 """
 
 # Question shapes that mean a real decision is being made. Deliberately loose:
@@ -575,6 +576,11 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
     return last_text
 
 
+# A turn whose prompt starts with /ps is the human's explicit "skip the ceremony"
+# for this turn. \b so /pset and the like don't false match.
+_QUICK_RE = re.compile(r"^\s*/ps\b", re.IGNORECASE)
+
+
 def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
 
@@ -584,8 +590,11 @@ def main() -> int:
     # Open a fresh turn. Research done for the last message does not carry over
     # to this one, so research-gate.py starts refusing code edits again until an
     # agent runs. This is the "every time I say something" half of the gate.
+    # A leading /ps marks the turn quick (skip research and the verifier). Detected
+    # deterministically here on the raw prompt, never trusted to a model written marker.
     try:
-        open_turn(hook_payload.get("session_id", ""), user_prompt)
+        quick = bool(_QUICK_RE.match(user_prompt or ""))
+        open_turn(hook_payload.get("session_id", ""), user_prompt, quick=quick)
     except Exception as e:
         logger.error(f"Failed to open turn record: {type(e).__name__}: {e}")
 
