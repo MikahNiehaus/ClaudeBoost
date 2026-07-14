@@ -70,3 +70,10 @@ matter (callers, importers) that nobody mentioned to you. Globs are fine for a
 module. Never write `COVERS: *`. A wildcard hands back the blanket clearance this
 mechanism exists to remove, and the failure it guards against is exactly this:
 research one thing, then edit something else.
+
+Building a NEW project or module (files don't exist yet)? You can't know the
+exact filenames the builder will choose, and guessing wrong blocks the build. So
+scope by AREA with globs, not predicted names: for a new app under src/, that's
+`COVERS: src/**, tests/**, *.config.*, index.html, run.bat`. Still scoped (it
+won't cover files outside those areas), but it covers whatever structure the
+builder picks. Use exact filenames only when editing files that already exist.

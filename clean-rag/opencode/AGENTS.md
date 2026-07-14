@@ -11,15 +11,16 @@ Call the clean-rag `rag_search` tool with a query about what you are changing. I
 searches the indexed project and its import graph, so you find what already exists
 and what your change touches.
 
-If `rag_search` returns zero results, the project is not indexed yet. That is not
-"nothing to find". Call `web_search_fallback` and research from the web instead.
-Either way, do the research before the edit. A zero result search does not open
-the gate, and it should not stop you either.
+**If `rag_search` returns zero results (a fresh, unindexed project), spawn
+`research-agent`.** It is the reliable way to research: it does the web search
+itself, once, ranks the sources, reasons over them, and ends with a `COVERS:` line
+naming the files it researched. The gate reads that line and unlocks those files.
+This is the primary path for a fresh project, use it.
 
-For anything beyond a trivial change, spawn `research-agent`. It covers depth and
-breadth, checks whether the thing already exists, and ends with a `COVERS:` line
-naming the files it researched. The gate reads that line and only then lets you
-edit those files.
+Do NOT sit in a loop calling `web_search_fallback` yourself. You may call it ONCE
+as a quick check, but if it comes back empty (the scraper rate limits rapid
+repeats), do not call it again, spawn `research-agent` instead. Hammering
+web_search gets you rate limited and gets you nowhere.
 
 ## For a known genre, ground it in a real reference first
 

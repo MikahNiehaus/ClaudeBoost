@@ -88,3 +88,11 @@ stays blocked. Name every file this research actually covers, including ones you
 found matter that nobody mentioned (callers, importers). Globs are fine for a
 module. Never write `COVERS: *`: a wildcard hands back the blanket clearance this
 mechanism exists to remove.
+
+**Building a NEW project or module (files do not exist yet)?** You cannot know
+the exact filenames the builder will choose, and guessing them wrong blocks the
+build. So scope by AREA with globs, not by predicted names. For a new app under
+src/, that is `COVERS: src/**, tests/**, *.config.*, index.html, run.bat`. This
+still scopes the research (it does not cover files outside those areas), but it
+covers whatever structure the builder actually picks, flat or nested. Use exact
+filenames only when editing files that already exist.

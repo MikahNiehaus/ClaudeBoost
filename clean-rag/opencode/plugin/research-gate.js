@@ -62,7 +62,7 @@ const EXEMPT_SEGMENTS = new Set([
 // Tail it: the file is clean-rag-gate.log in ~/.config/opencode (or
 // $XDG_CONFIG_HOME/opencode). Logging never throws, a broken log must not break
 // the gate.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -313,6 +313,24 @@ export const ResearchGate = async () => {
         return;
       }
 
+      // Creating a NEW file (does not exist yet) is different from editing an
+      // existing one. You cannot per-file-cover a file that does not exist, so the
+      // research-agent guessing its exact path is brittle: it predicts a nested
+      // layout, the builder writes a flat one, and every new file blocks. So for a
+      // file that is not on disk yet, a real research-agent run this session (it
+      // emitted at least one COVERS line, tracked in coveredScopes) is enough.
+      // Editing an EXISTING file still needs the strict per-file COVERS match above.
+      // A missing file check can race a concurrent write, but the worst case is a
+      // just-created file being treated as new, which is harmless here.
+      let fileExists = true;
+      try { fileExists = existsSync(filePath); } catch (_) { fileExists = true; }
+      const researchedThisSession = (coveredScopes.get(session) || []).length > 0;
+      if (!fileExists && researchedThisSession) {
+        gateLog("allowed-new-file-research-done", { session, tool, file: filePath });
+        if (!isTestFile(filePath)) untestedCode.set(session, filePath);
+        return;
+      }
+
       // Block. Name what research covered versus the file being edited, same as the
       // Python gate's "research covered X, not this file" message.
       const covered = Array.from(new Set(scopes)).sort();
@@ -336,13 +354,15 @@ export const ResearchGate = async () => {
         "BLOCKED by clean-rag research gate: this file is not in a researched scope.\n\n" +
         "About to edit: " + filePath + "\n" +
         scopeMsg + "\n\n" +
-        "To proceed, do ONE of these, then retry the edit:\n" +
-        "  1. Call rag_search about this file. If it returns 0 results, the project " +
-        "is not indexed yet, so that alone will NOT unlock the gate.\n" +
-        "  2. When rag_search is empty (a fresh project), call web_search_fallback " +
-        "to research it. A web search that finds real references DOES unlock the " +
-        "gate, and its results are exactly the grounding you should build from.\n" +
-        "  3. Or spawn research-agent, which emits a COVERS: line naming files.\n\n" +
+        "To proceed, then retry the edit:\n" +
+        "  1. BEST for a fresh project: spawn research-agent. It does the web " +
+        "search itself, once, ranks the sources, and emits a COVERS: line naming " +
+        "the files it researched. That unlocks the gate. This is the reliable path.\n" +
+        "  2. rag_search about this file also works IF the project is indexed. On a " +
+        "fresh project it returns 0 and will NOT unlock the gate.\n" +
+        "  3. You MAY call web_search_fallback ONCE as a quick check. If it comes " +
+        "back empty, do NOT call it again, the scraper rate limits rapid repeats. " +
+        "Spawn research-agent instead. Never loop web_search_fallback.\n\n" +
         "Markdown and config files are never gated." + testReminder
       );
     },

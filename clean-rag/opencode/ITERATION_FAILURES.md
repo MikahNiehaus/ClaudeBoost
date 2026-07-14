@@ -35,3 +35,78 @@ research-agent, for a game or simulation genre, must return the concrete pattern
 (fixed timestep, injected rng, pure state function, separate render, the specific
 tests to write). AGENTS.md gets a hard done-condition: not done until a unit test
 exists AND run_tests passes.
+
+## Iteration 2 (prescriptive AGENTS.md + web-search-unlock + "call web_search" prompt)
+
+WORSE than iteration 1. The model called web_search_fallback 13 times in a row,
+all 13 returned 0 results (DuckDuckGo rate limits rapid repeated scraping), the
+gate never unlocked, it wrote nothing, and it timed out. A regression.
+
+Root cause: the web-search-unlock change plus a prompt telling the model to call
+web_search made a weak model fixate on web_search and spam it. Iteration 1's
+forced research-agent path was actually better, because research-agent does ONE
+proper search and reasons, instead of the weak primary model hammering the
+scraper.
+
+Fix for iteration 3: the block message and AGENTS.md lead with "spawn
+research-agent" as the primary path (reliable, one search, more capable), and say
+web_search is a single fallback, never a loop. The web-search-unlock stays as an
+option but is no longer what the model is steered toward first.
+
+## Iteration 3 (research-agent-first path)
+
+The model correctly spawned research-agent this time (no web_search spam), and
+research-agent emitted a COVERS line. But the build still failed: research-agent
+covered a NESTED structure (src/engine/engine.js, src/components/Game.jsx), while
+the model wrote a FLAT one (src/engine.js, src/render.js, src/Game.jsx). The
+per-file gate blocked engine.js, render.js, Game.jsx because the exact paths
+didn't match. On a fresh project the research-agent is guessing filenames it can't
+know, and the builder picks different ones.
+
+Root cause: per-file COVERS is right for editing existing files, wrong for
+creating new ones where filenames aren't known yet.
+
+Fix for iteration 4: the research-agent, for a NEW project or module, emits an
+AREA glob (COVERS: src/**, tests/**, *.config.*, index.html, run.bat) instead of
+predicted filenames. Still scoped (won't cover outside those areas), but covers
+whatever structure the builder actually picks. Applied to both the OpenCode and
+Claude Code research-agent prompts.
+
+## Iteration 4 (glob COVERS)
+
+Better but still failed. The research-agent used globs now, but STRUCTURE
+specific ones (src/engine/*.js nested), while the model wrote flat (src/engine.js).
+A nested glob does not match a flat file, so engine.js, render.js, Game.jsx still
+blocked. The research-agent keeps guessing a structure the builder does not follow.
+
+Root cause: any prediction of the layout by the research-agent is brittle, glob or
+not, because it cannot know what structure the builder picks for files that do not
+exist yet.
+
+Fix for iteration 5: distinguish CREATING a new file from EDITING an existing one.
+In research-gate.js, if the target file does not exist on disk yet AND a
+research-agent ran this session (emitted any COVERS), allow it. Existing files
+keep the strict per-file COVERS check. You cannot per-file-cover a file that does
+not exist, so a completed research-agent is the right signal for new files.
+
+## Iteration 5 (new-file allow) — PERFECT, VERIFIED
+
+Success. No blocks. Research-agent ran, emitted COVERS with flat filenames that
+matched, and the new-file backstop covered anything else. The build hit every bar
+marker, verified by RUNNING it, not by trusting the model:
+
+- Pure engine.js: `export function step(state, dt, input, rng = Math.random)`.
+- Injected rng: `gapY = PIPE_MARGIN_TOP + rng() * range`, not Math.random inline.
+- Fixed timestep accumulator: `let accumulator = 0; accumulator += frameTime`.
+- Forgiving hitbox: BIRD_H * 0.7.
+- Separate render.js.
+- engine.test.js with a real frame rate independence test
+  (`one step at 1/30 equals two steps at 1/60`) plus 4 more.
+- `npm test`: 5 passed (5), run by hand.
+- `npm run build`: built in 136ms. Dev server: HTTP 200, engine.js transforms.
+- run.bat correct: `cd /d %~dp0` + `start "Flappy" cmd /k npm run dev`.
+
+A FREE model (deepseek-v4-flash-free) matched a build a capable model produced,
+because the gate forced real research, the research-agent grounded it, and the
+prescriptive AGENTS.md plus the new-file gate removed the friction that made
+earlier rounds fail. Five iterations, five real setup bugs fixed, all kept.
