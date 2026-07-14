@@ -14,6 +14,7 @@ Never blocks. Its only job is to write down what happened.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +23,15 @@ from research_state import (  # noqa: E402
     RESEARCH_AGENTS,
     record_agent,
 )
+
+# A report that links to a real repo but never says it actually fetched a file
+# from it is the "aware it exists, never read it" gap the agent's own
+# instructions warn against. This can only ever be a soft nudge: PostToolUse on
+# Task fires after the subagent already finished, so there's nothing left to
+# block, only stderr text handed back to the model. Matches a github.com repo
+# link (the shape a citation takes) with no GITHUB_FILE_READ: line anywhere.
+_GITHUB_LINK_RE = re.compile(r"github\.com/[\w.-]+/[\w.-]+", re.IGNORECASE)
+_GITHUB_FILE_READ_RE = re.compile(r"GITHUB_FILE_READ:", re.IGNORECASE)
 
 
 def _agent_type(payload: dict) -> str:
@@ -89,6 +99,17 @@ def main() -> int:
     session_id = payload.get("session_id", "")
     report = _report(payload)
     record_agent(session_id=session_id, agent_type=agent_type, report=report)
+
+    if _GITHUB_LINK_RE.search(report) and not _GITHUB_FILE_READ_RE.search(report):
+        print(
+            "[research-record] This report links a GitHub repo but has no "
+            "GITHUB_FILE_READ: line. If that repo was cited as a close or exact "
+            "match, it should have been fetched with github-file and read, not "
+            "just linked. If nothing was actually downloaded, treat this as a "
+            "reminder for the next research pass, not a finding to act on now.",
+            file=sys.stderr,
+        )
+
     return 0
 
 

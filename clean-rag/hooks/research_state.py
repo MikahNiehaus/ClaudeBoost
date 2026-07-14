@@ -142,11 +142,14 @@ def file_in_scope(file_path: str, covered: list[str]) -> bool:
     return False
 
 
-def extract_covered_files(text: str) -> list[str]:
+def extract_covered_files(text: str, prefix: str = "COVERS:") -> list[str]:
     """Pull the file scope out of an agent's report.
 
     An agent declares scope with a line like:
         COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py
+
+    `prefix` lets a sibling gate reuse this same parser for its own marker line
+    (verifier-gate's stamps use "VERIFIED:") instead of forking the logic.
 
     If it declares nothing, it covers nothing, and the gate will block. That's
     deliberate. An agent that can't say what it looked at hasn't given the gate
@@ -156,9 +159,10 @@ def extract_covered_files(text: str) -> list[str]:
     if not text:
         return []
 
+    marker = prefix.upper()
     for line in text.splitlines():
         stripped = line.strip().lstrip("*# ").strip()
-        if stripped.upper().startswith("COVERS:"):
+        if stripped.upper().startswith(marker):
             raw = stripped.split(":", 1)[1]
             return [p.strip().strip("`") for p in raw.split(",") if p.strip()]
 

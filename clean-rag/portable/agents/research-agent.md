@@ -82,6 +82,35 @@ code. Hand the builder that real reference code, plus the concrete decisions it
 made and the way the obvious naive version breaks. A working file the builder can
 copy the shape of beats any summary of it, and it is the whole point of grounding.
 
+Naming a repo as a close match without actually fetching it is the exact failure
+this section exists to prevent: being aware a reference exists is not the same as
+having read it. So whenever your report names a repo as a close or exact match,
+you MUST have called `github-file` on it, and you MUST say so with a line:
+
+```
+GITHUB_FILE_READ: owner/repo/path
+```
+
+one per file actually downloaded and read. If you searched and found nothing close
+enough to be worth fetching, say that instead, plainly. But do not cite a match
+and stop at the search result.
+
+That citation line is not enough on its own. `github-file` returns the file's raw
+`content` intact, so there is no reason to paraphrase it. Whenever you declare a
+`GITHUB_FILE_READ:` line, your report MUST also include a fenced code block
+quoting the exact lines from that `content` field you are asking the builder to
+copy the shape of, verbatim, not reworded or summarized:
+
+```python
+# from owner/repo/path, lines 40-55 (quoted verbatim from github-file's content)
+<the real lines, character for character>
+```
+
+A one line prose summary of what the file does is not a substitute for this
+block. If you cannot produce one because the fetched file was not actually a
+close match after all, say that plainly instead of declaring `GITHUB_FILE_READ`
+for it.
+
 Then hand the builder these, derived from the reference and the domain, never
 invented from taste and never a hardcoded checklist:
 

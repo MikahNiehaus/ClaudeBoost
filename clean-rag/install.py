@@ -32,6 +32,7 @@ RESEARCH_GATE_BASH_SENTINEL = "research-gate-bash.py"
 RESEARCH_RECORD_SENTINEL = "research-record.py"
 AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
 VERIFIER_GATE_SENTINEL = "verifier-gate.py"
+VERIFIER_RECORD_SENTINEL = "verifier-record.py"
 RECORD_EDIT_SENTINEL = "record-edit.py"
 
 
@@ -659,6 +660,25 @@ def register_verifier_gate_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The other half of the verifier gate: stamps the session record when
+# verifier-agent finishes. Mirrors register_research_record_hook exactly, one
+# level down (verifier_state instead of research_state). Without this the gate
+# has nothing to check and blocks every stop until the cap gives up.
+# ---------------------------------------------------------------------------
+def register_verifier_record_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-record.py"'
+    hook_entry = {
+        "matcher": "Task|Agent",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", VERIFIER_RECORD_SENTINEL,
+        hook_entry, label="verifier-record",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 5i: Configure web search env vars
 # ---------------------------------------------------------------------------
 def configure_web_search_env() -> None:
@@ -907,6 +927,7 @@ def main():
     # Step 5h2
     print("\nStep 5h2: Registering verifier-gate hook...")
     register_verifier_gate_hook()
+    register_verifier_record_hook()
 
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")

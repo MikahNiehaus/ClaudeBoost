@@ -68,9 +68,18 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   and any agent that wrote or researched the change inherits its own blind spot on
   review). Give the verifier the requirements, the correctness properties, and the
   diff, never your reasoning for the change, since that reasoning is exactly what
-  biases a reviewer into agreeing. `hooks/verifier-gate.py` (a Stop hook) nudges
-  you to spawn it after the tests pass, and `high_stakes.py` labels which surface
-  it touched so the review points at the sharpest risk. A `/ps` turn skips it, the
+  biases a reviewer into agreeing. If research-agent grounded the build in a real
+  GitHub reference (a `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted),
+  pass that snippet forward into the verifier's correctness properties too, not
+  just its description. verifier-agent has no web access on purpose, so this is
+  the only way a real reference reaches its review; do not give it its own
+  GitHub/web access to fetch one itself, that would duplicate the one
+  injection-exposed agent this codebase deliberately keeps to one. `hooks/verifier-gate.py`
+  (a Stop hook) requires a real stamp before the turn can end: verifier-agent's
+  completion writes a `VERIFIED:` line naming the files it covered, checked per
+  file the same way the research gate checks `COVERS:`, invalidated if a file is
+  edited again after being reviewed. `high_stakes.py` labels which surface it
+  touched so the review points at the sharpest risk. A `/ps` turn skips it, the
   same quick mode escape that skips the research gate.
 
 Trivial one liners need no check. This is the cheap post write complement to the
