@@ -55,6 +55,12 @@ def _missing_proof(report: str) -> list:
         # Find all domain citations in this report
         for match in domain_re.finditer(report):
             domain_cite = match.group()
+            if "owner/repo" in domain_cite.lower():
+                # Placeholder from swiper.md's own documented reporting convention
+                # (e.g. "github.com/owner/repo/path" quoted while explaining the
+                # format), not a real citation. A genuine citation never has this
+                # exact literal path.
+                continue
             # Check if the corresponding proof line exists
             proof_re = re.compile(re.escape(proof_prefix), re.IGNORECASE)
             if not proof_re.search(report):
