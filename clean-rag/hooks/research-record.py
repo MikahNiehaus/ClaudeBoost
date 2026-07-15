@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from research_state import (  # noqa: E402
     RESEARCH_AGENTS,
+    extract_covered_files,
     record_agent,
 )
 
@@ -70,6 +71,39 @@ def _missing_proof(report: str) -> list:
                     violations.append(f"{domain_cite} has {proof_prefix} line but no fenced code block after it")
 
     return violations
+
+
+_MATCH_STRATEGY_RE = re.compile(r"^MATCH_STRATEGY:\s*clone-and-patch\s*$", re.MULTILINE | re.IGNORECASE)
+_WRITTEN_TO_RE = re.compile(r"written to", re.IGNORECASE)
+_GIT_CLONE_RE = re.compile(r"git clone https?://\S+", re.IGNORECASE)
+
+
+def _missing_write_proof(report: str, covers: list) -> list:
+    """List of violations when clone-and-patch is declared but nothing was actually placed.
+
+    Only fires when MATCH_STRATEGY: clone-and-patch is declared AND the COVERS
+    scope names at least one concrete file (no "*"), since a glob-only scope
+    means a brand new project with no known target file yet (swiper.md's
+    documented escape hatch). A "written to <file>" marker (direct placement)
+    or a recommended `git clone` command (swiper.md's documented fallback for
+    "take the whole repo") both count as proof something was actually done,
+    not just reported. Empty list means no violations.
+    """
+    if not _MATCH_STRATEGY_RE.search(report):
+        return []
+
+    concrete_files = [f for f in covers if "*" not in f]
+    if not concrete_files:
+        return []
+
+    if not _WRITTEN_TO_RE.search(report) and not _GIT_CLONE_RE.search(report):
+        return [
+            "MATCH_STRATEGY: clone-and-patch declared against known file(s) but no "
+            "'written to <file>' proof or 'git clone' command found — code must be "
+            "placed with Write/Edit, or a real clone command recommended, not just quoted"
+        ]
+
+    return []
 
 
 def _strip_covers_line(report: str) -> str:
