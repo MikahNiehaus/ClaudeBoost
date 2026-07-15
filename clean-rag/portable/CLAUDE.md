@@ -6,21 +6,28 @@ knowledge base. Works standalone or with Gas Town.
 
 ## The research gate (this is the operative rule)
 
-Every edit to a code file is blocked until `research-agent` has run this turn and
-declared that it covered that file. Not asked for. Required. The gate is a
-PreToolUse hook that keys off a real agent completion, so there is no way to
-satisfy it by claiming you researched.
+Every edit to a code file is checked against whether `research-agent` has run
+this turn and declared that it covered that file, and nudges toward research
+when it hasn't. The gate used to actually block the edit until it did; that
+per turn scoping (research reset by every single message, not just a real new
+task) turned out to be too disruptive in practice, so the block is gone and
+the nudge plus an honest audit trail replaced it. The nudge is a PreToolUse
+hook that keys off a real agent completion, not a claim of one, so the record
+it checks can't be satisfied by claiming you researched, even though it no
+longer refuses the edit either way.
 
-When the gate blocks an edit:
+When the gate nudges toward research:
 
 1. **Spawn `research-agent`** (Sonnet). Tell it what you're changing, why, and the
    code you intend to write. It covers depth and breadth, checks whether the thing
    already exists, reads the project's import graph, and reports with sources and a
-   `COVERS:` line naming the files it covers. That scope is what unlocks the edit.
-   Wait for it before editing. Spawn it in the foreground (`run_in_background: false`),
-   never backgrounded — a backgrounded completion arrives later as a
-   `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
-   record never fires for it and the gate stays blocked no matter how long you wait.
+   `COVERS:` line naming the files it covers. That scope is what the audit trail
+   checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
+   Wait for it before editing anyway; that's still the point. Spawn it in the
+   foreground (`run_in_background: false`), never backgrounded — a backgrounded
+   completion arrives later as a `TaskNotificationMessage`, not a tool result, so
+   the hook that stamps the turn record never fires for it and the record never
+   shows the coverage no matter how long you wait.
    Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,
@@ -69,24 +76,34 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   human marked the turn `/ps`. It used to be reserved for high stakes surfaces
   (auth, money, SQL, a subprocess, concurrency); now it's the default after any
   code change, because green tests and correct code are different questions
-  everywhere, not only there. Spawn `verifier-agent`, a fresh context critic, NOT
+  everywhere, not only there. Spawn `bad-cop` first, a fresh context critic, NOT
   the research agent (that one reads untrusted web and stays capability stripped,
   and any agent that wrote or researched the change inherits its own blind spot on
-  review). Give the verifier the requirements, the correctness properties, and the
-  diff, never your reasoning for the change, since that reasoning is exactly what
-  biases a reviewer into agreeing. If research-agent grounded the build in a real
-  GitHub reference (a `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted),
-  pass that snippet forward into the verifier's correctness properties too, not
-  just its description. verifier-agent has no web access on purpose, so this is
-  the only way a real reference reaches its review; do not give it its own
-  GitHub/web access to fetch one itself, that would duplicate the one
-  injection-exposed agent this codebase deliberately keeps to one. `hooks/verifier-gate.py`
-  (a Stop hook) requires a real stamp before the turn can end: verifier-agent's
-  completion writes a `VERIFIED:` line naming the files it covered, checked per
-  file the same way the research gate checks `COVERS:`, invalidated if a file is
-  edited again after being reviewed. `high_stakes.py` labels which surface it
-  touched so the review points at the sharpest risk. A `/ps` turn skips it, the
-  same quick mode escape that skips the research gate.
+  review). bad-cop writes adversarial tests, runs the code, adds logging, and
+  reports the real failures it finds, with actual execution output attached.
+  If it finds nothing real, it stamps `VERIFIED:` itself: no separate
+  `good-cop` run needed to re-confirm a clean adversarial pass. Only when it
+  finds something real, spawn `good-cop` next, same rules, handed bad-cop's
+  findings instead of the requirements alone: it researches the correct fix,
+  applies it, and reruns bad-cop's new tests plus the existing suite until
+  everything is actually green, and it is the one that stamps `VERIFIED:` in
+  that case. Give both of them the
+  requirements, the correctness properties, and the diff, never your reasoning
+  for the change, since that reasoning is exactly what biases a reviewer into
+  agreeing. If research-agent grounded the build in a real GitHub reference (a
+  `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted), pass that
+  snippet forward into their correctness properties too, not just its
+  description. Neither has web fetch access on purpose, only search, so this is
+  the only way a real reference reaches their review; do not give either its own
+  GitHub/web fetch access, that would duplicate the one injection-exposed agent
+  this codebase deliberately keeps to one. `hooks/verifier-gate.py`
+  (a Stop hook) requires a real stamp before the turn can end: whichever of
+  the two closes it out (good-cop after a real fix, or bad-cop itself on a
+  clean pass) writes a `VERIFIED:` line naming the files it covered, checked
+  per file the same way the research gate checks `COVERS:`, invalidated if a
+  file is edited again after being reviewed. `high_stakes.py`
+  labels which surface it touched so the review points at the sharpest risk. A
+  `/ps` turn skips both, the same quick mode escape that skips the research gate.
 
 Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
@@ -163,8 +180,21 @@ ui, docs, test, and the rest) are available for focused work. They are spawned
 as needed, not on every task.
 
 ### Model Routing
-- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent, verifier-agent.
-- **Sonnet**: research-agent and all other specialists.
+- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent, good-cop.
+- **Sonnet**: research-agent, researcher, bad-cop, and all other specialists.
+
+### Starting a new build or feature
+
+For an edit intent task, a new build or feature, run `/start` instead of
+diving straight into research-agent: it spawns `researcher` first (codebase
+structure via clean-rag's own index and graph, plus the general engineering
+standard for this class of change), then `swiper` informed by researcher's
+findings (what can be swiped, from the project, the stdlib, a dependency,
+GitHub, or StackOverflow, reported only, swiper never writes to the project
+itself), then consults the user with real options before anything is
+written. `researcher` also replaces an ad hoc codebase exploring subagent for
+understanding a project: it has clean-rag's real indexed vector and graph
+databases behind it, so route codebase understanding tasks to it instead.
 
 ### Parallel Limits
 - Context below 50%: up to 3 agents.

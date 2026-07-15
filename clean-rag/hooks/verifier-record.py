@@ -1,5 +1,7 @@
 #!/usr/bin/env python
-"""PostToolUse on Task and Agent. Stamps the verifier record when backpack finishes.
+"""PostToolUse on Task and Agent. Stamps the verifier record when good-cop
+finishes, or when bad-cop finishes having found nothing (a genuinely clean
+adversarial pass needs no separate good-cop run to confirm it).
 
 Mirrors research-record.py exactly, including its tool_response flattening (the
 same list-of-content-blocks shape applies to any Task/Agent completion), pointed
@@ -14,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verifier_state import record_verifier  # noqa: E402
 
-VERIFIER_AGENTS = {"backpack"}
+VERIFIER_AGENTS = {"good-cop", "bad-cop"}
 
 
 def _agent_type(payload: dict) -> str:
@@ -70,7 +72,7 @@ def main() -> int:
 
     session_id = payload.get("session_id", "")
     report = _report(payload)
-    record_verifier(session_id=session_id, report=report)
+    record_verifier(session_id=session_id, report=report, agent_type=agent_type)
     return 0
 
 

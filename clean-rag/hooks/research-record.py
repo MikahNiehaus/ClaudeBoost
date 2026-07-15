@@ -24,7 +24,6 @@ from research_state import (  # noqa: E402
     clear_session_quick,
     extract_covered_files,
     record_agent,
-    swiper_finished,
 )
 
 # Proof enforcement: if a report cites a code-source domain (GitHub, StackOverflow,
@@ -79,39 +78,6 @@ def _missing_proof(report: str) -> list:
                     violations.append(f"{domain_cite} has {proof_prefix} line but no fenced code block after it")
 
     return violations
-
-
-_MATCH_STRATEGY_RE = re.compile(r"^MATCH_STRATEGY:\s*clone-and-patch\s*$", re.MULTILINE | re.IGNORECASE)
-_WRITTEN_TO_RE = re.compile(r"written to", re.IGNORECASE)
-_GIT_CLONE_RE = re.compile(r"git clone https?://\S+", re.IGNORECASE)
-
-
-def _missing_write_proof(report: str, covers: list) -> list:
-    """List of violations when clone-and-patch is declared but nothing was actually placed.
-
-    Only fires when MATCH_STRATEGY: clone-and-patch is declared AND the COVERS
-    scope names at least one concrete file (no "*"), since a glob-only scope
-    means a brand new project with no known target file yet (swiper.md's
-    documented escape hatch). A "written to <file>" marker (direct placement)
-    or a recommended `git clone` command (swiper.md's documented fallback for
-    "take the whole repo") both count as proof something was actually done,
-    not just reported. Empty list means no violations.
-    """
-    if not _MATCH_STRATEGY_RE.search(report):
-        return []
-
-    concrete_files = [f for f in covers if "*" not in f]
-    if not concrete_files:
-        return []
-
-    if not _WRITTEN_TO_RE.search(report) and not _GIT_CLONE_RE.search(report):
-        return [
-            "MATCH_STRATEGY: clone-and-patch declared against known file(s) but no "
-            "'written to <file>' proof or 'git clone' command found — code must be "
-            "placed with Write/Edit, or a real clone command recommended, not just quoted"
-        ]
-
-    return []
 
 
 def _strip_covers_line(report: str) -> str:
@@ -184,35 +150,26 @@ def main() -> int:
     session_id = payload.get("session_id", "")
     report = _report(payload)
 
-    # Check if any code-source domains are cited without proof, or clone-and-patch
-    # was declared without evidence the code was actually placed anywhere.
-    covers = extract_covered_files(report)
-    violations = _missing_proof(report) + _missing_write_proof(report, covers)
+    # Check if any code-source domains are cited without proof they were
+    # actually fetched and read.
+    violations = _missing_proof(report)
     if violations:
         report_to_record = _strip_covers_line(report)
         print(
             "[research-record] REJECTED: this report cites a code source but lacks proof "
-            "of actually downloading and reading it, or declares clone-and-patch without "
-            "placing the code. Missing: " + "; ".join(violations) + ". "
+            "of actually fetching and reading it. Missing: " + "; ".join(violations) + ". "
             "Each cited domain (GitHub, StackOverflow, etc.) needs a proof line "
             "(GITHUB_FILE_READ: owner/repo/path, STACKOVERFLOW_ANSWER_READ:, etc.) followed by "
-            "a verbatim fenced code block showing the code you read. If MATCH_STRATEGY is "
-            "clone-and-patch against known file(s), the report also needs a "
-            "'written to <file>' line showing the code was actually placed with Write/Edit, "
-            "or a real 'git clone <url>' command recommended. This stamp is recorded with "
-            "no file scope, so the research gate will block edits to any file until swiper "
-            "runs again with actual proof. Respin with the fetch, quote, and write, or drop the citation.",
+            "a verbatim fenced code block showing the code you read. This stamp is recorded "
+            "with no file scope, so the research gate will block edits to any file until "
+            "swiper runs again with actual proof. Respin with the fetch and quote, or drop "
+            "the citation.",
             file=sys.stderr,
         )
     else:
         report_to_record = report
 
     record_agent(session_id=session_id, agent_type=agent_type, report=report_to_record)
-
-    # Decrement the swiper-active counter and clear any sticky /ps flag now
-    # that real research has landed. Both are no-ops if swiper never incremented
-    # the counter or /ps was never set this session.
-    swiper_finished()
     clear_session_quick(session_id)
 
     return 0

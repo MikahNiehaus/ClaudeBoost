@@ -1,11 +1,15 @@
 #!/usr/bin/env python
-"""Stop hook: force backpack to run for code-changing turns, loop safe.
+"""Stop hook: force bad-cop, and good-cop when bad-cop finds something, to run
+for code-changing turns, loop safe.
 
 The test run (auto-test-gate) proves tests pass. It does not prove the tests
-catch the bug. Verification is mandatory: after every code change, a fresh
-backpack must review the files, check logging quality, test coverage,
-and code correctness, then stamp them with VERIFIED: lines. The only exception
-is /ps (quick mode), which opts out of both research and verification.
+catch the bug. Verification is mandatory: after every code change, bad-cop
+must run adversarial QA on the files first (new tests, logging, provable
+failures). If it finds nothing real, it stamps VERIFIED itself, no separate
+good-cop run needed to re-confirm a clean pass. If it finds something, good-cop
+must fix what it found, check logging quality, test coverage, and code
+correctness, then stamp the files with VERIFIED: lines. The only exception is
+/ps (quick mode), which opts out of both research and verification.
 
 This blocks the stop (exit 2) rather than only emitting a JSON nudge. Both
 mechanisms are documented for Stop (code.claude.com/docs/en/hooks confirms
@@ -15,14 +19,15 @@ PreToolUse exit-2-plus-stderr pattern, and every research-agent spawn this
 session happened because Claude read that stderr and acted on it unprompted.
 One battle-tested mechanism beats two parallel ones for the same problem.
 
-The block message tells Claude to spawn backpack itself, in the
+The block message tells Claude to spawn bad-cop then good-cop itself, in the
 foreground, right now, no user confirmation needed. Hooks can't spawn agents
 directly, they're not part of the conversation loop, so "automatic" here means
 an instruction forceful enough that Claude acts on it immediately without
 asking first, the same way it already does for research-gate.
 
-backpack's completion fires a PostToolUse hook (verifier-record.py) that
-writes a stamp (verifier_state.record_verifier) naming the files it covered.
+good-cop's completion, or bad-cop's when it found nothing, fires a PostToolUse
+hook (verifier-record.py) that writes a stamp (verifier_state.record_verifier)
+naming the files it covered.
 check_file_verified() on the next check will find that stamp and let the stop
 proceed. If a file is edited again after being reviewed, its stamp is
 invalidated and verification must run again.
@@ -35,7 +40,7 @@ and "correct" are different questions everywhere, not only on those surfaces.
 The block cap exists because Claude Code re-fires Stop after a block, and the
 only loop guard, stop_hook_active, has a documented, reproducible bug where it
 comes back false on a retry it should be true for (anthropics/claude-code#54360).
-An uncapped block risks a real infinite loop if backpack ever fails to
+An uncapped block risks a real infinite loop if good-cop ever fails to
 produce a parseable stamp. MAX_BLOCKS_PER_SESSION is a bounded last-resort
 escape under a real check, the identical pattern auto-test-gate.py already
 uses for the same reason. This differs from research-gate.py's edit gate on
@@ -51,7 +56,7 @@ Safety rules, in order:
   - If the tests are currently FAILING, allow: auto-test-gate owns that, and a
     reviewer on broken code is wasted. Verify only once the code runs.
   - Unverified files found: block (exit 2) up to MAX_BLOCKS_PER_SESSION times,
-    telling Claude to spawn backpack itself, right now, foreground.
+    telling Claude to spawn bad-cop then good-cop itself, right now, foreground.
   - Any error exits 0 (fail open). A broken gate must never trap the session.
 
 Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
@@ -161,9 +166,9 @@ def _reset_block_count(session_id: str) -> None:
     """Clear the cap once verification actually succeeds.
 
     Without this, the cap disables verification for the rest of the session
-    the first time two blocks happen in a row, even if backpack runs
+    the first time two blocks happen in a row, even if good-cop runs
     correctly on every file after that. The cap exists to stop a stuck loop
-    (a backpack that never produces a parseable stamp), not to silently
+    (a good-cop that never produces a parseable stamp), not to silently
     give up on verification forever the moment two blocks occur anywhere in a
     long session. Resetting on a clean pass keeps the loop guard scoped to
     actual consecutive failures, never a permanent session wide disable.
@@ -236,7 +241,7 @@ def main() -> int:
     if _tests_failing(diff_root):
         return 0
 
-    # The real check: has a backpack stamp actually covered each changed
+    # The real check: has a good-cop stamp actually covered each changed
     # file, and not been invalidated by a later edit? Unlike the old counter,
     # this reflects whether verification happened, not how many times we asked.
     # diff_root, not root: the fallback resolves paths against the repo the
@@ -279,20 +284,26 @@ def main() -> int:
         f"stamp: {files}\n\n"
         f"This touches {surface}.\n"
         f"{evidence}\n\n"
-        "Spawn backpack (a fresh context, NOT the research agent) on those "
-        "files, right now, in the foreground: run_in_background: false, never "
-        "true. A backgrounded completion arrives later as a "
+        "Spawn bad-cop first (a fresh context, NOT the research agent) on "
+        "those files, right now, in the foreground: run_in_background: "
+        "false, never true. A backgrounded completion arrives later as a "
         "TaskNotificationMessage, not a tool result, so the verifier record "
         "hook never fires for it and the stamp never lands.\n\n"
-        "Give backpack three things and only three: (1) the "
+        "Give bad-cop three things and only three: (1) the "
         "requirements/ticket context if any, (2) the correctness properties "
         "this change must satisfy, (3) the actual diff. Do NOT give it your "
         "reasoning for the change, that is what biases a reviewer into "
-        "agreeing with it.\n\n"
-        "Its report MUST end with a VERIFIED: line naming every file it "
-        "covered, the same way swiper's COVERS: line works, or this "
-        "gate has nothing to check and stays blocked. Fix any Critical or High "
-        "it returns, then finish.\n\n"
+        "agreeing with it. bad-cop writes adversarial tests, runs the code, "
+        "adds logging, and reports the real failures it finds.\n\n"
+        "If bad-cop finds nothing real, it stamps VERIFIED itself, no "
+        "separate good-cop run needed to re-confirm a clean pass. Only if it "
+        "finds something: spawn good-cop next, same rules (fresh context, "
+        "foreground, the three things only, plus bad-cop's findings), and it "
+        "fixes what was found and gets every test green.\n\n"
+        "Whichever of the two closes it out, that report MUST end with a "
+        "VERIFIED: line naming every file it covered, the same way swiper's "
+        "COVERS: line works, or this gate has nothing to check and stays "
+        "blocked. Fix any Critical or High bad-cop returns, then finish.\n\n"
         "If this really was trivial and needed no reviewer, that was a /ps "
         "turn's call to make up front, not this one's.",
         file=sys.stderr,

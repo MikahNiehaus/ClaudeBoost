@@ -1,9 +1,9 @@
 """Shared state for the verifier gate.
 
 verifier-gate.py used to count how many times it printed a nudge, not whether
-backpack had actually run. After 2 nudges it gave up for the rest of the
+good-cop had actually run. After 2 nudges it gave up for the rest of the
 session regardless of whether anything was ever reviewed. This is the real
-check that replaces the counter: a stamp, written only when backpack
+check that replaces the counter: a stamp, written only when good-cop
 actually completes, the same shape research-gate.py already uses for research.
 
 The scope is different from research's, on purpose. swiper's stamp is
@@ -72,8 +72,10 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
-def record_verifier(session_id: str, report: str) -> None:
-    """Called on PostToolUse after backpack finishes. Appends a stamp.
+def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") -> None:
+    """Called on PostToolUse after good-cop finishes, or after bad-cop finishes
+    having found nothing (it stamps VERIFIED itself in that case, no separate
+    good-cop run needed to re-confirm a clean adversarial pass). Appends a stamp.
 
     Session scoped: unlike research's per-turn record, this file is never reset
     by a new prompt, since the diff it covers spans turns too.
@@ -87,7 +89,7 @@ def record_verifier(session_id: str, report: str) -> None:
             record = {"session_id": session_id, "stamps": []}
 
         record.setdefault("stamps", []).append({
-            "agent": "backpack",
+            "agent": agent_type,
             "at": time.time(),
             "covers": extract_covered_files(report, prefix=VERIFIER_MARKER),
             "verdict": _first_verdict_line(report),
@@ -100,7 +102,8 @@ def record_verifier(session_id: str, report: str) -> None:
 
 
 def check_file_verified(session_id: str, file_path: str) -> tuple[bool, str]:
-    """Was this file reviewed by backpack, and not edited again since?
+    """Was this file verified (by good-cop's fix, or by bad-cop finding
+    nothing to fix), and not edited again since?
 
     Returns (ok, reason). Picks the newest stamp that covers the file, then
     checks whether the file's mtime is still older than that stamp's
@@ -109,7 +112,7 @@ def check_file_verified(session_id: str, file_path: str) -> tuple[bool, str]:
     """
     path = _record_path(session_id)
     if not path.exists():
-        return False, "no backpack run has covered this file"
+        return False, "no verifier run has covered this file"
 
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -119,17 +122,18 @@ def check_file_verified(session_id: str, file_path: str) -> tuple[bool, str]:
     stamps = record.get("stamps", []) if isinstance(record, dict) else []
     matching = [s for s in stamps if file_in_scope(file_path, s.get("covers", []))]
     if not matching:
-        return False, "no backpack run has covered this file"
+        return False, "no verifier run has covered this file"
 
     newest = max(matching, key=lambda s: s.get("at", 0))
+    verifying_agent = newest.get("agent", "verifier")
 
     try:
         mtime = Path(file_path).stat().st_mtime
     except OSError:
         # File is gone; nothing to re-verify against, and nothing to block either.
-        return True, "verified by backpack (file no longer present)"
+        return True, f"verified by {verifying_agent} (file no longer present)"
 
     if mtime > newest.get("at", 0):
         return False, "verified earlier, but edited again since"
 
-    return True, "verified by backpack"
+    return True, f"verified by {verifying_agent}"

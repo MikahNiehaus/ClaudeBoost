@@ -34,7 +34,6 @@ AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
 VERIFIER_GATE_SENTINEL = "verifier-gate.py"
 VERIFIER_RECORD_SENTINEL = "verifier-record.py"
 RECORD_EDIT_SENTINEL = "record-edit.py"
-SWIPER_START_GATE_SENTINEL = "swiper-start-gate.py"
 
 
 def _say(msg: str) -> None:
@@ -796,23 +795,6 @@ def register_research_record_hook() -> None:
     )
 
 
-def register_swiper_start_gate_hook() -> None:
-    """PreToolUse on Task/Agent. Increments the swiper-active counter when swiper
-    is spawned so research-gate.py can allow swiper's own Write calls without
-    needing a turn record for the subagent's session_id.
-    """
-    settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/swiper-start-gate.py"'
-    hook_entry = {
-        "matcher": "Task|Agent",
-        "hooks": [{"type": "command", "command": hook_command}],
-    }
-    _register_hook(
-        settings, "PreToolUse", SWIPER_START_GATE_SENTINEL,
-        hook_entry, label="swiper-start-gate",
-    )
-
-
 # ---------------------------------------------------------------------------
 # Step 5n: Configure code pattern injection environment
 # ---------------------------------------------------------------------------
@@ -902,7 +884,6 @@ def main():
     register_research_gate_hook()
     register_research_gate_bash_hook()
     register_research_record_hook()
-    register_swiper_start_gate_hook()
 
     # Step 3b
     print("\nStep 3b: Registering graph-context-inject hook...")

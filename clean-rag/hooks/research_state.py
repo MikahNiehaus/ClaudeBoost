@@ -284,54 +284,6 @@ def has_any_research_this_turn(session_id: str) -> tuple[bool, str]:
     return True, f"research ran this turn ({stamps[-1].get('agent')})"
 
 
-def _swiper_active_path() -> Path:
-    return _state_dir() / "swiper-active.json"
-
-
-def swiper_started() -> None:
-    """Increment the swiper-active counter when a swiper subagent is spawned.
-
-    Called by swiper-start-gate.py (PreToolUse on Task) so the research gate
-    can allow swiper's own Write calls without needing a turn record for the
-    subagent's session_id.
-    """
-    path = _swiper_active_path()
-    with _write_lock(path):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        except Exception:
-            data = {}
-        data["count"] = max(0, data.get("count", 0)) + 1
-        data["last_started"] = time.time()
-        path.write_text(json.dumps(data), encoding="utf-8")
-
-
-def swiper_finished() -> None:
-    """Decrement the swiper-active counter when swiper's PostToolUse fires."""
-    path = _swiper_active_path()
-    with _write_lock(path):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        except Exception:
-            data = {}
-        data["count"] = max(0, data.get("count", 0) - 1)
-        path.write_text(json.dumps(data), encoding="utf-8")
-
-
-def is_swiper_running() -> bool:
-    """True while a swiper subagent is running (counter > 0 and not stale)."""
-    path = _swiper_active_path()
-    if not path.exists():
-        return False
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if time.time() - data.get("last_started", 0) > 1800:  # 30-min stale guard
-            return False
-        return data.get("count", 0) > 0
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Session-scoped /ps persistence.
 #

@@ -738,7 +738,10 @@ Workspace ready: $WORKSPACE_ABS/
 Branch         : feature/$WORKSPACE_ID  (base: $BASE_BRANCH)
                  [omit this line if no git repo was detected]
 
-To start executing:
+Next (runs automatically before Step 1, see Phase 6.5):
+  /start $ARGUMENTS
+
+Then to continue executing:
   [Step 1 exact command]
 
 Agents queued  : [comma-separated agent list]
@@ -748,7 +751,34 @@ Context budget : [sequential/parallel note based on current context level]
 
 If any critical ambiguity remains (you genuinely cannot determine work type or scope): ask ONE focused question before presenting the plan. Do not ask about details that the plan itself can accommodate.
 
-If `AUTO_MODE` is true, print the plan but do NOT wait for user approval. Instead, immediately proceed to Phase 7 (Auto Execution Pipeline).
+If `AUTO_MODE` is true, print the plan but do NOT wait for user approval. Instead, immediately proceed to Phase 6.5, then Phase 7 (Auto Execution Pipeline).
+
+---
+
+## Phase 6.5: Kick off /start before any code gets written
+
+`plan.md` names which agents and skills to run; it does not, by itself, research
+the codebase or check whether something reusable already exists before Step 1
+starts touching files. Run `/start $ARGUMENTS` now (the goal or ticket text,
+not the whole plan) before Step 1 begins, in both manual and `AUTO_MODE` runs.
+
+This spawns `researcher` (codebase structure via clean-rag's own index and
+graph, plus the general engineering standard for this class of change), then
+`swiper` informed by researcher's findings (what can be swiped from the
+project, the stdlib, a dependency, GitHub, or StackOverflow, reported only,
+never written by swiper itself), then consults the user with real options
+before anything is written, unless `AUTO_MODE` is true, in which case proceed
+through the consult step the same way Phase 7 proceeds without stopping.
+
+Record the outcome in `context.md` under **Key Decisions**: what researcher
+found structurally, what swiper found worth swiping (or that nothing was),
+and which option was chosen. Then continue to Step 1 of `plan.md` (manual
+mode) or Phase 7 (`AUTO_MODE`), with that outcome as real context instead of
+starting Step 1 cold.
+
+If `/start` isn't available (clean-rag not installed for this project), note
+that in `context.md` and proceed with `plan.md` as written; this phase is a
+better starting point when it's there, not a hard requirement to have it.
 
 ---
 
@@ -879,6 +909,7 @@ Once the plan is in place, these are the most common next moves:
 
 | If you... | Run |
 |-----------|-----|
+| Haven't run Phase 6.5 yet for some reason | `/start` before touching Step 1, researcher and swiper first, then consult |
 | Are working in an unfamiliar codebase | `/index-project <path>` to enable semantic search |
 | Have a new subsystem or >15 files | Consider `/create-prd` to lock down scope before implementation |
 | Want a dependency map seeded from ticket entities | `/graph [workspace-id]` |
