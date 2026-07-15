@@ -176,18 +176,24 @@ def main() -> int:
     session_id = payload.get("session_id", "")
     report = _report(payload)
 
-    # Check if any code-source domains are cited without proof
-    violations = _missing_proof(report)
+    # Check if any code-source domains are cited without proof, or clone-and-patch
+    # was declared without evidence the code was actually placed anywhere.
+    covers = extract_covered_files(report)
+    violations = _missing_proof(report) + _missing_write_proof(report, covers)
     if violations:
         report_to_record = _strip_covers_line(report)
         print(
             "[research-record] REJECTED: this report cites a code source but lacks proof "
-            "of actually downloading and reading it. Missing: " + "; ".join(violations) + ". "
+            "of actually downloading and reading it, or declares clone-and-patch without "
+            "placing the code. Missing: " + "; ".join(violations) + ". "
             "Each cited domain (GitHub, StackOverflow, etc.) needs a proof line "
             "(GITHUB_FILE_READ: owner/repo/path, STACKOVERFLOW_ANSWER_READ:, etc.) followed by "
-            "a verbatim fenced code block showing the code you read. This stamp is recorded with "
+            "a verbatim fenced code block showing the code you read. If MATCH_STRATEGY is "
+            "clone-and-patch against known file(s), the report also needs a "
+            "'written to <file>' line showing the code was actually placed with Write/Edit, "
+            "or a real 'git clone <url>' command recommended. This stamp is recorded with "
             "no file scope, so the research gate will block edits to any file until swiper "
-            "runs again with actual proof. Respin with the fetch and quote, or drop the citation.",
+            "runs again with actual proof. Respin with the fetch, quote, and write, or drop the citation.",
             file=sys.stderr,
         )
     else:
