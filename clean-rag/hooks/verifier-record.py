@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""PostToolUse on Task and Agent. Stamps the verifier record when verifier-agent finishes.
+"""PostToolUse on Task and Agent. Stamps the verifier record when backpack finishes.
 
 Mirrors research-record.py exactly, including its tool_response flattening (the
 same list-of-content-blocks shape applies to any Task/Agent completion), pointed
@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verifier_state import record_verifier  # noqa: E402
 
-VERIFIER_AGENTS = {"verifier-agent"}
+VERIFIER_AGENTS = {"backpack"}
 
 
 def _agent_type(payload: dict) -> str:

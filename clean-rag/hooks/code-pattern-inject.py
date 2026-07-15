@@ -143,7 +143,7 @@ REUSE_CHECK = (
     "Search the web for both right now (the topic KB is off, its hits score "
     "0.86 and are wrong). POST http://127.0.0.1:8613/web-search for a fast "
     "ranked survey, WebSearch when you need real content. For anything past a "
-    "one liner, spawn research-agent instead of doing it inline.\n"
+    "one liner, spawn swiper instead of doing it inline.\n"
 )
 
 

@@ -38,11 +38,11 @@ from pathlib import Path
 
 # Agents whose completion counts as research having happened. One grounded agent,
 # not a cheap classifier tier: triage-agent was removed because it judged trivial
-# vs not without reading the file, a routing call made blind. research-agent always
+# vs not without reading the file, a routing call made blind. swiper always
 # runs the full pass, depth and breadth, every time; it never decides a change is
 # trivial on its own. That call belongs to the human, via /ps, which skips this
 # turn's research and verification entirely.
-RESEARCH_AGENTS = {"research-agent"}
+RESEARCH_AGENTS = {"swiper"}
 
 # A record older than this is treated as gone, covering an abandoned turn whose
 # edits arrive much later without a fresh prompt.
@@ -155,6 +155,12 @@ def extract_covered_files(text: str, prefix: str = "COVERS:") -> list[str]:
     deliberate. An agent that can't say what it looked at hasn't given the gate
     anything to check, and silently treating that as "covers everything" is
     exactly the blanket clearance this design exists to remove.
+
+    Claude Code's Agent tool appends an "agentId: ... (use SendMessage with
+    to: ..., summary: ...)" wrapper suffix to a spawned agent's final report
+    text, and it can land glued onto this exact line with no newline in
+    between. Left alone, that suffix gets swept into the file list and
+    corrupts the last entry, so it's cut off before the comma split.
     """
     if not text:
         return []
@@ -164,6 +170,7 @@ def extract_covered_files(text: str, prefix: str = "COVERS:") -> list[str]:
         stripped = line.strip().lstrip("*# ").strip()
         if stripped.upper().startswith(marker):
             raw = stripped.split(":", 1)[1]
+            raw = raw.split("agentId:", 1)[0]
             return [p.strip().strip("`") for p in raw.split(",") if p.strip()]
 
     return []
@@ -217,7 +224,7 @@ def is_quick_turn(session_id: str) -> bool:
 
 
 def record_agent(session_id: str, agent_type: str, report: str = "") -> None:
-    """Called on PostToolUse after research-agent finishes."""
+    """Called on PostToolUse after swiper finishes."""
     if agent_type not in RESEARCH_AGENTS:
         return
 
@@ -251,7 +258,7 @@ def _first_verdict_line(text: str) -> str:
 
 
 def has_any_research_this_turn(session_id: str) -> tuple[bool, str]:
-    """Did research-agent run at all this turn? For actions with no single file to
+    """Did swiper run at all this turn? For actions with no single file to
     scope against, a destructive package manager command, not an edit to a file.
     Same freshness rule as check_file_researched, just without the per file scope
     check, since "which file does this cover" does not apply to a shell command.

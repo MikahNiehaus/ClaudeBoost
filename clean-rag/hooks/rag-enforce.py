@@ -377,7 +377,7 @@ lands. POST http://127.0.0.1:8613/web-search for a fast ranked survey (GitHub an
 StackOverflow first), or the WebSearch tool when you need real content instead of
 snippets.
 
-For anything past a one liner, spawn research-agent rather than doing it inline.
+For anything past a one liner, spawn swiper rather than doing it inline.
 It picks its own queries, covers both axes, checks whether the thing already
 exists, and reports back with sources.
 """
@@ -400,7 +400,7 @@ The research gate only fires on code edits, so nothing is forcing you here. That
 is the point of this nudge: answering a design question from memory is how you
 end up confidently wrong in a way nobody catches.
 
-Spawn research-agent, or run the /research skill. Before you answer, not after.
+Spawn swiper, or run the /research skill. Before you answer, not after.
 Answering first and then pasting findings underneath just anchors you on what you
 already believed.
 
@@ -412,7 +412,7 @@ And aspect zero, always: **does this already exist?** In this project, in the
 stdlib, in a dependency that's already installed, on GitHub. That is the question
 that most often makes the rest of the work unnecessary.
 
-research-agent always runs the full pass regardless of how the change turns out.
+swiper always runs the full pass regardless of how the change turns out.
 Skipping it for something genuinely trivial is your call, made by starting the turn
 with /ps, not something the agent decides mid research.
 """
@@ -715,7 +715,7 @@ def main() -> int:
     #
     # Fixing this needs a model that can decide what (and whether) to search.
     # Hooks can't spawn agents (claude-code#64898 is still open), so the reasoning
-    # lives one level up: tell the orchestrator, let it choose. research-agent
+    # lives one level up: tell the orchestrator, let it choose. swiper
     # picks its own query and calls POST /web-search.
     logger.info(f"No local research. best_score={best_score:.2f} query={search_query!r}")
     nudge = _nudge_for(user_prompt)

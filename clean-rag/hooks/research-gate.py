@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """PreToolUse gate on Edit, Write, and MultiEdit.
 
-Blocks a code edit unless research-agent actually ran this turn.
+Blocks a code edit unless swiper actually ran this turn.
 
 This replaces the old proof gate idea outright. That one asked the model to
 write a proof file attesting it had researched, which proves nothing: the model
@@ -74,7 +74,7 @@ def _block(file_path: str, reason: str) -> int:
         f"BLOCKED: {reason}.\n\n"
         f"About to edit: {file_path}\n\n"
         "Every code edit has to be covered by research. Not asked for, required.\n\n"
-        "Spawn research-agent. Tell it what you are changing, why, and the code you\n"
+        "Spawn swiper. Tell it what you are changing, why, and the code you\n"
         "intend to write. It reads the real file and covers depth and breadth every\n"
         "time; it does not shortcut a change it judges trivial. If this genuinely is\n"
         "trivial, that call is yours: start the turn with /ps to skip research (and\n"

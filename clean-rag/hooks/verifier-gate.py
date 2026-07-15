@@ -1,37 +1,47 @@
 #!/usr/bin/env python
-"""Stop hook: require a fresh verifier stamp after a code-changing turn, loop safe.
+"""Stop hook: force backpack to run for code-changing turns, loop safe.
 
-The test run (auto-test-gate) proves the tests pass. It does not prove the tests
-catch the bug. So when code changed, this requires one fresh reviewer to have
-actually run and stamped the changed files before the turn can end. The user's
-rule: always verify a real code change, the one exception being a turn the human
-marked /ps (quick mode), which opts out of research and verification alike.
+The test run (auto-test-gate) proves tests pass. It does not prove the tests
+catch the bug. Verification is mandatory: after every code change, a fresh
+backpack must review the files, check logging quality, test coverage,
+and code correctness, then stamp them with VERIFIED: lines. The only exception
+is /ps (quick mode), which opts out of both research and verification.
 
-This used to be a counter: block up to twice, print a nudge, then give up for
-the rest of the session regardless of whether verifier-agent ever ran. That
-counted nudges printed, not verification done. It's now a real check, the same
-shape research-gate.py already uses: verifier-agent's completion writes a stamp
-(verifier-record.py -> verifier_state.record_verifier) naming the files it
-covered, and this gate checks that stamp per file (verifier_state.check_file_verified)
-before allowing the stop, invalidated if a file was edited again after being
-reviewed.
+This blocks the stop (exit 2) rather than only emitting a JSON nudge. Both
+mechanisms are documented for Stop (code.claude.com/docs/en/hooks confirms
+hookSpecificOutput.additionalContext works here too), but exit 2 is the one
+proven all session in this exact repo: research-gate.py uses the identical
+PreToolUse exit-2-plus-stderr pattern, and every research-agent spawn this
+session happened because Claude read that stderr and acted on it unprompted.
+One battle-tested mechanism beats two parallel ones for the same problem.
 
-The cap stays, unlike research-gate.py's edit gate, and that's a deliberate
-difference, not a leftover. research-gate.py is PreToolUse on a discretionary
-edit: the model can simply not attempt the edit, so blocking it indefinitely is
-safe, there's no forced retry. This is a Stop hook: Claude Code itself re-fires
-the Stop event after a block, and the only loop guard is stop_hook_active, which
-has a documented, reproducible bug where it comes back false on a retry it
-should be true for (anthropics/claude-code#54360). An uncapped block here risks
-a real infinite loop if verifier-agent ever fails to produce a parseable stamp.
-So the cap is now what auto-test-gate.py already does for the same reason: a
-bounded last-resort escape under a REAL check, not the check itself.
+The block message tells Claude to spawn backpack itself, in the
+foreground, right now, no user confirmation needed. Hooks can't spawn agents
+directly, they're not part of the conversation loop, so "automatic" here means
+an instruction forceful enough that Claude acts on it immediately without
+asking first, the same way it already does for research-gate.
 
-high_stakes.scan_diff still runs, but only to LABEL the change (auth, money, SQL,
-subprocess, concurrency) so the block message can point at the sharpest risk. It
-is not the trigger: a change with no high stakes surface still needs a stamp,
-because "green tests" and "correct" are different questions everywhere, not only
-on those surfaces.
+backpack's completion fires a PostToolUse hook (verifier-record.py) that
+writes a stamp (verifier_state.record_verifier) naming the files it covered.
+check_file_verified() on the next check will find that stamp and let the stop
+proceed. If a file is edited again after being reviewed, its stamp is
+invalidated and verification must run again.
+
+high_stakes.scan_diff labels the change (auth, money, SQL, subprocess, concurrency)
+so the block message can point at the sharpest risk. It is not the trigger: a
+change with no high stakes surface still needs a stamp, because "green tests"
+and "correct" are different questions everywhere, not only on those surfaces.
+
+The block cap exists because Claude Code re-fires Stop after a block, and the
+only loop guard, stop_hook_active, has a documented, reproducible bug where it
+comes back false on a retry it should be true for (anthropics/claude-code#54360).
+An uncapped block risks a real infinite loop if backpack ever fails to
+produce a parseable stamp. MAX_BLOCKS_PER_SESSION is a bounded last-resort
+escape under a real check, the identical pattern auto-test-gate.py already
+uses for the same reason. This differs from research-gate.py's edit gate on
+purpose: that one is PreToolUse on a discretionary edit Claude can simply
+choose not to attempt, so blocking it forever is safe. Stop is different,
+Claude Code itself re-fires it, so an uncapped block here is a real risk.
 
 Safety rules, in order:
 
@@ -40,8 +50,8 @@ Safety rules, in order:
   - No code changed this turn means nothing to review. Allow.
   - If the tests are currently FAILING, allow: auto-test-gate owns that, and a
     reviewer on broken code is wasted. Verify only once the code runs.
-  - Block on any changed file with no valid stamp, up to MAX_BLOCKS_PER_SESSION
-    times, then allow as the last-resort loop breaker.
+  - Unverified files found: block (exit 2) up to MAX_BLOCKS_PER_SESSION times,
+    telling Claude to spawn backpack itself, right now, foreground.
   - Any error exits 0 (fail open). A broken gate must never trap the session.
 
 Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
@@ -130,21 +140,6 @@ def _diff(root: str, files=None):
     return added, sorted(set(paths))
 
 
-def _tests_failing(root: str) -> bool:
-    """True only when the server ran real tests and they failed. Errs toward False."""
-    try:
-        payload = json.dumps({"project_path": root}).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{RAG_PORT}/run-tests",
-            data=payload, headers={"Content-Type": "application/json"}, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=140) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return False  # server down or unreachable, do not claim failure
-    return bool(result.get("has_tests")) and result.get("passed") is False
-
-
 def _block_count(session_id: str) -> int:
     f = BLOCK_DIR / f"{session_id or 'nosession'}.count"
     try:
@@ -160,6 +155,41 @@ def _bump_block_count(session_id: str) -> None:
         f.write_text(str(_block_count(session_id) + 1), encoding="utf-8")
     except Exception:
         pass
+
+
+def _reset_block_count(session_id: str) -> None:
+    """Clear the cap once verification actually succeeds.
+
+    Without this, the cap disables verification for the rest of the session
+    the first time two blocks happen in a row, even if backpack runs
+    correctly on every file after that. The cap exists to stop a stuck loop
+    (a backpack that never produces a parseable stamp), not to silently
+    give up on verification forever the moment two blocks occur anywhere in a
+    long session. Resetting on a clean pass keeps the loop guard scoped to
+    actual consecutive failures, never a permanent session wide disable.
+    """
+    f = BLOCK_DIR / f"{session_id or 'nosession'}.count"
+    try:
+        f.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _tests_failing(root: str) -> bool:
+    """True only when the server ran real tests and they failed. Errs toward False."""
+    try:
+        payload = json.dumps({"project_path": root}).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{RAG_PORT}/run-tests",
+            data=payload, headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=140) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False  # server down or unreachable, do not claim failure
+    return bool(result.get("has_tests")) and result.get("passed") is False
+
+
 
 
 def main() -> int:
@@ -206,7 +236,7 @@ def main() -> int:
     if _tests_failing(diff_root):
         return 0
 
-    # The real check: has a verifier-agent stamp actually covered each changed
+    # The real check: has a backpack stamp actually covered each changed
     # file, and not been invalidated by a later edit? Unlike the old counter,
     # this reflects whether verification happened, not how many times we asked.
     # diff_root, not root: the fallback resolves paths against the repo the
@@ -219,16 +249,7 @@ def main() -> int:
             unverified.append((p, reason))
 
     if not unverified:
-        return 0
-
-    if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
-        print(
-            "[verifier-gate] Code change still unverified after "
-            f"{MAX_BLOCKS_PER_SESSION} blocks this session. Not blocking again "
-            "(anti loop, stop_hook_active is not fully reliable: "
-            "anthropics/claude-code#54360). Fix this before you rely on it.",
-            file=sys.stderr,
-        )
+        _reset_block_count(session_id)
         return 0
 
     files = ", ".join(f"{p} ({reason})" for p, reason in unverified)
@@ -242,22 +263,38 @@ def main() -> int:
         surface = "code this turn; a passing test is not proof the test catches the bug"
         evidence = ""
 
+    if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
+        print(
+            "[verifier-gate] Code change still unverified after "
+            f"{MAX_BLOCKS_PER_SESSION} blocks this session. Not blocking again "
+            "(anti loop, stop_hook_active is not fully reliable: "
+            "anthropics/claude-code#54360). Fix this before you rely on it.",
+            file=sys.stderr,
+        )
+        return 0
+
     _bump_block_count(session_id)
     print(
         "[verifier-gate] BLOCKED: these changed files have no valid verifier "
         f"stamp: {files}\n\n"
         f"This touches {surface}.\n"
         f"{evidence}\n\n"
-        "Spawn verifier-agent (a fresh context, NOT the research agent) on those "
-        "files. Give it three things and only three: the requirements, the "
-        "correctness properties this change must satisfy, and the diff. Do NOT give "
-        "it your reasoning for the change, that is what biases a reviewer into "
-        "agreeing with it. Its report MUST end with a VERIFIED: line naming every "
-        "file it covered, the same way research-agent's COVERS: line works, or this "
-        "gate has nothing to check and stays blocked. Fix any Critical or High it "
-        "returns, then finish.\n\n"
-        "If this really was trivial and needed no reviewer, that was a /ps turn's "
-        "call to make up front, not this one's.",
+        "Spawn backpack (a fresh context, NOT the research agent) on those "
+        "files, right now, in the foreground: run_in_background: false, never "
+        "true. A backgrounded completion arrives later as a "
+        "TaskNotificationMessage, not a tool result, so the verifier record "
+        "hook never fires for it and the stamp never lands.\n\n"
+        "Give backpack three things and only three: (1) the "
+        "requirements/ticket context if any, (2) the correctness properties "
+        "this change must satisfy, (3) the actual diff. Do NOT give it your "
+        "reasoning for the change, that is what biases a reviewer into "
+        "agreeing with it.\n\n"
+        "Its report MUST end with a VERIFIED: line naming every file it "
+        "covered, the same way swiper's COVERS: line works, or this "
+        "gate has nothing to check and stays blocked. Fix any Critical or High "
+        "it returns, then finish.\n\n"
+        "If this really was trivial and needed no reviewer, that was a /ps "
+        "turn's call to make up front, not this one's.",
         file=sys.stderr,
     )
     return 2

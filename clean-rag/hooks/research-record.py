@@ -3,7 +3,7 @@
 
 This is the half of the gate the model cannot simply skip. research-gate.py
 refuses an edit unless this hook has fired, and this hook only fires after Claude
-Code has actually run research-agent to completion.
+Code has actually run swiper to completion.
 
 To be clear about what that is and isn't: it stops the model forgetting or
 drifting, which is the real failure. It is not a security boundary. A model with
@@ -24,14 +24,57 @@ from research_state import (  # noqa: E402
     record_agent,
 )
 
-# A report that links to a real repo but never says it actually fetched a file
-# from it is the "aware it exists, never read it" gap the agent's own
-# instructions warn against. This can only ever be a soft nudge: PostToolUse on
-# Task fires after the subagent already finished, so there's nothing left to
-# block, only stderr text handed back to the model. Matches a github.com repo
-# link (the shape a citation takes) with no GITHUB_FILE_READ: line anywhere.
-_GITHUB_LINK_RE = re.compile(r"github\.com/[\w.-]+/[\w.-]+", re.IGNORECASE)
-_GITHUB_FILE_READ_RE = re.compile(r"GITHUB_FILE_READ:", re.IGNORECASE)
+# Proof enforcement: if a report cites a code-source domain (GitHub, StackOverflow,
+# etc) without fetching and quoting the actual code, strip the COVERS: line so the
+# downstream research gate blocks on the next edit, forcing a respin.
+# The gate itself can't reject (PostToolUse fires after the task completes), but
+# stripping scope reuses the existing "ran but declared no file coverage" block.
+
+_DOMAIN_PROOF_MAP = {
+    re.compile(r"(?:github\.com|gist\.github\.com|raw\.githubusercontent\.com)/[\w.\-/]+", re.IGNORECASE): "GITHUB_FILE_READ:",
+    re.compile(r"stackoverflow\.com/questions/", re.IGNORECASE): "STACKOVERFLOW_ANSWER_READ:",
+    re.compile(r"gitlab\.com/[\w.\-/]+", re.IGNORECASE): "GITLAB_FILE_READ:",
+    re.compile(r"bitbucket\.org/[\w.\-/]+", re.IGNORECASE): "BITBUCKET_FILE_READ:",
+    re.compile(r"codepen\.io/[\w.\-/]+/pen/", re.IGNORECASE): "CODEPEN_READ:",
+}
+
+_FENCE_RE = re.compile(r"```[ \t]*\w*\r?\n(?:(?!```).)+?\r?\n?```", re.DOTALL)
+_COVERS_LINE_RE = re.compile(r"^COVERS:.*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _missing_proof(report: str) -> list:
+    """List of domains cited without fetch proof (line + code block).
+
+    Returns a list of violation descriptions, e.g. ["GitHub repo cited but no GITHUB_FILE_READ: line"].
+    Empty list means no violations.
+    """
+    violations = []
+
+    for domain_re, proof_prefix in _DOMAIN_PROOF_MAP.items():
+        # Find all domain citations in this report
+        for match in domain_re.finditer(report):
+            domain_cite = match.group()
+            # Check if the corresponding proof line exists
+            proof_re = re.compile(re.escape(proof_prefix), re.IGNORECASE)
+            if not proof_re.search(report):
+                violations.append(f"{domain_cite} cited but no {proof_prefix} line found")
+                continue
+
+            # Proof line exists. Now check if a code block follows it.
+            # Find the proof line in the report, then look for a fence after it.
+            proof_pos = proof_re.search(report)
+            if proof_pos:
+                after_proof = report[proof_pos.end():]
+                # A valid proof block: a fence that appears somewhere after the proof line
+                if not _FENCE_RE.search(after_proof):
+                    violations.append(f"{domain_cite} has {proof_prefix} line but no fenced code block after it")
+
+    return violations
+
+
+def _strip_covers_line(report: str) -> str:
+    """Remove COVERS: line(s) from the report, leaving everything else."""
+    return _COVERS_LINE_RE.sub("", report)
 
 
 def _agent_type(payload: dict) -> str:
@@ -98,17 +141,25 @@ def main() -> int:
 
     session_id = payload.get("session_id", "")
     report = _report(payload)
-    record_agent(session_id=session_id, agent_type=agent_type, report=report)
 
-    if _GITHUB_LINK_RE.search(report) and not _GITHUB_FILE_READ_RE.search(report):
+    # Check if any code-source domains are cited without proof
+    violations = _missing_proof(report)
+    if violations:
+        report_to_record = _strip_covers_line(report)
         print(
-            "[research-record] This report links a GitHub repo but has no "
-            "GITHUB_FILE_READ: line. If that repo was cited as a close or exact "
-            "match, it should have been fetched with github-file and read, not "
-            "just linked. If nothing was actually downloaded, treat this as a "
-            "reminder for the next research pass, not a finding to act on now.",
+            "[research-record] REJECTED: this report cites a code source but lacks proof "
+            "of actually downloading and reading it. Missing: " + "; ".join(violations) + ". "
+            "Each cited domain (GitHub, StackOverflow, etc.) needs a proof line "
+            "(GITHUB_FILE_READ: owner/repo/path, STACKOVERFLOW_ANSWER_READ:, etc.) followed by "
+            "a verbatim fenced code block showing the code you read. This stamp is recorded with "
+            "no file scope, so the research gate will block edits to any file until swiper "
+            "runs again with actual proof. Respin with the fetch and quote, or drop the citation.",
             file=sys.stderr,
         )
+    else:
+        report_to_record = report
+
+    record_agent(session_id=session_id, agent_type=agent_type, report=report_to_record)
 
     return 0
 
