@@ -580,6 +580,14 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
 # for this turn. \b so /pset and the like don't false match.
 _QUICK_RE = re.compile(r"^\s*/ps\b", re.IGNORECASE)
 
+# The /ps skill invoked through Claude Code's slash-command UI does not deliver a
+# raw "/ps ..." prompt: it arrives wrapped as
+# "<command-message>ps</command-message><command-name>/ps</command-name>
+# <command-args>...</command-args>", so the anchored _QUICK_RE above never matches
+# it and the turn silently stays non-quick. .search(), not anchored, same reasoning
+# as _TASK_NOTIFICATION_RE below: Claude Code may add its own preamble before the tag.
+_QUICK_COMMAND_RE = re.compile(r"<command-name>\s*/ps\s*</command-name>", re.IGNORECASE)
+
 # Claude Code delivers a background task's completion (a backgrounded Bash
 # command, a Monitor watch, any subagent) as a synthetic UserPromptSubmit event
 # too, with no field distinguishing it from a real human message -- the SDK's
@@ -609,7 +617,7 @@ def main() -> int:
     # A leading /ps marks the turn quick (skip research and the verifier). Detected
     # deterministically here on the raw prompt, never trusted to a model written marker.
     try:
-        quick = bool(_QUICK_RE.match(user_prompt or ""))
+        quick = bool(_QUICK_RE.match(user_prompt or "")) or bool(_QUICK_COMMAND_RE.search(user_prompt or ""))
         open_turn(hook_payload.get("session_id", ""), user_prompt, quick=quick)
     except Exception as e:
         logger.error(f"Failed to open turn record: {type(e).__name__}: {e}")

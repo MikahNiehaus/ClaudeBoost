@@ -167,7 +167,7 @@ actual code.
 Then declare what the match implies for how the builder should act:
 
 ```
-MATCH_STRATEGY: clone-and-patch | adapt | pattern-only
+MATCH_STRATEGY: clone-and-patch | pattern-only
 ```
 
 Always required, even when nothing was fetched (write `pattern-only` rather
@@ -176,7 +176,8 @@ This is the fix for a real observed failure: research handed a builder a
 verbatim, shipping ready reference for a one bug fix task, and the builder
 rewrote the whole thing from its own understanding anyway, switched rendering
 approaches, and added structure nobody asked for. Naming the strategy
-explicitly is what stops that.
+explicitly is what stops that. There is no `adapt` tier: that word was exactly
+what let the rewrite happen, so it's gone, not softened.
 
 - **`clone-and-patch`**: the fetched reference is functionally the same thing
   the project needs, same language, same architecture, same approach, and the
@@ -185,14 +186,9 @@ explicitly is what stops that.
   set of concrete changes that actually fixes the issue (sometimes one line,
   sometimes a handful of small edits, never a rewrite), and make only those
   changes. No restyling, no renaming, no switching libraries or approaches, no
-  added overlays or options the reference did not already have.
-- **`adapt`**: the reference solves the same class of problem in a different
-  context (different framework, different scale, a real gap the project has
-  that the reference does not cover). Port its design and concrete decisions
-  to this project's stack; expect a real diff, but still nothing beyond what
-  the task asked for. Grounded still means grounded: port FROM the verbatim
-  quoted block you fetched, line by line, not from your own paraphrase or
-  memory of what it does.
+  added overlays or options the reference did not already have. This is a hard
+  ceiling on the diff, not a suggestion, even when the fetched reference came
+  from a different framework or scale than this project's.
 - **`pattern-only`**: nothing was worth stealing. Build from the correctness
   properties below. This is the outcome you reach reluctantly, not by default.
 
