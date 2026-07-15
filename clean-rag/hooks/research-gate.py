@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import research_audit  # noqa: E402
 from manifest_files import is_gated_file  # noqa: E402
-from research_state import check_file_researched, is_quick_turn  # noqa: E402
+from research_state import check_file_researched, is_quick_turn, is_swiper_running  # noqa: E402
 
 # Only these get gated. Everything else, including .md, .json, .yaml, and configs,
 # passes. A markdown edit has nothing to research.
@@ -128,6 +128,17 @@ def main() -> int:
         return 0
 
     ok, reason = check_file_researched(session_id, file_path)
+
+    # Swiper runs as a subagent with its own session_id. The gate would see
+    # that session_id, find no turn record for it, and block every Write swiper
+    # tries to make. Allow writes while the counter says swiper is active.
+    if not ok and is_swiper_running():
+        research_audit.append(
+            file_path=file_path, session_id=session_id,
+            allowed=True, reason="inside active swiper subagent",
+            covering_agent="swiper",
+        )
+        return 0
 
     # Every code edit gets a line, allowed or blocked, chained to the one before.
     #

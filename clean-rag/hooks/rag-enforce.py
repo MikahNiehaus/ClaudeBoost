@@ -20,7 +20,7 @@ from pathlib import Path
 import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import open_turn  # noqa: E402
+from research_state import open_turn, set_session_quick, is_session_quick  # noqa: E402
 
 # Windows consoles default to cp1252, which cannot encode emoji. Reconfigure
 # stdout to UTF-8 with a safe fallback so print() never crashes the hook.
@@ -617,8 +617,13 @@ def main() -> int:
     # A leading /ps marks the turn quick (skip research and the verifier). Detected
     # deterministically here on the raw prompt, never trusted to a model written marker.
     try:
+        session_id = hook_payload.get("session_id", "")
         quick = bool(_QUICK_RE.match(user_prompt or "")) or bool(_QUICK_COMMAND_RE.search(user_prompt or ""))
-        open_turn(hook_payload.get("session_id", ""), user_prompt, quick=quick)
+        if quick:
+            set_session_quick(session_id)
+        elif is_session_quick(session_id):
+            quick = True
+        open_turn(session_id, user_prompt, quick=quick)
     except Exception as e:
         logger.error(f"Failed to open turn record: {type(e).__name__}: {e}")
 

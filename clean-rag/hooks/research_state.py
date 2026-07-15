@@ -284,6 +284,101 @@ def has_any_research_this_turn(session_id: str) -> tuple[bool, str]:
     return True, f"research ran this turn ({stamps[-1].get('agent')})"
 
 
+def _swiper_active_path() -> Path:
+    return _state_dir() / "swiper-active.json"
+
+
+def swiper_started() -> None:
+    """Increment the swiper-active counter when a swiper subagent is spawned.
+
+    Called by swiper-start-gate.py (PreToolUse on Task) so the research gate
+    can allow swiper's own Write calls without needing a turn record for the
+    subagent's session_id.
+    """
+    path = _swiper_active_path()
+    with _write_lock(path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        data["count"] = max(0, data.get("count", 0)) + 1
+        data["last_started"] = time.time()
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def swiper_finished() -> None:
+    """Decrement the swiper-active counter when swiper's PostToolUse fires."""
+    path = _swiper_active_path()
+    with _write_lock(path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        data["count"] = max(0, data.get("count", 0) - 1)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def is_swiper_running() -> bool:
+    """True while a swiper subagent is running (counter > 0 and not stale)."""
+    path = _swiper_active_path()
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if time.time() - data.get("last_started", 0) > 1800:  # 30-min stale guard
+            return False
+        return data.get("count", 0) > 0
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped /ps persistence.
+#
+# /ps marks one message's turn record as quick. The next user message opens
+# a fresh turn record with quick=False, so the gate blocks again on the very
+# next edit. User sends /ps, then the actual task as a separate message. The
+# task message gets blocked.
+#
+# Fix: a session-keyed file with a 10-minute TTL. set_session_quick() is
+# called when /ps is detected. rag-enforce.py checks is_session_quick() on
+# new turns and carries the flag forward. clear_session_quick() is called by
+# research-record.py once real research lands, ending the sticky /ps.
+# ---------------------------------------------------------------------------
+
+SESSION_QUICK_MAX_AGE_S = 600  # 10 minutes
+
+
+def _session_quick_path(session_id: str) -> Path:
+    key = hashlib.sha256((session_id or "no-session").encode()).hexdigest()[:16]
+    return _state_dir() / f"session-quick-{key}.json"
+
+
+def set_session_quick(session_id: str) -> None:
+    path = _session_quick_path(session_id)
+    path.write_text(json.dumps({"set_at": time.time()}), encoding="utf-8")
+
+
+def clear_session_quick(session_id: str) -> None:
+    path = _session_quick_path(session_id)
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def is_session_quick(session_id: str) -> bool:
+    """True if /ps was issued recently for this session and no research has landed since."""
+    path = _session_quick_path(session_id)
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (time.time() - data.get("set_at", 0)) <= SESSION_QUICK_MAX_AGE_S
+    except Exception:
+        return False
+
+
 def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     """Was this specific file covered by research this turn?
 

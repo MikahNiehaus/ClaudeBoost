@@ -21,8 +21,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from research_state import (  # noqa: E402
     RESEARCH_AGENTS,
+    clear_session_quick,
     extract_covered_files,
     record_agent,
+    swiper_finished,
 )
 
 # Proof enforcement: if a report cites a code-source domain (GitHub, StackOverflow,
@@ -206,6 +208,12 @@ def main() -> int:
         report_to_record = report
 
     record_agent(session_id=session_id, agent_type=agent_type, report=report_to_record)
+
+    # Decrement the swiper-active counter and clear any sticky /ps flag now
+    # that real research has landed. Both are no-ops if swiper never incremented
+    # the counter or /ps was never set this session.
+    swiper_finished()
+    clear_session_quick(session_id)
 
     return 0
 

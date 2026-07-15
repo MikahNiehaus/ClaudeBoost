@@ -32,6 +32,43 @@ SAFE_COMMANDS = {"curl", "echo", "cat", "ls", "pwd", "grep", "rg", "head", "tail
 CHAINING = re.compile(r"[;&|`]|\$\(|>>|>")
 
 
+def _check_git_clone(parts: list, command: str) -> int:
+    """Allow 'git clone https://...' with no dangerous flags.
+
+    git's own flag surface is a documented arbitrary-command vector:
+    CVE-2022-25900 (--upload-pack), GHSA-jcxm-m3jx-f287 (ext:: transport).
+    --template and -c/--config let untrusted repo content override hooks.
+    Blocking them here means swiper can clone real repos without opening
+    the exec path that makes git clone dangerous.
+    """
+    if len(parts) < 2 or parts[1] != "clone":
+        sub = parts[1] if len(parts) > 1 else "(none)"
+        return _refuse(f"git subcommand {sub!r} is not allowed; only 'git clone https://...' is permitted")
+
+    urls = [p for p in parts[2:] if not p.startswith("-")]
+    if not urls:
+        return _refuse("git clone with no URL")
+    for url in urls:
+        if not url.startswith("https://"):
+            return _refuse(
+                f"git clone URL must start with https:// (blocks git://, ssh://, "
+                f"local paths, and the ext:: transport vector): {url!r}"
+            )
+
+    DANGEROUS_FLAGS = {"--upload-pack", "--template", "--config", "-c"}
+    for part in parts[2:]:
+        if part.startswith("ext::"):
+            return _refuse(f"git ext:: transport is a documented command-execution vector: {part!r}")
+        flag = part.split("=", 1)[0]
+        if flag in DANGEROUS_FLAGS:
+            return _refuse(
+                f"{part!r} is a documented git clone command-execution vector "
+                "(CVE-2022-25900 / GHSA-jcxm-m3jx-f287) and is not allowed"
+            )
+
+    return 0
+
+
 def _refuse(reason: str) -> int:
     print(
         f"BLOCKED for research agent: {reason}\n\n"
@@ -76,6 +113,12 @@ def main() -> int:
     binary = parts[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
     if binary.endswith(".exe"):
         binary = binary[:-4]
+
+    # git clone https:// is the one git subcommand swiper legitimately needs
+    # to steal whole repos. Routed before SAFE_COMMANDS so it doesn't fall
+    # into the "not on the allowlist" refuse path.
+    if binary == "git":
+        return _check_git_clone(parts, command)
 
     if binary not in SAFE_COMMANDS:
         return _refuse(f"{binary!r} is not on the allowlist")
