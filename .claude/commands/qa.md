@@ -46,7 +46,7 @@ This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:
 Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8613/status` and check `indexed_projects` for the detected path.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
@@ -295,7 +295,7 @@ This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test ge
 
 **0f — Index project codebase.**
 
-Call `POST http://127.0.0.1:8612/index with project_path=<WORKSPACE_ROOT>`. Report: "X files indexed."
+Call `POST http://127.0.0.1:8613/index-project {"project_path":"<WORKSPACE_ROOT>"}`. Report: "X files indexed."
 
 Use the WORKSPACE_ROOT detected in step 0c — not raw CWD. CWD may be the ClaudeBoost directory even when the project under test is elsewhere.
 
@@ -307,38 +307,38 @@ This is how a QA person learns the project BEFORE opening the browser. Run all s
 
 **Search 1 — Routes and pages:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=vector limit=20
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=graph limit=20
+POST http://127.0.0.1:8613/search {"query":"page route URL path controller action handler navigation","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":20}
+POST http://127.0.0.1:8613/search {"query":"page route URL path controller action handler navigation","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":20}
 ```
 
 **Search 2 — Forms and mutations:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=vector limit=15
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=graph limit=15
+POST http://127.0.0.1:8613/search {"query":"form submit create update edit delete save mutation POST PUT PATCH DELETE","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":15}
+POST http://127.0.0.1:8613/search {"query":"form submit create update edit delete save mutation POST PUT PATCH DELETE","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":15}
 ```
 
 **Search 3 — Authentication and authorization:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=vector limit=12
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=graph limit=12
+POST http://127.0.0.1:8613/search {"query":"authentication authorization login logout session role permission access control","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":12}
+POST http://127.0.0.1:8613/search {"query":"authentication authorization login logout session role permission access control","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":12}
 ```
 
 **Search 4 — Data models and entities:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=vector limit=15
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=graph limit=15
+POST http://127.0.0.1:8613/search {"query":"model entity schema database table class record","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":15}
+POST http://127.0.0.1:8613/search {"query":"model entity schema database table class record","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":15}
 ```
 
 **Search 5 — Background jobs and async processing:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=vector limit=8
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=graph limit=8
+POST http://127.0.0.1:8613/search {"query":"background job worker queue scheduled task cron async","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":8}
+POST http://127.0.0.1:8613/search {"query":"background job worker queue scheduled task cron async","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":8}
 ```
 
 **Search 6 — External integrations:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=vector limit=8
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=graph limit=8
+POST http://127.0.0.1:8613/search {"query":"external API integration webhook email notification payment third-party","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":8}
+POST http://127.0.0.1:8613/search {"query":"external API integration webhook email notification payment third-party","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":8}
 ```
 
 **If ticket was provided — also search ticket entities:**
@@ -599,7 +599,7 @@ The most common source of bad E2E tests is generating them from what the browser
 1. **App Inventory** (from `$WORKSPACE_ABS/app-inventory.md` Phase 0g — HIGHEST PRIORITY): every entity in the Entities with CRUD table is a journey candidate. For each entity with create/update/delete operations: generate the corresponding journey (create → verify → delete). For each route in the Routes/Pages table: verify it is represented in at least one journey. This is the completeness guarantee — the inventory was built from the actual code, not from what was clickable.
 2. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
 3. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
-4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8612/search scope=codebase query="route controller action" mode=graph limit=5`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8613/search` with `{"query":"route controller action","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
 
 **Completeness gate — after deriving journeys:** Count the routes in app-inventory.md. Count the journeys derived. Every route that has no covering journey must either (a) be covered by an existing journey, or (b) have an explicit reason in a `## Uncovered Routes` section of `flow-map.md` explaining why it's not covered (e.g., "admin-only, no test account", "API route only — not browser-testable"). Routes cannot be silently omitted.
 
@@ -1165,7 +1165,7 @@ This step produces the code-level proof that the server actually executed. Witho
 
    **Tier 3 — RAG graph search (fallback):**
    ```
-   POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="[TC primary action — e.g. 'create order controller handler']" mode=graph limit=3
+   POST http://127.0.0.1:8613/search {"query":"[TC primary action — e.g. 'create order controller handler']","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":3}
    ```
    Use the top result's `source` and `line_start`.
 
@@ -1285,8 +1285,8 @@ NOT legitimate: UI shows a success toast or list update — use the UI instead.
 
 Protocol:
 1. Run both searches to find the server-side function handling the operation:
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service"` — semantic match
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service", mode="graph"` — caller chain and module wiring
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[operation] handler controller service","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":5}` — semantic match
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[operation] handler controller service","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}` — caller chain and module wiring
 2. `Read` the target file
 3. Insert: `console.log('[E2E-TEMP] TC-NNN: [description]');` after the operation
 4. Perform the browser action
@@ -1303,7 +1303,7 @@ Legitimate uses: cron jobs, Hangfire/Sidekiq/Quartz workers, service-bus consume
 NOT legitimate: UI shows a success toast, list update, or status badge — use the UI instead. Also NOT a replacement for temp-logging when a synchronous server-side function needs verification.
 
 Protocol:
-1. `POST http://127.0.0.1:8612/search with scope="codebase", query="[job class name] job worker execute schedule", mode="graph")` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job alongside the class itself.
+1. `POST http://127.0.0.1:8613/search` with `{"query":"[job class name] job worker execute schedule","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job alongside the class itself.
 2. `Read` the job class file. Identify:
    - What DB table/column the job writes (the "write side" — this is what must be verified)
    - Any dev/admin endpoint that can trigger the job manually (e.g., `/admin/jobs/trigger`, `/api/internal/run-job`, a dev-only controller action)
@@ -1794,8 +1794,8 @@ Understand the target before testing it.
 
 **G2b — RAG search for related code.** Run both modes:
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=vector limit=10
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=graph limit=10
+POST http://127.0.0.1:8613/search {"query":"<target description>","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":10}
+POST http://127.0.0.1:8613/search {"query":"<target description>","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":10}
 ```
 Use results to find: callers, tests that already exist, related modules the change might affect.
 

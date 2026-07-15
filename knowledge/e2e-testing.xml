@@ -577,7 +577,7 @@
   </illegitimate-use-cases>
 
   <protocol>
-    <step order="1" name="Identify">POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service" — find the function that handles the operation. If you need to trace callers or find which module wires this up, add mode="graph" to the same call.</step>
+    <step order="1" name="Identify">POST http://127.0.0.1:8613/search with {"query":"[operation] handler controller service","sources":["project:&lt;project_path&gt;"],"mode":"vector","limit":5} — find the function that handles the operation. If you need to trace callers or find which module wires this up, use mode="graph" in the same call.</step>
     <step order="2" name="Read">Read the target file with the Read tool</step>
     <step order="3" name="Insert">Add: console.log('[E2E-TEMP] TC-NNN: [description]'); immediately after the operation completes</step>
     <step order="4" name="Execute">Perform the browser action that triggers the function</step>
@@ -626,9 +626,9 @@
   <purpose>Understand an unfamiliar app before generating test cases. Two legal channels: RAG codebase search and browser navigation. No database access.</purpose>
 
   <rag-discovery>
-    <query name="Routes">POST http://127.0.0.1:8612/search with scope="codebase", query="routes pages navigation URL paths", limit=6, mode="graph"</query>
-    <query name="Auth">POST http://127.0.0.1:8612/search with scope="codebase", query="authentication login session user roles JWT cookie", limit=5, mode="graph"</query>
-    <query name="Entities">POST http://127.0.0.1:8612/search with scope="codebase", query="form submit create update delete entity model schema", limit=5, mode="graph"</query>
+    <query name="Routes">POST http://127.0.0.1:8613/search with {"query":"routes pages navigation URL paths","sources":["project:&lt;project_path&gt;"],"mode":"graph","limit":6}</query>
+    <query name="Auth">POST http://127.0.0.1:8613/search with {"query":"authentication login session user roles JWT cookie","sources":["project:&lt;project_path&gt;"],"mode":"graph","limit":5}</query>
+    <query name="Entities">POST http://127.0.0.1:8613/search with {"query":"form submit create update delete entity model schema","sources":["project:&lt;project_path&gt;"],"mode":"graph","limit":5}</query>
     <note>mode="graph" is used here because routes, auth, and entity modules have rich import/inheritance relationships — graph mode surfaces structural neighbours (middleware, base controllers, shared validators) alongside the semantic matches.</note>
     <extract>From results: route paths, entity names, auth mechanism, form structures, known features</extract>
   </rag-discovery>
@@ -689,8 +689,8 @@
   </step>
 
   <step order="2">For each entity, run BOTH searches. Never skip either.
-    Call 1 — vector: POST http://127.0.0.1:8612/search with scope="codebase", project_path=..., query="[entity]", mode="vector", limit=3
-    Call 2 — graph: POST http://127.0.0.1:8612/search with scope="codebase", project_path=..., query="[entity]", mode="graph", limit=3
+    Call 1 — vector: POST http://127.0.0.1:8613/search with {"query":"[entity]","sources":["project:&lt;project_path&gt;"],"mode":"vector","limit":3}
+    Call 2 — graph: POST http://127.0.0.1:8613/search with {"query":"[entity]","sources":["project:&lt;project_path&gt;"],"mode":"graph","limit":3}
     Vector finds semantically similar files; graph finds structural neighbours via imports and inheritance.
   </step>
 

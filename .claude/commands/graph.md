@@ -84,7 +84,7 @@ Stop. Do not proceed.
 If it returns successfully: check that the project is indexed (substitute the
 resolved path for `$PROJECT_PATH`):
 ```bash
-curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"test","scope":"codebase","project_path":"$PROJECT_PATH","limit":1}'
+curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"test","sources":["project:$PROJECT_PATH"],"mode":"both","limit":1}'
 ```
 
 If this returns nothing:
@@ -128,12 +128,12 @@ For each entity, run BOTH calls. Never skip either.
 
 **Call 1 — Vector** (semantic similarity — finds code that does the same thing):
 ```bash
-curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[entity]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"vector","limit":3}'
+curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"[entity]","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":3}'
 ```
 
 **Call 2 — Graph** (structural neighbours — finds code that imports, inherits, or calls the seed):
 ```bash
-curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[entity]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"graph","limit":3}'
+curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"[entity]","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":3}'
 ```
 
 Read the `results` array from each response — each hit has a `score` and `source` (file path).
@@ -209,7 +209,7 @@ For each source file in the scope table (skip `.md`, `.json`, `.yaml` — not so
 run one RAG vector search:
 
 ```bash
-curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"class function definition","scope":"codebase","project_path":"$PROJECT_PATH","mode":"vector","limit":10}'
+curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"class function definition","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":10}'
 ```
 
 From the `results`, keep only hits whose `source` contains the target file, and read
@@ -239,7 +239,7 @@ returns nothing, and batch all fallback greps into a single Bash call.
 
 **Step 1 — RAG graph search per symbol:**
 ```bash
-curl -s --max-time 10 -X POST http://127.0.0.1:8612/search -H "Content-Type: application/json" -d '{"query":"[symbol_name]","scope":"codebase","project_path":"$PROJECT_PATH","mode":"graph","limit":3}'
+curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: application/json" -d '{"query":"[symbol_name]","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":3}'
 ```
 
 Read the `results` array — each hit has a `score` and `source`.
@@ -346,7 +346,7 @@ Do not assume a file is correct just because it is in scope. Treat every primary
 
 For each primary implementation file (processors, controllers, page models, enums, service classes, test files):
 
-1. **Find the relevant section via RAG first** — run `POST http://127.0.0.1:8612/search scope=codebase project_path=$PROJECT_PATH query="[AC concept from 6b]" mode=vector limit=3`. Read only the specific chunk RAG identifies (use `line_start` to target the Read). Do not read the whole file.
+1. **Find the relevant section via RAG first** — run `POST http://127.0.0.1:8613/search` with `{"query":"[AC concept from 6b]","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":3}`. Read only the specific chunk RAG identifies (use `line_start` to target the Read). Do not read the whole file.
 2. **Map what it handles** — every condition, branch, filter, status, role, type, or case it covers
 3. **Map what it does NOT handle** — ask "what inputs or states could reach this code that are not covered here?" For every filter or allowlist, ask what is excluded. For every branch, ask what falls through. For every role check, ask which roles are absent.
 4. **Follow references via RAG** — if the file references an enum, constant list, or helper defined elsewhere, search RAG for it (`query="[enum/constant name]" mode=graph`), then Read only the section RAG returns. Do not read files directly without a RAG search to navigate first.

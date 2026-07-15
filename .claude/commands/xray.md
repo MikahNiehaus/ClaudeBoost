@@ -46,7 +46,7 @@ If it fails: stop — "RAG is not connected. Run `/rag` first."
 
 **0b — Verify project is indexed:**
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `PROJECT_PATH`.
+Call `GET http://127.0.0.1:8613/status` and check that `PROJECT_PATH` appears in the indexed projects.
 
 - **Indexed**: continue
 - **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` first
@@ -213,8 +213,8 @@ Store as `REVIEW_DIFF`. Do NOT truncate.
 
 Summarize what changed in one sentence. Then:
 ```
-POST http://127.0.0.1:8612/search scope="codebase", project_path=<cwd>, query="<summary>", limit=5
-POST http://127.0.0.1:8612/search scope="codebase", project_path=<cwd>, query="<summary>", mode="graph", limit=5
+POST http://127.0.0.1:8613/search {"query":"<summary>","sources":["project:<cwd>"],"mode":"vector","limit":5}
+POST http://127.0.0.1:8613/search {"query":"<summary>","sources":["project:<cwd>"],"mode":"graph","limit":5}
 ```
 
 Both calls are mandatory — vector finds semantic matches, graph finds structural neighbours.
@@ -350,12 +350,10 @@ Step 2 — ClaudeBoost KB (orchestration patterns, agent specs, skill convention
   POST http://127.0.0.1:8612/search  scope="knowledge"  query="<targeted query>"  limit=5
 
 Step 3 — Codebase vector search (semantically similar implementations):
-  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<PROJECT_PATH>"
-    query="<targeted query>"  mode="vector"  limit=5
+  POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:<PROJECT_PATH>"],"mode":"vector","limit":5}
 
 Step 4 — Codebase graph search (callers, imports, structural neighbors):
-  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<PROJECT_PATH>"
-    query="<targeted query>"  mode="graph"  limit=5
+  POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":5}
 
 Step 5 — Workspace KB (task-scoped research for this ticket, if workspace_path is set):
   POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<WORKSPACE_PATH>/knowledge"
@@ -542,7 +540,7 @@ Spawn one Opus evaluator after ALL batches and Phase 3b complete. Do NOT proceed
 ```
 Your FIRST two actions:
 1. Call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="evaluator pass — classify review findings", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>"
-2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8612/search scope="codebase", project_path="<PROJECT_PATH>", query="<symbol from finding>", mode="graph", limit=3 to verify it exists and isn't already handled elsewhere.
+2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8613/search {"query":"<symbol from finding>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":3} to verify it exists and isn't already handled elsewhere.
 
 You are the Evaluator. You do NOT re-review the code — you review the FINDINGS and TEST RESULTS.
 

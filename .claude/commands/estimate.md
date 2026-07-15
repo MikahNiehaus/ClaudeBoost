@@ -201,8 +201,8 @@ Score guide for your dimension:
 **E1: Blast Radius**
 - Focus: How many files, layers, components, AND integration entry points does this ticket touch?
 - Search strategy:
-  1. For each entity in the ticket: `POST http://127.0.0.1:8612/search` with scope="codebase", project_path, query="[entity name]", mode="vector", limit=5
-  2. For each entity: same search with mode="graph", limit=5 (finds structural neighbors: callers, importers, inheritors)
+  1. For each entity in the ticket: `POST http://127.0.0.1:8613/search` with `{"query":"[entity name]","sources":["project:<project_path>"],"mode":"vector","limit":5}`
+  2. For each entity: same search with `"mode":"graph"`, limit=5 (finds structural neighbors: callers, importers, inheritors)
   3. Glob for files matching entity names across all project layers
   4. Categorize hits by layer: UI (Pages/, wwwroot/), API (Controllers/), Service (Services/), Data (Models/, Migrations/), Test (*Tests/)
   5. **Integration entry point audit**: For each file that needs changes, count how many DISTINCT call sites, UI actions, or user flows trigger the same code path. A single file with 3 different entry points (e.g., single action, bulk action, dropdown) counts as 3 integration points, not 1. Report both file count AND integration point count.
@@ -246,8 +246,8 @@ Score guide for your dimension:
 **E4: Data/Migration**
 - Focus: Does this ticket require database schema changes, migrations, or seed data?
 - Search strategy:
-  1. Search for entity models: `POST http://127.0.0.1:8612/search` with query="[entity] model class property", scope="codebase", mode="vector"
-  2. Search for DbContext references: query="DbSet [entity]", scope="codebase"
+  1. Search for entity models: `POST http://127.0.0.1:8613/search` with `{"query":"[entity] model class property","sources":["project:<project_path>"],"mode":"vector","limit":5}`
+  2. Search for DbContext references: `POST http://127.0.0.1:8613/search` with `{"query":"DbSet [entity]","sources":["project:<project_path>"],"mode":"vector","limit":5}`
   3. Check for existing migrations touching these entities: Glob for `**/Migrations/**` and grep for entity names
   4. Look for FK relationships, navigation properties, indexes on affected models
   5. Check if new tables, columns, or relationships are implied by acceptance criteria
@@ -261,7 +261,7 @@ Score guide for your dimension:
 **E5: Pattern Precedent**
 - Focus: Has similar work been done before? Does the ticket follow ONE pattern or require COMBINING multiple?
 - Search strategy:
-  1. Search codebase for similar patterns: `POST http://127.0.0.1:8612/search` with query="[feature description] implementation", scope="codebase", mode="vector", limit=5
+  1. Search codebase for similar patterns: `POST http://127.0.0.1:8613/search` with `{"query":"[feature description] implementation","sources":["project:<project_path>"],"mode":"vector","limit":5}`
   2. Git log search for recent commits touching similar files: `git -C "<PROJECT_PATH>" log --oneline --all --since="6 months ago" -- "*[entity]*" | head -20`
   3. Look for existing implementations of similar features (e.g., if adding a new notification type, find existing notification implementations)
   4. Assess: can this ticket follow an existing pattern, or does it require a new approach?

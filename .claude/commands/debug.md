@@ -88,13 +88,11 @@ Project : [PROJECT_PATH]
 Run both searches in parallel — they surface different files:
 
 ```
-POST http://127.0.0.1:8612/search
-  scope=codebase, project_path=<PROJECT_PATH>, mode=vector, limit=8
-  query="<TARGET or ERROR_DESC>"
+POST http://127.0.0.1:8613/search
+  {"query":"<TARGET or ERROR_DESC>","sources":["project:<PROJECT_PATH>"],"mode":"vector","limit":8}
 
-POST http://127.0.0.1:8612/search
-  scope=codebase, project_path=<PROJECT_PATH>, mode=graph, limit=8
-  query="<TARGET or ERROR_DESC>"
+POST http://127.0.0.1:8613/search
+  {"query":"<TARGET or ERROR_DESC>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":8}
 ```
 
 If `TARGET_FILE` is set: also read it directly. Note the line range around `TARGET_LINE` (±20 lines).
@@ -275,9 +273,8 @@ Cite file:line for each step. Skip levels that don't apply — don't force five 
 If a function is the root cause, find all callers. This matters because the same bug often appears at every call site.
 
 ```
-POST http://127.0.0.1:8612/search
-  scope=codebase, project_path=<PROJECT_PATH>, mode=graph, limit=5
-  query="<function name>"
+POST http://127.0.0.1:8613/search
+  {"query":"<function name>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":5}
 ```
 
 Read each caller file. Note whether the same incorrect assumption is repeated.
@@ -484,9 +481,8 @@ If `TARGET_LINE` is set: set the breakpoint immediately.
 If `TARGET_LINE` is null: search for the best entry point:
 
 ```
-POST http://127.0.0.1:8612/search
-  scope=codebase, project_path=<PROJECT_PATH>, mode=graph, limit=3
-  query="<TARGET_FILE or ERROR_DESC> entry point handler"
+POST http://127.0.0.1:8613/search
+  {"query":"<TARGET_FILE or ERROR_DESC> entry point handler","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":3}
 ```
 
 Use the top result's `line_start` as the breakpoint target.

@@ -20,7 +20,7 @@ If it fails: stop and tell the user "RAG is not connected. Run /rag before using
 Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8613/status` and check that the detected path appears in the indexed projects.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
@@ -102,7 +102,7 @@ Then **Read** `/tmp/cb-graph.json` with the Read tool. Use the `layers`, `side_r
    ```bash
    ls -la && cat package.json 2>/dev/null || cat pyproject.toml 2>/dev/null || cat Cargo.toml 2>/dev/null
    ```
-2. If RAG project index exists: `POST http://127.0.0.1:8612/search` with `{"scope":"codebase","mode":"graph","query":"services endpoints data models","project_path":"<cwd>","limit":8}`
+2. If RAG project index exists: `POST http://127.0.0.1:8613/search` with `{"query":"services endpoints data models","sources":["project:<cwd>"],"mode":"graph","limit":8}`
 3. Identify **8–15 key components**: entry points, services, data stores, external APIs, middleware. Cap at 15 — more components hurt clarity.
 
 ---
@@ -165,7 +165,7 @@ If no workspace ticket is found: skip this step silently and proceed to Step 3.
 The goal is to understand the topic well enough to explain it visually as a layered flow. Gather from whichever sources apply:
 
 1. **RAG knowledge search**: `POST http://127.0.0.1:8612/search` with `{"scope":"all","query":"<TOPIC>","limit":6}` — pull relevant knowledge files.
-2. **Codebase search (both modes)**: `POST http://127.0.0.1:8612/search` with `{"scope":"codebase","mode":"both","query":"<TOPIC>","project_path":"<cwd>","limit":8}` — find the files that implement or relate to the concept.
+2. **Codebase search (both modes)**: `POST http://127.0.0.1:8613/search` with `{"query":"<TOPIC>","sources":["project:<cwd>"],"mode":"both","limit":8}` — find the files that implement or relate to the concept.
 3. **Read key files** identified above (no more than 5) to understand the actual implementation.
 
 From those sources, identify:

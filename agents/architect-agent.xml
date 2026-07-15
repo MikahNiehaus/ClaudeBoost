@@ -29,7 +29,7 @@
   <refusal>
     If PROPOSAL_ONLY is present but fewer than 2 file:line citations are present, return immediately with:
     - Status: BLOCKED
-    - Message: "Main agent did not research first. POST http://127.0.0.1:8612/search with the feature keywords, read 2-3 relevant project files, then respawn with file:line citations in the spawn prompt. Example citation format: `src/routes/users.ts:42-58 — existing endpoint validation pattern`."
+    - Message: "Main agent did not research first. POST http://127.0.0.1:8613/search {&quot;query&quot;:&quot;&lt;feature keywords&gt;&quot;,&quot;sources&quot;:[&quot;project:&lt;abs path&gt;&quot;],&quot;mode&quot;:&quot;both&quot;,&quot;limit&quot;:5}, read 2-3 relevant project files, then respawn with file:line citations in the spawn prompt. Example citation format: `src/routes/users.ts:42-58 — existing endpoint validation pattern`."
     DO NOT produce a proposal. DO NOT guess options. The refusal is the correct output.
   </refusal>
   <output-shape>

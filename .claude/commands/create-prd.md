@@ -21,7 +21,7 @@ Feature or task: **$ARGUMENTS**
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for `<PROJECT_PATH>`.
+Call `GET http://127.0.0.1:8613/status` and check that `<PROJECT_PATH>` appears in the indexed projects.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.

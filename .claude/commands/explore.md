@@ -163,14 +163,14 @@ This is a fast probe. `GET /status` does not use the embedding model, so it resp
 > **STOP. Do not proceed.**
 > Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/explore $ARGUMENTS`."
 
-**If `GET http://127.0.0.1:8612/status` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
+**If `GET http://127.0.0.1:8613/status` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
 Detect the project path:
 1. Run `"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"` to get the active workspace ID for this Claude instance (same source as the blue WS indicator — per-instance, not shared). Output is JSON with `workspace_id`, `workspace_path`, `project_path`. Fall back to current working directory if no workspace is active.
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8613/status` and check that the detected path appears in the indexed projects.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
@@ -247,11 +247,11 @@ Skip this phase entirely if `PROJECT_PATH = none`.
 
 **2a — RAG health check.**
 
-Call `GET http://127.0.0.1:8612/status`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
+Call `GET http://127.0.0.1:8613/status`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
 
-**2b — Scan the project.**
+**2b — Index the project.**
 
-Call `POST http://127.0.0.1:8612/scan with project_path=$PROJECT_PATH`.
+Call `POST http://127.0.0.1:8613/index-project` with `{"project_path":"$PROJECT_PATH"}` (idempotent — safe to call even if already indexed).
 
 Print a concise scan summary:
 - Files by language
@@ -260,7 +260,7 @@ Print a concise scan summary:
 
 **2c — Index the project.**
 
-Call `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH`.
+Call `POST http://127.0.0.1:8613/index-project {"project_path":"$PROJECT_PATH"}`.
 
 Report: "Project indexed: X files, Y chunks."
 
@@ -302,13 +302,13 @@ Your task — do ALL of these:
    If the section is empty or missing, fall back to generic queries derived from the ticket summary.
 
 1. Semantic search — vector (find semantically similar code):
-   - For each entity in Code Entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="vector", limit=3
-   - If no entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="vector", limit=5
+   - For each entity in Code Entities: POST http://127.0.0.1:8613/search {"query":"[entity name]","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":3}
+   - If no entities: POST http://127.0.0.1:8613/search {"query":"[key feature from ticket] implementation","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":5}
 
 2. Structural search — graph (find structural neighbours of the vector seeds):
-   - For each entity: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity name]", mode="graph", limit=3
+   - For each entity: POST http://127.0.0.1:8613/search {"query":"[entity name]","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":3}
    - Collect all unique source files from graph results. These are the starting "Files in Scope" map — files that import, inherit from, or are called by the seed results.
-   - If no entities: POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[key feature from ticket] implementation", mode="graph", limit=5
+   - If no entities: POST http://127.0.0.1:8613/search {"query":"[key feature from ticket] implementation","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":5}
 
 3. Targeted Glob + Grep to find:
    - Entry points (routes, controllers, handlers) relevant to the ticket
@@ -382,8 +382,8 @@ POST http://127.0.0.1:8612/search with scope="knowledge", query="testing strateg
 
 If `PROJECT_PATH` is not none:
 ```
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3
-POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, query="[main entity from ticket] patterns conventions", limit=3, mode="graph"
+POST http://127.0.0.1:8613/search {"query":"[main entity from ticket] patterns conventions","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":3}
+POST http://127.0.0.1:8613/search {"query":"[main entity from ticket] patterns conventions","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":3}
 ```
 Run both modes: vector finds semantically similar patterns, graph surfaces files that import or inherit from the seed files — revealing where these patterns propagate across the codebase.
 

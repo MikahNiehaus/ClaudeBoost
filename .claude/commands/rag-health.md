@@ -24,7 +24,7 @@ $ARGUMENTS — which collection to check (flexible natural language accepted):
 ### Step 1 — Server status (always first)
 
 ```bash
-curl -s http://127.0.0.1:8612/status
+curl -s http://127.0.0.1:8613/status
 ```
 
 Evaluate:
@@ -80,7 +80,7 @@ Do NOT fail solely because `files_indexed == 0`. That is normal when all files a
 **3c. Partial index ratio**
 Scan the project to get total file count:
 ```bash
-curl -s -X POST http://127.0.0.1:8612/scan \
+curl -s -X POST http://127.0.0.1:8613/scan \
   -H "Content-Type: application/json" \
   -d '{"project_path": "<path>"}'
 ```
@@ -103,9 +103,9 @@ Check `dimension_mismatch` from saved status — look for "codebase" entry:
 
 **3f. Graph liveness**
 ```bash
-curl -s -X POST http://127.0.0.1:8612/search \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "service class method", "scope": "codebase", "project_path": "<path>", "mode": "graph", "limit": 3}'
+  -d '{"query": "service class method", "sources": ["project:<path>"], "mode": "graph", "limit": 3}'
 ```
 - ✅ PASS if `graph_augmented: true` — report `graph_resolved/graph_edges` from registry
 - ⚠️ WARN if `graph_augmented: false` AND `graph_active: true` in registry
@@ -120,9 +120,9 @@ Pick query by dominant language (highest count in scan.files_by_language):
 - default → `"class method interface implementation"`
 
 ```bash
-curl -s -X POST http://127.0.0.1:8612/search \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "<query>", "scope": "codebase", "project_path": "<path>", "limit": 5}'
+  -d '{"query": "<query>", "sources": ["project:<path>"], "mode": "vector", "limit": 5}'
 ```
 Evaluate top result score:
 - ✅ PASS if top score ≥ 0.68
@@ -151,9 +151,9 @@ Read `<project>/.ragignore` with the Read tool:
 - ✅ PASS if no .ragignore file → "No .ragignore — all files eligible"
 - For each excluded directory, search:
   ```bash
-  curl -s -X POST http://127.0.0.1:8612/search \
+  curl -s -X POST http://127.0.0.1:8613/search \
     -H "Content-Type: application/json" \
-    -d '{"query": "<dir> file module", "scope": "codebase", "project_path": "<path>", "limit": 3}'
+    -d '{"query": "<dir> file module", "sources": ["project:<path>"], "mode": "vector", "limit": 3}'
   ```
   - ✅ PASS if no results from excluded directory paths
   - ❌ FAIL if results found from excluded dirs → "Exclusion not active — restart RAG server (/rag)"

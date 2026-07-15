@@ -91,7 +91,7 @@ Announce: `Round R[N+1]`
 
 **SELF mode:**
 1. `POST http://127.0.0.1:8612/index with force=true, scope=all)` — rebuilds ClaudeBoost RAG (agents + knowledge
-2. `POST http://127.0.0.1:8612/index with project_path=$CLAUDEBOOST_HOME, force=true)` — rebuilds project RAG (codebase
+2. `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME","force":true}` — rebuilds project RAG (codebase
 
 Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
 
@@ -99,13 +99,13 @@ Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
 1. Read `$WORKSPACE_ABS/goal.md` and `$WORKSPACE_ABS/plan.md`.
 2. Extract `**Project**:` line from plan.md — this is the project path the workspace is working on.
 3. If a valid project path is found:
-   - `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH, force=true`
+   - `POST http://127.0.0.1:8613/index-project {"project_path":"$PROJECT_PATH","force":true}`
    - Report: "Indexed Y files (project: $PROJECT_PATH)"
 4. If no project path found or path is "N/A":
    - Skip project indexing. Note: "No project path in workspace plan — code audit will use grep/glob only."
 
 **PROJECT mode:**
-1. `POST http://127.0.0.1:8612/index with project_path=$PROJECT_PATH, force=true`
+1. `POST http://127.0.0.1:8613/index-project {"project_path":"$PROJECT_PATH","force":true}`
 2. Report: "Indexed Y files (project: $PROJECT_PATH)"
 
 ---
@@ -180,8 +180,8 @@ Use POST http://127.0.0.1:8612/search to locate files before reading them. Never
 First, determine the **workspace scope** (what files the workspace touched):
 1. Read `$WORKSPACE_ABS/plan.md` — extract all `**Output artifact**:` lines to build a file list.
 2. Run both searches to find related files (both calls are mandatory):
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, limit=10`
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[goal keywords from goal.md]", project_path=$PROJECT_PATH, mode="graph", limit=10`
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[goal keywords from goal.md]","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":10}`
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[goal keywords from goal.md]","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":10}`
 3. Only audit files in scope. Do not audit the entire project.
 
 | FOCUS | Lenses to run |
@@ -195,14 +195,14 @@ First, determine the **workspace scope** (what files the workspace touched):
 
 ### PROJECT mode lenses
 
-Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJECT_PATH, ...` to locate files. Run both `mode=vector` and `mode=graph` on each query — never guess, never run only one mode.
+Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project:$PROJECT_PATH"],"mode":"vector"|"graph","limit":10}` to locate files. Run both `mode=vector` and `mode=graph` on each query — never guess, never run only one mode.
 
 | FOCUS | Lenses to run |
 |-------|--------------|
-| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use POST http://127.0.0.1:8612/search (both mode=vector and mode=graph) to find largest/most-referenced files and spot-check them. Cite file:line. |
+| `code` | Code quality sweep: complexity hotspots, duplicate logic, obvious smells. Use `POST http://127.0.0.1:8613/search` with `{"sources":["project:$PROJECT_PATH"],"mode":"vector"}` and same with `"mode":"graph"` to find largest/most-referenced files and spot-check them. Cite file:line. |
 | `security` | OWASP top 10 scan across project entry points and data flows. Grep for raw SQL string concatenation, eval() on user input, secrets in source. |
 | `tests` | Find source files with no corresponding test file. Report ratio of tested vs untested modules. |
-| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via POST http://127.0.0.1:8612/search (both mode=vector and mode=graph). |
+| `quality` | Consistency: error handling patterns, logging (logger.error in catch), naming conventions. Sample 5-10 files via `POST http://127.0.0.1:8613/search` with `{"sources":["project:$PROJECT_PATH"],"mode":"vector"}` and `"mode":"graph"`. |
 | `docs` | README present and complete? Public API surface documented? Undocumented exports? |
 | `all` | All of the above |
 
@@ -226,10 +226,10 @@ Use `POST http://127.0.0.1:8612/search with scope="codebase", project_path=$PROJ
 | ST-10 | `GET /status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `GET /status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via POST /index output instead |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
-| ST-13 | `POST http://127.0.0.1:8612/search with "rag search implementation", scope="codebase", project_path=$CLAUDEBOOST_HOME, mode="graph"` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
+| ST-13 | `POST http://127.0.0.1:8613/search` with `{"query":"rag search implementation","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
 | ST-14 | `POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
-| ST-15 | Graph resolution quality: `POST http://127.0.0.1:8612/index with project_path=$CLAUDEBOOST_HOME)` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved. External deps don't count as unresolved. |
-| ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8612/search with scope="codebase", query="build_context tier4 codebase", project_path=$CLAUDEBOOST_HOME, mode="graph")` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`. Confirms graph edges connect semantically related files, not random ones. |
+| ST-15 | Graph resolution quality: `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME"}` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved. External deps don't count as unresolved. |
+| ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8613/search` with `{"query":"build_context tier4 codebase","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`. Confirms graph edges connect semantically related files, not random ones. |
 | ST-17 | CodeSearchNet MRR benchmark: `python "$RAG_BENCHMARKS_PATH/codesearchnet_benchmark.py" --sample 100 --lang python --no-index` where `$RAG_BENCHMARKS_PATH` is your local clone of the rag-benchmarks repo. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. **Caveat**: benchmark uses `whole_func_string` (code+docstring) which is easier than the published CodeBERT task (code-only). Use for trend tracking only — not a direct comparison to Microsoft baselines. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |
 
 ### WORKSPACE mode tests (run all)

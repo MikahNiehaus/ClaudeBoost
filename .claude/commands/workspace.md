@@ -452,7 +452,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/review` | Code review — quick A-F grade by default; add `--deep` for full 15-pass parallel review |
 | `/security-review` | Security-focused review of pending branch changes |
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
-| `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8612/search with scope="codebase"` |
+| `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8613/search` with `{"sources":["project:<path>"],"mode":"both"}` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
 | `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
 | `/self-improve` | ClaudeBoost self-improvement audit cycle (meta-work only) |
@@ -510,7 +510,7 @@ Never bundle unrequested fixes into the same commit.
 
 **Bug Fix investigation rule:** Before finalizing the fix approach in `plan.md`:
 1. Read the **full file** for every location being changed — not just the bug line
-2. Find **all callers** of modified methods: use `POST http://127.0.0.1:8612/search with scope="codebase", mode="graph", query="[method name]", project_path=PROJECT_PATH)` if indexed, or `Grep("[method name]"` across the codebase if not
+2. Find **all callers** of modified methods: use `POST http://127.0.0.1:8613/search` with `{"query":"[method name]","sources":["project:PROJECT_PATH"],"mode":"graph","limit":10}` if indexed, or `Grep("[method name]"` across the codebase if not
 3. Confirm the caller sweep is complete — "no 4th location" must be verified, not assumed
 4. Document what was checked in the plan under a **"Pre-fix Investigation"** section, citing file:line for every location reviewed
 
@@ -539,7 +539,7 @@ Applies when `PROJECT_PATH` is set (not `none`) and WORK_TYPES includes Bug Fix,
 
 Check if the project is indexed:
 ```
-POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="test", limit=1
+POST http://127.0.0.1:8613/search {"query":"test","sources":["project:$PROJECT_PATH"],"mode":"vector","limit":1}
 ```
 
 **If results returned**: "Project RAG active — vector + graph search available. Graph RAG will auto-trace callers/dependents."
@@ -563,7 +563,7 @@ Runs only when Phase 4.5 confirmed the project is indexed.
 
 2. For each entity found, run:
    ```
-   POST http://127.0.0.1:8612/search with scope="codebase", project_path="$PROJECT_PATH", query="[entity]", mode="graph", limit=3
+   POST http://127.0.0.1:8613/search {"query":"[entity]","sources":["project:$PROJECT_PATH"],"mode":"graph","limit":3}
    ```
 
 3. Collect unique file paths from all graph results.

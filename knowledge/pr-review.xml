@@ -5,8 +5,8 @@
 <rag-requirement mandatory="true">
   Before writing any finding or starting any review pass, run these three calls in order:
   1. POST http://127.0.0.1:8612/context with agent="reviewer-agent", task_description="code review [description]", max_tokens=4000
-  2. POST http://127.0.0.1:8612/search with scope="codebase", project_path=[repo], query="[one-sentence summary of what changed]", limit=5
-  3. POST http://127.0.0.1:8612/search with scope="codebase", project_path=[repo], query="[same summary]", limit=5, mode="graph"
+  2. POST http://127.0.0.1:8613/search with {"query":"[one-sentence summary of what changed]","sources":["project:[repo]"],"mode":"vector","limit":5}
+  3. POST http://127.0.0.1:8613/search with {"query":"[same summary]","sources":["project:[repo]"],"mode":"graph","limit":5}
 
   Why this is mandatory: RAG surfaces existing patterns (guards, projections, conventions) before
   any code is reviewed. Reviewing a diff in isolation means pattern-inconsistency bugs won't be
