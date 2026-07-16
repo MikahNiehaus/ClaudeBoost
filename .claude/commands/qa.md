@@ -61,10 +61,10 @@ Call `GET http://127.0.0.1:8613/status` and check `indexed_projects` for the det
 Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3 and G4d)
 - `--fresh` present → force a new workspace (already handled in 0c)
-- `--code` present → set `CODE_FLAG = true` (used in 0a-iii to set MODE = general)
+- `--code` present → set `CODE_FLAG = true` (used in 0a-i to set MODE = general)
 - Remaining tokens after stripping all flags: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
 
-**0a-iii — Set MODE based on parsed arguments.**
+**0a-i — Set MODE based on parsed arguments.**
 
 | Condition | MODE | GENERAL_TARGET |
 |-----------|------|----------------|
@@ -82,13 +82,13 @@ Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - "the workspace output" / "the plan" → files in `$WORKSPACE_ABS/`
 - Anything else → print the resolved target and ask "Is this what you want to QA?" before starting
 
-**If MODE = `general`:** skip Steps A–D, skip Phase 0a-ii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
+**If MODE = `general`:** skip Steps A–D, skip Phase 0a-iii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
 
 **If MODE = `detect` and Steps A–C find a running server:** set `MODE = browser` and `TARGET_URL` to the detected address.
 
 **If MODE = `detect` and no server found (Step D):** ask: "No running server found. Paste a URL for browser testing, or describe what to QA (file, workspace ID, or `--code` for recent git changes)." Set MODE based on the reply.
 
-**0a-i — Auto-detect TARGET_URL if not provided.**
+**0a-ii — Auto-detect TARGET_URL if not provided.**
 
 If `TARGET_URL` is empty after parsing, do NOT ask the user yet. Work through these steps in order and stop at the first hit:
 
@@ -131,7 +131,7 @@ Wait for the user's response. Set MODE and TARGET based on what they provide:
 - URL → `browser`
 - File name, path, description of scripts/code, or `--code` → `general`
 
-**0a-ii — Ticket tracing (ask if not provided).**
+**0a-iii — Ticket tracing (ask if not provided).**
 
 If the user is working from a ticket (e.g., `ASC-1175`, `FEAT-42`), ask:
 ```
@@ -167,7 +167,7 @@ pwd
 
 **Step 1 — Ticket workspace check (runs first if TICKET_ID is set):**
 
-If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
+If `TICKET_ID` was captured in Phase 0a-iii (not 'none'):
 
 First check the registry for a project-scoped workspace:
 ```bash
@@ -292,6 +292,16 @@ fi
 Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_description="QA session for $TARGET_URL scope=$SCOPE — app inventory, browser testing, coverage gap analysis", max_tokens=5000`.
 
 This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test generation, annotation technique), playwright knowledge, and testing patterns.
+
+**0e-ii — Load cross-session memory (browser mode only).**
+
+Before any browser navigation, check for prior-session knowledge files:
+
+1. Check for `$WORKSPACE_ABS/ui-quirks.md` — if it exists, read it fully. These are known tricky elements from prior sessions: wrong-click corrections, elements that need parent-div clicks, custom components with unreliable selectors. Apply this context when deciding how to interact with any element during the session.
+2. Check for `$WORKSPACE_ABS/known-failures.md` — if it exists, read it fully. These are flows that were BLOCKED in prior sessions with the exact step that blocked them. Do not re-attempt a known-blocked step the same way — try a different approach or mark BLOCKED immediately with reference to the prior failure.
+3. If neither file exists: proceed normally. They will be created during this session if navigation corrections or blocked flows occur.
+
+**Write rule:** Append to `$WORKSPACE_ABS/ui-quirks.md` after any successful navigation correction (wrong click fixed, parent-div workaround discovered). Create the file if it doesn't exist. Never delete existing entries. Append to `$WORKSPACE_ABS/known-failures.md` when any flow is marked BLOCKED, with the exact blocking step.
 
 **0f — Index project codebase.**
 
@@ -1601,9 +1611,12 @@ Phase 5 has two jobs:
 Before calling `/audit`, inventory what proof exists:
 
 **Code proof (always required when `DEBUG_ENABLED = true`):**
-Count files in `$DEBUG_PROOF_DIR/`. For each TC in plan.md marked `[x] PASS`:
+
+**If MODE = browser:** Count files in `$DEBUG_PROOF_DIR/`. For each TC in plan.md marked `[x] PASS`:
 - Does a `TC-NNN-debug.json` exist in `$DEBUG_PROOF_DIR/`? If no → flag as "PASS without code proof"
 - A "not hit" json counts as attempted — it is NOT a gap. A missing json IS a gap.
+
+**If MODE = general:** Read `$DEBUG_PROOF_DIR/session-summary.json` (written by G4d). Check `paths_debugged` — if the file does not exist or `paths_debugged = 0`, flag as "no code proof collected." Do NOT check for `TC-NNN-debug.json` files — general mode writes `path-NNN-[function-name].json` artifacts, not TC-named files.
 
 **Screenshot proof (required for browser mode, not required for general mode):**
 Only check this if `MODE = browser`. For each TC in plan.md marked `[x] PASS`:
@@ -1613,10 +1626,10 @@ Only check this if `MODE = browser`. For each TC in plan.md marked `[x] PASS`:
 Print the proof inventory:
 ```
 Proof inventory:
-  TCs with PASS                     : [N]
-  TCs with debug json (code proof)  : [N]  ← gaps: [list TC-IDs missing debug json]
-  TCs with screenshot (UI proof)    : [N]  ← N/A for general mode
-  TCs flagged as PASS without proof : [list]
+  TCs/paths with PASS                : [N]
+  Code proof collected               : [N]  ← gaps: [list TC-IDs or "paths_debugged=0"]  (browser: TC-NNN-debug.json / general: session-summary.json)
+  Screenshots (UI proof)             : [N]  ← N/A for general mode
+  Items flagged as PASS without proof: [list]
 ```
 
 ---
@@ -1799,6 +1812,22 @@ POST http://127.0.0.1:8613/search {"query":"<target description>","sources":["pr
 ```
 Use results to find: callers, tests that already exist, related modules the change might affect.
 
+**G2b-ii — Caller-graph regression surface.**
+
+For each changed function or entry point found in G2b, enumerate its callers via graph search:
+```
+POST http://127.0.0.1:8613/search {"query":"<changed function name>","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":10}
+```
+
+Add a `## Caller Regression Surface` section to `session-inventory.md` (written in G2c):
+```markdown
+## Caller Regression Surface
+| Changed Symbol | Callers Found | Risk |
+|---------------|---------------|------|
+| [function] | [callers from graph result] | [high if many/external callers, low if private/internal] |
+```
+These callers define the regression surface. Include at least one TC in G4b that exercises each distinct caller path — a passing test suite that never exercises the changed function through its real callers proves nothing about backward compatibility.
+
 **G2c — Write inventory to `$WORKSPACE_ABS/session-inventory.md`:**
 ```markdown
 # Session Inventory
@@ -1812,6 +1841,11 @@ Use results to find: callers, tests that already exist, related modules the chan
 | File | Relationship |
 |------|-------------|
 | ... | calls this, imports from this, tested alongside |
+
+## Caller Regression Surface
+| Changed Symbol | Callers Found | Risk |
+|---------------|---------------|------|
+| [from G2b-ii] | | |
 
 ## Risk Areas
 - [things that could break, edge cases, surprising inputs]
@@ -1862,9 +1896,11 @@ Build a coverage table in `$WORKSPACE_ABS/coverage-map.md`:
 | OnPostCreateTableauDashboard | ReportsSettings.cshtml.cs:396 | UNCOVERED | none |
 ```
 
-**G3.5b — Write tests for every UNCOVERED symbol.**
+**G3.5b — Write tests for every UNCOVERED symbol in changed or newly-added code.**
 
-For every UNCOVERED symbol: write at least one test using the project's established pattern (extract logic into a local helper, test in isolation — no live DI or DB needed). Each auth/validation branch is a separate test case — one test covering the happy path is insufficient.
+Scope: only symbols that appear in the git diff (changed or new). Pre-existing uncovered symbols are noted in `coverage-map.md` as `pre-existing gap — out of session scope` and left for a dedicated coverage pass.
+
+For every in-scope UNCOVERED symbol: write at least one test using the project's established pattern (extract logic into a local helper, test in isolation — no live DI or DB needed). Each auth/validation branch is a separate test case — one test covering the happy path is insufficient.
 
 If a symbol genuinely cannot be unit tested in isolation (requires live DB, live session, etc.): document it as INTEGRATION_REQUIRED, explain why, and describe what would be needed to test it with a running server.
 
@@ -1940,6 +1976,21 @@ Write targeted tests for things the existing suite does not cover.
 - Boundary conditions (empty input, null, max length, negative numbers)
 - False positive / false negative risks (for checks and validators)
 - Interaction effects (does this change break something it calls or that calls it?)
+- Caller paths from the Caller Regression Surface in `session-inventory.md` that have no covering test
+
+**G4a-ii — Derive correctness invariants (runs before G4b).**
+
+Before writing edge case tests, derive the invariants the changed logic must hold. For each function or handler in scope, complete:
+- "For any input X, this function must [return/produce/not produce] Y"
+- "This function must NEVER [raise uncaught / return null when non-null expected / corrupt state / produce a value outside bounds]"
+
+Write these as comments at the top of the edge case test file. Use them to drive G4b: a good edge case test disproves an invariant on wrong inputs, not just confirms a known-good path.
+
+Common invariants to check against wrong implementations:
+- Off-by-one: does the boundary value (0, 1, N, N+1) trigger the correct branch?
+- Null/empty: does None, "", or [] reach the correct guard without raising?
+- Idempotency: does calling the function twice with the same input produce the same result?
+- Contract: does the function uphold its documented preconditions on invalid input?
 
 **G4b — Write edge case tests.** For each gap, write a minimal test. Place it alongside the existing test file if one exists, or create `$WORKSPACE_ABS/edge-case-tests.py` (or `.ts`, `.js`).
 
@@ -1951,6 +2002,21 @@ Each test must be:
 **G4c — Run edge case tests.** Record results. A test that was expected to fail and does pass is a regression catch — flag it.
 
 Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
+
+**G4c-ii — Mutation check (runs after edge case tests pass).**
+
+Passing tests are necessary, not proof the tests catch bugs. Run the mutation check on changed files only:
+```
+POST http://127.0.0.1:8613/mutation-test {"project_path":"<WORKSPACE_ROOT>","changed_files":["<files from GENERAL_TARGET>"]}
+```
+This runs the language's real mutation tool (`mutmut` for Python, `StrykerJS` for JS/TS, `cargo-mutants` for Rust) and returns a kill score. A surviving mutant is a test that would pass on broken code — tighten the test to kill it.
+
+Record the kill score in `$WORKSPACE_ABS/static-results.md` under "Mutation Check":
+```
+Mutation kill score: [N]% ([K] killed / [T] total mutants)
+Surviving mutants: [list or "none"]
+```
+A kill score below 80% on a non-trivial change is a gap worth addressing before shipping. If the mutation server is unavailable, note it and skip.
 
 ---
 

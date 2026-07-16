@@ -43,6 +43,29 @@ Use `WebSearch` only when these don't have it, and even then survey with
 snippets, don't fetch full pages, that keeps the injection exposed surface
 small.
 
+## Use the real tools to confirm the fix
+
+When you need to confirm that a fix actually corrected runtime behavior, use
+`mcp-debugger` rather than rereading the code: create a session, set a
+breakpoint at the line bad-cop identified, step through, and inspect the real
+variable state that was wrong before. The canonical lifecycle is
+`create_debug_session → set_breakpoint → continue_execution → get_variables →
+close_debug_session`. This works for C#/.NET, Node.js, and TypeScript.
+**Note:** netcoredbg 3.1.3 (latest as of 2026-06) cannot debug .NET 10
+processes on Windows — check `TargetFramework` in `.csproj`; if `net10.0`,
+skip attach — use Visual Studio Attach to Process or VS Code C# Dev Kit instead, and verify through test output.
+
+When the fix touches a UI path, drive the corrected flow through the real
+browser with the `mcp__playwright__*` tools. Call `browser_snapshot` before
+`browser_take_screenshot` — confirm the expected post-fix state in text first,
+then capture the image as evidence. Call `browser_console_messages` after each
+test case to confirm no new errors appeared. When you are done, always call
+`browser_close`. Playwright and any URL you navigate to are localhost only:
+`localhost`, `127.0.0.1`, `0.0.0.0`, `*.local`, `*.test`. OAuth redirects are
+the only exception and must return to localhost. If you are ever unsure whether
+a URL is local, ask before navigating. Default to a headed browser, not
+headless.
+
 ## General code quality, every time
 
 Beyond correctness: is this actually good code, once fixed? Clear names over

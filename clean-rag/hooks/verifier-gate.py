@@ -75,7 +75,7 @@ import high_stakes  # noqa: E402
 from manifest_files import is_gated_file  # noqa: E402
 from research_state import is_quick_turn  # noqa: E402
 from turn_edits import edited_code_files, git_root as _git_root_of  # noqa: E402
-from verifier_state import check_file_verified  # noqa: E402
+from verifier_state import _record_path, check_file_verified  # noqa: E402
 
 CLEAN_RAG_HOME = Path(os.environ.get("CLEAN_RAG_HOME") or Path(__file__).resolve().parent.parent)
 STATE_DIR = CLEAN_RAG_HOME / "state"
@@ -180,6 +180,31 @@ def _reset_block_count(session_id: str) -> None:
         pass
 
 
+def _bad_cop_ran_with_bugs(session_id: str) -> bool:
+    """True when bad-cop ran this session and found real bugs.
+
+    bad-cop's stamp has covers=[] when its report contains no VERIFIED: line,
+    which is exactly what it produces when it found failures. An empty-covers
+    stamp is invisible to check_file_verified(), so the gate keeps blocking,
+    but without this check the block message says 'spawn bad-cop' when bad-cop
+    already ran and what's actually needed is good-cop.
+    """
+    path = _record_path(session_id)
+    if not path.exists():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    stamps = record.get("stamps", [])
+    if not isinstance(stamps, list):
+        return False
+    return any(
+        s.get("agent") == "bad-cop" and not s.get("covers")
+        for s in stamps
+    )
+
+
 def _tests_failing(root: str) -> bool:
     """True only when the server ran real tests and they failed. Errs toward False."""
     try:
@@ -279,35 +304,54 @@ def main() -> int:
         return 0
 
     _bump_block_count(session_id)
-    print(
-        "[verifier-gate] BLOCKED: these changed files have no valid verifier "
-        f"stamp: {files}\n\n"
-        f"This touches {surface}.\n"
-        f"{evidence}\n\n"
-        "Spawn bad-cop first (a fresh context, NOT the research agent) on "
-        "those files, right now, in the foreground: run_in_background: "
-        "false, never true. A backgrounded completion arrives later as a "
-        "TaskNotificationMessage, not a tool result, so the verifier record "
-        "hook never fires for it and the stamp never lands.\n\n"
-        "Give bad-cop three things and only three: (1) the "
-        "requirements/ticket context if any, (2) the correctness properties "
-        "this change must satisfy, (3) the actual diff. Do NOT give it your "
-        "reasoning for the change, that is what biases a reviewer into "
-        "agreeing with it. bad-cop writes adversarial tests, runs the code, "
-        "adds logging, and reports the real failures it finds.\n\n"
-        "If bad-cop finds nothing real, it stamps VERIFIED itself, no "
-        "separate good-cop run needed to re-confirm a clean pass. Only if it "
-        "finds something: spawn good-cop next, same rules (fresh context, "
-        "foreground, the three things only, plus bad-cop's findings), and it "
-        "fixes what was found and gets every test green.\n\n"
-        "Whichever of the two closes it out, that report MUST end with a "
-        "VERIFIED: line naming every file it covered, the same way swiper's "
-        "COVERS: line works, or this gate has nothing to check and stays "
-        "blocked. Fix any Critical or High bad-cop returns, then finish.\n\n"
-        "If this really was trivial and needed no reviewer, that was a /ps "
-        "turn's call to make up front, not this one's.",
-        file=sys.stderr,
-    )
+
+    if _bad_cop_ran_with_bugs(session_id):
+        print(
+            "[verifier-gate] BLOCKED: bad-cop already ran and found real bugs — "
+            f"these files still have no valid verifier stamp: {files}\n\n"
+            "bad-cop is DONE. Do NOT spawn bad-cop again.\n\n"
+            "Spawn good-cop NOW (Opus model, fresh context, foreground, "
+            "run_in_background: false — never backgrounded). "
+            "Give good-cop three things only: (1) the requirements/ticket "
+            "context, (2) bad-cop's actual findings, (3) the diff. Not your "
+            "reasoning for the change. good-cop researches the correct fix, "
+            "applies it, reruns bad-cop's new tests plus the existing suite "
+            "until everything is green, then stamps VERIFIED: naming every "
+            "file it covered.\n\n"
+            "That VERIFIED: line is what clears this gate. Without it, this "
+            "gate stays blocked.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "[verifier-gate] BLOCKED: these changed files have no valid verifier "
+            f"stamp: {files}\n\n"
+            f"This touches {surface}.\n"
+            f"{evidence}\n\n"
+            "Spawn bad-cop first (a fresh context, NOT the research agent) on "
+            "those files, right now, in the foreground: run_in_background: "
+            "false, never true. A backgrounded completion arrives later as a "
+            "TaskNotificationMessage, not a tool result, so the verifier record "
+            "hook never fires for it and the stamp never lands.\n\n"
+            "Give bad-cop three things and only three: (1) the "
+            "requirements/ticket context if any, (2) the correctness properties "
+            "this change must satisfy, (3) the actual diff. Do NOT give it your "
+            "reasoning for the change, that is what biases a reviewer into "
+            "agreeing with it. bad-cop writes adversarial tests, runs the code, "
+            "adds logging, and reports the real failures it finds.\n\n"
+            "If bad-cop finds nothing real, it stamps VERIFIED itself, no "
+            "separate good-cop run needed to re-confirm a clean pass. Only if it "
+            "finds something: spawn good-cop next, same rules (fresh context, "
+            "foreground, the three things only, plus bad-cop's findings), and it "
+            "fixes what was found and gets every test green.\n\n"
+            "Whichever of the two closes it out, that report MUST end with a "
+            "VERIFIED: line naming every file it covered, the same way swiper's "
+            "COVERS: line works, or this gate has nothing to check and stays "
+            "blocked. Fix any Critical or High bad-cop returns, then finish.\n\n"
+            "If this really was trivial and needed no reviewer, that was a /ps "
+            "turn's call to make up front, not this one's.",
+            file=sys.stderr,
+        )
     return 2
 
 
