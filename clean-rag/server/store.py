@@ -104,10 +104,16 @@ class ChromaStore:
         )
 
     def collection_exists(self, collection: str) -> bool:
+        import chromadb.errors
         try:
             self._client.get_collection(collection)
             return True
-        except Exception:
+        except chromadb.errors.NotFoundError:
+            return False
+        except Exception as e:
+            logger.warning(
+                "collection_exists(%r): %s: %s", collection, type(e).__name__, e
+            )
             return False
 
     def delete_collection(self, collection: str) -> None:

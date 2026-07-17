@@ -277,8 +277,7 @@ if FAILURES:
 
 print()
 print(f"Result: {len(PASSES)} passed, {len(FAILURES)} failed")
-if FAILURES:
-    sys.exit(1)
-else:
+if not FAILURES:
     print("ALL CHECKS PASSED")
-    sys.exit(0)
+if __name__ == "__main__":
+    sys.exit(1 if FAILURES else 0)

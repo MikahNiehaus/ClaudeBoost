@@ -124,12 +124,27 @@ STACKOVERFLOW_ANSWER_READ: stackoverflow.com/a/12345678
 with exact path or URL, one per source actually fetched. Then quote it:
 
 *GitHub*: `curl` the local clean-rag server's `github-file` endpoint (already
-allowed on your capped Bash) to get the real file content.
+allowed on your capped Bash) to get the real file content:
 
-*StackOverflow*: use your `WebFetch` tool directly on the answer's URL. This
-is a separate, already allowed tool, not a shell command, so it isn't subject
-to the Bash cage, same as your `WebSearch` access. Fetch the actual accepted
-or highest voted answer's code block, not a summary of the thread.
+```
+curl -s -X POST http://127.0.0.1:8613/github-file -H "Content-Type: application/json" \
+  -d '{"owner": "OWNER", "repo": "REPO", "path": "path/to/file.py"}'
+```
+
+Add `"ref": "BRANCH"` to pin to a branch or tag. `owner`, `repo`, and `path`
+are all required; a wrong or missing field returns a silent 400.
+
+*StackOverflow*: reach for `stackoverflow-search` first — it returns cleaned,
+structured code blocks from accepted answers, smaller injection surface:
+
+```
+curl -s -X POST http://127.0.0.1:8613/stackoverflow-search \
+  -H "Content-Type: application/json" -d '{"query": "...", "max_results": 3}'
+```
+
+If you already have a specific answer URL and need the full page, use your
+`WebFetch` tool directly on it (a first-class tool, not subject to the Bash
+cage). Fetch the accepted or highest voted answer's code block, not a summary.
 
 Then, for either source, quote what you fetched directly in your report so
 the builder can take it without fetching it again:
@@ -142,6 +157,10 @@ or
 # From stackoverflow.com/a/12345678
 <exact code, as fetched>
 ```
+
+For large files: quote the nearest complete function, method, or class
+containing the relevant logic. A block that ends at a structural boundary is
+more useful to the builder than a shorter window that cuts a function in half.
 
 **When a whole repo or module is worth taking, recommend a `git clone`
 command instead of quoting file by file:**
@@ -165,6 +184,26 @@ If you cannot produce the exact quoted code or clone command because the
 fetched file was not actually a close match after all, say that plainly
 instead of declaring `GITHUB_FILE_READ` for it. No prose summaries as
 substitutes for actual code.
+
+## Proof-of-fetch requirement (not negotiable)
+
+`MATCH_STRATEGY` and `COVERS:` are execution claims, not awareness claims.
+Before either appears in your response, your response body MUST show actual
+fetched content — the code block you pulled, the curl output you got, the
+StackOverflow code block you read. Not a description. The content itself.
+
+These are fabricated stamps:
+
+| What you wrote | Why it does not qualify |
+|---|---|
+| "kdalanon/LLM-AutoHotkey-Assistant does this" | You named it. You did not fetch it. |
+| "There is a good example at github.com/..." | A link is not a fetch. Run the curl, quote the code. |
+| "The pattern from X applies here" | Prove it: show the actual code you read from X. |
+
+`MATCH_STRATEGY: clone-and-patch` with no code block in the response is a
+contradiction — clone-and-patch means "use this exact code", which requires
+the code to be present. If no block is quoted, the strategy must be
+`pattern-only` until the code is actually fetched and shown.
 
 Then declare what the match implies for how the builder should act:
 
@@ -190,7 +229,23 @@ what let the rewrite happen, so it's gone, not softened.
   changes. No restyling, no renaming, no switching libraries or approaches, no
   added overlays or options the reference did not already have. This is a hard
   ceiling on the diff, not a suggestion, even when the fetched reference came
-  from a different framework or scale than this project's.
+  from a different framework or scale than this project's. Language mismatch
+  (a reference in a different programming language) forces `pattern-only`
+  instead — there is no verbatim starting point when the syntax itself must
+  change. Still cite and quote it; the correctness properties come from it
+  even when the code cannot be directly transplanted.
+
+  When you declare `clone-and-patch`, immediately after the quoted block, add:
+
+  ```
+  REQUIRED_ADAPTATIONS:
+  - <specific line or section>: <what to change and why>
+  ```
+
+  Name only the changes actually required to fit this project. If nothing
+  needs changing (rare), write `none`. This is what stops the builder from
+  rewriting the reference instead of patching it.
+
 - **`pattern-only`**: nothing was worth swiping. Build from the correctness
   properties below. This is the outcome you reach reluctantly, not by default.
 

@@ -299,7 +299,11 @@ def _search_project_graph(
         # Get chunks for this file from ChromaDB
         try:
             file_chunks = store.get_by_source("codebase", nfile)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "graph search: failed to fetch chunks for %s: %s: %s",
+                nfile, type(e).__name__, e,
+            )
             continue
 
         if not file_chunks:

@@ -36,13 +36,13 @@ import sys
 import time
 from pathlib import Path
 
-# Agents whose completion counts as research having happened. One grounded agent,
-# not a cheap classifier tier: triage-agent was removed because it judged trivial
-# vs not without reading the file, a routing call made blind. swiper always
-# runs the full pass, depth and breadth, every time; it never decides a change is
-# trivial on its own. That call belongs to the human, via /ps, which skips this
-# turn's research and verification entirely.
-RESEARCH_AGENTS = {"swiper"}
+# Agents whose completion counts as research having happened. Both run the full
+# pass every time: researcher maps the codebase and grounds the change in real
+# engineering standards; swiper checks existence and finds what to clone. Either
+# stamps the file scope it covered. The gate checks per-file membership in any
+# stamp's scope, not whether a specific agent ran. /ps is the human's exit for
+# a turn they already know is trivial — skips both research and the verifier gate.
+RESEARCH_AGENTS = {"swiper", "researcher"}
 
 # A record older than this is treated as gone, covering an abandoned turn whose
 # edits arrive much later without a fresh prompt.
@@ -177,24 +177,34 @@ def extract_covered_files(text: str, prefix: str = "COVERS:") -> list[str]:
 
 
 def open_turn(session_id: str, prompt: str, quick: bool = False) -> None:
-    """Called on UserPromptSubmit. Starts a fresh turn with no research in it.
+    """Called on UserPromptSubmit. Updates turn metadata; preserves existing stamps.
 
-    `quick` marks a /ps turn: the human's explicit "skip the ceremony" for this
-    turn. It is set deterministically from the raw prompt text by the caller, never
-    by the model, so it can't be forged the way a model written marker could. It
-    rides the same per-turn record as `stamps`, so it can't leak into the next turn:
-    the next prompt overwrites this whole record.
+    Research coverage earned this session persists across messages until it expires
+    (TURN_MAX_AGE_S) or new research lands. This is the prerequisite for the research
+    gate being a hard block: under the old reset-on-every-message design, coverage
+    from swiper was wiped by the next follow-up message before anything was edited,
+    causing constant false blocks. Preserving stamps fixes that. Coverage now expires
+    only via the TTL or when new research runs (which adds its own stamps on top).
+
+    `quick` marks a /ps turn: the human's explicit "skip the ceremony". Set
+    deterministically from the raw prompt text, never by the model.
     """
     path = _record_path(session_id)
-    record = {
-        "session_id": session_id,
-        "started_at": time.time(),
-        "prompt_preview": (prompt or "")[:200],
-        "quick": bool(quick),
-        "stamps": [],
-    }
     try:
         with _write_lock(path):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                record = {"session_id": session_id, "started_at": time.time(), "stamps": []}
+
+            # Update metadata but preserve existing stamps. Coverage persists across
+            # follow-up messages; it expires only via TTL or when new research runs.
+            record["session_id"] = session_id
+            record["started_at"] = time.time()
+            record["prompt_preview"] = (prompt or "")[:200]
+            record["quick"] = bool(quick)
+            record.setdefault("stamps", [])
+
             path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     except OSError:
         # A gate that can't write its record blocks every edit. Staying quiet is
@@ -224,7 +234,7 @@ def is_quick_turn(session_id: str) -> bool:
 
 
 def record_agent(session_id: str, agent_type: str, report: str = "") -> None:
-    """Called on PostToolUse after swiper finishes."""
+    """Called on PostToolUse after researcher or swiper finishes."""
     if agent_type not in RESEARCH_AGENTS:
         return
 

@@ -97,6 +97,20 @@ done. If fixing one property genuinely trades off against another (a
 performance cost for a security fix, for instance), say so explicitly rather
 than silently picking one.
 
+**Verify bad-cop's tests assert behavior, not implementation.** Before
+accepting bad-cop's new tests as part of the suite, check that they assert
+observable output or state, not internal call sequences, framework behavior,
+exact mock counts, or magic constants. A structural test breaks on every
+refactor without catching a bug. If bad-cop's test is structural, rewrite it
+to assert the real contract before running the suite.
+
+**Mutation-check your own fix.** After the suite is green and bad-cop's
+tests are confirmed behavioral, if the project has a test runner the
+mutation endpoint supports, run `POST http://127.0.0.1:8613/mutation-test`
+with `{"project_path": "<abs>", "changed_files": [...]}` on just the files
+you changed. A surviving mutant means bad-cop's test (or yours) would pass
+on broken code — tighten it before stamping VERIFIED.
+
 **Logging quality**, on your own fix as much as on what you inherited:
 
 - A `catch`/`except` block that swallows an error without a `logger.error`
@@ -147,6 +161,31 @@ For each finding you addressed:
 Fix: <the specific change you made>
 Proof: <bad-cop's test, rerun, actually passing now>
 ```
+
+## Proof-of-execution requirement (not negotiable)
+
+`VERIFIED:` is an execution claim, not a review claim. Before that line
+appears in your response, your response body MUST contain actual test runner
+output — stdout and/or stderr from a real command you ran after applying the
+fix. Not a statement that it should work. The actual output.
+
+These are fabricated stamps:
+
+| What you typed | Why it is not execution |
+|---|---|
+| "I applied the fix and it looks correct" | You read it. You did not run it. |
+| "The tests should now pass" | A prediction, not evidence. |
+| "Fixed and verified" with no output shown | Show the command and the actual output. |
+| "All tests passing" without the run shown | Same failure. Paste the real output. |
+
+The minimum evidence required before emitting `VERIFIED:`:
+
+1. The command you ran after the fix, shown verbatim
+2. The actual output — pass/fail lines, or a clean run confirming green
+3. bad-cop's specific failing test, rerun, shown passing now
+
+If you cannot show this, the fix is not confirmed. Run the tests. Paste the
+output. Only then emit the stamp.
 
 Then one verdict line, last:
 

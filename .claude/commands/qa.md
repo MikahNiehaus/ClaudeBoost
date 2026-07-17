@@ -656,7 +656,18 @@ Routes from app-inventory.md that have no covering journey — must list a reaso
 
 **2b — Generate test cases from flow-map.md journeys + intelligent rules.**
 
-TCs come from journeys, not from components. For each journey in flow-map.md:
+TCs come from journeys, not from components.
+
+**Derive journey invariants first.** Before generating TCs, state what each
+journey must hold regardless of input:
+- "After completing J1, the user MUST see [expected state] on [page]"
+- "J1 MUST NOT leave orphaned records if the user abandons mid-flow"
+- "J1 MUST reject [invalid input class] at step N before reaching step N+1"
+
+Use these invariants to drive TC generation: a good TC disproves an
+invariant on a wrong implementation, not just confirms a known-good path.
+
+For each journey in flow-map.md:
 - Generate TCs that walk the journey end-to-end: entry → actions → final observable state
 - Take the **most direct path to the feature** — no roundabout navigation through unrelated pages
 - Each TC must reference its parent journey: `[Journey: J1 — User Registration, Step 3]`
@@ -1971,12 +1982,25 @@ Do not move to Phase 5 (audit) until all discovered bugs are fixed and verified.
 
 Write targeted tests for things the existing suite does not cover.
 
-**G4a — Identify gaps.** From the inventory risk areas and static pass results, list what is not tested:
+**G4a — Identify gaps.** Three passes, each surfacing different gaps:
+
+**Pass 1 — Equivalence partitioning.** For each public entry point in the
+changed code, name five input classes: valid-typical, valid-boundary,
+invalid-format, null/empty, and type-wrong. Any class with no covering test
+is a gap.
+
+**Pass 2 — Caller regression.** From the Caller Regression Surface in
+`session-inventory.md`, check which callers have a test that exercises the
+changed path. A caller with no test is a gap.
+
+**Pass 3 — Behavioral gaps.** From the inventory risk areas and static pass
+results, list what is not tested:
 - Error paths (what happens when X fails?)
-- Boundary conditions (empty input, null, max length, negative numbers)
 - False positive / false negative risks (for checks and validators)
 - Interaction effects (does this change break something it calls or that calls it?)
-- Caller paths from the Caller Regression Surface in `session-inventory.md` that have no covering test
+- Prior-behavior differential: does the change alter return value, type, or
+  side effect for any existing caller? If so, a test that asserts the old
+  behavior is a gap.
 
 **G4a-ii — Derive correctness invariants (runs before G4b).**
 
@@ -1991,6 +2015,11 @@ Common invariants to check against wrong implementations:
 - Null/empty: does None, "", or [] reach the correct guard without raising?
 - Idempotency: does calling the function twice with the same input produce the same result?
 - Contract: does the function uphold its documented preconditions on invalid input?
+
+When the edge cases are combinatorial (multiple parameters, each with
+boundary values), prefer the language's property-based testing library
+(`Hypothesis` for Python, `fast-check` for JS/TS, `jqwik` for Java) over
+hand-listing a few examples. It generates the inputs you wouldn't think of.
 
 **G4b — Write edge case tests.** For each gap, write a minimal test. Place it alongside the existing test file if one exists, or create `$WORKSPACE_ABS/edge-case-tests.py` (or `.ts`, `.js`).
 

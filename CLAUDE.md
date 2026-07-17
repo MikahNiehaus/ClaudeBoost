@@ -32,8 +32,8 @@ When the gate nudges toward research:
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,
    no swapped libraries or approaches, no added structure the reference didn't
-   have. That's a hard ceiling on the diff, not a suggestion. `adapt` and
-   `pattern-only` allow a real diff; `clone-and-patch` does not.
+   have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
+   allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
 2. There is no cheap triage tier anymore. The old one decided whether a change
    needed research WITHOUT reading the code, and that blind guess was wrong often
    enough to remove. research-agent looks first, so its judgment is grounded. It

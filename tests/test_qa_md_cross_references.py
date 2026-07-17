@@ -55,7 +55,7 @@ def test_ticket_id_captured_in_correct_step():
 
     bad_lines = []
     for i, line in enumerate(lines, 1):
-        if "TICKET_ID" in line and "0a-ii" in line:
+        if "TICKET_ID" in line and re.search(r'0a-ii(?!i)', line):
             bad_lines.append((i, line.strip()))
 
     assert bad_lines == [], (

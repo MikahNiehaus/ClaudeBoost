@@ -547,10 +547,11 @@ async def handle_github_search(request: web.Request) -> web.Response:
 
     max_results = min(int(body.get("max_results", 5)), 50)
     sort = body.get("sort", "stars")
+    timeout = min(float(body.get("timeout", 6.0)), 20.0)
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        None, lambda: github_search(query, max_results=max_results, sort=sort)
+        None, lambda: github_search(query, max_results=max_results, sort=sort, timeout=timeout)
     )
 
     if result.get("error"):
@@ -603,10 +604,11 @@ async def handle_stackoverflow_search(request: web.Request) -> web.Response:
     if not query:
         return _json_response({"error": "query is required"}, 400)
     max_results = min(int(body.get("max_results", 3)), 10)
+    timeout = min(float(body.get("timeout", 8.0)), 20.0)
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        None, lambda: stackoverflow_search(query, max_results=max_results)
+        None, lambda: stackoverflow_search(query, max_results=max_results, timeout=timeout)
     )
     if result.get("error"):
         logger.error("StackOverflow search failed for %r: %s", query, result["error"])
@@ -796,6 +798,20 @@ async def _on_shutdown(app: web.Application) -> None:
         pass
 
 
+@web.middleware
+async def error_middleware(request: web.Request, handler) -> web.Response:
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise  # preserve 4xx/5xx raised intentionally by handlers
+    except Exception as exc:
+        logger.exception(
+            "Unhandled error in %s %s: %s: %s",
+            request.method, request.path, type(exc).__name__, exc,
+        )
+        return _json_response({"error": "Internal server error"}, 500)
+
+
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
     global _code_embedder, _start_time
@@ -826,7 +842,7 @@ def create_app() -> web.Application:
         except Exception:
             logger.exception("Embedder warmup failed at startup")
 
-        _write_heartbeat(model_loaded=True, index_ok=True)
+        _write_heartbeat(model_loaded=_code_embedder.is_loaded, index_ok=True)
         _start_heartbeat_thread()
         logger.info("Heartbeat thread started (interval=%ds)", _HEARTBEAT_INTERVAL_S)
 
@@ -839,7 +855,7 @@ def create_app() -> web.Application:
         )
         logger.info("Auto reindex loop started")
 
-    app = web.Application()
+    app = web.Application(middlewares=[error_middleware])
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
     app.router.add_post("/web-search", handle_web_search)

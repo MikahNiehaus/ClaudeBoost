@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """PreToolUse gate on Edit, Write, and MultiEdit.
 
-Nudges toward research before a code edit; does not block one.
+Blocks a code edit when the file hasn't been covered by research this session.
 
 This replaces the old proof gate idea outright. That one asked the model to
 write a proof file attesting it had researched, which proves nothing: the model
@@ -14,18 +14,13 @@ Markdown and other non code files pass through untouched. So do the usual
 scratch directories. Research is for code, and gating a doc tweak on a subagent
 spawn would just teach you to hate the gate.
 
-Non blocking: this hook never refuses an edit. It used to (exit 2, PreToolUse
-block) until the per turn scoping (research coverage reset on every single
-user message, not just on a real new task) turned out to be too disruptive in
-practice: a file swiper covered a moment ago needed covering again the instant
-another message came in, before anything had even been edited. Rather than
-fix the scoping and keep a hard block, the block itself is gone. This hook now
-always allows the edit and, when the file wasn't covered by research this
-turn, prints a nudge to stderr and logs the real coverage status to the audit
-trail. The audit trail and the nudge are the enforcement now: visible, not
-blocking.
+Previously this hook was softened to a nudge (exit 0) because per-turn scoping
+wiped coverage on every follow-up message, causing constant false blocks.
+That scoping bug is now fixed: open_turn() preserves existing stamps across
+messages instead of resetting them. Coverage persists until the TTL expires or
+new research runs. With persistent stamps the gate can be a real block again.
 
-Exit codes: always 0.
+Exit codes: 0 = allowed, 2 = blocked (PreToolUse hard refuse).
 """
 
 import json
@@ -80,28 +75,25 @@ def _is_exempt(file_path: str) -> tuple[bool, str]:
     return False, ""
 
 
-def _nudge(file_path: str, reason: str) -> int:
+def _block(file_path: str, reason: str) -> int:
     print(
-        f"[research-gate] NOTE: {reason}.\n\n"
-        f"About to edit: {file_path}\n\n"
-        "This edit is allowed either way, but it hasn't been covered by swiper\n"
-        "this turn. Consider spawning swiper if this is a real change: tell it\n"
-        "what you are changing, why, and the code you intend to write. It reads\n"
-        "the real file and covers depth and breadth every time; it does not\n"
-        "shortcut a change it judges trivial.\n\n"
-        "Spawn it in the foreground: run_in_background: false, never true. A\n"
-        "backgrounded completion arrives later as a TaskNotificationMessage, not a\n"
+        f"[research-gate] BLOCKED: {reason}.\n\n"
+        f"Cannot edit: {file_path}\n\n"
+        "Spawn researcher and/or swiper before editing this file. Tell them what\n"
+        "you are changing, why, and the code you intend to write. Both read the\n"
+        "real files and cover depth and breadth every time; neither shortcuts a\n"
+        "change it judges trivial. Use /ps to skip this gate for a turn you\n"
+        "already know is trivial.\n\n"
+        "Spawn in the foreground: run_in_background: false, never true. A\n"
+        "backgrounded completion arrives as a TaskNotificationMessage, not a\n"
         "tool result, so the hook that stamps this record never fires for it.\n\n"
-        "Its report ends with a line naming every file the research covers:\n\n"
+        "Their reports end with a line naming every file the research covers:\n\n"
         "    COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py\n\n"
-        "One research run can cover a whole coherent change across many files, so\n"
-        "you do not need one agent per file. This is a reminder, not a block: the\n"
-        "audit trail records whether this file was actually covered, so an\n"
-        "unresearched edit is visible after the fact even though it isn't refused\n"
-        "up front.",
+        "One research run can cover a whole coherent change across many files,\n"
+        "so you do not need one agent per file.",
         file=sys.stderr,
     )
-    return 0
+    return 2
 
 
 def main() -> int:
@@ -156,7 +148,7 @@ def main() -> int:
     if ok:
         return 0
 
-    return _nudge(file_path, reason)
+    return _block(file_path, reason)
 
 
 if __name__ == "__main__":

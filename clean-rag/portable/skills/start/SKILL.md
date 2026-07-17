@@ -49,9 +49,43 @@ reports the exact code, the exact repo and file, or the exact StackOverflow
 answer to use. It never writes anything into the project itself, it only
 reports, with `MATCH_STRATEGY` and `COVERS:`.
 
+**2a. Read the reference block before forming options.** If swiper's report
+contains a `GITHUB_FILE_READ:` line and a quoted code block, read that block
+before constructing the CONSULT options. Not the repo name alone — the actual
+quoted code. The block is there so you do not consult from memory of what the
+reference "probably does"; consulting from a description of it is the same
+failure mode the snippet-forwarding rule in CLAUDE.md was written to prevent
+at the bad-cop/good-cop handoff. If the block is absent despite a
+`MATCH_STRATEGY: clone-and-patch` declaration, treat the strategy as
+`pattern-only` until the block is produced.
+
+**2b. Write a visible summary of both reports before forming options.** After
+researcher and swiper finish, write a summary to the user in the conversation
+before the `AskUserQuestion` call. This is not internal processing — it is a
+visible report so the user can see the reasoning before they are asked to
+choose. It must include:
+
+- Researcher: key structural findings, blast radius (what breaks if this
+  changes), what the general engineering standard says about this class of
+  change, and the COVERS scope it declared
+- Swiper: what it found (or didn't), which repo/file, the MATCH_STRATEGY it
+  declared, and if `clone-and-patch`, the relevant quoted code block it
+  brought back
+- Your read of each: do the findings line up, are there tensions, what do they
+  imply for the options
+
+A consult option you cannot trace to a specific researcher or swiper finding
+is skipped reasoning, not CONSULT. The summary is how you prove you read both
+reports before forming the options. "Based on research findings" is not a
+summary — name the actual findings.
+
 **3. Consult before writing anything.** Read both reports and turn them into
 a small set of concrete options: what to swipe from where, what the
-structural risk is, what the plan costs in each direction. Use
+structural risk is, what the plan costs in each direction. When swiper
+reported a `MATCH_STRATEGY: clone-and-patch`, one option must name the
+reference explicitly as "full swap from [repo/file]" — not just "use the
+pattern from X". The user is choosing whether to commit to that starting
+point; they can only do that if the option names it. Use
 `AskUserQuestion` to put those options in front of the user before a single
 line gets written. This is the standing CONSULT mode behavior, just wired
 explicitly into this sequence so it can't get skipped by momentum.
@@ -64,10 +98,15 @@ actually required to fit, nothing more.
 
 **5. Close it out.** Spawn `bad-cop`, the same way the verifier gate would
 ask for it after any real code change: adversarial tests and logging, real
-provable findings. If it finds nothing real, it stamps `VERIFIED:` itself,
-done, no `good-cop` needed. Only if it finds something real, spawn
-`good-cop` next with its findings: researches the fix, applies it, gets
-everything green, and is the one that emits `VERIFIED:` in that case.
+provable findings. After bad-cop reports, write a visible summary to the
+user: what tests it wrote and ran, what the output was, and what (if
+anything) it found. If it finds nothing real and stamps `VERIFIED:` itself,
+relay that to the user. Only if it finds real findings, relay each one
+clearly — file, line, what the test showed — then spawn `good-cop` with
+those findings. After good-cop reports, write a visible summary of what it
+fixed and that the suite is green. The user should never have to ask what
+happened in QA; it should all be visible in the conversation before the
+turn ends.
 
 ## What this is not
 

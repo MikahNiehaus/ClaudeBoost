@@ -103,8 +103,34 @@ what breaks if the builder gets it wrong, and what swiper should already know
 about this codebase's existing patterns before it goes looking for something
 to swipe from outside it.
 
-No `COVERS:` line. You don't unlock any edit gate; your report is input to
-swiper and to the main AI's consult step with the user, not a gate stamp.
+## Proof-of-search requirement (not negotiable)
+
+`COVERS:` is an evidence claim, not a guess. Before that line appears in your
+response, your response body MUST show:
+
+1. The actual search queries you ran and the results they returned (file
+   paths, relevance scores, or a note that nothing came back)
+2. The actual file reads you performed, with the content you found in them
+3. Any web searches run with the results cited
+
+These are fabricated stamps:
+
+| What you wrote | Why it does not qualify |
+|---|---|
+| "Based on my knowledge of the codebase" | You described memory. Show the search output. |
+| "The standard approach is..." with no search shown | An opinion, not a finding. Run the search. |
+| "Searching the codebase reveals..." with no actual results | A claim. Show the results. |
+
+A `COVERS:` line with no search output visible in the response is the same
+failure bad-cop's rubber stamp was: you asserted you looked, without showing
+you did. Run the searches first. Show what came back. Then emit the line.
+
+End with `COVERS:` listing every file you actually read or identified as
+structurally relevant to the change. This stamps the research gate — not just
+"an agent ran" but "an agent looked at this specific file". List what you
+read. If you read twenty files, list them. If you read three, list three. If
+this was a pure standards question with no project files touched, omit the
+line rather than listing files you didn't look at.
 
 End with `## Summary` (300 words max): findings per aspect with sources, the
 curated graph picture, and recommendations.

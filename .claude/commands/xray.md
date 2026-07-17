@@ -149,6 +149,40 @@ No issues found.
 Verdict: PASS
 ```
 
+### PR output (`--pr`)
+
+When the scope is `--pr`, replace the standard output above with a compact
+PR-review format. **Report only, do not fix anything.** Write like a
+teammate leaving a review comment, not a linter. CRITICAL and MAJOR
+findings include the exact line of code that needs fixing. MINOR findings
+are one-liners without the code quote.
+
+Extract the PR number from the URL (e.g. `#142` from
+`https://github.com/org/repo/pull/142`) and print it in the header.
+
+```
+PR #<number> — Grade: <A|B|C|D|F>
+
+<file>:<line> [CRITICAL] `<exact code on that line>` — <concise comment in a human voice>
+<file>:<line> [MAJOR] `<exact code on that line>` — <concise comment in a human voice>
+<file>:<line> [MINOR] <concise comment in a human voice>
+
+Summary: N CRITICAL, N MAJOR, N MINOR
+Verdict: PASS | FAIL
+```
+
+Example:
+```
+PR #142 — Grade: C
+
+src/auth/login.py:42 [MAJOR] `if token == stored_token:` — timing attack waiting to happen, use hmac.compare_digest
+src/api/orders.py:118 [MAJOR] `response = retry(charge_card, amount)` — no idempotency key so a timeout double-charges
+src/api/orders.py:95 [MINOR] total_price shadows the module-level name, confusing but not broken
+
+Summary: 0 CRITICAL, 2 MAJOR, 1 MINOR
+Verdict: FAIL
+```
+
 ## Evidence Verification
 
 Spawn a single `evaluator-agent`:

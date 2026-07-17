@@ -268,7 +268,7 @@ print(f"\n{'='*50}")
 print(f"Results: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED:", FAIL)
-    sys.exit(1)
 else:
     print("All adversarial checks passed.")
-    sys.exit(0)
+if __name__ == "__main__":
+    sys.exit(1 if FAIL else 0)

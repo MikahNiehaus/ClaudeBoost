@@ -1,5 +1,7 @@
 ---
 description: Interactive Visual Board — generate a visual diagram of any concept, system, flow, or architecture and open it in the browser
+allowed-tools: Bash, Read, Write, Glob
+argument-hint: [topic | --self | --project | --excalidraw]
 ---
 
 # Interactive Visual Board
@@ -8,12 +10,7 @@ Generate a professional interactive diagram as a self-contained HTML file and op
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `POST http://127.0.0.1:8612/context` with:
-```json
-{"agent":"workflow-agent","task_description":"visual diagram: $ARGUMENTS — current project","project_path":"<cwd>"}
-```
-
-If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
@@ -35,9 +32,10 @@ Read `$ARGUMENTS` (the text the user typed after `/visualize`).
 Derive three things you'll use throughout:
 - **TOPIC** — a human-readable title for what's being visualized (e.g. "Auth Flow", "RAG Pipeline", "CI/CD Pipeline", "Architecture")
 - **SLUG** — a lowercase, hyphenated filename stem (e.g. `auth-flow`, `rag-pipeline`, `ci-cd-pipeline`, `architecture`)
-- **MODE** — one of: `concept`, `self-map`, `project-map`
+- **MODE** — one of: `concept`, `self-map`, `project-map`, `excalidraw`
 
 Rules:
+- `$ARGUMENTS` contains `--excalidraw` → **excalidraw** mode; strip `--excalidraw` to derive TOPIC/SLUG from remainder (default TOPIC = "Architecture" if blank). Skip Steps 3–3b; go to Step 3c.
 - `$ARGUMENTS` is empty or `--project` → **project-map** mode, TOPIC = "Architecture", SLUG = `architecture`
 - `$ARGUMENTS` is `--self` → **self-map** mode, TOPIC = "How ClaudeBoost Works", SLUG = `claudeboost`
 - `$ARGUMENTS` describes a concept, flow, or question (e.g. "auth flow", "how the RAG system works", "data pipeline") → **concept** mode; derive TOPIC and SLUG from the argument text
@@ -77,7 +75,7 @@ Novice-first rules (apply unless TOPIC signals technical/expert audience):
 ls agents/ knowledge/ 2>/dev/null | head -5
 ```
 
-- `MODE` is already set from Phase 0c — skip detection only if the user passed an explicit flag (`--self`, `--project`) or a concept argument.
+- `MODE` is already set from Phase 0c — skip detection only if the user passed an explicit flag (`--self`, `--project`, `--excalidraw`) or a concept argument.
 - If no argument was given, use the directory check: both `agents/` and `knowledge/` exist → set MODE to **self-map**; otherwise **project-map**.
 
 User can always override: `--self` forces self-map, `--project` forces project-map.
@@ -164,9 +162,8 @@ If no workspace ticket is found: skip this step silently and proceed to Step 3.
 
 The goal is to understand the topic well enough to explain it visually as a layered flow. Gather from whichever sources apply:
 
-1. **RAG knowledge search**: `POST http://127.0.0.1:8612/search` with `{"scope":"all","query":"<TOPIC>","limit":6}` — pull relevant knowledge files.
-2. **Codebase search (both modes)**: `POST http://127.0.0.1:8613/search` with `{"query":"<TOPIC>","sources":["project:<cwd>"],"mode":"both","limit":8}` — find the files that implement or relate to the concept.
-3. **Read key files** identified above (no more than 5) to understand the actual implementation.
+1. **Codebase search**: `POST http://127.0.0.1:8613/search` with `{"query":"<TOPIC>","sources":["project:<cwd>"],"mode":"both","limit":8}` — find files that implement or relate to the concept. Use `mode:"both"` — vector and graph surface different files.
+2. **Read key files** identified above (no more than 5) to understand the actual implementation.
 
 From those sources, identify:
 - **4–8 key concepts, steps, or components** that make up this topic
@@ -443,32 +440,34 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
   <button class="detail-close" onclick="closeDetail()">✕</button>
   <div id="detail-type" class="detail-type"></div>
   <h2 id="detail-title"></h2>
-  <p id="detail-desc"></p>
-  <ul id="detail-list"></ul>
+  <div id="detail-body"></div>
 </div>
 
 <script>
 // Component data — one entry per clickable card
+const FLOW_ROW = (color, text, sub) => `<div style="background:#0f172a;border-left:3px solid ${color};border-radius:4px;padding:6px 9px;font-size:10px;color:#f1f5f9;margin-bottom:3px">${text}${sub ? `<br><span style="font-size:9px;color:#475569">${sub}</span>` : ''}</div>`;
+const ARROW = () => `<div style="color:#334155;font-size:10px;padding:0 0 3px 10px">↓</div>`;
+const SECTION = (label, sub) => `<div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px">${label}${sub ? `<span style="color:#334155;margin-left:6px">${sub}</span>` : ''}</div>`;
+
 const COMPONENTS = {
   'you': {
     title: 'You',
     type: 'Input',
-    desc: 'You interact with Claude Code normally. ClaudeBoost changes how Claude thinks behind the scenes.',
-    items: [
-      'Type requests, paste tickets, or run slash commands',
-      'Approve or adjust architectural proposals (CONSULT mode)',
-    ]
+    html: `<div style="font-size:12px;color:#e2e8f0;line-height:1.6;margin-bottom:12px">You interact with Claude Code normally. ClaudeBoost changes how Claude thinks behind the scenes.</div>
+${SECTION('How it works', '')}
+${FLOW_ROW('#0ea5e9','Type requests, paste tickets, or run slash commands','')}
+${ARROW()}
+${FLOW_ROW('#f97316','Approve or adjust architectural proposals (CONSULT mode)','')}`,
   },
   'global-rules': {
     title: 'Global Rules',
     type: 'Config',
-    desc: 'Hard rules loaded from ~/.claude/CLAUDE.md at every session. Not debatable.',
-    items: [
-      'jQuery ban — use React hooks / vanilla JS',
-      'Parameterized queries only',
-      'logger.error in every catch block',
-      'No secrets in logs, URLs, or source code',
-    ]
+    html: `<div style="font-size:12px;color:#e2e8f0;line-height:1.6;margin-bottom:12px">Hard rules loaded from ~/.claude/CLAUDE.md at every session. Not debatable.</div>
+${SECTION('Rules enforced', '')}
+${FLOW_ROW('#ef4444','jQuery ban — use React hooks / vanilla JS','')}
+${FLOW_ROW('#ef4444','Parameterized queries only','')}
+${FLOW_ROW('#ef4444','logger.error in every catch block','')}
+${FLOW_ROW('#ef4444','No secrets in logs, URLs, or source code','')}`,
   },
   // add one entry per card id...
 };
@@ -478,8 +477,7 @@ function showDetail(id) {
   if (!c) return;
   document.getElementById('detail-title').textContent = c.title;
   document.getElementById('detail-type').textContent = c.type || '';
-  document.getElementById('detail-desc').textContent = c.desc || '';
-  document.getElementById('detail-list').innerHTML = (c.items || []).map(i => `<li>${i}</li>`).join('');
+  document.getElementById('detail-body').innerHTML = c.html || '';
   document.getElementById('detail').classList.remove('hidden');
 }
 
@@ -520,6 +518,8 @@ function downloadSVG() {
 
 ## Step 3b: Add Audio Tour (MANDATORY — DO NOT SIMPLIFY)
 
+**Only run when MODE = concept, self-map, or project-map.** Skip for `excalidraw` mode — go directly to Step 3c.
+
 Every visualization MUST include the **full audio bar system** using the Web Speech API. This is non-negotiable — users expect it in every diagram.
 
 **BANNED — do NOT use these simpler patterns:**
@@ -527,8 +527,7 @@ Every visualization MUST include the **full audio bar system** using the Web Spe
 - A toolbar button that toggles a tour mode
 - Any approach that does not include the full two-row audio bar at the bottom
 
-**REQUIRED — always use the exact system below.** The canonical reference implementation is at:
-`C:\Development\Food and Function\FoodAccessProject\workspace\TFF-1038\visualize\architecture.html`
+**REQUIRED — always use the exact system below.** The full audio bar system is defined inline in the CSS and JS additions below — use those sections as your reference.
 
 The full system includes:
 - Fixed two-row audio bar at the bottom with play/pause ▶⏸, stop ■, chapters ☰, transcript T
@@ -1061,18 +1060,106 @@ The bad version describes what it is. The good version explains why you'd want i
 
 ---
 
+## Step 3c: Excalidraw Mode Output
+
+**Only run when MODE = excalidraw. Skip Steps 3–3b entirely.**
+
+Gather data as in Step 2d (concept mode) or Step 2b (project-map). Then generate a valid Excalidraw JSON file.
+
+**Excalidraw JSON structure:**
+
+```json
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [ /* array of shape elements */ ],
+  "appState": { "gridSize": null, "viewBackgroundColor": "#ffffff" },
+  "files": {}
+}
+```
+
+**Element types to use:**
+
+```json
+// Rectangle (component box):
+{ "type": "rectangle", "id": "unique-id", "x": 100, "y": 100, "width": 160, "height": 60,
+  "strokeColor": "#1e1e1e", "backgroundColor": "#e0f2fe", "fillStyle": "solid",
+  "strokeWidth": 2, "roughness": 1, "opacity": 100,
+  "angle": 0, "strokeStyle": "solid", "roundness": { "type": 3 },
+  "version": 1, "versionNonce": 1, "isDeleted": false, "groupIds": [],
+  "frameId": null, "boundElements": [], "updated": 1, "link": null, "locked": false }
+
+// Text label:
+{ "type": "text", "id": "unique-id-text", "x": 110, "y": 120, "width": 140, "height": 25,
+  "text": "Component Name", "fontSize": 16, "fontFamily": 1, "textAlign": "center",
+  "verticalAlign": "middle", "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+  "angle": 0, "opacity": 100, "strokeWidth": 1, "roughness": 1, "fillStyle": "solid",
+  "strokeStyle": "solid", "roundness": null, "version": 1, "versionNonce": 1,
+  "isDeleted": false, "groupIds": [], "frameId": null, "boundElements": [],
+  "updated": 1, "link": null, "locked": false, "containerId": null,
+  "originalText": "Component Name", "autoResize": true, "lineHeight": 1.25 }
+
+// Arrow:
+{ "type": "arrow", "id": "unique-id-arrow", "x": 260, "y": 130, "width": 80, "height": 0,
+  "points": [[0,0],[80,0]], "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+  "fillStyle": "solid", "strokeWidth": 2, "roughness": 1, "opacity": 100,
+  "angle": 0, "strokeStyle": "solid", "roundness": { "type": 2 },
+  "version": 1, "versionNonce": 1, "isDeleted": false, "groupIds": [],
+  "frameId": null, "boundElements": [], "updated": 1, "link": null, "locked": false,
+  "startBinding": null, "endBinding": null, "lastCommittedPoint": null,
+  "startArrowhead": null, "endArrowhead": "arrow" }
+```
+
+**Layout guide:**
+- Left-to-right flow: x increments by ~200px per stage; y starts at 100
+- Top-to-bottom: y increments by ~120px per layer; x center-aligned around 400
+- Color coding by component type (use `backgroundColor`):
+  - Input/User: `#e0f2fe` (light blue)
+  - Core/Orchestrator: `#fff7ed` (light orange)
+  - Agent/Worker: `#f0fdf4` (light green)
+  - Storage/DB: `#fefce8` (light yellow)
+  - External/API: `#f0fdfa` (light teal)
+  - Config: `#f8fafc` (near-white)
+
+Generate IDs as short unique strings (e.g., `"rec-auth"`, `"arr-1"`, `"txt-auth"`). Keep total element count under 60 for readability.
+
+Save as `[SLUG].excalidraw`. The file can be opened directly at excalidraw.com (File → Open) or in the VS Code Excalidraw extension for editing.
+
+---
+
+## Step 3e: Post-Generation Validation (HTML modes only)
+
+**Run after writing the HTML file, before Step 4. Skip for excalidraw mode.**
+
+Scan the generated HTML for correctness:
+
+1. **ID coverage**: Search the written file for all `showDetail('` calls. Extract each ID. Verify every ID has a matching key in the `COMPONENTS` object. If any IDs are missing from `COMPONENTS`, add placeholder entries before saving.
+
+2. **TOUR_SEGMENTS non-empty**: Verify `TOUR_SEGMENTS` array has at least one entry. An empty array means the play button does nothing — the tour is a core feature, not optional.
+
+3. **detail-body present**: Verify the detail panel HTML includes `<div id="detail-body"></div>` (not the old `<p id="detail-desc">` / `<ul id="detail-list">` pattern). The `html:` rendering in `showDetail` writes to `detail-body` via `innerHTML`.
+
+Fix any gaps in-place before proceeding to Step 4.
+
+---
+
 ## Step 4: Save and Open
 
 Pick an output directory:
-- If `workspace/[task-id]/` exists → save to `workspace/[task-id]/visualize/[SLUG].html`
-- Otherwise create `workspace/visualize-YYYY-MM-DD/` and save there as `[SLUG].html`
+- If `workspace/[task-id]/` exists → save to `workspace/[task-id]/visualize/[SLUG].[ext]`
+- Otherwise create `workspace/visualize-YYYY-MM-DD/` and save there as `[SLUG].[ext]`
 
-Open in browser (Windows):
+File extensions by mode: HTML modes → `.html`, excalidraw → `.excalidraw`
+
+Open in browser (HTML and excalidraw modes, Windows):
 ```bash
-powershell.exe -NoProfile -Command "Start-Process 'C:\path\to\[SLUG].html'"
+powershell.exe -NoProfile -Command "Start-Process 'C:\path\to\[SLUG].[ext]'"
 ```
 
 Use the literal Windows path with backslashes. Do not use `cygpath` or `cmd.exe /c start`.
+
+For excalidraw files: if the `.excalidraw` extension isn't associated with anything, tell the user to open it at excalidraw.com via File → Open, or install the VS Code Excalidraw extension.
 
 ---
 
@@ -1094,3 +1181,4 @@ Tell the user:
 | A security-relevant flow (auth, data, tokens) | `/security-review` — OWASP-aware review of pending changes |
 | A performance bottleneck | Spawn `performance-agent` to profile and recommend fixes |
 | Something you want to build | Describe it to Claude — if it's a big feature, use `/workspace` first |
+| Want an editable whiteboard version | `/visualize --excalidraw [topic]` — generates an Excalidraw file you can drag, reshape, annotate |

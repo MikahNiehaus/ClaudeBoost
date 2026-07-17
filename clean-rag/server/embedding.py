@@ -58,9 +58,16 @@ class SentenceTransformerEmbedding:
                         "Model %s not cached locally. Downloading from HuggingFace (~1 min).",
                         self._model_name,
                     )
-                    self._model = SentenceTransformer(
-                        self._model_name, local_files_only=False, **kwargs
-                    )
+                    try:
+                        self._model = SentenceTransformer(
+                            self._model_name, local_files_only=False, **kwargs
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            "Failed to download/load model %s: %s: %s",
+                            self._model_name, type(e).__name__, e,
+                        )
+                        raise
                 self._batch_size = EMBED_BATCH_SIZE
                 get_dim = getattr(
                     self._model, "get_embedding_dimension",

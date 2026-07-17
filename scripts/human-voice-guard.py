@@ -98,7 +98,12 @@ def strip_noise(text: str) -> str:
 
 
 def get_last_assistant_text(transcript_path: str) -> str:
-    """Return the plain text of the last assistant turn in the transcript."""
+    """Return the plain text of the last assistant turn in the transcript.
+
+    Handles both transcript formats:
+    - New (Claude Code >=1.x): top-level "type":"assistant", content under entry["message"]["content"]
+    - Old: top-level "role":"assistant", content under entry["content"]
+    """
     try:
         raw_lines = Path(transcript_path).read_text(encoding="utf-8").splitlines()
     except Exception:
@@ -113,9 +118,19 @@ def get_last_assistant_text(transcript_path: str) -> str:
             entry = json.loads(line)
         except Exception:
             continue
-        if entry.get("role") != "assistant":
+        # New format: {"type":"assistant","message":{"role":"assistant","content":[...]}}
+        # Old format: {"role":"assistant","content":"..." or [...]}
+        is_assistant = (
+            entry.get("type") == "assistant"
+            or entry.get("role") == "assistant"
+        )
+        if not is_assistant:
             continue
-        content = entry.get("content", "")
+        # Try new nested format first, fall back to old flat format
+        msg = entry.get("message")
+        if not isinstance(msg, dict):
+            msg = entry
+        content = msg.get("content", "")
         if isinstance(content, str):
             last = content
         elif isinstance(content, list):

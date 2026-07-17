@@ -6,39 +6,34 @@ knowledge base. Works standalone or with Gas Town.
 
 ## The research gate (this is the operative rule)
 
-Every edit to a code file is checked against whether `research-agent` has run
-this turn and declared that it covered that file, and nudges toward research
-when it hasn't. The gate used to actually block the edit until it did; that
-per turn scoping (research reset by every single message, not just a real new
-task) turned out to be too disruptive in practice, so the block is gone and
-the nudge plus an honest audit trail replaced it. The nudge is a PreToolUse
-hook that keys off a real agent completion, not a claim of one, so the record
-it checks can't be satisfied by claiming you researched, even though it no
-longer refuses the edit either way.
+Every edit to a code file is checked against whether `researcher` or `swiper`
+has run this session and declared that it covered that file. The gate is a
+hard PreToolUse block: an uncovered file cannot be edited. Coverage persists
+across follow-up messages (not reset on every message) and expires after one
+hour of inactivity or when new research runs. The block is keyed off a real
+agent completion stamped by a PostToolUse hook — it cannot be satisfied by
+claiming you researched.
 
-When the gate nudges toward research:
+When the gate blocks:
 
-1. **Spawn `research-agent`** (Sonnet). Tell it what you're changing, why, and the
-   code you intend to write. It covers depth and breadth, checks whether the thing
-   already exists, reads the project's import graph, and reports with sources and a
-   `COVERS:` line naming the files it covers. That scope is what the audit trail
-   checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
-   Wait for it before editing anyway; that's still the point. Spawn it in the
-   foreground (`run_in_background: false`), never backgrounded — a backgrounded
-   completion arrives later as a `TaskNotificationMessage`, not a tool result, so
-   the hook that stamps the turn record never fires for it and the record never
-   shows the coverage no matter how long you wait.
+1. **Spawn `researcher` and/or `swiper`** (Sonnet, foreground). Tell them what
+   you're changing, why, and the code you intend to write. Both cover depth and
+   breadth and report with sources and a `COVERS:` line naming the files they
+   covered. That scope is what the gate checks: an edit to an uncovered file is
+   blocked, not just flagged. Wait for them before attempting the edit — there is
+   no point trying the edit first. Spawn in the foreground (`run_in_background:
+   false`), never backgrounded — a backgrounded completion arrives later as a
+   `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
+   record never fires for it and the gate never sees the coverage.
    Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,
    no swapped libraries or approaches, no added structure the reference didn't
-   have. That's a hard ceiling on the diff, not a suggestion. `adapt` and
-   `pattern-only` allow a real diff; `clone-and-patch` does not.
-2. There is no cheap triage tier anymore. The old one decided whether a change
-   needed research WITHOUT reading the code, and that blind guess was wrong often
-   enough to remove. research-agent looks first, so its judgment is grounded. It
-   does real research every time it runs; do not build a triviality shortcut into
-   it or any other agent.
+   have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
+   allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
+2. There is no cheap triage tier. A change either has research covering the
+   file or it doesn't. If it doesn't, the gate blocks. `/ps` is the human's
+   escape for a turn they already know is trivial.
 3. Genuinely trivial work that needs no research is the human's call, not a
    model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
    you already know the change is trivial.
