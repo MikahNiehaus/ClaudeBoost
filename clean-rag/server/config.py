@@ -94,12 +94,6 @@ def _detect_device() -> str:
             return "mps"
     except ImportError:
         pass
-    try:
-        import onnxruntime as _ort
-        if "DmlExecutionProvider" in _ort.get_available_providers():
-            return "onnx-dml"
-    except (ImportError, Exception):
-        pass
     return "cpu"
 
 
