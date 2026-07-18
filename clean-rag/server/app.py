@@ -30,7 +30,7 @@ from .config import (
 from .embedding import SentenceTransformerEmbedding
 from .github_search import github_fetch_file, github_search
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
-from .indexing import index_project, reindex_file
+from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
 from .mutation import run_mutation
 from .search import search
 from .stackexchange import stackoverflow_search
@@ -335,9 +335,15 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
         except Exception as e:
             return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
-    result = await loop.run_in_executor(
-        None, partial(reindex_file, project_path, file_path, _code_embedder)
-    )
+    if not acquire_index_lock("reindex-file"):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
+
+    try:
+        result = await loop.run_in_executor(
+            None, partial(reindex_file, project_path, file_path, _code_embedder)
+        )
+    finally:
+        release_index_lock()
 
     status = 200 if "error" not in result else 400
     return _json_response(result, status)

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -645,6 +646,30 @@ def index_project(
 
     # Evict project ChromaDB client + GC
     ChromaStore.evict_cache(str(chroma_dir))
+
+    # Reclaim SQLite free-list pages accumulated by delete+upsert cycles.
+    # Each incremental reindex deletes old rows and inserts new ones; SQLite
+    # never releases freed pages to the OS without a VACUUM. On a heavily-edited
+    # project this compounds to gigabytes over time (ChromaDB issue #2143).
+    sqlite_path = chroma_dir / "chroma.sqlite3"
+    if sqlite_path.exists():
+        try:
+            size_before = sqlite_path.stat().st_size
+            conn = sqlite3.connect(str(sqlite_path))
+            conn.execute("VACUUM")
+            conn.close()
+            size_after = sqlite_path.stat().st_size
+            freed_mb = round((size_before - size_after) / 1024 ** 2, 1)
+            logger.info(
+                "VACUUM chroma.sqlite3 for %s: %.1f MB -> %.1f MB (freed %.1f MB)",
+                pid,
+                round(size_before / 1024 ** 2, 1),
+                round(size_after / 1024 ** 2, 1),
+                freed_mb,
+            )
+        except Exception as e:
+            logger.warning("VACUUM failed for %s (non-fatal): %s", pid, e)
+
     _gc_cleanup(f"project-final:{pid}")
 
     elapsed = round(time.time() - start_time, 1)
