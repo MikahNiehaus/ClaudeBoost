@@ -131,6 +131,19 @@ Wait for the user's response. Set MODE and TARGET based on what they provide:
 - URL → `browser`
 - File name, path, description of scripts/code, or `--code` → `general`
 
+**0a-ii-b — Visual feedback loop (browser mode only).**
+
+When `MODE = browser`, apply this loop for every UI-related test case:
+1. `browser_navigate` to the route under test
+2. `browser_snapshot` — read the accessibility and text state first, before any screenshot
+3. `browser_take_screenshot` — capture the visual state
+4. Note findings with pixel precise specifics before proposing any fix (e.g. "gap between cards is 8px, design requires 24px")
+5. `browser_resize` at 375px, 768px, 1280px for any responsive test case
+6. `browser_console_messages` after each test case — show the output, never assume silent
+
+Confirm with the user before implementing any visual change found in QA.
+Verify with a before/after screenshot pair after any fix is applied.
+
 **0a-iii — Ticket tracing (ask if not provided).**
 
 If the user is working from a ticket (e.g., `ASC-1175`, `FEAT-42`), ask:

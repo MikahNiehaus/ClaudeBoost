@@ -101,12 +101,17 @@ ask for it after any real code change: adversarial tests and logging, real
 provable findings. After bad-cop reports, write a visible summary to the
 user: what tests it wrote and ran, what the output was, and what (if
 anything) it found. If it finds nothing real and stamps `VERIFIED:` itself,
-relay that to the user. Only if it finds real findings, relay each one
-clearly — file, line, what the test showed — then spawn `good-cop` with
-those findings. After good-cop reports, write a visible summary of what it
-fixed and that the suite is green. The user should never have to ask what
-happened in QA; it should all be visible in the conversation before the
-turn ends.
+relay that to the user and you're done. Only if it finds real findings,
+relay each one clearly — file, line, what the test showed — then spawn
+`good-cop` with those findings. After good-cop reports, write a visible
+summary of what it fixed and that the suite is green. Then spawn bad-cop
+again for a final adversarial re-check on good-cop's fix. Write a visible
+summary of that re-check too. If bad-cop finds nothing and stamps
+`VERIFIED:`, the loop ends. If it finds more issues, relay them and spawn
+good-cop again. The loop (bad-cop → good-cop → bad-cop) continues until
+bad-cop stamps `VERIFIED:` on a clean pass — that is the only terminal
+condition. The user should never have to ask what happened in QA; each
+round's output should be visible in the conversation before the turn ends.
 
 ## What this is not
 

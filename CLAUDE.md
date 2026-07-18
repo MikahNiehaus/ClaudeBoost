@@ -87,7 +87,12 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   findings instead of the requirements alone: it researches the correct fix,
   applies it, and reruns bad-cop's new tests plus the existing suite until
   everything is actually green, and it is the one that stamps `VERIFIED:` in
-  that case. Give both of them the
+  that case. After good-cop stamps, spawn bad-cop again for a final
+  adversarial re-check on the fix. If bad-cop finds nothing on that re-check,
+  it stamps `VERIFIED:` itself and the loop ends. If it finds more issues,
+  spawn good-cop again. The loop (bad-cop → good-cop → bad-cop) continues
+  until bad-cop stamps `VERIFIED:` itself — that is the only terminal
+  condition, not good-cop claiming done. Give both of them the
   requirements, the correctness properties, and the diff, never your reasoning
   for the change, since that reasoning is exactly what biases a reviewer into
   agreeing. If research-agent grounded the build in a real GitHub reference (a
@@ -97,9 +102,10 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   the only way a real reference reaches their review; do not give either its own
   GitHub/web fetch access, that would duplicate the one injection-exposed agent
   this codebase deliberately keeps to one. `hooks/verifier-gate.py`
-  (a Stop hook) requires a real stamp before the turn can end: whichever of
-  the two closes it out (good-cop after a real fix, or bad-cop itself on a
-  clean pass) writes a `VERIFIED:` line naming the files it covered, checked
+  (a Stop hook) requires a real stamp before the turn can end: bad-cop always
+  provides the terminal stamp — either directly on a clean initial pass, or
+  after a final re-check that finds nothing following good-cop's fix —
+  writing a `VERIFIED:` line naming the files it covered, checked
   per file the same way the research gate checks `COVERS:`, invalidated if a
   file is edited again after being reviewed. `high_stakes.py`
   labels which surface it touched so the review points at the sharpest risk. A
@@ -132,6 +138,20 @@ surviving mutant is a test that would pass on broken code, so tighten it. When t
 edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
 guessing which inputs to test, which is the weak version the research warned about.
+
+## UI / Frontend Work
+
+When the task involves editing or creating frontend files (`.tsx`, `.jsx`,
+`.html`, `.css`, `.scss`, `.vue`, `.svelte`), invoke the `frontend-design`
+skill before making any design decisions. Run the two-pass process: compact
+token system (palette, typefaces, layout concept, signature element) then
+self-critique against the brief before building. Never skip to code without
+the brief-grounding pass.
+
+After any UI change, invoke the `eyes` skill to capture a screenshot and
+verify visually before calling it done. Propose changes with pixel-precise
+numbers. Confirm with the user before applying. Verify with a before/after
+comparison screenshot.
 
 ## clean-rag (the search backend, port 8613)
 

@@ -33,7 +33,11 @@ you're done: don't spawn `/good-cop` just to have it re-confirm a clean pass.
 **If it found something**, it emits no `VERIFIED:` line and ends with
 `HANDOFF:` instead; hand its findings to `/good-cop` then, don't fix them
 yourself in this context, that inherits your own blind spot the same way
-reading the author's reasoning would.
+reading the author's reasoning would. After good-cop stamps `VERIFIED:`,
+spawn bad-cop again for a final re-check on the fix. If it finds nothing,
+it stamps `VERIFIED:` itself and the loop ends. If it finds more, spawn
+good-cop again. The terminal condition is always bad-cop stamping `VERIFIED:`
+on a clean pass, never good-cop claiming done.
 
 ## What this is not
 

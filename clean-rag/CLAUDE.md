@@ -63,10 +63,15 @@ finds nothing real, it emits the `VERIFIED:` line itself and the pass is
 done, no `good-cop` run needed to re-confirm a clean adversarial pass. Only
 when it finds something real does **`good-cop`** (Opus) run: takes bad-cop's
 findings, researches the correct fix, applies it, and reruns bad-cop's new
-tests plus the existing suite until everything is actually green, and it is
-the one that stamps `VERIFIED:` in that case. `hooks/verifier-gate.py` checks
-for whichever of the two actually closed it out. Both are defined in
-`~/.claude/agents/` the same way swiper and researcher are.
+tests plus the existing suite until everything is actually green, and stamps
+`VERIFIED:`. After good-cop stamps, bad-cop re-runs for a final adversarial
+re-check. If bad-cop finds nothing on that re-check, it stamps `VERIFIED:`
+itself and the loop ends. If it finds more issues, good-cop runs again. The
+loop (bad-cop → good-cop → bad-cop) continues until bad-cop stamps
+`VERIFIED:` on a clean pass — that is the only terminal condition.
+`hooks/verifier-gate.py` enforces this: bad-cop's final clean stamp is what
+clears the gate. Both are defined in `~/.claude/agents/` the same way swiper
+and researcher are.
 
 ## Search
 

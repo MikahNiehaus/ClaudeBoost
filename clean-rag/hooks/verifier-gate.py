@@ -80,7 +80,7 @@ from verifier_state import _record_path, check_file_verified  # noqa: E402
 CLEAN_RAG_HOME = Path(os.environ.get("CLEAN_RAG_HOME") or Path(__file__).resolve().parent.parent)
 STATE_DIR = CLEAN_RAG_HOME / "state"
 BLOCK_DIR = STATE_DIR / "verifier-gate"
-MAX_BLOCKS_PER_SESSION = 2
+MAX_BLOCKS_PER_SESSION = 6
 RAG_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
 
 CODE_EXTENSIONS = {
@@ -180,29 +180,30 @@ def _reset_block_count(session_id: str) -> None:
         pass
 
 
-def _bad_cop_ran_with_bugs(session_id: str) -> bool:
-    """True when bad-cop ran this session and found real bugs.
+def _last_verifier_agent(session_id: str):
+    """Return (agent, covers) for the most recent verifier stamp, or ('', []) if none.
 
-    bad-cop's stamp has covers=[] when its report contains no VERIFIED: line,
-    which is exactly what it produces when it found failures. An empty-covers
-    stamp is invisible to check_file_verified(), so the gate keeps blocking,
-    but without this check the block message says 'spawn bad-cop' when bad-cop
-    already ran and what's actually needed is good-cop.
+    Drives the three-way block message routing:
+      - ('', [])            → no verifier ran yet → spawn bad-cop
+      - ('bad-cop', [])     → bad-cop found real bugs → spawn good-cop
+      - ('good-cop', [...]) → good-cop stamped a fix → spawn bad-cop for re-check
+
+    Using the most recent stamp (not any stamp) avoids stale matches from earlier
+    rounds: an old empty-covers bad-cop stamp no longer redirects to good-cop once
+    the loop has already advanced past that round and good-cop has since stamped.
     """
     path = _record_path(session_id)
     if not path.exists():
-        return False
+        return "", []
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return "", []
     stamps = record.get("stamps", [])
-    if not isinstance(stamps, list):
-        return False
-    return any(
-        s.get("agent") == "bad-cop" and not s.get("covers")
-        for s in stamps
-    )
+    if not isinstance(stamps, list) or not stamps:
+        return "", []
+    last = stamps[-1]
+    return last.get("agent", ""), last.get("covers") or []
 
 
 def _tests_failing(root: str) -> bool:
@@ -293,6 +294,17 @@ def main() -> int:
         surface = "code this turn; a passing test is not proof the test catches the bug"
         evidence = ""
 
+    last_agent, last_covers = _last_verifier_agent(session_id)
+
+    # When good-cop just completed a fix cycle and stamped VERIFIED, reset the
+    # consecutive-block cap before spawning bad-cop for the re-check. The cap
+    # guards against a stuck loop (an agent that never produces a parseable stamp),
+    # not against a healthy loop making real progress each round. Resetting here
+    # keeps the cap scoped to consecutive failures within one round rather than
+    # accumulated across rounds of a healthy bad-cop → good-cop → bad-cop cycle.
+    if last_agent == "good-cop" and last_covers:
+        _reset_block_count(session_id)
+
     if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
         print(
             "[verifier-gate] Code change still unverified after "
@@ -305,21 +317,41 @@ def main() -> int:
 
     _bump_block_count(session_id)
 
-    if _bad_cop_ran_with_bugs(session_id):
+    if last_agent == "bad-cop" and not last_covers:
         print(
-            "[verifier-gate] BLOCKED: bad-cop already ran and found real bugs — "
+            "[verifier-gate] BLOCKED: bad-cop ran and found real bugs — "
             f"these files still have no valid verifier stamp: {files}\n\n"
-            "bad-cop is DONE. Do NOT spawn bad-cop again.\n\n"
             "Spawn good-cop NOW (Opus model, fresh context, foreground, "
             "run_in_background: false — never backgrounded). "
-            "Give good-cop three things only: (1) the requirements/ticket "
-            "context, (2) bad-cop's actual findings, (3) the diff. Not your "
-            "reasoning for the change. good-cop researches the correct fix, "
-            "applies it, reruns bad-cop's new tests plus the existing suite "
-            "until everything is green, then stamps VERIFIED: naming every "
-            "file it covered.\n\n"
-            "That VERIFIED: line is what clears this gate. Without it, this "
-            "gate stays blocked.",
+            "Give good-cop four things only: (1) the requirements/ticket "
+            "context, (2) the correctness properties, (3) the diff, "
+            "(4) bad-cop's actual findings with their real execution output. "
+            "Not your reasoning for the change. good-cop researches the "
+            "correct fix, applies it, reruns bad-cop's new tests plus the "
+            "existing suite until everything is green, then stamps VERIFIED: "
+            "naming every file it covered.\n\n"
+            "After good-cop stamps VERIFIED:, spawn bad-cop again (fresh "
+            "context, foreground, same three things plus the updated diff) "
+            "for a final re-check on the fix. If bad-cop finds nothing on "
+            "that re-check, it stamps VERIFIED: itself and the loop ends. "
+            "If it finds more issues, spawn good-cop again. The loop "
+            "(bad-cop → good-cop → bad-cop) continues until bad-cop stamps "
+            "VERIFIED: itself — that is the only terminal condition.",
+            file=sys.stderr,
+        )
+    elif last_agent == "good-cop" and last_covers:
+        print(
+            "[verifier-gate] BLOCKED: good-cop stamped VERIFIED: but "
+            f"these files still have no valid verifier stamp: {files}\n\n"
+            "Spawn bad-cop again (Sonnet model, fresh context, foreground, "
+            "run_in_background: false) for a re-check on good-cop's fix. "
+            "Give it three things only: (1) the requirements/ticket context, "
+            "(2) the correctness properties, (3) the diff including good-cop's "
+            "changes. Not your reasoning.\n\n"
+            "If bad-cop finds nothing on this re-check, it stamps VERIFIED: "
+            "itself and the loop ends. If it finds more issues, spawn "
+            "good-cop again with those findings. The loop continues until "
+            "bad-cop stamps VERIFIED: itself.",
             file=sys.stderr,
         )
     else:
@@ -339,15 +371,17 @@ def main() -> int:
             "reasoning for the change, that is what biases a reviewer into "
             "agreeing with it. bad-cop writes adversarial tests, runs the code, "
             "adds logging, and reports the real failures it finds.\n\n"
-            "If bad-cop finds nothing real, it stamps VERIFIED itself, no "
-            "separate good-cop run needed to re-confirm a clean pass. Only if it "
-            "finds something: spawn good-cop next, same rules (fresh context, "
-            "foreground, the three things only, plus bad-cop's findings), and it "
-            "fixes what was found and gets every test green.\n\n"
-            "Whichever of the two closes it out, that report MUST end with a "
-            "VERIFIED: line naming every file it covered, the same way swiper's "
-            "COVERS: line works, or this gate has nothing to check and stays "
-            "blocked. Fix any Critical or High bad-cop returns, then finish.\n\n"
+            "If bad-cop finds nothing real, it stamps VERIFIED: itself and "
+            "the loop ends — no separate good-cop run needed. Only if it finds "
+            "something: spawn good-cop next (Opus, fresh context, foreground, "
+            "four things: requirements, correctness properties, diff, and "
+            "bad-cop's findings). good-cop fixes what was found and gets every "
+            "test green, then stamps VERIFIED:. After good-cop stamps, spawn "
+            "bad-cop again for a final re-check. The loop (bad-cop → good-cop "
+            "→ bad-cop) continues until bad-cop stamps VERIFIED: itself — "
+            "that is the only terminal condition, not good-cop claiming done.\n\n"
+            "That final bad-cop VERIFIED: line is what clears this gate. "
+            "Fix any Critical or High bad-cop returns, then finish.\n\n"
             "If this really was trivial and needed no reviewer, that was a /ps "
             "turn's call to make up front, not this one's.",
             file=sys.stderr,

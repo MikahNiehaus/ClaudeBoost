@@ -22,8 +22,12 @@ root cause rather than the symptom bad-cop's test caught, and reruns
 bad-cop's new tests plus the existing suite until everything is actually
 green, not just the one repro that was originally flagged. It ends with a
 `VERDICT:` line and, only once everything is green, a `VERIFIED:` line
-naming the files it covered. That line is what `hooks/verifier-gate.py`
-checks for, the same as bad-cop's own `VERIFIED:` line when it found nothing.
+naming the files it covered. After good-cop stamps `VERIFIED:`, spawn
+bad-cop again for a final adversarial re-check on the fix. If bad-cop finds
+nothing on that re-check, it stamps `VERIFIED:` itself and the loop ends.
+If it finds more issues, spawn good-cop again. The loop (bad-cop → good-cop
+→ bad-cop) continues until bad-cop stamps `VERIFIED:` on a clean pass —
+that is the only terminal condition, not good-cop claiming done.
 
 ## What this is not
 
