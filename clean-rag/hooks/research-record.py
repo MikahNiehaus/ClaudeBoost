@@ -40,19 +40,53 @@ _DOMAIN_PROOF_MAP = {
     re.compile(r"codepen\.io/[\w.\-/]+/pen/", re.IGNORECASE): "CODEPEN_READ:",
 }
 
-_FENCE_RE = re.compile(r"```[ \t]*\w*\r?\n(?:(?!```).)+?\r?\n?```", re.DOTALL)
+_FENCE_RE = re.compile(
+    r"(?P<fence>```|~~~)[ \t]*\w*\r?\n(?:(?!(?P=fence)).)+?\r?\n?(?P=fence)",
+    re.DOTALL,
+)
 _COVERS_LINE_RE = re.compile(r"^COVERS:.*$", re.MULTILINE | re.IGNORECASE)
+
+# Bounds the "is this citation actually followed by a code claim" window to the
+# citation's own structural unit: a real section break (two or more consecutive
+# blank lines), the next per-aspect "**N." marker, or the next markdown heading,
+# whichever comes first. A SINGLE blank line is deliberately NOT a boundary:
+# "See [file](url):" then a blank line then a fenced code block is completely
+# standard markdown (and the exact style swiper/researcher reports use), so
+# cutting the window at one blank line would let any normally-formatted unproven
+# citation+code evade the check. researcher/swiper reports (see
+# clean-rag/portable/agents/swiper.md, researcher.md) are written per-aspect, not
+# as one end-of-document bibliography, so a section/heading boundary tracks the
+# report's real structure far better than any fixed character count would.
+_PARAGRAPH_BOUNDARY_RE = re.compile(r"\n\s*\n\s*\n|\n\*\*\d+\.|\n#{1,6}\s")
+
+
+def _window_end(report: str, start: int) -> int:
+    match = _PARAGRAPH_BOUNDARY_RE.search(report, start)
+    return match.start() if match else len(report)
 
 
 def _missing_proof(report: str) -> list:
-    """List of domains cited without fetch proof (line + code block).
+    """List of domains cited *with an adjacent code claim* but no fetch proof.
 
     Returns a list of violation descriptions, e.g. ["GitHub repo cited but no GITHUB_FILE_READ: line"].
     Empty list means no violations.
+
+    Only fires when a domain citation is closely followed (within its own
+    paragraph/aspect, see _window_end) by a fenced code block -- that's the
+    actual fabrication risk this check exists to catch: claiming quoted code
+    came from a source without proving the fetch. A bare bibliography-style
+    citation (e.g. "[... - Stack Overflow](url)" cited from a cheap web-search
+    survey, with no code attributed to it) needs no proof line -- CLAUDE.md's
+    own global instructions explicitly allow surveying with search snippets and
+    citing the source without a full fetch. Previously this checked the whole
+    report for a proof marker with no proximity relationship at all, so a single
+    bare bibliography link anywhere in a long multi-aspect report would strip the
+    entire report's COVERS: line, including aspects that had real proof.
     """
     violations = []
 
     for domain_re, proof_prefix in _DOMAIN_PROOF_MAP.items():
+        proof_re = re.compile(re.escape(proof_prefix), re.IGNORECASE)
         # Find all domain citations in this report
         for match in domain_re.finditer(report):
             domain_cite = match.group()
@@ -62,10 +96,15 @@ def _missing_proof(report: str) -> list:
                 # format), not a real citation. A genuine citation never has this
                 # exact literal path.
                 continue
+
+            window = report[match.end():_window_end(report, match.end())]
+            if not _FENCE_RE.search(window):
+                # No code claimed near this citation -- nothing to prove.
+                continue
+
             # Check if the corresponding proof line exists
-            proof_re = re.compile(re.escape(proof_prefix), re.IGNORECASE)
             if not proof_re.search(report):
-                violations.append(f"{domain_cite} cited but no {proof_prefix} line found")
+                violations.append(f"{domain_cite} cited with adjacent code but no {proof_prefix} line found")
                 continue
 
             # Proof line exists. Now check if a code block follows it.

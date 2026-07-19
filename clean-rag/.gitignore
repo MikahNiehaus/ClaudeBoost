@@ -36,6 +36,12 @@ graphrag-models/
 .env.*
 !.env.example
 
+# Configured doc-rag source lists name whatever topic you're personally
+# researching (medical debt law, or anything else), never committed. The
+# tracked template documents the schema for a fresh clone.
+docs_sources/*.json
+!docs_sources/*.template.json
+
 # Python
 __pycache__/
 *.pyc

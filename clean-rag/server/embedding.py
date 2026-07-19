@@ -104,3 +104,28 @@ class SentenceTransformerEmbedding:
             self._model.get_sentence_embedding_dimension,
         )
         return get_dim()
+
+    @property
+    def max_tokens(self) -> int:
+        """The model's real max sequence length (e.g. 512 for bge-base).
+
+        Text longer than this is silently truncated at encode time, so it's
+        the hard ceiling the docs chunker must keep every chunk under.
+        """
+        self._load_model()
+        return self._model.max_seq_length
+
+    def count_tokens(self, text: str) -> int:
+        """Real subword token count for `text`, using the model's own
+        tokenizer and including the special tokens (`[CLS]`/`[SEP]`) the
+        encoder always adds.
+
+        The docs chunker uses this instead of the 4-chars-per-token estimate,
+        which under-counts dense legal text (measured ~3.7 chars/token on real
+        eCFR regulation prose) and let oversized chunks slip past the guard.
+        The document prefix, if any, is included so the count matches what
+        embed() actually encodes.
+        """
+        self._load_model()
+        measured = (self._doc_prefix + text) if self._doc_prefix else text
+        return len(self._model.tokenizer(measured)["input_ids"])

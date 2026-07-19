@@ -7,6 +7,7 @@ Bundled with ClaudeBoost: routes registered under /clean-rag/* on port 8612.
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Server-wide singletons (initialized in create_app)
 _code_embedder: SentenceTransformerEmbedding | None = None
+_doc_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
 
 # Heartbeat: writes a JSON file every 30s so the supervisor (and health checks)
@@ -171,6 +173,16 @@ async def handle_search(request: web.Request) -> web.Response:
             logger.exception("Code embedding model failed to load")
             return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
+    # docs: sources need the separate prose embedder, warmed up the same way,
+    # only when one is actually present so a pure project: search never pays
+    # for a model it doesn't use.
+    if any(s.startswith("docs:") for s in sources) and _doc_embedder and not _doc_embedder.is_loaded:
+        try:
+            await loop.run_in_executor(None, _doc_embedder.embed_query, "warmup")
+        except Exception as e:
+            logger.exception("Docs embedding model failed to load")
+            return _json_response({"error": f"Docs embedding model failed to load: {e}"}, 503)
+
     graph_meta: dict = {}
     results = await loop.run_in_executor(
         None,
@@ -185,6 +197,7 @@ async def handle_search(request: web.Request) -> web.Response:
             meta_out=graph_meta,
             depth=depth,
             direction=direction,
+            doc_embedder=_doc_embedder,
         ),
     )
 
@@ -301,6 +314,160 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     status = 200 if "error" not in result else 400
     return _json_response(result, status)
+
+
+async def handle_docs_ingest(request: web.Request) -> web.Response:
+    """POST /docs-ingest: fetch, chunk, citation tag, and store official
+    document sources under a persistent topic, searchable afterward via
+    POST /search with sources: ["docs:<topic>"].
+
+    Body fields:
+        topic (str): topic name, e.g. "medical-debt-law" (required)
+        sources (list[dict]): each entry:
+            source_id (str): stable id for this source, e.g. a URL (required)
+            type (str): "ecfr" or "html" (required)
+            heading_pattern (str): regex identifying a citation heading line
+                (required)
+            citation_prefix (str): jurisdiction/code prefix, e.g.
+                "Tex. Fin. Code" or "45 CFR" (required)
+            jurisdiction (str): e.g. "Texas" or "Federal" (required)
+            url (str): source URL, required for type "html"
+            title (int), date (str), section (str, optional): required for
+                type "ecfr"
+        force (bool): re ingest even if content hash is unchanged
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    topic = body.get("topic", "").strip()
+    if not topic:
+        return _json_response({"error": "Missing 'topic' field"}, 400)
+
+    source_entries = body.get("sources", [])
+    if not source_entries or not isinstance(source_entries, list):
+        return _json_response({"error": "'sources' must be a non empty list"}, 400)
+
+    force = body.get("force", False)
+
+    if not _doc_embedder:
+        return _json_response({"error": "Server not initialized"}, 503)
+
+    loop = asyncio.get_running_loop()
+    if not _doc_embedder.is_loaded:
+        try:
+            await loop.run_in_executor(None, _doc_embedder.embed_query, "warmup")
+        except Exception as e:
+            return _json_response({"error": f"Docs embedding model failed to load: {e}"}, 503)
+
+    from .docs_chunker import heading_pattern_matches
+    from .docs_fetch import fetch_ecfr_section, fetch_html_as_text
+    from .docs_store import ingest_source
+
+    results = []
+    for entry in source_entries:
+        source_id = entry.get("source_id", "").strip()
+        source_type = entry.get("type", "").strip()
+        heading_pattern = entry.get("heading_pattern", "")
+        citation_prefix = entry.get("citation_prefix", "")
+        jurisdiction = entry.get("jurisdiction", "")
+
+        if not all([source_id, source_type, heading_pattern, citation_prefix, jurisdiction]):
+            results.append({"source_id": source_id or "?", "error": "missing required field(s)"})
+            continue
+
+        # Validate the caller-supplied heading regex once, up front. A malformed
+        # pattern otherwise raises an uncaught re.error later (in
+        # heading_pattern_matches for html, or in chunk_by_heading for any
+        # source type), which propagates as a request-wide 500 and aborts every
+        # other well-formed source in the batch. Surface it as a scoped
+        # per-source error instead, same shape as the other validation failures.
+        try:
+            re.compile(heading_pattern)
+        except re.error as e:
+            results.append({
+                "source_id": source_id,
+                "error": f"invalid heading_pattern regex ({heading_pattern!r}): {e}",
+            })
+            continue
+
+        if source_type == "ecfr":
+            title = entry.get("title")
+            date = entry.get("date", "")
+            section = entry.get("section")
+            if not title or not date:
+                results.append({"source_id": source_id, "error": "ecfr source needs title and date"})
+                continue
+            text = await loop.run_in_executor(
+                None, partial(fetch_ecfr_section, title, date, section)
+            )
+            source_url = f"https://www.ecfr.gov/current/title-{title}"
+        elif source_type == "html":
+            url = entry.get("url", "")
+            if not url:
+                results.append({"source_id": source_id, "error": "html source needs url"})
+                continue
+            text = await loop.run_in_executor(None, partial(fetch_html_as_text, url))
+            source_url = url
+        else:
+            results.append({"source_id": source_id, "error": f"unknown type {source_type!r}"})
+            continue
+
+        if not text:
+            results.append({"source_id": source_id, "error": "fetch returned no content"})
+            continue
+
+        # Content-sanity check for html sources: a non-empty fetch can still be
+        # junk (a JS-rendered shell returns its nav chrome, not the statute), and
+        # that junk would otherwise be chunked and stamped with a clean-looking
+        # but false citation. Require the source's own heading_pattern to match
+        # at least once. The never-match sentinel "(?!)" marks an intentionally
+        # single-section fetch (no heading line by design), so it's exempt.
+        if (
+            source_type == "html"
+            and heading_pattern.strip() != "(?!)"
+            and not heading_pattern_matches(text, heading_pattern)
+        ):
+            results.append({
+                "source_id": source_id,
+                "error": (
+                    f"fetched content has no heading_pattern match ({heading_pattern!r}); "
+                    "the page is likely a client-rendered shell or the wrong URL, "
+                    "not the expected multi-section document"
+                ),
+            })
+            continue
+
+        stats = await loop.run_in_executor(
+            None,
+            partial(
+                ingest_source,
+                topic, source_id, text, heading_pattern, citation_prefix,
+                source_url, jurisdiction, _doc_embedder, force=force,
+            ),
+        )
+        results.append(stats)
+
+    return _json_response({"topic": topic, "results": results})
+
+
+async def handle_docs_status(request: web.Request) -> web.Response:
+    """GET/POST /docs-status: what's been ingested for a docs topic."""
+    if request.method == "GET":
+        topic = request.query.get("topic", "").strip()
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON body"}, 400)
+        topic = body.get("topic", "").strip()
+
+    if not topic:
+        return _json_response({"error": "Missing 'topic' field"}, 400)
+
+    from .docs_store import topic_status
+    return _json_response(topic_status(topic))
 
 
 async def handle_reindex_file(request: web.Request) -> web.Response:
@@ -820,12 +987,19 @@ async def error_middleware(request: web.Request, handler) -> web.Response:
 
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
-    global _code_embedder, _start_time
+    global _code_embedder, _doc_embedder, _start_time
 
     _start_time = time.time()
 
     # Create the code embedder (loaded lazily, model downloads on first use)
     _code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+    # General prose embedder for docs: sources (statutes, regulations, etc),
+    # a separate model from the code search tuned one above. Also loaded
+    # lazily, on first docs: search or ingest, not at startup: the code
+    # embedder's startup warmup already imports sentence_transformers once,
+    # single threaded, so the thread safety concern that warmup exists for
+    # does not apply a second time here.
+    _doc_embedder = SentenceTransformerEmbedding()
 
     # Ensure state directory exists
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -875,6 +1049,9 @@ def create_app() -> web.Application:
     app.router.add_post("/graphrag-status", handle_graphrag_status)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)
+    app.router.add_post("/docs-ingest", handle_docs_ingest)
+    app.router.add_get("/docs-status", handle_docs_status)
+    app.router.add_post("/docs-status", handle_docs_status)
     app.router.add_post("/run-tests", handle_run_tests)
     app.router.add_post("/mutation-test", handle_mutation_test)
     app.router.add_get("/projects", handle_projects)

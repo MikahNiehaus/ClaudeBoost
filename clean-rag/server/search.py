@@ -20,14 +20,18 @@ def search(
     meta_out: dict | None = None,
     depth: int = 2,
     direction: str = "both",
+    doc_embedder=None,
 ) -> list[dict]:
-    """Search across project codebase indexes.
+    """Search across project codebase indexes and persistent docs topics.
 
     Args:
         query: The search query text.
         sources: List of source specifiers:
             - "project:<path>" to search a project's codebase index
+            - "docs:<topic>" to search a persistent official documents topic
         code_embedder: Code embedder (st-codesearch-distilroberta-base).
+        doc_embedder: General prose embedder for docs: sources. Required only
+            when a docs: source is present; project: sources ignore it.
         limit: Max results per source.
         min_score: Minimum similarity score.
         mode: Search mode for project sources. "vector" (default), "graph",
@@ -78,6 +82,13 @@ def search(
             else:
                 results = _search_project(query, project_path, code_embedder, limit, min_score)
                 all_results.extend(results)
+        elif source.startswith("docs:"):
+            topic = source[5:]
+            if doc_embedder is None:
+                logger.warning("docs: source requested but no doc_embedder provided: %s", source)
+                continue
+            from .docs_store import search_topic
+            all_results.extend(search_topic(query, topic, doc_embedder, limit, min_score))
         else:
             logger.warning("Unknown source specifier: %s", source)
 
