@@ -5,6 +5,7 @@ Extracted from ClaudeBoost mcp-rag-server (self-contained, no external imports).
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,11 +117,23 @@ class ChromaStore:
             )
             return False
 
-    def delete_collection(self, collection: str) -> None:
-        try:
-            self._client.delete_collection(collection)
-        except Exception as e:
-            logger.warning("Failed to delete collection %r: %s", collection, e)
+    def delete_collection(self, collection: str) -> bool:
+        for attempt in range(3):
+            try:
+                self._client.delete_collection(collection)
+                return True
+            except Exception as e:
+                if attempt < 2:
+                    logger.warning(
+                        "delete_collection(%r) attempt %d failed: %s — retrying in 0.5s",
+                        collection, attempt + 1, e,
+                    )
+                    time.sleep(0.5)
+                else:
+                    logger.error(
+                        "delete_collection(%r) failed after 3 attempts: %s", collection, e
+                    )
+                    return False
 
     def add_chunks(self, collection: str, chunks: list[Chunk]) -> int:
         if not chunks:

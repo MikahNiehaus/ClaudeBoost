@@ -88,6 +88,15 @@ DIFF=$(gh pr diff <url>)
 
 If the diff is empty, report "No changes to review" and stop.
 
+### Step 1b: Already-Exists check
+
+For every new function, class, or utility added in the diff:
+1. Extract its name and a one sentence description of what it does.
+2. Run `POST http://127.0.0.1:8613/search {"query":"<name> <description>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":5}`
+3. Read any hits with score > 0.75. If an existing file already provides the same thing, include it as a MAJOR finding: "This already exists at file:line".
+
+This is a single search call, not the full 16 pass protocol. Skip if the project is not indexed (Phase 0b already checked).
+
 ### Step 2: Review the diff
 
 Review the diff systematically. For each issue found, classify by severity:
@@ -431,8 +440,16 @@ If no issues: {"pass": <id>, "name": "<name>", "findings": []}
 **Pass 1 — Simplicity**
 Can this be deleted, inlined, or simplified? Prefer derived values over refs. Minimize state variables and coordination points. Flag any N×M sync complexity.
 
-**Pass 2 — Already-Exists**
-Did you add something the codebase or a dependency already provides? Verify existing things actually meet the requirement before reusing.
+**Pass 2 — Already-Exists** | USE_GRAPH: yes
+Did you add something the codebase or a dependency already provides?
+
+For every new or substantially changed function, class, or utility in the diff:
+1. Extract its name and a one sentence description of what it does.
+2. Search by name: `POST http://127.0.0.1:8613/search {"query":"<name>","sources":["project:<PROJECT_PATH>"],"mode":"vector","limit":5}`
+3. Search by behavior: `POST http://127.0.0.1:8613/search {"query":"<one sentence description>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":5}`
+4. Read any hits with score > 0.75. If an existing file solves the same problem, flag as WARNING with the existing file:line and what it already provides.
+
+Verify existing things actually meet the requirement before recommending reuse. A hit that predates a requirement change is not a valid match.
 
 **Pass 3 — Dead Code**
 For every variable/param/function: is it actually referenced end-to-end? Check orphaned imports. Use `POST /search mode=graph` to verify external consumers.

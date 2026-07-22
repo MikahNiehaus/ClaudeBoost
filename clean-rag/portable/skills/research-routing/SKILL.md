@@ -15,8 +15,18 @@ place it. A report with nothing actually quoted in it is half the job.
 Before researching how to build a thing, research whether it's already built.
 This applies on every task, listed or not.
 
-1. **This project.** Grep for it. Search the project index. Reusing a helper
-   three files over beats writing a second one.
+**Index guard:** before running the project searches below, make sure the
+project is indexed and current. Fire `POST http://127.0.0.1:8613/index-project
+{"project_path": "<abs path>"}` — it's idempotent (returns immediately if
+already current). A stale or missing index makes the vector + graph search
+below silently return nothing, which reads as "nothing exists" when the truth
+is "I didn't look."
+
+1. **This project.** Grep and Glob for exact matches, then vector + graph
+   search (`mode: "both"`) to find semantically similar code under different
+   names and the import graph paths that reveal existing patterns. Read what
+   the graph surfaces. Reusing a helper three files over beats writing a
+   second one, and extending an existing pattern beats inventing a new one.
 2. **Stdlib, or a dependency already installed.** Check what's in the manifest
    before adding anything.
 3. **GitHub, and lean on it.** Search it first and hard. A maintained

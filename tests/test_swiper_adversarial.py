@@ -106,8 +106,9 @@ def test_stackoverflow_search_curl_does_not_use_wrong_fields():
 
 def test_match_strategy_line_is_two_value_only():
     """MATCH_STRATEGY line must show exactly clone-and-patch | pattern-only, no adapt."""
-    m = re.search(r'MATCH_STRATEGY:.*', swiper)
-    assert m, "No MATCH_STRATEGY: line in swiper.md"
+    # Anchor to start of line so we hit the template declaration, not a prose mention
+    m = re.search(r'^MATCH_STRATEGY:.*', swiper, re.MULTILINE)
+    assert m, "No MATCH_STRATEGY: line at start of line in swiper.md"
     line = m.group()
     assert "adapt" not in line.lower(), (
         f"MATCH_STRATEGY line contains 'adapt': {line!r}"

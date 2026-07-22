@@ -35,6 +35,57 @@ from .store import Chunk, ChromaStore
 
 logger = logging.getLogger(__name__)
 
+# Only run VACUUM when the SQLite file exceeds this size.  VACUUMing a small
+# file on every single-file reindex (which fires after every edit) would take
+# a write lock for nothing.  50 MB is well above normal working size and low
+# enough to catch real bloat before it matters.
+VACUUM_THRESHOLD_BYTES = 50 * 1024 * 1024
+
+
+def _vacuum_chroma_sqlite(
+    chroma_dir: Path, pid: str, *, skip_threshold: bool = False,
+) -> None:
+    """VACUUM chroma.sqlite3 if it exceeds the size threshold.
+
+    Reclaims SQLite free-list pages accumulated by delete+upsert cycles.
+    Each incremental reindex deletes old rows and inserts new ones; SQLite
+    never releases freed pages to the OS without a VACUUM.  On a heavily
+    edited project this compounds to gigabytes (ChromaDB issue #2143).
+
+    When *skip_threshold* is True the size check is bypassed (used after a
+    full index_project run, which is infrequent enough to always vacuum).
+
+    The caller MUST evict the ChromaDB client for this chroma_dir before
+    calling this function.  A live client keeps Win32 file handles open on
+    the SQLite WAL and data files; raw sqlite3 access while those handles
+    are open causes corruption or OperationalError: database is locked.
+    """
+    sqlite_path = chroma_dir / "chroma.sqlite3"
+    if not sqlite_path.exists():
+        return
+    try:
+        size_before = sqlite_path.stat().st_size
+    except OSError:
+        return
+    if not skip_threshold and size_before < VACUUM_THRESHOLD_BYTES:
+        return
+    try:
+        conn = sqlite3.connect(str(sqlite_path))
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("VACUUM")
+        conn.close()
+        size_after = sqlite_path.stat().st_size
+        freed_mb = round((size_before - size_after) / 1024 ** 2, 1)
+        logger.info(
+            "VACUUM chroma.sqlite3 for %s: %.1f MB -> %.1f MB (freed %.1f MB)",
+            pid,
+            round(size_before / 1024 ** 2, 1),
+            round(size_after / 1024 ** 2, 1),
+            freed_mb,
+        )
+    except Exception as e:
+        logger.warning("VACUUM failed for %s (non-fatal): %s", pid, e)
+
 
 def _mem_mb() -> float:
     """Current process RSS in MB. Returns 0.0 if psutil is not installed."""
@@ -467,11 +518,28 @@ def index_project(
         except Exception:
             manifest = {}
 
+    if force:
+        # Evict the cached ChromaDB client BEFORE opening a new one.
+        # The cached client holds live C++ HNSW segment instances that keep
+        # Win32 file handles open on data_level0.bin etc. delete_collection
+        # internally calls rmtree on the segment UUID directory, which fails
+        # with WinError 32 if any handle is still open. Evicting first calls
+        # client.close() -> System.stop() -> close_persistent_index() which
+        # releases the handles before the delete attempt (WinError 32 fix).
+        ChromaStore.evict_cache(str(chroma_dir))
+        _gc_cleanup("force-pre-evict")
+
     store = ChromaStore(persist_dir=str(chroma_dir))
     collection = "codebase"
 
     if force and store.collection_exists(collection):
-        store.delete_collection(collection)
+        deleted = store.delete_collection(collection)
+        if not deleted:
+            raise RuntimeError(
+                f"Force-rebuild of {project_path!r}: could not delete existing "
+                f"collection after 3 attempts — aborting to prevent double-indexing. "
+                f"Restart the RAG server and retry."
+            )
 
     store.create_collection(collection)
 
@@ -644,31 +712,11 @@ def index_project(
         graph_stats=graph_stats,
     )
 
-    # Evict project ChromaDB client + GC
+    # Evict project ChromaDB client before VACUUM (Win32 file handle release)
     ChromaStore.evict_cache(str(chroma_dir))
 
-    # Reclaim SQLite free-list pages accumulated by delete+upsert cycles.
-    # Each incremental reindex deletes old rows and inserts new ones; SQLite
-    # never releases freed pages to the OS without a VACUUM. On a heavily-edited
-    # project this compounds to gigabytes over time (ChromaDB issue #2143).
-    sqlite_path = chroma_dir / "chroma.sqlite3"
-    if sqlite_path.exists():
-        try:
-            size_before = sqlite_path.stat().st_size
-            conn = sqlite3.connect(str(sqlite_path))
-            conn.execute("VACUUM")
-            conn.close()
-            size_after = sqlite_path.stat().st_size
-            freed_mb = round((size_before - size_after) / 1024 ** 2, 1)
-            logger.info(
-                "VACUUM chroma.sqlite3 for %s: %.1f MB -> %.1f MB (freed %.1f MB)",
-                pid,
-                round(size_before / 1024 ** 2, 1),
-                round(size_after / 1024 ** 2, 1),
-                freed_mb,
-            )
-        except Exception as e:
-            logger.warning("VACUUM failed for %s (non-fatal): %s", pid, e)
+    # Full index always vacuums regardless of size threshold.
+    _vacuum_chroma_sqlite(chroma_dir, pid, skip_threshold=True)
 
     _gc_cleanup(f"project-final:{pid}")
 
@@ -701,6 +749,9 @@ def reindex_file(
     Much faster than index_project() because it skips scanning the whole
     project tree. Only re-embeds the specified file if its content hash
     changed since the last index. Also updates graph edges for the file.
+
+    Caller must hold ``acquire_index_lock()`` before calling.  The function
+    may run VACUUM on the SQLite file, which requires exclusive access.
 
     Returns stats dict.
     """
@@ -841,6 +892,12 @@ def reindex_file(
 
     manifest[rel_path] = current_hash
     _save_project_manifest(manifest_path, manifest, str(project_root))
+
+    # Reclaim bloat if the db grew past the threshold.  Close the store
+    # and evict the cached client first so no Win32 file handles remain.
+    store.close()
+    ChromaStore.evict_cache(str(chroma_dir))
+    _vacuum_chroma_sqlite(chroma_dir, pid)
 
     elapsed = round(time.time() - start_time, 3)
     result = {
