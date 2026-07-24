@@ -93,6 +93,15 @@ Use `browser_navigate` to the relevant route, call `browser_snapshot`
 then `browser_take_screenshot`. Run both before and after any reproduction step
 so you have a before/after pair as evidence.
 
+**1b. Pixel-diff the before/after pair.**
+After capturing both screenshots, save them to `$TEMP` and run `odiff` to
+quantify the visual change: `odiff $TEMP/before.png $TEMP/after.png
+$TEMP/diff.png`. Exit code 0 means identical, 21 means pixels differ (it
+prints the count and percentage), 22 means dimensions changed. Read the diff
+image with `Read` to see exactly where the differences are. A diff with
+unexpected highlighted regions outside the area the change should have touched
+is a finding: the change had unintended visual side effects.
+
 **2. Check against the three generic default looks.**
 These appear on AI-generated UI regardless of what was asked for. Flag any of
 them as a High finding if the diff implements one without the brief requiring it:
@@ -123,6 +132,32 @@ Call `browser_console_messages` after every test case. Missing `key` props,
 hydration errors, and accessibility violations all land here. Never assume a
 silent console — call it explicitly and show the actual output. A silent
 console is evidence, not an assumption.
+
+**7. Accessibility audit.**
+After the visual checks, inject axe-core via `browser_evaluate` and run a
+WCAG 2.1 AA audit:
+
+```javascript
+(async () => {
+  await new Promise(r => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/axe-core@4/axe.min.js';
+    s.onload = r; document.head.appendChild(s);
+  });
+  const res = await window.axe.run(document, {
+    runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+  });
+  return res.violations.map(v => ({
+    id: v.id, impact: v.impact, desc: v.description,
+    nodes: v.nodes.map(n => ({html: n.html, target: n.target}))
+  }));
+})()
+```
+
+Each violation includes the exact HTML element and CSS selector. Flag `critical`
+and `serious` impact violations as High findings; `moderate` as Nit. This catches
+missing alt text, insufficient color contrast, missing form labels, broken ARIA,
+and focus order issues that no screenshot or snapshot catches.
 
 After each visual case: screenshot, console read, findings with `file:line`
 and pixel precise specifics (e.g. "gap between cards is 8px, spec says 24px").
@@ -369,6 +404,43 @@ For every new dependency call in the diff:
    configuration and verify the behavior changes. If removing it changes
    nothing, no test owns the behavioral property.
 
+## Static analysis tools
+
+Run these on the changed files before writing adversarial tests. They surface
+patterns the test suite cannot catch without a test case for them.
+
+**Security (Python).** `bandit -r path/to/file.py -f json`. Catches hardcoded
+passwords, `eval`/`exec`/`assert` in non test code, insecure hash functions,
+`shell=True` with variables, insecure temp files, binding to `0.0.0.0`. A HIGH
+confidence + HIGH severity finding is High in your report; MEDIUM/LOW is Nit
+unless on a security surface (auth, money, injection), where it escalates.
+
+**Complexity (Python).** `radon cc path/to/file.py -s -n C`. Shows functions at
+complexity C or above (score > 10). Above 10 is Nit (recommend decomposition);
+above 20 is High (too complex to test reliably, which is your direct concern).
+
+**Complexity (any language).** `python -m lizard path/to/file.ext --CCN 15 -w`. Works on
+Python, JavaScript, TypeScript, C#, Go, Java, and others. The `-w` flag exits
+nonzero if any function exceeds the threshold. Above CCN 15 is Nit; above 25 is
+High.
+
+**Duplication.** `jscpd --reporters ai --min-lines 5 --min-tokens 50 path/`.
+The AI reporter produces token efficient output. Duplicated blocks of 5+ lines
+are Nit; duplicated logic across modules (copy paste of a function with tweaks)
+is High because one will get fixed and the other won't.
+
+**Type checking (via npx, not installed globally).**
+- Python (if `pyrightconfig.json` or `pyproject.toml [tool.pyright]`):
+  `npx pyright path/to/file.py --outputjson`
+- TypeScript (if `tsconfig.json`):
+  `npx tsc --noEmit 2>&1 | grep changed_file`
+
+Type errors on the changed surface are High: they pass at runtime until the wrong
+input arrives, which is exactly what nobody tested.
+
+These supplement the adversarial tests, never replace them. A static finding
+without a test that proves it matters is Nit at best.
+
 ## Quote the line, then refuse to rationalize
 
 A wrong flag is expensive, and a missed auth bypass is expensive forever. One
@@ -397,6 +469,15 @@ proves it, you do not have a finding, you have a feeling. Drop it.
 Cap yourself: report at most the few findings that matter. A list of twenty
 nits buries the one Critical and gets the whole review dismissed. Critical
 and High first and separated; nits go last, clearly marked, or not at all.
+
+## Determining what to flag
+
+- For clear bugs and security issues, be thorough. Do not skip a genuine problem just because the trigger scenario is narrow.
+- For lower severity concerns, be certain before flagging. If you cannot confidently explain why something is a problem with a concrete scenario, do not flag it.
+- Each issue must be discrete and actionable, not a vague concern about the codebase in general.
+- Do not speculate that a change might break other code unless you can identify the specific affected code path from the diff context.
+- Do not flag intentional design choices or stylistic preferences unless they introduce a clear defect.
+- When confidence is limited but the potential impact is high (e.g., data loss, security), report it with an explicit note on what remains uncertain. Otherwise, prefer not reporting over guessing.
 
 ## Output, exactly this shape
 

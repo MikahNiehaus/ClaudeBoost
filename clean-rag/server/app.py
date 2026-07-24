@@ -33,6 +33,7 @@ from .github_search import github_fetch_file, github_search
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
 from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
 from .mutation import run_mutation
+from .security import run_security_scan
 from .search import search
 from .stackexchange import stackoverflow_search
 from .wikipedia import wikipedia_search
@@ -666,6 +667,35 @@ async def handle_mutation_test(request: web.Request) -> web.Response:
     return _json_response(result)
 
 
+async def handle_security_scan(request: web.Request) -> web.Response:
+    """POST /security-scan: run security tools on changed files.
+
+    Body: {"project_path": "<abs>", "changed_files": ["src/a.py", ...]}. Runs
+    available scanners (bandit, pip-audit, semgrep) scoped to changed_files in
+    an executor. A missing tool reports has_tool false with install instructions.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    changed_files = body.get("changed_files") or []
+    if not isinstance(changed_files, list):
+        return _json_response({"error": "'changed_files' must be a list"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, partial(run_security_scan, project_path, changed_files)
+    )
+    return _json_response(result)
+
+
 async def handle_web_search(request: web.Request) -> web.Response:
     """POST /web-search: DuckDuckGo search, source ranked and sanitized.
 
@@ -1054,6 +1084,7 @@ def create_app() -> web.Application:
     app.router.add_post("/docs-status", handle_docs_status)
     app.router.add_post("/run-tests", handle_run_tests)
     app.router.add_post("/mutation-test", handle_mutation_test)
+    app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/register-project", handle_register_project)
     app.on_startup.append(_on_startup)

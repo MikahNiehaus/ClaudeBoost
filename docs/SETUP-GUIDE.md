@@ -42,7 +42,7 @@ This does everything in one step:
 | 1 | Installs RAG server package | pip (editable install) |
 | 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
 | 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 35 slash commands | `~/.claude/commands/` |
+| 4 | Links 36 slash commands | `~/.claude/commands/` |
 | 5 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
 
 The installer output should show all steps completing:
@@ -73,7 +73,7 @@ Should return `{"status":"ready"}` with collection chunk counts.
 That's it. Every Claude Code session now has:
 - Semantic search over 109 knowledge files (55 domain, 21 language, 33 framework) and 25 agent XML files
 - Global CLAUDE.md telling Claude when and how to use RAG
-- 35 slash commands for task management
+- 36 slash commands for task management
 
 ### How RAG works after install
 

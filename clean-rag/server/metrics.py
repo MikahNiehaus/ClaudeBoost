@@ -11,6 +11,12 @@ from datetime import datetime, timedelta
 import hashlib
 import logging
 
+try:
+    from radon.complexity import cc_visit, cc_rank
+    _HAS_RADON = True
+except ImportError:
+    _HAS_RADON = False
+
 logger = logging.getLogger(__name__)
 
 METRICS_CACHE_DIR = Path(os.environ.get("METRICS_CACHE_DIR", "state/metrics-cache"))
@@ -69,8 +75,28 @@ def _compute_metrics(filepath: str) -> dict:
         lines = content.split("\n")
         loc = len([l for l in lines if l.strip() and not l.strip().startswith("#")])
 
-        # Simplified cyclomatic complexity estimate
-        complexity = 1 + sum(1 for line in lines if any(kw in line for kw in ["if ", "elif ", "for ", "while ", "except "]))
+        # Cyclomatic complexity via radon (real McCabe on AST), with fallback
+        complexity_rank = None
+        complexity_warning = None
+        if _HAS_RADON:
+            results = cc_visit(content)
+            if results:
+                complexity = max(r.complexity for r in results)
+                complexity_rank = cc_rank(complexity)
+                # Warn on any function exceeding C rank (complexity > 20)
+                bad = [r for r in results if r.complexity > 20]
+                if bad:
+                    worst = max(bad, key=lambda r: r.complexity)
+                    complexity_warning = (
+                        f"Function {worst.name} has complexity {worst.complexity} "
+                        f"(rank {cc_rank(worst.complexity)}), consider refactoring"
+                    )
+            else:
+                complexity = 1
+                complexity_rank = "A"
+        else:
+            # Fallback: simplified line scan estimate
+            complexity = 1 + sum(1 for line in lines if any(kw in line for kw in ["if ", "elif ", "for ", "while ", "except "]))
 
         # Maintainability index (simplified: based on LOC and complexity)
         maintainability = max(0, min(100, 171 - 5.2 * (complexity ** 0.4) - 0.23 * loc + 50 * (loc ** -0.5)))
@@ -78,7 +104,7 @@ def _compute_metrics(filepath: str) -> dict:
         # Extract call graph
         call_graph = _extract_call_graph(filepath)
 
-        return {
+        result = {
             "file": filepath,
             "lines_of_code": loc,
             "cyclomatic_complexity": complexity,
@@ -86,6 +112,11 @@ def _compute_metrics(filepath: str) -> dict:
             "call_graph": call_graph,
             "computed_at": datetime.now().isoformat(),
         }
+        if complexity_rank is not None:
+            result["complexity_rank"] = complexity_rank
+        if complexity_warning is not None:
+            result["complexity_warning"] = complexity_warning
+        return result
     except Exception as e:
         logger.warning(f"Failed to compute metrics for {filepath}: {e}")
         return {"file": filepath, "error": str(e)}
@@ -138,6 +169,11 @@ def format_metrics_for_context(metrics_list: list[dict]) -> str:
     for m in metrics_list:
         if "error" in m:
             continue
-        lines.append(f"- **{m['file']}**: LOC={m['lines_of_code']}, Complexity={m['cyclomatic_complexity']}, Maintainability={m['maintainability_index']}")
+        rank = m.get("complexity_rank", "")
+        rank_str = f" ({rank})" if rank else ""
+        lines.append(f"- **{m['file']}**: LOC={m['lines_of_code']}, Complexity={m['cyclomatic_complexity']}{rank_str}, Maintainability={m['maintainability_index']}")
+        warning = m.get("complexity_warning")
+        if warning:
+            lines.append(f"  - Warning: {warning}")
 
     return "\n".join(lines)

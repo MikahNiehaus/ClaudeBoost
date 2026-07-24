@@ -34,6 +34,7 @@ AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
 VERIFIER_GATE_SENTINEL = "verifier-gate.py"
 VERIFIER_RECORD_SENTINEL = "verifier-record.py"
 RECORD_EDIT_SENTINEL = "record-edit.py"
+LINT_GATE_SENTINEL = "lint-gate.py"
 
 
 def _say(msg: str) -> None:
@@ -169,6 +170,41 @@ def install_deps() -> None:
         _ok("Dependencies installed")
     else:
         _warn(f"pip install returned {result.returncode}: {result.stderr[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# Step 2b: Install npm QA tools (best effort)
+# ---------------------------------------------------------------------------
+def install_npm_qa_tools() -> None:
+    """Install npm QA tools for bad-cop and good-cop agents.
+
+    Best effort: warns and continues if npm is not available or if any
+    install fails. odiff provides pixel level screenshot diffing; jscpd
+    provides duplication detection with an AI optimized reporter.
+    """
+    npm = shutil.which("npm")
+    if not npm:
+        _warn("npm not found, skipping QA tool install (odiff, jscpd)")
+        _say("Install Node.js to enable visual diffing and duplication detection")
+        return
+
+    tools = [("odiff-bin", "odiff"), ("jscpd@5", "jscpd")]
+    for package, binary in tools:
+        if shutil.which(binary):
+            _ok(f"{binary} already installed")
+            continue
+        _say(f"Installing {package}...")
+        try:
+            result = subprocess.run(
+                [npm, "install", "-g", package],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                _ok(f"{package} installed")
+            else:
+                _warn(f"{package} install failed: {result.stderr[:200]}")
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{package} install failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +715,23 @@ def register_verifier_record_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lint gate: PostToolUse nudge that runs ruff/eslint after code writes.
+# Always exits 0, reports to stderr. Not a blocker.
+# ---------------------------------------------------------------------------
+def register_lint_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/lint-gate.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", LINT_GATE_SENTINEL,
+        hook_entry, label="lint-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Step 5i: Configure web search env vars
 # ---------------------------------------------------------------------------
 def configure_web_search_env() -> None:
@@ -878,6 +931,13 @@ def main():
     else:
         print("\nStep 2: Skipped (--skip-deps)")
 
+    # Step 2b
+    if not args.skip_deps:
+        print("\nStep 2b: Installing npm QA tools...")
+        install_npm_qa_tools()
+    else:
+        print("\nStep 2b: Skipped (--skip-deps)")
+
     # Step 3
     print("\nStep 3: Registering the research gate...")
     wipe_clean_rag_hooks()  # clean slate: drop clean-rag's own hooks, then rebuild them all
@@ -928,6 +988,9 @@ def main():
     print("\nStep 5h2: Registering verifier-gate hook...")
     register_verifier_gate_hook()
     register_verifier_record_hook()
+
+    print("\nRegistering lint-gate hook...")
+    register_lint_gate_hook()
 
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")

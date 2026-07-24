@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get 24 specialist agents (architect, security, performance, test, debug, and more), 109 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 35 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get 24 specialist agents (architect, security, performance, test, debug, and more), 109 knowledge files covering languages, frameworks, and engineering domains, a RAG search layer that routes the right knowledge to each agent automatically, and 36 slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -14,7 +14,7 @@ The core idea is that most engineering tasks benefit from a specialist rather th
 
 ## 2. Getting started
 
-Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 35 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
+Install: see [SETUP-GUIDE.md](SETUP-GUIDE.md). The installer sets up the RAG server, links all 36 slash commands, hardlinks `CLAUDE.md` globally, and builds the initial vector index. It takes a few minutes the first time.
 
 Then run `/boost` at the start of every session. That's the one mandatory step — it loads RAG and primes Claude with your project context. Without it, RAG isn't connected and the agents won't have access to the knowledge bases.
 
@@ -119,6 +119,7 @@ Everything else in the tables below is available, but most of it runs automatica
 |---------|-------------|---------|
 | `/init` | Creates a `CLAUDE.md` with codebase documentation for the current project. | `/init` |
 | `/visualize` | Generates an interactive architecture board and opens it in the browser. | `/visualize` |
+| `/walkthrough` | Generates a step by step tutorial with annotated screenshots. Drives a live app through Playwright, injects visual highlights, numbered callouts, arrows, and popovers, then assembles a polished markdown doc. | `/walkthrough http://localhost:3000 login flow` |
 
 ### Git & Workflow
 
@@ -489,7 +490,30 @@ For rename campaigns that touch many files, `refactor-agent` searches all occurr
 ```
 Generates an interactive board of your project's architecture and opens it in the browser. Shows the layers of the system, how components connect, and where decisions were made. Useful for onboarding a new team member, planning a large change, or just getting reoriented in a codebase you haven't touched in a while.
 
-### 10. Context window full mid-task
+### 10. Generate a feature walkthrough
+
+```
+/walkthrough http://localhost:3000 login flow
+/walkthrough http://localhost:5173 creating a new project --output docs/tutorials
+```
+
+Creates a step by step tutorial document with annotated screenshots. Claude drives the app through Playwright in headed mode, injects visual annotations (numbered badges, highlight boxes, arrows, Driver.js popovers) onto each step, captures a screenshot, then assembles a polished markdown file with all the images embedded.
+
+**How it works:**
+1. You provide a URL (localhost only) and describe the feature or workflow
+2. Claude writes a step plan and shows it to you for approval
+3. For each step, it navigates, waits for the page to settle, injects annotations, takes a screenshot, cleans up, then performs the action to advance
+4. The output is a markdown doc in `docs/walkthroughs/` (or your `--output` path) with one section per step, each containing instructions and an annotated screenshot
+
+**Annotation types available:**
+- Numbered callout badges (red circles with step numbers)
+- Highlight boxes (colored outlines around target elements)
+- Directional arrows with text labels
+- Driver.js popovers (spotlight + tooltip with title and description)
+
+The skill falls back to pure DOM injection if the CDN is unreachable (air gapped environments). All annotations are cleaned up between steps so they don't accumulate.
+
+### 11. Context window full mid-task
 
 This happens on long sessions. The fix is:
 
@@ -505,7 +529,7 @@ next, which files are relevant. Run it *before* `/clear`, not after.
 
 The key is running `/clear-safe` *before* `/clear`, not after. Once you clear the context, that information is gone if you didn't save it.
 
-### 11. Review what changed
+### 12. Review what changed
 
 ```
 /changes

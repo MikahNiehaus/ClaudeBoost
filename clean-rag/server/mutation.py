@@ -254,6 +254,9 @@ def _run_mutmut(root, files, rejected):
     try:
         proc = _run(argv, root)
     except subprocess.TimeoutExpired:
+        fallback = _run_mutatest(root, files, rejected)
+        if fallback is not None:
+            return fallback
         return _result(False, "mutmut", rejected=rejected,
                        error=f"mutmut timed out after {DEFAULT_TIMEOUT_S}s")
     except Exception as e:  # noqa: BLE001
@@ -261,10 +264,65 @@ def _run_mutmut(root, files, rejected):
 
     killed, survived = _parse_mutmut_emoji((proc.stdout or "") + (proc.stderr or ""))
     total = killed + survived
+    if not total:
+        fallback = _run_mutatest(root, files, rejected)
+        if fallback is not None:
+            return fallback
     score = round(100 * killed / total, 1) if total else None
     err = None if total else "mutmut ran but produced no parseable summary; verify the installed version"
     return _result(total > 0, "mutmut", score=score, killed=killed, survived=survived,
                    total=total, rejected=rejected, error=err)
+
+
+def _run_mutatest(root, files, rejected):
+    """mutatest fallback. Bytecode-level mutation, quick spot-check."""
+    mutatest_bin = shutil.which("mutatest")
+    if not mutatest_bin:
+        return None  # Not installed, let caller handle
+    argv = [mutatest_bin, "--sample-size", "5"]
+    if files:
+        # mutatest uses --src for the source directory; scope to the
+        # common parent of the changed Python files.
+        py_files = [f for f in files if f.endswith(".py")]
+        if py_files:
+            src_dir = str(Path(py_files[0]).parent) or "."
+            argv += ["--src", src_dir]
+    try:
+        proc = _run(argv, root)
+    except subprocess.TimeoutExpired:
+        return _result(False, "mutatest", rejected=rejected,
+                       error=f"mutatest timed out after {DEFAULT_TIMEOUT_S}s")
+    except Exception as e:  # noqa: BLE001
+        return _result(False, "mutatest", rejected=rejected, error=f"could not run mutatest: {e}")
+
+    killed, survived = _parse_mutatest_output((proc.stdout or "") + (proc.stderr or ""))
+    total = killed + survived
+    score = round(100 * killed / total, 1) if total else None
+    return _result(total > 0, "mutatest", score=score, killed=killed, survived=survived,
+                   total=total, rejected=rejected)
+
+
+def _parse_mutatest_output(text):
+    """Parse mutatest plain-text summary for detected/survived counts."""
+    detected = survived = 0
+    for line in text.splitlines():
+        low = line.lower()
+        if "detected" in low:
+            detected = max(detected, _count_first_int(line))
+        elif "survived" in low:
+            survived = max(survived, _count_first_int(line))
+    return detected, survived
+
+
+def _count_first_int(line):
+    """Extract the first integer from a line."""
+    num = ""
+    for ch in line:
+        if ch.isdigit():
+            num += ch
+        elif num:
+            break
+    return int(num) if num else 0
 
 
 def _parse_mutmut_emoji(text):

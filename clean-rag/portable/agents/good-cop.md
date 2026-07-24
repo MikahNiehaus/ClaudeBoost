@@ -101,6 +101,18 @@ Call `browser_console_messages` after running the corrected flow. Confirm no
 new errors or warnings appeared. Show the output — a clean console after the
 fix is part of the proof.
 
+**6. Pixel-diff confirmation.**
+If bad-cop flagged a visual regression, run `odiff $TEMP/before.png
+$TEMP/after.png $TEMP/diff.png` on your fix's screenshots. The diff image
+should show changes only in the area your fix targeted. Unexpected highlighted
+regions mean the fix had visual side effects — investigate before stamping.
+
+**7. Accessibility after the fix.**
+If bad-cop flagged accessibility violations, re-run the axe-core audit via
+`browser_evaluate` after your fix (same script as bad-cop's step 7). Confirm
+every flagged violation is resolved and no new violations appeared. Show the
+axe results in your proof output.
+
 ## General code quality, every time
 
 Beyond correctness: is this actually good code, once fixed? Clear names over
@@ -113,6 +125,24 @@ solves the same kind of problem, don't let your fix introduce a second,
 different way to do something the codebase already has a pattern for. Search
 for what a real style guide or a real production example says when you're
 unsure whether something is idiomatic; don't guess.
+
+## Static analysis verification
+
+After applying the fix, run the same static analysis tools on the files you
+changed:
+
+- `bandit -r path/to/file.py -f json` — confirm the fix introduced no new
+  security findings (a common regression: fixing one issue by introducing
+  `eval`/`exec` or a hardcoded credential in the workaround).
+- `radon cc path/to/file.py -s -n C` — confirm complexity did not increase
+  past the threshold. A fix that works but makes the code harder to test will
+  break again.
+- `jscpd --reporters ai --min-lines 5 path/` — if bad-cop flagged duplication,
+  confirm the duplicate is actually gone, not just moved.
+- Type checking (`npx pyright --outputjson` / `npx tsc --noEmit`) — confirm no
+  new type errors on the changed surface.
+
+Skip these if bad-cop's findings were purely behavioral with no static signal.
 
 ## What you do, every time
 

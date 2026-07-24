@@ -221,6 +221,20 @@ def _tests_failing(root: str) -> bool:
     return bool(result.get("has_tests")) and result.get("passed") is False
 
 
+def _security_scan(root, files):
+    """Call /security-scan for the changed files. Returns findings or []."""
+    try:
+        payload = json.dumps({"project_path": root, "changed_files": files}).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{RAG_PORT}/security-scan",
+            data=payload, headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return [f for f in result.get("findings", [])
+                if f.get("severity", "").lower() in ("critical", "high")]
+    except Exception:
+        return []
 
 
 def main() -> int:
@@ -262,6 +276,18 @@ def main() -> int:
     # scan_diff no longer decides whether to review, it only labels the sharpest
     # risk so the block message can point at it. Any real code change needs a stamp.
     hits = high_stakes.scan_diff(added, paths)
+
+    # Opt-in: run security scanners on high stakes files for extra evidence.
+    # Gated by env var so it only runs when the user explicitly enables it.
+    if hits and os.environ.get("CLEAN_RAG_SECURITY_SCAN") == "1":
+        sec_findings = _security_scan(diff_root, [p for p in paths])
+        if sec_findings:
+            hits.setdefault("security-scan", [])
+            for f in sec_findings[:5]:
+                hits["security-scan"].append(
+                    f"{f.get('severity', 'low').upper()}: {f.get('title', '?')} "
+                    f"({f.get('file', '?')}:{f.get('line', 0)})"
+                )
 
     # A reviewer on failing code is wasted; the test gate owns that case.
     if _tests_failing(diff_root):

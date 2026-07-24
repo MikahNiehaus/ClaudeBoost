@@ -1,7 +1,7 @@
 ---
-description: Code X-ray — quick A-F grade by default; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator
-allowed-tools: Read, Write, Bash, Glob, Grep, Agent
-argument-hint: [--staged | --branch | --pr <url>] [--deep]
+description: Code X-ray — quick A-F grade by default; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator; add --fix to auto-fix all findings
+allowed-tools: Read, Write, Bash, Glob, Grep, Agent, Edit
+argument-hint: [--staged | --branch | --pr <url>] [--deep] [--fix]
 ---
 
 # /xray — Code X-ray
@@ -16,6 +16,15 @@ Scan `$ARGUMENTS` for any of: `--deep`, `--full`, `deep`, `full`, `in depth`, `i
 - **No match** → `DEEP_MODE = false` — quick single-agent A-F grade
 
 Strip the depth keyword from scope args before proceeding. Remaining tokens are the scope.
+
+## Fix Detection
+
+Scan `$ARGUMENTS` for: `--fix`, `fix`
+
+- **Match found** → `FIX_MODE = true` — after review completes, auto-fix every confirmed finding (BLOCKER, WARNING, and NIT)
+- **No match** → `FIX_MODE = false` — report only
+
+Strip the fix keyword from scope args before proceeding. `--fix` combines with any other flag: `--fix --deep`, `--fix --staged`, etc.
 
 ---
 
@@ -200,9 +209,47 @@ Spawn a single `evaluator-agent`:
 
 Surface any NEEDS_EVIDENCE items alongside the grade.
 
+## Fix Phase (FIX_MODE = true, quick review)
+
+If `FIX_MODE = false`, skip to Escalation Offer.
+
+After the quick review and evidence verification complete, apply fixes for every confirmed finding at every severity (BLOCKER, WARNING, NIT/MINOR). Do not skip nits.
+
+**Step 1 — Build fix list.** Collect every finding from the review output. For each one, read the file at the cited line to confirm it still matches the finding. Drop any that no longer apply.
+
+**Step 2 — Apply fixes.** For each finding in the fix list, ordered by file (to batch edits in the same file together):
+- Read the relevant section of the file
+- Apply the suggested fix using the Edit tool
+- If the fix is ambiguous or could break something, apply the safest interpretation
+
+**Step 3 — Verify fixes.** After all edits:
+```bash
+# Run the same diff command used for the review to confirm changes look correct
+git diff
+```
+
+If a test runner was detected, run the test suite to confirm nothing broke:
+```bash
+# Use the same test command from Phase 3b detection logic
+<test command> 
+```
+
+**Step 4 — Report.**
+```
+Fixed: N issues (N CRITICAL, N MAJOR, N MINOR/NIT)
+Skipped: N issues (with reasons)
+Tests: PASS | FAIL | not run
+
+Files modified:
+  <file> — <what changed>
+  ...
+```
+
+If any fix caused test failures, revert that specific fix and note it in Skipped with reason "caused test failure".
+
 ## Escalation Offer
 
-After delivering the grade, always end with:
+After delivering the grade (and fix report if `FIX_MODE`), always end with:
 
 > "Quick review done. Reply **deep** to run the full 16-pass X-ray with deterministic pre-scan, test execution, and Opus evaluator."
 
@@ -640,13 +687,75 @@ Final message:
 
 ---
 
+## Phase 6: Fix Phase (FIX_MODE = true, deep review)
+
+If `FIX_MODE = false`, skip to Post-Review Interaction.
+
+After the evaluator (Phase 4) completes and the report (Phase 5) is delivered, apply fixes for every confirmed finding that the evaluator did NOT classify as FALSE POSITIVE. This includes BLOCKERs, WARNINGs, and NITs.
+
+**Step 1 — Build fix list from evaluator output.** Use the evaluator's classifications as the source of truth. Include:
+- All BLOCKERs (confirmed by evaluator)
+- All WARNINGs (confirmed by evaluator)
+- All NITs (confirmed by evaluator)
+- Exclude FALSE POSITIVEs
+- Exclude INCOMPLETE pass flags (those are process issues, not code issues)
+
+For each item, record: file, line, description, suggested fix, severity.
+
+**Step 2 — Apply fixes.** Group findings by file. For each file:
+1. Read the relevant section around the cited line
+2. Apply the fix using the Edit tool
+3. Move to the next finding in the same file before switching files
+
+If a finding's suggested fix is too vague to apply mechanically, use your judgment to apply the most reasonable fix that addresses the described issue. If truly ambiguous (multiple valid interpretations that change behavior differently), skip it and note why.
+
+**Step 3 — Verify fixes.**
+
+Run the test suite (same detection logic as Phase 3b):
+```bash
+<detected test command>
+```
+
+If tests fail, identify which fix caused the failure:
+1. Check the test error against recent edits
+2. Revert the specific fix that broke the test
+3. Re-run tests to confirm green
+4. Record the reverted fix as "Skipped: caused test failure"
+
+**Step 4 — Fix report.**
+
+```
+## Fix Report
+
+Applied: N fixes (N BLOCKER, N WARNING, N NIT)
+Skipped: N (with reasons)
+Tests: PASS | FAIL | not run
+
+### Applied Fixes
+  <file>:<line> [<severity>] — <what was fixed>
+  ...
+
+### Skipped Fixes (if any)
+  <file>:<line> [<severity>] — <reason skipped>
+  ...
+```
+
+Append the fix report after the evaluator's grade report. The final message becomes:
+
+> "X-ray complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. **Fixed N of M findings.** [Remaining items listed if any were skipped.]"
+
+---
+
 ## Post-Review Interaction
 
 **If the user asks whether a finding is legitimate:**
 Only the evaluator (Phase 4) is authorized to answer. If it has run: quote its verdict. If it hasn't: spawn it first. Never self-verify.
 
-**If the user asks for fixes:**
+**If the user asks for fixes (and FIX_MODE was not set):**
 Only recommend fixes the evaluator classified as BLOCKER or WARNING.
 
+**If the user replies with `fix` or `--fix` after a review that did NOT have FIX_MODE:**
+Run the Fix Phase (Phase 6 for deep, or the quick review fix phase) immediately using the findings from the just-completed review. Do not re-run the review.
+
 **If the user replies with escalation keywords** (deep, in depth, full, more detail, thorough) **after a QUICK review:**
-Run DEEP REVIEW immediately using the same scope. Do not ask for confirmation.
+Run DEEP REVIEW immediately using the same scope. Do not ask for confirmation. Carry `FIX_MODE` forward if it was set.

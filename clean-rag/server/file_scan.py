@@ -21,7 +21,7 @@ CODE_EXTENSIONS = {
     ".lua", ".r", ".jl", ".dart", ".zig",
     ".sh", ".bash", ".zsh", ".ps1",
     ".sql", ".graphql", ".proto",
-    ".html", ".css", ".scss", ".less", ".vue", ".svelte",
+    ".html", ".cshtml", ".razor", ".css", ".scss", ".less", ".vue", ".svelte",
     ".yaml", ".yml", ".toml", ".json", ".xml",
     ".md", ".mdx", ".rst", ".txt",
 }

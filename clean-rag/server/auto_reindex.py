@@ -34,7 +34,7 @@ from .indexing import (
 
 logger = logging.getLogger(__name__)
 
-INTERVAL_S = 10 * 60
+INTERVAL_S = 60 * 60
 
 # A sweep that finds this many changed files is not an incremental edit, it's a
 # branch switch or a fresh pull. Rebuilding wholesale is cheaper than several

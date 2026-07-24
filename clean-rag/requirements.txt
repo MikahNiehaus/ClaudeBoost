@@ -5,3 +5,7 @@ httpx>=0.27.0,<1.0
 html2text>=2024.2.26,<2026.0
 networkx>=3.0,<4.0
 eyecite>=2.6.0,<3.0
+radon>=5.1,<7.0
+bandit>=1.7,<2.0
+mutatest>=3.0,<4.0
+lizard>=1.17,<2.0
