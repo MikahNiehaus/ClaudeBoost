@@ -108,12 +108,11 @@ def _compute_metrics(filepath: str) -> dict:
             "file": filepath,
             "lines_of_code": loc,
             "cyclomatic_complexity": complexity,
+            "complexity_rank": complexity_rank,
             "maintainability_index": round(maintainability, 1),
             "call_graph": call_graph,
             "computed_at": datetime.now().isoformat(),
         }
-        if complexity_rank is not None:
-            result["complexity_rank"] = complexity_rank
         if complexity_warning is not None:
             result["complexity_warning"] = complexity_warning
         return result

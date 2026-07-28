@@ -52,9 +52,10 @@ def _run_bandit(root, files):
 
     py_files = [f for f in files if f.endswith(".py")]
     if not py_files:
-        argv = [bandit, "-r", ".", "-f", "json", "--quiet"]
-    else:
-        argv = [bandit, "-f", "json", "--quiet"] + py_files
+        # No Python files in the changed set; skip bandit rather than
+        # falling through to a recursive scan of the entire project.
+        return []
+    argv = [bandit, "-f", "json", "--quiet"] + py_files
 
     env = {**os.environ, "CI": "true"}
     try:

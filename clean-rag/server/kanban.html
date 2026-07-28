@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Kanban</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --pending: #f0883e;
+    --in-progress: #58a6ff;
+    --completed: #3fb950;
+    --card-bg: #1c2129;
+    --card-hover: #22272e;
+    --accent-dim: rgba(88,166,255,0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .header-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .header-btn:hover {
+    background: var(--card-hover);
+    color: var(--text);
+    border-color: #484f58;
+  }
+
+  .header-btn.active {
+    background: var(--in-progress);
+    color: #fff;
+    border-color: var(--in-progress);
+  }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--completed);
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot.disconnected {
+    background: #f85149;
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Main layout: board + detail panel */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    padding: 16px 24px;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .column {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .column-header .count {
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  .column-header .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+    display: inline-block;
+  }
+
+  .col-pending .dot { background: var(--pending); }
+  .col-in-progress .dot { background: var(--in-progress); }
+  .col-completed .dot { background: var(--completed); }
+
+  .cards {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+
+  .cards::-webkit-scrollbar { width: 6px; }
+  .cards::-webkit-scrollbar-track { background: transparent; }
+  .cards::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .card:hover {
+    background: var(--card-hover);
+    border-color: #484f58;
+    transform: translateY(-1px);
+  }
+
+  .card.in-progress {
+    border-color: var(--in-progress);
+    box-shadow: 0 0 20px var(--accent-dim);
+  }
+
+  .card.selected {
+    border-color: var(--in-progress);
+    background: var(--card-hover);
+  }
+
+  .card-subject {
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.4;
+    margin-bottom: 4px;
+    word-break: break-word;
+  }
+
+  .card-active-form {
+    font-size: 11px;
+    color: var(--in-progress);
+    font-style: italic;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-id {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  .card-project {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-deps {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .dep-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(240,136,62,0.15);
+    color: var(--pending);
+  }
+
+  .empty-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 13px;
+    opacity: 0.5;
+  }
+
+  /* Detail panel */
+  .detail-panel {
+    width: 400px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .detail-panel.visible {
+    display: flex;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detail-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .detail-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .detail-close:hover {
+    background: var(--card-bg);
+    color: var(--text);
+  }
+
+  .detail-close svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .detail-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .detail-content::-webkit-scrollbar { width: 6px; }
+  .detail-content::-webkit-scrollbar-track { background: transparent; }
+  .detail-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .detail-field {
+    margin-bottom: 16px;
+  }
+
+  .detail-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .detail-value {
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .detail-value.mono {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .detail-description {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .detail-description p { margin-bottom: 8px; }
+  .detail-description code {
+    background: var(--card-bg);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .detail-description pre {
+    background: var(--card-bg);
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .detail-description pre code {
+    background: none;
+    padding: 0;
+  }
+
+  .status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .status-badge.pending {
+    background: rgba(240,136,62,0.15);
+    color: var(--pending);
+  }
+
+  .status-badge.in-progress {
+    background: rgba(88,166,255,0.15);
+    color: var(--in-progress);
+  }
+
+  .status-badge.completed {
+    background: rgba(63,185,80,0.15);
+    color: var(--completed);
+  }
+
+  .detail-dep-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .detail-dep-list li {
+    font-size: 12px;
+    padding: 4px 0;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detail-dep-list li:last-child {
+    border-bottom: none;
+  }
+
+  /* Mermaid modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  .modal-overlay.visible {
+    display: flex;
+  }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 80vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header h3 { font-size: 15px; }
+
+  .modal-body {
+    flex: 1;
+    overflow: auto;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-body svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .modal-empty {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    z-index: 50;
+  }
+
+  .toast.visible { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Claude Code Kanban</h1>
+      <div class="header-actions">
+        <button class="header-btn" id="btnDeps" title="Show dependency graph">Dependencies</button>
+        <button class="header-btn" id="btnNotify" title="Enable desktop notifications">Notify</button>
+      </div>
+    </div>
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="board">
+      <div class="column col-pending">
+        <div class="column-header">
+          <div><span class="dot"></span>Pending</div>
+          <span class="count" id="countPending">0</span>
+        </div>
+        <div class="cards" id="colPending"></div>
+      </div>
+      <div class="column col-in-progress">
+        <div class="column-header">
+          <div><span class="dot"></span>In Progress</div>
+          <span class="count" id="countInProgress">0</span>
+        </div>
+        <div class="cards" id="colInProgress"></div>
+      </div>
+      <div class="column col-completed">
+        <div class="column-header">
+          <div><span class="dot"></span>Completed</div>
+          <span class="count" id="countCompleted">0</span>
+        </div>
+        <div class="cards" id="colCompleted"></div>
+      </div>
+    </div>
+
+    <aside class="detail-panel" id="detailPanel">
+      <div class="detail-header">
+        <h3>Task Details</h3>
+        <button class="detail-close" id="closeDetail">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="detail-content" id="detailContent"></div>
+    </aside>
+  </div>
+
+  <!-- Dependency graph modal -->
+  <div class="modal-overlay" id="depsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Task Dependencies</h3>
+        <button class="detail-close" id="closeDeps">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="depsContent">
+        <span class="modal-empty">No task dependencies found</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+  const cols = {
+    pending:     document.getElementById('colPending'),
+    in_progress: document.getElementById('colInProgress'),
+    completed:   document.getElementById('colCompleted'),
+  };
+  const counts = {
+    pending:     document.getElementById('countPending'),
+    in_progress: document.getElementById('countInProgress'),
+    completed:   document.getElementById('countCompleted'),
+  };
+  const statusDot    = document.getElementById('statusDot');
+  const statusText   = document.getElementById('statusText');
+  const toast        = document.getElementById('toast');
+  const detailPanel  = document.getElementById('detailPanel');
+  const detailContent = document.getElementById('detailContent');
+  const closeDetail  = document.getElementById('closeDetail');
+  const btnDeps      = document.getElementById('btnDeps');
+  const depsModal    = document.getElementById('depsModal');
+  const depsContent  = document.getElementById('depsContent');
+  const closeDeps    = document.getElementById('closeDeps');
+  const btnNotify    = document.getElementById('btnNotify');
+
+  let allTasks = [];
+  let selectedTaskId = null;
+  let selectedSession = null;
+  let notificationsEnabled = false;
+  let previousStatuses = {};
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  function renderCard(task) {
+    const shortId = String(task.id || '').substring(0, 8);
+    const isInProgress = task.status === 'in_progress';
+    const isSelected = selectedTaskId === task.id && selectedSession === task.session;
+    const classes = ['card'];
+    if (isInProgress) classes.push('in-progress');
+    if (isSelected) classes.push('selected');
+
+    let activeFormHtml = '';
+    if (isInProgress && task.active_form) {
+      activeFormHtml = '<div class="card-active-form">' + escapeHtml(task.active_form) + '</div>';
+    }
+
+    let depsHtml = '';
+    const blockedBy = task.blocked_by || [];
+    const blocks = task.blocks || [];
+    if (blockedBy.length > 0 || blocks.length > 0) {
+      const badges = [];
+      if (blockedBy.length > 0) badges.push('<span class="dep-badge">blocked by ' + blockedBy.length + '</span>');
+      if (blocks.length > 0) badges.push('<span class="dep-badge">blocks ' + blocks.length + '</span>');
+      depsHtml = '<div class="card-deps">' + badges.join('') + '</div>';
+    }
+
+    const projectLabel = task.project_name || task.session || '';
+
+    return '<div class="' + classes.join(' ') + '" data-task-id="' + escapeHtml(String(task.id)) + '" data-session="' + escapeHtml(task.session || '') + '">' +
+      '<div class="card-subject">' + escapeHtml(task.subject) + '</div>' +
+      activeFormHtml +
+      '<div class="card-meta">' +
+        '<span class="card-id">#' + escapeHtml(shortId) + '</span>' +
+        '<span class="card-project">' + escapeHtml(projectLabel) + '</span>' +
+      '</div>' +
+      depsHtml +
+    '</div>';
+  }
+
+  function renderBoard(tasks) {
+    const buckets = { pending: [], in_progress: [], completed: [] };
+
+    tasks.forEach(function(t) {
+      const status = t.status || 'pending';
+      const key = status === 'in_progress' ? 'in_progress' :
+                  status === 'completed'   ? 'completed'   : 'pending';
+      buckets[key].push(t);
+    });
+
+    Object.keys(cols).forEach(function(key) {
+      const list = buckets[key] || [];
+      counts[key].textContent = list.length;
+      if (list.length === 0) {
+        cols[key].innerHTML = '<div class="empty-col">No tasks</div>';
+      } else {
+        cols[key].innerHTML = list.map(renderCard).join('');
+      }
+    });
+
+    // Attach click handlers to cards
+    document.querySelectorAll('.card').forEach(function(el) {
+      el.addEventListener('click', function() {
+        const taskId = el.getAttribute('data-task-id');
+        const cardSession = el.getAttribute('data-session');
+        const task = allTasks.find(function(t) { return String(t.id) === taskId && t.session === cardSession; })
+                  || allTasks.find(function(t) { return String(t.id) === taskId; });
+        if (task) showDetail(task);
+      });
+    });
+  }
+
+  function showDetail(task) {
+    selectedTaskId = task.id;
+    selectedSession = task.session;
+    detailPanel.classList.add('visible');
+
+    const statusClass = (task.status || 'pending').replace('_', '-');
+    const statusLabel = (task.status || 'pending').replace('_', ' ');
+
+    const taskMap = {};
+    allTasks.forEach(function(t) { taskMap[t.id] = t; });
+
+    let blocksHtml = '';
+    if (task.blocks && task.blocks.length > 0) {
+      const items = task.blocks.map(function(id) {
+        const t = taskMap[id];
+        return '<li>#' + escapeHtml(String(id)) + (t ? ' ' + escapeHtml(t.subject) : '') + '</li>';
+      }).join('');
+      blocksHtml = '<div class="detail-field"><div class="detail-label">Blocks</div><ul class="detail-dep-list">' + items + '</ul></div>';
+    }
+
+    let blockedByHtml = '';
+    if (task.blocked_by && task.blocked_by.length > 0) {
+      const items = task.blocked_by.map(function(id) {
+        const t = taskMap[id];
+        return '<li>#' + escapeHtml(String(id)) + (t ? ' ' + escapeHtml(t.subject) : '') + '</li>';
+      }).join('');
+      blockedByHtml = '<div class="detail-field"><div class="detail-label">Blocked By</div><ul class="detail-dep-list">' + items + '</ul></div>';
+    }
+
+    let descHtml = '';
+    if (task.description) {
+      const rendered = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
+        ? DOMPurify.sanitize(marked.parse(task.description))
+        : escapeHtml(task.description);
+      descHtml = '<div class="detail-field"><div class="detail-label">Description</div><div class="detail-description">' + rendered + '</div></div>';
+    }
+
+    let activeFormHtml = '';
+    if (task.active_form) {
+      activeFormHtml = '<div class="detail-field"><div class="detail-label">Currently Working On</div><div class="detail-value" style="color:var(--in-progress);font-style:italic">' + escapeHtml(task.active_form) + '</div></div>';
+    }
+
+    detailContent.innerHTML =
+      '<div class="detail-field">' +
+        '<div class="detail-label">Subject</div>' +
+        '<div class="detail-value">' + escapeHtml(task.subject) + '</div>' +
+      '</div>' +
+      '<div class="detail-field">' +
+        '<div class="detail-label">Status</div>' +
+        '<span class="status-badge ' + statusClass + '">' + escapeHtml(statusLabel) + '</span>' +
+      '</div>' +
+      activeFormHtml +
+      descHtml +
+      '<div class="detail-field">' +
+        '<div class="detail-label">Project</div>' +
+        '<div class="detail-value mono">' + escapeHtml(task.project || 'Unknown') + '</div>' +
+      '</div>' +
+      '<div class="detail-field">' +
+        '<div class="detail-label">Session</div>' +
+        '<div class="detail-value mono">' + escapeHtml(task.session_full || task.session) + '</div>' +
+      '</div>' +
+      blocksHtml +
+      blockedByHtml;
+
+    // Re-render board to show selected state
+    renderBoard(allTasks);
+  }
+
+  function closeDetailPanel() {
+    selectedTaskId = null;
+    selectedSession = null;
+    detailPanel.classList.remove('visible');
+    renderBoard(allTasks);
+  }
+
+  closeDetail.addEventListener('click', closeDetailPanel);
+
+  // Esc closes detail panel or deps modal
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (depsModal.classList.contains('visible')) {
+        depsModal.classList.remove('visible');
+      } else if (detailPanel.classList.contains('visible')) {
+        closeDetailPanel();
+      }
+    }
+  });
+
+  // Dependency graph
+  function buildDependencyGraph(tasks) {
+    const relevant = tasks.filter(function(t) {
+      return (t.blocks && t.blocks.length > 0) || (t.blocked_by && t.blocked_by.length > 0);
+    });
+    if (relevant.length === 0) return null;
+
+    const taskMap = {};
+    tasks.forEach(function(t) { taskMap[t.id] = t; });
+
+    const lines = ['graph TD'];
+    const seen = new Set();
+    const statusColors = { pending: '#f0883e', in_progress: '#58a6ff', completed: '#3fb950' };
+
+    for (const task of relevant) {
+      const fromLabel = (task.subject || String(task.id)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
+      const fromId = 'T' + String(task.id).replace(/[^a-zA-Z0-9]/g, '_');
+      if (!seen.has(String(task.id))) {
+        lines.push('  ' + fromId + '["' + fromLabel + '"]');
+        const color = statusColors[task.status] || statusColors.pending;
+        lines.push('  style ' + fromId + ' fill:' + color + '22,stroke:' + color + ',color:#e6edf3');
+        seen.add(String(task.id));
+      }
+      for (const blockedId of (task.blocks || [])) {
+        const target = taskMap[blockedId];
+        const toLabel = (target ? target.subject : String(blockedId)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
+        const toId = 'T' + String(blockedId).replace(/[^a-zA-Z0-9]/g, '_');
+        if (!seen.has(String(blockedId))) {
+          lines.push('  ' + toId + '["' + toLabel + '"]');
+          const color = target ? (statusColors[target.status] || statusColors.pending) : statusColors.pending;
+          lines.push('  style ' + toId + ' fill:' + color + '22,stroke:' + color + ',color:#e6edf3');
+          seen.add(String(blockedId));
+        }
+        lines.push('  ' + fromId + ' --> ' + toId);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  let mermaidCounter = 0;
+
+  btnDeps.addEventListener('click', async function() {
+    const graphDef = buildDependencyGraph(allTasks);
+    if (!graphDef) {
+      depsContent.innerHTML = '<span class="modal-empty">No task dependencies found</span>';
+    } else {
+      try {
+        mermaidCounter++;
+        const { svg } = await mermaid.render('mermaidGraph' + mermaidCounter, graphDef);
+        depsContent.innerHTML = svg;
+      } catch (err) {
+        depsContent.innerHTML = '<span class="modal-empty">Failed to render graph: ' + escapeHtml(err.message) + '</span>';
+      }
+    }
+    depsModal.classList.add('visible');
+  });
+
+  closeDeps.addEventListener('click', function() {
+    depsModal.classList.remove('visible');
+  });
+
+  depsModal.addEventListener('click', function(e) {
+    if (e.target === depsModal) depsModal.classList.remove('visible');
+  });
+
+  // Desktop notifications
+  btnNotify.addEventListener('click', async function() {
+    if (!notificationsEnabled) {
+      if ('Notification' in window) {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+          notificationsEnabled = true;
+          btnNotify.classList.add('active');
+          btnNotify.textContent = 'Notify ON';
+          showToast('Desktop notifications enabled');
+        } else {
+          showToast('Notification permission denied');
+        }
+      } else {
+        showToast('Notifications not supported');
+      }
+    } else {
+      notificationsEnabled = false;
+      btnNotify.classList.remove('active');
+      btnNotify.textContent = 'Notify';
+    }
+  });
+
+  function checkForCompletions(newTasks) {
+    if (!notificationsEnabled) return;
+    const newStatuses = {};
+    newTasks.forEach(function(t) {
+      newStatuses[t.session + '_' + t.id] = t.status;
+    });
+    for (const key in newStatuses) {
+      const prev = previousStatuses[key];
+      if (prev && prev === 'in_progress' && newStatuses[key] === 'completed') {
+        const task = newTasks.find(function(t) { return (t.session + '_' + t.id) === key; });
+        if (task) {
+          new Notification('Task Completed', {
+            body: task.subject || 'A task was completed',
+            icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%233fb950"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>'),
+          });
+        }
+      }
+    }
+    previousStatuses = newStatuses;
+  }
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    setTimeout(function() { toast.classList.remove('visible'); }, 2000);
+  }
+
+  function handleTaskUpdate(tasks) {
+    checkForCompletions(tasks);
+    allTasks = tasks;
+    renderBoard(tasks);
+    // Refresh detail panel if open
+    if (selectedTaskId) {
+      const task = allTasks.find(function(t) { return String(t.id) === String(selectedTaskId) && t.session === selectedSession; })
+                || allTasks.find(function(t) { return String(t.id) === String(selectedTaskId); });
+      if (task) showDetail(task);
+    }
+  }
+
+  function connect() {
+    const es = new EventSource('/kanban/events');
+
+    es.addEventListener('tasks', function(e) {
+      try {
+        const data = JSON.parse(e.data);
+        handleTaskUpdate(data.tasks || []);
+      } catch(err) {
+        console.error('Parse error:', err);
+      }
+    });
+
+    es.onopen = function() {
+      statusDot.className = 'status-dot';
+      statusText.textContent = 'Connected';
+    };
+
+    es.onerror = function() {
+      statusDot.className = 'status-dot disconnected';
+      statusText.textContent = 'Reconnecting...';
+    };
+  }
+
+  // Initial load via REST, then switch to SSE for live updates
+  fetch('/kanban/tasks')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      allTasks = data.tasks || [];
+      // Seed previous statuses so we don't fire notifications on first load
+      allTasks.forEach(function(t) {
+        previousStatuses[t.session + '_' + t.id] = t.status;
+      });
+      renderBoard(allTasks);
+    })
+    .catch(function() {});
+
+  connect();
+</script>
+</body>
+</html>

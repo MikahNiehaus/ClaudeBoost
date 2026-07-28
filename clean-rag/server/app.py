@@ -29,6 +29,7 @@ from .config import (
     WEB_SEARCH_SCORE_THRESHOLD,
 )
 from .embedding import SentenceTransformerEmbedding
+from .lang_router import ModelCache
 from .github_search import github_fetch_file, github_search
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
 from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
@@ -41,7 +42,7 @@ from .wikipedia import wikipedia_search
 logger = logging.getLogger(__name__)
 
 # Server-wide singletons (initialized in create_app)
-_code_embedder: SentenceTransformerEmbedding | None = None
+_model_cache: ModelCache | None = None
 _doc_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
 
@@ -69,7 +70,7 @@ def _start_heartbeat_thread() -> None:
         while True:
             time.sleep(_HEARTBEAT_INTERVAL_S)
             _write_heartbeat(
-                model_loaded=_code_embedder is not None and _code_embedder.is_loaded,
+                model_loaded=_model_cache is not None and len(_model_cache) > 0,
                 index_ok=True,
             )
 
@@ -104,10 +105,11 @@ async def handle_status(request: web.Request) -> web.Response:
     projects = _list_projects()
 
     return _json_response({
-        "status": "ready" if _code_embedder and _code_embedder.is_loaded else "warming_up",
+        "status": "ready" if _model_cache and len(_model_cache) > 0 else "warming_up",
         "uptime_s": round(time.time() - _start_time, 1),
         "code_embedding_model": CODE_EMBEDDING_MODEL,
-        "code_embedding_loaded": _code_embedder.is_loaded if _code_embedder else False,
+        "code_embedding_loaded": len(_model_cache) > 0 if _model_cache else False,
+        "loaded_models": _model_cache.loaded_models() if _model_cache else [],
         "projects": {
             "count": len(projects),
             "entries": projects,
@@ -162,17 +164,16 @@ async def handle_search(request: web.Request) -> web.Response:
             {"error": "direction must be 'both', 'callers', or 'dependencies'"}, 400,
         )
 
-    if not _code_embedder:
+    if not _model_cache:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    # Warm up the code embedder on first search (lazy load)
+    # Get the default code embedder for query embedding
     loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-        except Exception as e:
-            logger.exception("Code embedding model failed to load")
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+    try:
+        _code_embedder = _model_cache.get(CODE_EMBEDDING_MODEL)
+    except Exception as e:
+        logger.exception("Code embedding model failed to load")
+        return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
     # docs: sources need the separate prose embedder, warmed up the same way,
     # only when one is actually present so a pure project: search never pays
@@ -299,19 +300,19 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     force = body.get("force", False)
 
-    if not _code_embedder:
+    if not _model_cache:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-        except Exception as e:
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+    if not acquire_index_lock("index-project"):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
 
-    result = await loop.run_in_executor(
-        None, partial(index_project, project_path, _code_embedder, force=force)
-    )
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, partial(index_project, project_path, _model_cache, force=force)
+        )
+    finally:
+        release_index_lock()
 
     status = 200 if "error" not in result else 400
     return _json_response(result, status)
@@ -493,22 +494,17 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     if not Path(project_path).is_dir():
         return _json_response({"error": f"Project path not found: {project_path}"}, 400)
 
-    if not _code_embedder:
+    if not _model_cache:
         return _json_response({"error": "Server not initialized"}, 503)
 
     loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-        except Exception as e:
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
     if not acquire_index_lock("reindex-file"):
         return _json_response({"error": "Index busy, retry in a moment"}, 423)
 
     try:
         result = await loop.run_in_executor(
-            None, partial(reindex_file, project_path, file_path, _code_embedder)
+            None, partial(reindex_file, project_path, file_path, _model_cache)
         )
     finally:
         release_index_lock()
@@ -1017,12 +1013,12 @@ async def error_middleware(request: web.Request, handler) -> web.Response:
 
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
-    global _code_embedder, _doc_embedder, _start_time
+    global _model_cache, _doc_embedder, _start_time
 
     _start_time = time.time()
 
-    # Create the code embedder (loaded lazily, model downloads on first use)
-    _code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+    # Model cache with language-based routing (loads models lazily on first use)
+    _model_cache = ModelCache()
     # General prose embedder for docs: sources (statutes, regulations, etc),
     # a separate model from the code search tuned one above. Also loaded
     # lazily, on first docs: search or ingest, not at startup: the code
@@ -1047,12 +1043,15 @@ def create_app() -> web.Application:
         """
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-            logger.info("Code embedder warmed up at startup")
+            # Warm up the default code model before accepting connections.
+            # sentence-transformers' first import is not thread safe, so this
+            # must complete single-threaded before request handlers fire.
+            await loop.run_in_executor(None, _model_cache.get, CODE_EMBEDDING_MODEL)
+            logger.info("Code embedder warmed up at startup (model=%s)", CODE_EMBEDDING_MODEL)
         except Exception:
             logger.exception("Embedder warmup failed at startup")
 
-        _write_heartbeat(model_loaded=_code_embedder.is_loaded, index_ok=True)
+        _write_heartbeat(model_loaded=len(_model_cache) > 0, index_ok=True)
         _start_heartbeat_thread()
         logger.info("Heartbeat thread started (interval=%ds)", _HEARTBEAT_INTERVAL_S)
 
@@ -1061,7 +1060,7 @@ def create_app() -> web.Application:
         # confidently returning code that no longer exists.
         from .auto_reindex import auto_reindex_loop
         app["auto_reindex_task"] = asyncio.create_task(
-            auto_reindex_loop(lambda: _code_embedder)
+            auto_reindex_loop(lambda: _model_cache)
         )
         logger.info("Auto reindex loop started")
 
@@ -1087,6 +1086,10 @@ def create_app() -> web.Application:
     app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/register-project", handle_register_project)
+
+    from .kanban import setup_kanban
+    setup_kanban(app)
+
     app.on_startup.append(_on_startup)
     app.on_shutdown.append(_on_shutdown)
 

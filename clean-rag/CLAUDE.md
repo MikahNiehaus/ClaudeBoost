@@ -135,7 +135,7 @@ The registry of what's indexed is `state/projects.json`.
 Three layers, so the index never silently drifts:
 
 1. **After every edit.** `hooks/reindex-after-edit.py` (PostToolUse) reindexes just the changed file.
-2. **Every 10 minutes.** `server/auto_reindex.py` walks every project in the registry, diffs file hashes against the manifest, and reindexes only what changed. This is what catches edits from another editor, a `git pull`, or a branch switch. A deletion, or 50-plus changed files, triggers a full rebuild instead, because stale chunks can't be cleared file by file and a branch switch is cheaper to rebuild wholesale.
+2. **Every 60 minutes.** `server/auto_reindex.py` walks every project in the registry, diffs file hashes against the manifest, and reindexes only what changed. This is what catches edits from another editor, a `git pull`, or a branch switch. A deletion, or 50-plus changed files, triggers a full rebuild instead, because stale chunks can't be cleared file by file and a branch switch is cheaper to rebuild wholesale.
 3. **On demand.** `POST /index-project` with `"force": true`.
 
 All three take `acquire_index_lock()` so they can't race each other.

@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -146,11 +147,15 @@ def install_user_assets() -> None:
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
-    # Skills. Copied whole so a skill can carry more than one file later.
+    # Skills. Copied whole, so a skill can carry a scripts/ subfolder (the
+    # powerpoint skill does). __pycache__ is excluded: running the skill's
+    # helper leaves bytecode in the repo copy that has no business shipping.
     skills_src = portable / "skills"
     if skills_src.is_dir():
-        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True)
-        _ok("installed .claude/skills (research, research-routing)")
+        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        names = sorted(d.name for d in skills_src.iterdir() if d.is_dir())
+        _ok(f"installed .claude/skills ({len(names)}: {', '.join(names)})")
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +210,82 @@ def install_npm_qa_tools() -> None:
                 _warn(f"{package} install failed: {result.stderr[:200]}")
         except Exception as e:  # noqa: BLE001
             _warn(f"{package} install failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Step 2c: Install deck tooling for the powerpoint skill (best effort)
+# ---------------------------------------------------------------------------
+def _module_available(module: str) -> bool:
+    """Is an importable module already present for this interpreter?
+
+    The in-process counterpart of install_npm_qa_tools()'s shutil.which: it
+    answers without spawning anything, so it cannot hang the installer the way
+    `python -c "import x"` can when a package blocks at import time. find_spec
+    locates the module without executing it, which is also why it is what the
+    powerpoint skill's own helper uses (pptx_env._have_module).
+    """
+    try:
+        return importlib.util.find_spec(module) is not None
+    except Exception:  # noqa: BLE001  a broken spec means "not usable", not a crash
+        return False
+
+
+def install_pptx_tools() -> None:
+    """Install what the powerpoint skill needs to build and narrate a deck.
+
+    Best effort, same contract as install_npm_qa_tools: warn and continue,
+    never abort. python-pptx builds the deck and edge-tts voices the optional
+    narration, both pip installable. LibreOffice, poppler and ffmpeg are
+    native packages, so they are only detected here and reported with a
+    manual install hint; auto-installing them across three OS package
+    managers is a worse failure mode than a warning.
+    """
+    packages = [("python-pptx", "pptx"), ("edge-tts", "edge_tts")]
+    for package, module in packages:
+        if _module_available(module):
+            _ok(f"{package} already installed")
+            continue
+        _say(f"Installing {package}...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", package],
+                capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode == 0:
+                _ok(f"{package} installed")
+            else:
+                _warn(f"{package} install failed: {result.stderr[:200]}")
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{package} install failed: {e}")
+
+    # Native tools. The skill's own helper knows the per-OS search paths, so
+    # ask it rather than duplicating that list here.
+    helper = CLEAN_RAG_HOME / "portable" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    natives = [
+        ("soffice", "LibreOffice", "render and video",
+         "winget install TheDocumentFoundation.LibreOffice | brew install --cask libreoffice | apt install libreoffice"),
+        ("pdftoppm", "poppler", "slide images",
+         "winget install oschwartz10612.Poppler | brew install poppler | apt install poppler-utils"),
+        ("ffmpeg", "ffmpeg", "narrated video",
+         "winget install Gyan.FFmpeg | brew install ffmpeg | apt install ffmpeg"),
+    ]
+    if not helper.is_file():
+        _warn("powerpoint skill helper not found, skipping native tool detection")
+        return
+    for probe, label, purpose, how in natives:
+        try:
+            result = subprocess.run(
+                [sys.executable, str(helper), probe],
+                capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"could not probe for {label}: {e}")
+            continue
+        if result.returncode == 0:
+            _ok(f"{label} found at {result.stdout.strip()}")
+        else:
+            _warn(f"{label} not found, powerpoint skill loses {purpose}")
+            _say(f"  {how}")
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +1018,13 @@ def main():
         install_npm_qa_tools()
     else:
         print("\nStep 2b: Skipped (--skip-deps)")
+
+    # Step 2c
+    if not args.skip_deps:
+        print("\nStep 2c: Installing deck tooling for the powerpoint skill...")
+        install_pptx_tools()
+    else:
+        print("\nStep 2c: Skipped (--skip-deps)")
 
     # Step 3
     print("\nStep 3: Registering the research gate...")

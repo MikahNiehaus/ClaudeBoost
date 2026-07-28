@@ -102,7 +102,7 @@ def find_changed_files(project_path: str) -> tuple[list[str], list[str]]:
     return changed, deleted
 
 
-async def _sweep_project(pid: str, entry: dict, code_embedder) -> None:
+async def _sweep_project(pid: str, entry: dict, model_cache) -> None:
     project_path = entry.get("project_path")
     if not project_path or not Path(project_path).exists():
         logger.warning("Project %s no longer exists on disk: %s", pid, project_path)
@@ -123,7 +123,7 @@ async def _sweep_project(pid: str, entry: dict, code_embedder) -> None:
     )
 
     # The lock is what stops this racing a manual /index-project. If someone is
-    # already indexing, skip the sweep and catch it on the next pass ten minutes
+    # already indexing, skip the sweep and catch it on the next pass one hour
     # from now. Waiting would just pile up sweeps behind a slow index.
     if not acquire_index_lock():
         logger.info("Index lock held by another job, skipping %s this pass", project_path)
@@ -137,7 +137,7 @@ async def _sweep_project(pid: str, entry: dict, code_embedder) -> None:
             reason = "files were deleted" if deleted else f"{len(changed)} files changed"
             logger.info("Full reindex of %s (%s)", project_path, reason)
             result = await loop.run_in_executor(
-                None, partial(index_project, project_path, code_embedder, force=True)
+                None, partial(index_project, project_path, model_cache, force=True)
             )
             logger.info(
                 "Reindexed %s: %d files, %d chunks, %d failed",
@@ -151,7 +151,7 @@ async def _sweep_project(pid: str, entry: dict, code_embedder) -> None:
         for abs_path in changed:
             try:
                 await loop.run_in_executor(
-                    None, partial(reindex_file, project_path, abs_path, code_embedder)
+                    None, partial(reindex_file, project_path, abs_path, model_cache)
                 )
             except Exception as e:
                 logger.error("Failed to reindex %s: %s: %s", abs_path, type(e).__name__, e)
@@ -162,20 +162,20 @@ async def _sweep_project(pid: str, entry: dict, code_embedder) -> None:
         release_index_lock()
 
 
-async def auto_reindex_loop(get_embedder) -> None:
+async def auto_reindex_loop(get_model_cache) -> None:
     """Sweep every registered project every INTERVAL_S.
 
-    Takes a callable rather than the embedder itself because the server loads the
-    model lazily, so at startup there may be nothing to hand over yet.
+    Takes a callable rather than the model cache itself because the server
+    loads models lazily, so at startup there may be nothing to hand over yet.
     """
     logger.info("Auto reindex running every %d minutes", INTERVAL_S // 60)
 
     while True:
         await asyncio.sleep(INTERVAL_S)
 
-        embedder = get_embedder()
-        if not embedder:
-            logger.debug("No embedder yet, skipping this sweep")
+        model_cache = get_model_cache()
+        if not model_cache:
+            logger.debug("No model cache yet, skipping this sweep")
             continue
 
         registry = _read_registry()
@@ -185,7 +185,7 @@ async def auto_reindex_loop(get_embedder) -> None:
         started = time.time()
         for pid, entry in registry.items():
             try:
-                await _sweep_project(pid, entry, embedder)
+                await _sweep_project(pid, entry, model_cache)
             except Exception as e:
                 # One bad project must not kill the loop for the others, or a
                 # single unreadable repo silently stops all reindexing forever.

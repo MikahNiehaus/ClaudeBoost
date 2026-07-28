@@ -86,7 +86,7 @@ Defined once in `clean-rag/server/indexing.py` and applied everywhere, including
 Once the project is in `state/projects.json`, three things keep it fresh and you do not have to do anything:
 
 1. **After every edit Claude makes.** `hooks/reindex-after-edit.py` reindexes just that file.
-2. **Every 10 minutes.** `server/auto_reindex.py` sweeps every registered project, diffs file hashes against the manifest, and reindexes only what changed. This catches edits from another editor, a `git pull`, or a branch switch. If files were deleted, or 50-plus changed, it rebuilds fully instead, because stale chunks can't be cleared file by file.
+2. **Every 60 minutes.** `server/auto_reindex.py` sweeps every registered project, diffs file hashes against the manifest, and reindexes only what changed. This catches edits from another editor, a `git pull`, or a branch switch. If files were deleted, or 50-plus changed, it rebuilds fully instead, because stale chunks can't be cleared file by file.
 3. **On demand.** Re-run this command with `force`.
 
 All three take the index lock, so they can't race each other. You will see every sweep in the server's console window.

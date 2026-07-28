@@ -16,10 +16,14 @@ _TASK_PREFIX_MODELS = {
     "BAAI/bge-base-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
     "BAAI/bge-large-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
     "BAAI/bge-small-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
+    "nomic-ai/CodeRankEmbed": ("search_query: ", "search_document: "),
 }
 
 # Models that require trust_remote_code=True
-_TRUST_REMOTE_CODE_MODELS: set[str] = set()
+_TRUST_REMOTE_CODE_MODELS: set[str] = {
+    "nomic-ai/CodeRankEmbed",
+    "jinaai/jina-embeddings-v2-base-code",
+}
 
 
 class SentenceTransformerEmbedding:

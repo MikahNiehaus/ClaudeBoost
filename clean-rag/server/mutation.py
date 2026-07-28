@@ -274,6 +274,8 @@ def _run_mutmut(root, files, rejected):
                    total=total, rejected=rejected, error=err)
 
 
+_MUTATEST_TIMEOUT_S = 120  # Fallback after mutmut; --sample-size 5 should be quick.
+
 def _run_mutatest(root, files, rejected):
     """mutatest fallback. Bytecode-level mutation, quick spot-check."""
     mutatest_bin = shutil.which("mutatest")
@@ -285,13 +287,19 @@ def _run_mutatest(root, files, rejected):
         # common parent of the changed Python files.
         py_files = [f for f in files if f.endswith(".py")]
         if py_files:
-            src_dir = str(Path(py_files[0]).parent) or "."
+            parents = [Path(f).parent for f in py_files]
+            common = parents[0]
+            for p in parents[1:]:
+                # Walk up until we find a shared ancestor of all paths
+                while common != p and common not in p.parents:
+                    common = common.parent
+            src_dir = str(common) or "."
             argv += ["--src", src_dir]
     try:
-        proc = _run(argv, root)
+        proc = _run(argv, root, timeout=_MUTATEST_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return _result(False, "mutatest", rejected=rejected,
-                       error=f"mutatest timed out after {DEFAULT_TIMEOUT_S}s")
+                       error=f"mutatest timed out after {_MUTATEST_TIMEOUT_S}s")
     except Exception as e:  # noqa: BLE001
         return _result(False, "mutatest", rejected=rejected, error=f"could not run mutatest: {e}")
 

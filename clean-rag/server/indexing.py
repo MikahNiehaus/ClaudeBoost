@@ -9,20 +9,22 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .code_chunker import RawChunk, chunk_code, estimate_tokens
 from .config import (
     CHUNK_OVERLAP_TOKENS,
     DATABASES_DIR,
     DEGENERATE_CHUNK_MIN_TOKENS,
     MAX_CHUNK_TOKENS,
     MIN_CHUNK_TOKENS,
+    PIPELINE_VERSION,
     STATE_DIR,
 )
+from .lang_router import get_model_for_project
 from .file_scan import (
     CODE_EXTENSIONS,
     MAX_FILE_SIZE,
@@ -35,56 +37,6 @@ from .store import Chunk, ChromaStore
 
 logger = logging.getLogger(__name__)
 
-# Only run VACUUM when the SQLite file exceeds this size.  VACUUMing a small
-# file on every single-file reindex (which fires after every edit) would take
-# a write lock for nothing.  50 MB is well above normal working size and low
-# enough to catch real bloat before it matters.
-VACUUM_THRESHOLD_BYTES = 50 * 1024 * 1024
-
-
-def _vacuum_chroma_sqlite(
-    chroma_dir: Path, pid: str, *, skip_threshold: bool = False,
-) -> None:
-    """VACUUM chroma.sqlite3 if it exceeds the size threshold.
-
-    Reclaims SQLite free-list pages accumulated by delete+upsert cycles.
-    Each incremental reindex deletes old rows and inserts new ones; SQLite
-    never releases freed pages to the OS without a VACUUM.  On a heavily
-    edited project this compounds to gigabytes (ChromaDB issue #2143).
-
-    When *skip_threshold* is True the size check is bypassed (used after a
-    full index_project run, which is infrequent enough to always vacuum).
-
-    The caller MUST evict the ChromaDB client for this chroma_dir before
-    calling this function.  A live client keeps Win32 file handles open on
-    the SQLite WAL and data files; raw sqlite3 access while those handles
-    are open causes corruption or OperationalError: database is locked.
-    """
-    sqlite_path = chroma_dir / "chroma.sqlite3"
-    if not sqlite_path.exists():
-        return
-    try:
-        size_before = sqlite_path.stat().st_size
-    except OSError:
-        return
-    if not skip_threshold and size_before < VACUUM_THRESHOLD_BYTES:
-        return
-    try:
-        conn = sqlite3.connect(str(sqlite_path))
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("VACUUM")
-        conn.close()
-        size_after = sqlite_path.stat().st_size
-        freed_mb = round((size_before - size_after) / 1024 ** 2, 1)
-        logger.info(
-            "VACUUM chroma.sqlite3 for %s: %.1f MB -> %.1f MB (freed %.1f MB)",
-            pid,
-            round(size_before / 1024 ** 2, 1),
-            round(size_after / 1024 ** 2, 1),
-            freed_mb,
-        )
-    except Exception as e:
-        logger.warning("VACUUM failed for %s (non-fatal): %s", pid, e)
 
 
 def _mem_mb() -> float:
@@ -165,21 +117,6 @@ def release_index_lock() -> None:
 # Chunking
 # ---------------------------------------------------------------------------
 
-@dataclass
-class RawChunk:
-    """A chunk of text before embedding."""
-    content: str
-    section: str
-    line_start: int
-    line_end: int
-    token_count_approx: int
-
-
-def estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~4 chars per token for English."""
-    return len(text) // 4
-
-
 def file_hash(content: str) -> str:
     """SHA-256 hash prefix for change detection."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
@@ -245,63 +182,6 @@ def chunk_markdown(
             line_end=last.line_end,
             token_count_approx=chunks[-1].token_count_approx + last.token_count_approx,
         )
-
-    return chunks
-
-
-def chunk_code(
-    content: str,
-    source_file: str,
-    max_tokens: int = 500,
-    min_tokens: int = 50,
-    chunk_overlap: int = 0,
-) -> list[RawChunk]:
-    """Split source code into chunks. Uses blank-line boundaries for splitting."""
-    lines = content.split("\n")
-    total_tokens = estimate_tokens(content)
-
-    if total_tokens <= max_tokens:
-        if total_tokens < min_tokens:
-            return []
-        return [RawChunk(
-            content=content,
-            section=Path(source_file).stem,
-            line_start=1,
-            line_end=len(lines),
-            token_count_approx=total_tokens,
-        )]
-
-    # Split on double-newline boundaries (function/class gaps)
-    chunks = []
-    current_lines: list[str] = []
-    current_start = 1
-    overlap_lines: list[str] = []
-
-    for i, line in enumerate(lines, 1):
-        current_lines.append(line)
-        current_text = "\n".join(current_lines)
-        current_tokens = estimate_tokens(current_text)
-
-        is_boundary = (line.strip() == "" and i < len(lines))
-        is_last = (i == len(lines))
-
-        if (current_tokens >= max_tokens and is_boundary) or is_last:
-            text = current_text.strip()
-            if text and estimate_tokens(text) >= min_tokens:
-                chunks.append(RawChunk(
-                    content=text,
-                    section=Path(source_file).stem,
-                    line_start=current_start,
-                    line_end=i,
-                    token_count_approx=estimate_tokens(text),
-                ))
-            if chunk_overlap > 0 and current_lines:
-                # Carry last few lines as overlap
-                overlap_count = max(1, chunk_overlap // 10)
-                overlap_lines = current_lines[-overlap_count:]
-            current_lines = list(overlap_lines)
-            overlap_lines = []
-            current_start = i + 1
 
     return chunks
 
@@ -422,16 +302,22 @@ def _process_section(
 
 def _save_project_manifest(
     manifest_path: Path, manifest: dict, project_path: str,
+    pipeline_version: int | None = None,
+    model_id: str | None = None,
 ) -> None:
     """Save project manifest to disk with metadata."""
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     save_data = {"__project_path__": project_path}
+    if pipeline_version is not None:
+        save_data["__pipeline_version__"] = pipeline_version
+    if model_id is not None:
+        save_data["__model_id__"] = model_id
     save_data.update(manifest)
     manifest_path.write_text(json.dumps(save_data, indent=2), encoding="utf-8")
 
 
 def _project_paths(project_path: str) -> tuple[Path, str, Path, Path, Path]:
-    """Resolve project root, project ID, index dir, chroma dir, manifest path."""
+    """Resolve project root, project ID, index dir, store dir, manifest path."""
     project_root = Path(project_path).resolve()
     pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
     index_dir = DATABASES_DIR / "_projects" / pid
@@ -497,7 +383,7 @@ def _register_file_variants(rel_path: str, file_map: dict[str, str]) -> None:
 
 def index_project(
     project_path: str,
-    code_embedder,
+    model_cache,
     force: bool = False,
 ) -> dict:
     """Index a project's source code into databases/_projects/<hash>/chroma/.
@@ -505,27 +391,33 @@ def index_project(
     Also builds a structural graph (graph.db) of import/inheritance edges
     for mode=graph search.
 
+    Args:
+        model_cache: A ModelCache instance (from lang_router) or a plain
+            embedder with an ``embed(texts)`` method for backward compat.
+
     Returns stats dict.
     """
     project_root, pid, index_dir, chroma_dir, manifest_path = _project_paths(project_path)
 
-    # Load manifest
+    # Load manifest and check pipeline version
     manifest: dict = {}
+    stored_model_id: str | None = None
     if not force and manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            stored_version = raw.get("__pipeline_version__")
+            stored_model_id = raw.get("__model_id__")
+            if stored_version != PIPELINE_VERSION:
+                logger.info(
+                    "Pipeline version changed (%s -> %s), forcing full reindex of %s",
+                    stored_version, PIPELINE_VERSION, project_path,
+                )
+                force = True
             manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
         except Exception:
             manifest = {}
 
     if force:
-        # Evict the cached ChromaDB client BEFORE opening a new one.
-        # The cached client holds live C++ HNSW segment instances that keep
-        # Win32 file handles open on data_level0.bin etc. delete_collection
-        # internally calls rmtree on the segment UUID directory, which fails
-        # with WinError 32 if any handle is still open. Evicting first calls
-        # client.close() -> System.stop() -> close_persistent_index() which
-        # releases the handles before the delete attempt (WinError 32 fix).
         ChromaStore.evict_cache(str(chroma_dir))
         _gc_cleanup("force-pre-evict")
 
@@ -560,13 +452,34 @@ def index_project(
         current_files.add(rp)
         _register_file_variants(rp, file_map)
 
-    # Lazy import edge extraction (only needed for code files)
+    # _EXT_TO_LANG is always available (code_chunker depends on edge_extraction
+    # at the top level, so if it were missing indexing.py wouldn't load at all).
+    from .edge_extraction import _EXT_TO_LANG
+
+    # extract_edges and get_language are only needed for graph building.
     try:
         from .edge_extraction import extract_edges, get_language
         has_edge_extraction = True
     except ImportError:
         logger.warning("edge_extraction not available, skipping graph build")
         has_edge_extraction = False
+
+    # Detect dominant language and pick the right embedding model.
+    # If model_cache is a ModelCache, use lang routing; otherwise it's a plain
+    # embedder passed directly (backward compat with auto_reindex).
+    from .lang_router import ModelCache
+    if isinstance(model_cache, ModelCache):
+        lang_counts: dict[str, int] = {}
+        for fp in file_paths:
+            ext = Path(fp).suffix.lower()
+            lang = _EXT_TO_LANG.get(ext, "unknown")
+            lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        model_id = get_model_for_project(lang_counts)
+        code_embedder = model_cache.get(model_id)
+    else:
+        # Plain embedder passed directly (backward compat)
+        code_embedder = model_cache
+        model_id = stored_model_id or ""
 
     files_indexed = 0
     chunks_created = 0
@@ -703,8 +616,12 @@ def index_project(
             logger.error("Graph post-processing failed: %s", e)
             graph_stats = {"error": str(e)}
 
-    # Save manifest
-    _save_project_manifest(manifest_path, manifest, str(project_root))
+    # Save manifest with pipeline version and model info
+    _save_project_manifest(
+        manifest_path, manifest, str(project_root),
+        pipeline_version=PIPELINE_VERSION,
+        model_id=model_id,
+    )
 
     # Update project registry
     _update_project_registry(
@@ -712,11 +629,8 @@ def index_project(
         graph_stats=graph_stats,
     )
 
-    # Evict project ChromaDB client before VACUUM (Win32 file handle release)
-    ChromaStore.evict_cache(str(chroma_dir))
-
-    # Full index always vacuums regardless of size threshold.
-    _vacuum_chroma_sqlite(chroma_dir, pid, skip_threshold=True)
+    # Reclaim any free pages after the bulk delete+insert cycle.
+    store.vacuum()
 
     _gc_cleanup(f"project-final:{pid}")
 
@@ -742,13 +656,16 @@ def index_project(
 def reindex_file(
     project_path: str,
     file_path: str,
-    code_embedder,
+    model_cache,
 ) -> dict:
     """Reindex a single file within an already-indexed project.
 
     Much faster than index_project() because it skips scanning the whole
     project tree. Only re-embeds the specified file if its content hash
     changed since the last index. Also updates graph edges for the file.
+
+    Args:
+        model_cache: A ModelCache instance or plain embedder (backward compat).
 
     Caller must hold ``acquire_index_lock()`` before calling.  The function
     may run VACUUM on the SQLite file, which requires exclusive access.
@@ -761,14 +678,28 @@ def reindex_file(
     if not chroma_dir.exists():
         return {"error": f"Project not indexed: {project_path}. Run index-project first."}
 
-    # Load manifest
+    # Load manifest and read the model this project was indexed with
     manifest: dict = {}
+    stored_model_id: str | None = None
     if manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            stored_model_id = raw.get("__model_id__")
             manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
         except Exception:
             manifest = {}
+
+    # Resolve the embedder: use the project's stored model from ModelCache,
+    # or fall back to the passed object if it's a plain embedder.
+    from .lang_router import ModelCache
+    if isinstance(model_cache, ModelCache):
+        if stored_model_id:
+            code_embedder = model_cache.get(stored_model_id)
+        else:
+            from .config import CODE_EMBEDDING_MODEL
+            code_embedder = model_cache.get(CODE_EMBEDDING_MODEL)
+    else:
+        code_embedder = model_cache
 
     abs_file = Path(file_path).resolve()
     try:
@@ -890,14 +821,13 @@ def reindex_file(
             except Exception as e:
                 logger.warning("Graph update failed for %s: %s", rel_path, e)
 
+    # Reclaim dead pages if the freelist has grown past the threshold.
+    # Full VACUUM runs after index_project(); this catches the incremental
+    # accumulation from repeated per-file delete+insert cycles.
+    store.vacuum_if_needed()
+
     manifest[rel_path] = current_hash
     _save_project_manifest(manifest_path, manifest, str(project_root))
-
-    # Reclaim bloat if the db grew past the threshold.  Close the store
-    # and evict the cached client first so no Win32 file handles remain.
-    store.close()
-    ChromaStore.evict_cache(str(chroma_dir))
-    _vacuum_chroma_sqlite(chroma_dir, pid)
 
     elapsed = round(time.time() - start_time, 3)
     result = {

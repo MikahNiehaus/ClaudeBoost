@@ -57,11 +57,16 @@ DATABASES_DIR = CLEAN_RAG_HOME / "databases"
 STATE_DIR = CLEAN_RAG_HOME / "state"
 
 # Embedding model for project codebase indexing.
-# st-codesearch-distilroberta-base (768d) trained on code-query pairs.
+# CodeRankEmbed (768d) trained on CodeSearchNet code-query pairs.
 CODE_EMBEDDING_MODEL = os.environ.get(
     "CLEAN_RAG_CODE_EMBEDDING_MODEL",
-    "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+    "nomic-ai/CodeRankEmbed",
 )
+
+# Bumped when the chunking or embedding pipeline changes in a way that
+# requires a full re-index. When a project's manifest records a different
+# version, the next index_project run forces a rebuild automatically.
+PIPELINE_VERSION = 2
 
 # Server port: 8613 standalone, 8612 routes when bundled with ClaudeBoost
 STANDALONE_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
