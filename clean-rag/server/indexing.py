@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from .config import (
     STATE_DIR,
 )
 from .lang_router import get_model_for_project
+from .project_id import resolve_project_dir
 from .file_scan import (
     CODE_EXTENSIONS,
     MAX_FILE_SIZE,
@@ -116,6 +118,13 @@ def release_index_lock() -> None:
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
+
+#: Manifest value for a file that exists, passed every scan filter, and still
+#: could not be read as text. Safe against collision by construction:
+#: file_hash() returns exactly 16 lowercase hex characters, so no real hash can
+#: ever equal this.
+UNREADABLE_SENTINEL = "__unreadable__"
+
 
 def file_hash(content: str) -> str:
     """SHA-256 hash prefix for change detection."""
@@ -304,23 +313,100 @@ def _save_project_manifest(
     manifest_path: Path, manifest: dict, project_path: str,
     pipeline_version: int | None = None,
     model_id: str | None = None,
+    embedding_dim: int | None = None,
+    incomplete: bool | None = None,
 ) -> None:
-    """Save project manifest to disk with metadata."""
+    """Save project manifest to disk with metadata.
+
+    Metadata keys the caller does not supply are carried over from whatever is
+    already on disk rather than dropped. reindex_file() calls this on every
+    single edit and knows nothing about the pipeline version or the embedding
+    model, so without the carry over each per file reindex silently erased
+    ``__pipeline_version__`` and ``__model_id__``. That erasure is why every
+    manifest in databases/_projects/ holds only ``__project_path__``: it made
+    index_project() force a full rebuild every run (stored version always read
+    back as None), and it destroyed the provenance record that tells search
+    which embedding space a project's vectors actually live in.
+    """
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    prior: dict = {}
+    if manifest_path.exists():
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            prior = {k: v for k, v in raw.items() if k.startswith("__")}
+        except Exception:
+            prior = {}
+
     save_data = {"__project_path__": project_path}
-    if pipeline_version is not None:
-        save_data["__pipeline_version__"] = pipeline_version
-    if model_id is not None:
-        save_data["__model_id__"] = model_id
+    for key, value in (
+        ("__pipeline_version__", pipeline_version),
+        ("__model_id__", model_id),
+        ("__embedding_dim__", embedding_dim),
+        ("__incomplete__", incomplete),
+    ):
+        if value is not None:
+            save_data[key] = value
+        elif key in prior:
+            save_data[key] = prior[key]
+
     save_data.update(manifest)
     manifest_path.write_text(json.dumps(save_data, indent=2), encoding="utf-8")
 
 
+def read_project_provenance(project_path: str) -> dict:
+    """Return the embedding provenance recorded for *project_path*.
+
+    Keys: ``model_id`` and ``embedding_dim``, either of which may be None when
+    the project was indexed before provenance was recorded. A None model_id
+    means "unknown", which search must treat as unsafe rather than assume it
+    matches the current model: an index built by a different model of the same
+    width returns confident nonsense instead of an error.
+    """
+    _root, _pid, _index_dir, _chroma_dir, manifest_path = _project_paths(project_path)
+    if not manifest_path.exists():
+        return {"model_id": None, "embedding_dim": None}
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"model_id": None, "embedding_dim": None}
+    return {
+        "model_id": raw.get("__model_id__"),
+        "embedding_dim": raw.get("__embedding_dim__"),
+    }
+
+
+def index_is_incomplete(project_path: str) -> bool:
+    """Did the last index of *project_path* stop before it reached every file?
+
+    True means the manifest lists a real subset of the project: every file in
+    it is genuinely in the store, and the rest were never reached. A resume can
+    therefore run with force off and keep the work already done, instead of
+    wiping the collection and starting the same large project from zero every
+    time the machine is busy.
+    """
+    _root, _pid, _index_dir, _chroma_dir, manifest_path = _project_paths(project_path)
+    if not manifest_path.exists():
+        return False
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Manifest unreadable for %s: %s", project_path, e)
+        return False
+    return bool(raw.get("__incomplete__"))
+
+
 def _project_paths(project_path: str) -> tuple[Path, str, Path, Path, Path]:
-    """Resolve project root, project ID, index dir, store dir, manifest path."""
+    """Resolve project root, project ID, index dir, store dir, manifest path.
+
+    The name comes from server/project_id.py, which every other lookup site
+    also uses. It used to be computed here and hand copied into five other
+    files, and a disagreement between any two of them read as "never
+    indexed" rather than as an error.
+    """
     project_root = Path(project_path).resolve()
-    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
-    index_dir = DATABASES_DIR / "_projects" / pid
+    index_dir = resolve_project_dir(DATABASES_DIR / "_projects", project_root)
+    pid = index_dir.name
     chroma_dir = index_dir / "chroma"
     manifest_path = index_dir / "manifest.json"
     return project_root, pid, index_dir, chroma_dir, manifest_path
@@ -385,6 +471,7 @@ def index_project(
     project_path: str,
     model_cache,
     force: bool = False,
+    should_abort: Callable[[], str | None] | None = None,
 ) -> dict:
     """Index a project's source code into databases/_projects/<hash>/chroma/.
 
@@ -394,8 +481,18 @@ def index_project(
     Args:
         model_cache: A ModelCache instance (from lang_router) or a plain
             embedder with an ``embed(texts)`` method for backward compat.
+        should_abort: Optional zero-argument callable consulted before each
+            file. Return a reason string to stop the run there; return None to
+            carry on. This is the only way a background sweep can give the
+            machine back part way through one project: index_project runs
+            inside a run_in_executor worker, and a Future that has already
+            started cannot be cancelled, so stopping has to be cooperative --
+            the worker checks a flag at a safe point and returns by itself.
+            Left unset (the manual /index-project path) nothing is checked and
+            behaviour is exactly as before.
 
-    Returns stats dict.
+    Returns stats dict. A run that stopped early carries ``stopped_early`` with
+    the reason, and its manifest is marked incomplete so the next pass resumes.
     """
     project_root, pid, index_dir, chroma_dir, manifest_path = _project_paths(project_path)
 
@@ -476,6 +573,20 @@ def index_project(
             lang_counts[lang] = lang_counts.get(lang, 0) + 1
         model_id = get_model_for_project(lang_counts)
         code_embedder = model_cache.get(model_id)
+        # Record the model that actually produced the vectors, not the one we
+        # asked for. ModelCache.get falls back to CODE_EMBEDDING_MODEL when the
+        # routed model cannot load (bigcode/starencoder, the router's own
+        # fallback entry, currently fails this way), and writing the requested
+        # id would make the manifest claim an embedding space the vectors are
+        # not in. Search compares this id against the live embedder, so a wrong
+        # value here marks a freshly indexed project permanently stale.
+        actual_model_id = getattr(code_embedder, "model_name", None)
+        if actual_model_id and actual_model_id != model_id:
+            logger.info(
+                "Model %s unavailable, vectors produced by %s -- recording the latter",
+                model_id, actual_model_id,
+            )
+            model_id = actual_model_id
     else:
         # Plain embedder passed directly (backward compat)
         code_embedder = model_cache
@@ -486,9 +597,25 @@ def index_project(
     files_unchanged = 0
     files_failed = 0
     edges_extracted = 0
+    stopped_early: str | None = None
     start_time = time.time()
 
     for file_path in file_paths:
+        # Cooperative abort point: between files, never part way through one.
+        # A file only enters the manifest once its chunks are actually in the
+        # store, so stopping here always leaves the manifest and the store
+        # agreeing about what is indexed.
+        if should_abort is not None:
+            reason = should_abort()
+            if reason:
+                stopped_early = reason
+                logger.warning(
+                    "Giving the machine back part way through %s: %s "
+                    "(%d of %d files done, resuming next sweep)",
+                    project_path, reason, files_indexed, len(file_paths),
+                )
+                break
+
         try:
             rel_path = str(Path(file_path).relative_to(project_root)).replace("\\", "/")
         except ValueError:
@@ -500,7 +627,20 @@ def index_project(
         try:
             content = Path(file_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
+            # Record the failure instead of just counting it.
+            #
+            # Leaving no manifest entry meant find_changed_files (which reads
+            # with errors="replace" and so always succeeds) saw a file it had
+            # no hash for, called it changed, and handed it back here to fail
+            # identically. Forever: one real file logged the same
+            # UnicodeDecodeError on 98 consecutive passes and was never
+            # indexed. The sentinel is what lets the two agree the file is
+            # known and unreadable rather than perpetually new.
+            #
+            # UNREADABLE_SENTINEL cannot collide with a real entry because
+            # file_hash() returns exactly 16 lowercase hex characters.
             logger.warning("Failed to read %s: %s", rel_path, e)
+            manifest[rel_path] = UNREADABLE_SENTINEL
             files_failed += 1
             continue
 
@@ -616,11 +756,42 @@ def index_project(
             logger.error("Graph post-processing failed: %s", e)
             graph_stats = {"error": str(e)}
 
-    # Save manifest with pipeline version and model info
+    # Save manifest with pipeline version and model info. The dimension is
+    # recorded alongside the model id because a same width model swap (both
+    # CodeRankEmbed and st-codesearch-distilroberta-base are 768) passes every
+    # width check there is while still returning results from a different
+    # embedding space, so width alone cannot detect it.
+    embedding_dim: int | None = None
+    try:
+        embedding_dim = store.sample_dimension(collection)
+    except Exception:
+        logger.debug("Could not sample embedding dimension for %s", pid, exc_info=True)
+
+    # A run that stopped early still saves, and that is the deliberate choice
+    # over leaving the previous manifest untouched. The manifest is the record
+    # of what is actually in the store, and after the break above it holds
+    # A run that stopped early still saves, and that is the deliberate choice
+    # over leaving the previous manifest untouched. The manifest is the record
+    # of what is actually in the store, and after the break above it holds
+    # exactly the files this run embedded (plus, when force is off, the ones
+    # already there and untouched). The files never reached are simply absent,
+    # so the next sweep sees them as changed and finishes the job.
+    #
+    # Not saving would be worse, specifically on a force rebuild: the
+    # collection is emptied at the top of this function, so keeping the old
+    # manifest would claim files are indexed whose chunks no longer exist, and
+    # nothing would ever notice or reindex them. __incomplete__ is what stops
+    # the resume from being a restart, see index_is_incomplete().
     _save_project_manifest(
         manifest_path, manifest, str(project_root),
         pipeline_version=PIPELINE_VERSION,
-        model_id=model_id,
+        incomplete=stopped_early is not None,
+        # The backward compat branch above sets model_id to "" when a plain
+        # embedder was passed instead of a ModelCache. Empty is "unknown", not
+        # a real model id, so normalize it to None and let the carry over keep
+        # any genuine value already on disk.
+        model_id=model_id or None,
+        embedding_dim=embedding_dim,
     )
 
     # Update project registry
@@ -650,6 +821,8 @@ def index_project(
     }
     if graph_stats:
         result["graph"] = graph_stats
+    if stopped_early:
+        result["stopped_early"] = stopped_early
     return result
 
 

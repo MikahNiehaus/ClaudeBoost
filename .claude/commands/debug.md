@@ -1,7 +1,7 @@
 ---
 argument-hint: ["error message" | file.py:42 | --live | --static | --no-log]
 description: Debug a bug — static analysis, live step-through, and test-project debugging. Works with Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust. Handles test projects (xUnit/VSTest, pytest, Jest, go test, JUnit, cargo test) with runner-specific attach workflows. Outputs a Bug Analysis Report.
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__redefine_classes
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
 ---
 
 # /debug — Debugging Session
@@ -246,6 +246,20 @@ Do NOT block on this — it's informational.
 ## Phase 3: Static Analysis
 
 Applies when `MODE = STATIC` or as the first pass in `MODE = HYBRID`.
+
+**Before the first pass, and again at every stall:** invoke the
+`debugging-methodology` skill and name the technique you are using. Match it to
+the symptom rather than defaulting to reading the code again. Regressed since a
+known good commit is `git bisect`. A large input that fails while small ones pass
+is delta debugging. A long call chain with one bad value is binary search on
+state. A working case beside the failing one is differential debugging.
+Intermittent is record replay. At 2-3 iterations with no new information, switch
+technique by name; do not alternate between rereading the code and adding another
+print statement, that is one technique, not two. That skill also carries the per
+stack CLI recipes (React Native via `adb logcat` and Hermes over CDP, .NET via
+`dotnet-trace`/`dotnet-dump`, Python via `py-spy`) and the rule that databases are
+read only here: understand the schema from migrations and models, never execute
+against a live one.
 
 ### 3a — Read the relevant files
 

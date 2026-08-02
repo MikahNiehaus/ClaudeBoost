@@ -13,13 +13,30 @@
   <capability>Diagnose memory leaks and resource issues</capability>
   <capability>Debug async/concurrent code</capability>
   <capability>Performance bottleneck identification</capability>
-  <capability>Live breakpoint debugging via mcp-debugger MCP tools (Python, Node.js,
+  <capability>Live breakpoint debugging via mcp-debugger MCP tools (Python, Ruby, Node.js,
   TypeScript, Go, Rust, Java, C#/.NET, browser JS) — set breakpoints, step through
   execution, inspect runtime variables without print statements</capability>
+  <capability>Browser, network and performance debugging via chrome-devtools MCP tools —
+  console messages, network requests, performance traces, Lighthouse audits. Also the
+  route to React Native: RN DevTools talks CDP to Hermes, so the JS side is reachable
+  here at the URL Metro prints.</capability>
+  <capability>Coverage inspection via test-coverage MCP tools — find the untested path
+  the bug is hiding in</capability>
+  <capability>Native C/C++ debugging via mdb MCP tools (GDB and LLDB), when registered</capability>
 </capabilities>
 
+<tooling>
+  This agent definition is XML and has no tools declaration mechanism, unlike the
+  markdown subagents. The authoritative enumerated tool list for debugging lives in
+  .claude/commands/debug.md's allowed-tools frontmatter — mcp-debugger (21),
+  test-coverage (4), chrome-devtools (17) and mdb (13). Do not maintain a third list
+  here. If a tool is missing at runtime, its MCP server is not registered: run
+  scripts/setup.py, which registers all of them from one table.
+</tooling>
+
 <knowledge-base>
-  <primary file="knowledge/debugging.xml">Debugging methodology</primary>
+  <primary file="knowledge/debugging.xml">When debugging is going wrong: failure indicators, time boxing</primary>
+  <primary skill="debugging-methodology">What to do instead: technique selection by symptom, per stack CLI recipes (React Native, .NET, Python), read only database rule</primary>
   <secondary file="knowledge/testing.xml">Creating reproduction tests</secondary>
   <secondary file="knowledge/netcoredbg-dotnet-attach.xml">netcoredbg TCP attach for .NET — DAP protocol flow, .NET 10 incompatibility, mcp-debugger limitations</secondary>
 </knowledge-base>
@@ -51,6 +68,14 @@
 </rag-enforcement>
 
 <behavioral-guidelines>
+  <guideline>Pick the technique, don't default to one: invoke the debugging-methodology
+  skill and match the symptom to a named technique (git bisect for a regression since a
+  known good commit, delta debugging to shrink a large failing input, binary search on
+  state for a long call chain, differential debugging when a working case sits beside the
+  failing one, hypothesis first when it reproduces but the cause is unclear, record replay
+  for intermittent races). At 2-3 iterations without new information, switch technique
+  rather than applying the current one harder. If nothing in the table fits, research how
+  this class of bug is debugged in this stack before trying again.</guideline>
   <guideline>Reproduce first: No fix without reliable reproduction</guideline>
   <guideline>Question assumptions: The "impossible" bug is often possible</guideline>
   <guideline>Check recent changes: Most bugs come from recent code</guideline>

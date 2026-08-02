@@ -13,7 +13,6 @@ Exit codes:
   0 = always (PostToolUse hooks should not block)
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -83,17 +82,35 @@ def _find_project_for_file(file_path: str) -> str | None:
     return None
 
 
-def _manifest_path(project_path: str) -> Path:
-    """Where the manifest actually lives.
+def _manifest_path(project_path: str) -> Path | None:
+    """Where the manifest actually lives, or None if that cannot be known.
 
-    Mirrors _project_paths() in server/indexing.py:684. The manifest is stored
-    inside clean-rag's own databases dir, keyed by a hash of the resolved
-    project path. It is NOT a dotfile in the project root.
+    Inside clean-rag's own databases dir, in a directory named after the
+    project. NOT a dotfile in the project root.
+
+    This used to re-derive the directory name by hand, with a comment saying
+    it mirrored server/indexing.py. A mirror drifts; this imports the real
+    thing instead. It no longer falls back to the old formula: the import
+    only fails when CLEAN_RAG_HOME is not a clean-rag checkout, and then
+    projects_root is wrong too, so the guessed path names a manifest nothing
+    ever writes. That path never exists, so _should_force_reindex read it as
+    "never indexed" and forced a full rebuild of the whole repository on
+    every single edit -- the exact pathology its own docstring says was
+    fixed. Returning None says "unknown" honestly and lets the caller pick a
+    cheap, correct default. (Same reason graph-context-inject.py skips and
+    graph_service.py raises: none of the three may guess a directory name.)
     """
     home = _clean_rag_home()
-    project_root = Path(project_path).resolve()
-    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
-    return home / "databases" / "_projects" / pid / "manifest.json"
+    if str(home) not in sys.path:
+        sys.path.insert(0, str(home))
+    try:
+        from server.project_id import resolve_project_dir
+    except ImportError:
+        logger.error("Cannot import server.project_id from CLEAN_RAG_HOME=%s; "
+                     "manifest location unknown", home)
+        return None
+    projects_root = home / "databases" / "_projects"
+    return resolve_project_dir(projects_root, Path(project_path).resolve()) / "manifest.json"
 
 
 def _should_force_reindex(project_path: str) -> bool:
@@ -106,6 +123,12 @@ def _should_force_reindex(project_path: str) -> bool:
     databases/_projects/<pid>/manifest.json.
     """
     manifest_path = _manifest_path(project_path)
+    if manifest_path is None:
+        # Location unknown (already logged). Do not force: a full rebuild of
+        # the repo on every edit is the expensive wrong guess, and the server
+        # is the authority anyway -- reindex_file() answers "Project not
+        # indexed" cleanly for a project that really has none.
+        return False
     if not manifest_path.exists():
         return True  # never indexed, so there's nothing to incrementally update
 
@@ -160,7 +183,11 @@ def _send_reindex(project_path: str, file_path: str) -> None:
     try:
         urllib.request.urlopen(req, timeout=60)
     except Exception:
-        pass
+        # Still never raises: this runs in a daemon thread and must not
+        # disturb the edit. But it no longer vanishes either. A down server
+        # or a rejected request is why the index looks stale later, and
+        # state/reindex.log is the only place that can say so.
+        logger.warning("Reindex request to %s failed for %s", url, file_path, exc_info=True)
 
 
 def main() -> int:

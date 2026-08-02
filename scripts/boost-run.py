@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -253,20 +254,69 @@ def step_mode() -> str:
     return mode
 
 
+# Mirrors setup.py's MCP_SERVERS table. Kept as (name, fix-hint) pairs rather
+# than imported so /boost verify stays a standalone script with no import path
+# into scripts/setup.py. Adding a server there means adding it here too.
+MCP_SERVERS_EXPECTED: list[tuple[str, str]] = [
+    ("mcp-debugger", "claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio"),
+    ("playwright", "claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest"),
+    ("test-coverage", "claude mcp add test-coverage --scope user -- npx -y test-coverage-mcp"),
+    ("chrome-devtools", "claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest"),
+    # mdb (native GDB/LLDB) is optional — setup.py only registers it if the
+    # clone and its deps both land, so a missing one is not a health failure.
+]
+
+
+def parse_mcp_list(stdout: str) -> dict[str, str]:
+    """Map each server name in `claude mcp list` output to its OWN status text.
+
+    Mirrors setup.py's parse_mcp_list for the same standalone-script reason as
+    MCP_SERVERS_EXPECTED above. Real output is a header line then one server
+    per line, `<name>: <command-or-url> - <status>`:
+
+        mcp-debugger: npx -y @debugmcp/mcp-debugger stdio - ✔ Connected
+        claude.ai GitHub: https://api.githubcopilot.com/mcp - ! Needs authentication
+
+    Names can contain spaces and commands can contain colons, so the name is
+    everything before the FIRST ": " and the status everything after the LAST
+    " - ". Matching a bare substring against the whole output instead reports
+    "mdb" registered when only an unrelated "cmdb" is.
+    """
+    servers: dict[str, str] = {}
+    for line in stdout.splitlines():
+        name, sep, rest = line.partition(": ")
+        if not sep or not name.strip():
+            continue
+        _, dash, status = rest.rpartition(" - ")
+        servers[name.strip()] = status.strip() if dash else ""
+    return servers
+
+
 def step_mcp_debugger() -> str:
+    """Health-check every debugging MCP server. Worst status wins."""
     rc, out = _run(["claude", "mcp", "list"], timeout=20)
     if rc == 127:
-        print("  mcp-debugger: not checked (claude CLI not on PATH)")
+        print("  MCP servers: not checked (claude CLI not on PATH)")
         return "unknown"
-    line = next((l for l in out.splitlines() if "mcp-debugger" in l.lower()), "")
-    if not line:
-        print("  mcp-debugger: NOT registered — claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
-        return "missing"
-    if "connected" in line.lower() or "✓" in line:
-        print("  mcp-debugger: connected")
-        return "connected"
-    print(f"  mcp-debugger: registered but not healthy ({line.strip()})")
-    return "unhealthy"
+
+    servers = parse_mcp_list(out)
+    worst = "connected"
+    for name, fix in MCP_SERVERS_EXPECTED:
+        status = servers.get(name)
+        if status is None:
+            print(f"  {name}: NOT registered — {fix}")
+            worst = "missing"
+        elif re.search(r"\bconnected\b", status, re.IGNORECASE):
+            print(f"  {name}: connected")
+        else:
+            print(f"  {name}: registered but not healthy ({status})")
+            if worst != "missing":
+                worst = "unhealthy"
+
+    if "mdb" in servers:
+        print("  mdb: registered (native GDB/LLDB, optional)")
+
+    return worst
 
 
 def step_workspaces() -> list[str]:

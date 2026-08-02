@@ -135,6 +135,11 @@ class OpenCodeRAGServer:
                             "type": "string",
                             "description": "Model name (DeepSeek, Claude, etc.) - for logging",
                         },
+                        "project_path": {
+                            "type": "string",
+                            "description": "Absolute path of the indexed project to search. "
+                                           "Optional: inferred from filepath when omitted.",
+                        },
                     },
                     "required": ["prompt"],
                 },
@@ -334,15 +339,75 @@ class OpenCodeRAGServer:
             logger.error(f"Web search failed: {e}")
             return {"results": [], "error": str(e)}
 
+    def _infer_project_path(self, filepath: str | None) -> str | None:
+        """Best guess at which indexed project *filepath* belongs to.
+
+        Prefers a registered project that actually contains the file, because a
+        path with no index is no better than no path at all. Falls back to the
+        nearest enclosing git root so a project indexed under a different alias
+        still resolves.
+        """
+        if not filepath:
+            return None
+        try:
+            target = Path(filepath).resolve()
+        except Exception:
+            return None
+
+        try:
+            registry = json.loads(
+                (_CLEAN_RAG_HOME / "state" / "projects.json").read_text(encoding="utf-8")
+            )
+            entries = registry.get("projects", registry) if isinstance(registry, dict) else {}
+            best = None
+            for entry in entries.values():
+                if not isinstance(entry, dict):
+                    continue
+                root = entry.get("project_path")
+                if not root:
+                    continue
+                try:
+                    rp = Path(root).resolve()
+                except Exception:
+                    continue
+                if target == rp or rp in target.parents:
+                    # Deepest match wins: a repo nested inside another repo is
+                    # the more specific index.
+                    if best is None or len(str(rp)) > len(str(best)):
+                        best = rp
+            if best is not None:
+                return str(best)
+        except Exception:
+            logger.debug("Could not consult the project registry", exc_info=True)
+
+        for parent in [target] + list(target.parents):
+            if (parent / ".git").exists():
+                return str(parent)
+        return None
+
     def inject_full_context(
-        self, prompt: str, filepath: str = None, model: str = "unknown"
+        self, prompt: str, filepath: str = None, model: str = "unknown",
+        project_path: str = None,
     ) -> dict:
         """Complete context injection: RAG + metrics + web fallback."""
         logger.info(f"Injecting context for {model}: {prompt[:60]}...")
 
-        # Step 1: Search RAG
-        rag_result = self.rag_search(prompt)
+        # Step 1: Search RAG.
+        #
+        # This used to call rag_search(prompt) with no project_path, which
+        # returns the "project_path is required" error before searching
+        # anything. So the project index was never consulted on this path and
+        # the empty result always fell straight through to the web fallback
+        # below: the context injector injected no project context at all.
+        if not project_path:
+            project_path = self._infer_project_path(filepath)
+            if project_path:
+                logger.info(f"Inferred project_path={project_path} from filepath")
+
+        rag_result = self.rag_search(prompt, project_path=project_path)
         rag_results = rag_result.get("results", [])
+        if rag_result.get("error"):
+            logger.warning(f"RAG search unavailable: {rag_result['error']}")
 
         # Step 2: Get metrics if filepath provided
         metrics = None
@@ -456,6 +521,7 @@ class OpenCodeRAGServer:
                 tool_input.get("prompt", ""),
                 tool_input.get("filepath"),
                 tool_input.get("model", "unknown"),
+                tool_input.get("project_path"),
             )
 
         else:

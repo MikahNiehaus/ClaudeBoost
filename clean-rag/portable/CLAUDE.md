@@ -134,6 +134,47 @@ edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
 guessing which inputs to test, which is the weak version the research warned about.
 
+## Debugging, testing and QA
+
+When a bug does not yield, the failure mode is applying one technique harder.
+Two or three iterations with no new information means the technique is wrong,
+not that you need more logging. Invoke the **`debugging-methodology`** skill and
+pick a different one by name from its symptom table:
+
+- Regressed since a known good commit, use `git bisect` (`git bisect run <cmd>`
+  automates it entirely).
+- Large input fails, small ones pass, use delta debugging to shrink it.
+- Long call chain with one bad value, binary search on state.
+- A working case sits beside the failing one, differential debugging.
+- Reproduces but the cause is unclear, hypothesis first: write the claim down,
+  then design the smallest test that would falsify it.
+- Intermittent or a race, record replay (`rr`). Re running it is not a strategy.
+- No reliable reproduction at all, stop and get one. A fix without a repro is a
+  guess you cannot validate.
+
+That skill also carries the per stack recipes for surfaces no MCP server
+reaches: React Native (`adb logcat`, `npx react-native log-ios`, Hermes over CDP
+through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
+(`dotnet-trace`, `dotnet-dump`, `dotnet-gcdump`, `dotnet-counters`), and Python
+(`py-spy dump`/`record`, which attach to a live process without restarting it).
+
+**Reach for the debugger over print statements.** `mcp-debugger` covers Python,
+Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
+`start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
+performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
+is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
+registered, so run the installer; every server comes from one table there.
+
+**Databases are read only.** Understand the schema from the project's own
+artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic versions,
+`schema.sql`), reason about the query, and hand it to the human to run. Do not
+execute against a live database and do not automate SSMS or any equivalent GUI
+client. A wrong statement against real data is not recoverable by a retry.
+
+Running `/qa` gives the full session: inventory, a risk ranked test plan, and
+execution with evidence. `/debug` is the focused single bug path. Both enumerate
+the debugging tools already, and both point back at this same skill.
+
 ## UI / Frontend Work
 
 When the task involves editing or creating frontend files (`.tsx`, `.jsx`,

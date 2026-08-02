@@ -146,15 +146,160 @@ def _health_check(port: str) -> bool:
         )
         with urllib.request.urlopen(req, timeout=1) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data.get("status") in ("ready", "warming_up")
+            status = data.get("status")
+            # "failed" is deliberately excluded. warming_up stays healthy
+            # because a model that is still loading really does recover on its
+            # own, but a warmup that raised never will, and reporting it
+            # healthy is what let the server sit unusable for three days
+            # without anything noticing.
+            if status == "failed":
+                logger.error(
+                    "RAG server reports failed init: %s",
+                    data.get("last_error", "no reason given"),
+                )
+                return False
+            return status in ("ready", "warming_up")
     except Exception as e:
         logger.error(f"Health check failed: {type(e).__name__}: {e}")
         return False
 
 
+# A deliberately stopped server must stay stopped. Without this, killing the
+# server to get the machine back lasts only until the next prompt, because the
+# health check sees it down and restarts it. That is not self healing, it is
+# fighting the user for control of their own machine.
+_STOP_MARKER_NAME = "server-stopped-by-user"
+
+# Restarting cannot fix a deterministic startup failure, so retrying it every
+# prompt just burns the machine. One attempt per this window.
+_SELF_HEAL_COOLDOWN_S = 15 * 60
+_SELF_HEAL_STAMP_NAME = "last-self-heal"
+
+
+def _load_write_durably():
+    """Resolve ``server.durable_write.write_durably``, or None if unavailable.
+
+    Imported through CLEAN_RAG_HOME the same way reindex-after-edit.py imports
+    server.project_id: a hook runs as a loose script with no package context.
+    """
+    root = str(_clean_rag_home())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from server.durable_write import write_durably
+    except ImportError as e:
+        logger.error(
+            "Cannot import server.durable_write from CLEAN_RAG_HOME=%s: %s", root, e
+        )
+        return None
+    return write_durably
+
+
+def _read_self_heal_stamp(stamp) -> float | None:
+    """When the last self-heal ran, in epoch seconds, or None if unknown.
+
+    None means "no usable record", which the caller must treat as no cooldown.
+    A stamp that is missing, empty, truncated mid write, or not a number tells
+    us nothing about when the last restart happened, and inventing a cooldown
+    from it would refuse self healing forever -- a permanent outage is strictly
+    worse than the 15 minute window this is meant to enforce. The next attempt
+    overwrites it with a sane value.
+
+    The recorded timestamp is the authority rather than the file's mtime,
+    because that is the value _record_self_heal_attempt() actually proves it
+    wrote; an mtime can be moved by a copy, a restore, or a sync client that
+    never touched the contents.
+    """
+    try:
+        raw = stamp.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.error("Could not read the self-heal cooldown stamp %s: %s", stamp, e)
+        return None
+
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "Self-heal cooldown stamp %s is not a timestamp (%r); treating it as "
+            "no cooldown so the next attempt rewrites it.", stamp, raw[:40],
+        )
+        return None
+
+
+def _self_heal_suppressed(home) -> str | None:
+    """Return a reason to skip the restart, or None to go ahead."""
+    marker = home / "state" / _STOP_MARKER_NAME
+    if marker.exists():
+        return "server was stopped deliberately (remove state/server-stopped-by-user to re-enable)"
+
+    recorded_at = _read_self_heal_stamp(home / "state" / _SELF_HEAL_STAMP_NAME)
+    if recorded_at is None:
+        return None
+
+    age = time.time() - recorded_at
+    if age < 0:
+        # Dated in the future: clock skew, a restored backup, or a corrupt
+        # number. Left alone it would read as a cooldown that never expires.
+        logger.warning(
+            "Self-heal cooldown stamp is %.0f min in the future; ignoring it.",
+            -age / 60,
+        )
+        return None
+    if age < _SELF_HEAL_COOLDOWN_S:
+        return f"restarted {age / 60:.0f} min ago, cooling down"
+    return None
+
+
+def _record_self_heal_attempt(home) -> bool:
+    """Persist the cooldown stamp. True only if it will still be there next time.
+
+    The stamp is worth exactly as much as its durability, so the write is read
+    back and compared to what was written. Checking that the file merely
+    *exists* afterwards is not the same test and does not catch the fault class
+    that matters here: a write that reports success and leaves the previous
+    stamp in place (an antivirus intercept, a lazy network or synced folder
+    write) passes an existence check while re-arming nothing. Same check, same
+    helper, as cli/server_ctl.py's _mark_stopped_by_user().
+    """
+    write_durably = _load_write_durably()
+    if write_durably is None:
+        return False
+
+    stamp = home / "state" / _SELF_HEAL_STAMP_NAME
+    try:
+        write_durably(stamp, str(time.time()))
+    except OSError as e:
+        logger.error(f"Could not persist the self-heal cooldown stamp: {e}")
+        return False
+    return True
+
+
 def _trigger_self_heal(port: str) -> None:
-    """Attempt to restart RAG server if down."""
+    """Attempt to restart RAG server if down, unless suppressed."""
     home = _clean_rag_home()
+
+    reason = _self_heal_suppressed(home)
+    if reason is not None:
+        logger.info("Self-heal skipped: %s", reason)
+        return
+
+    # Fail closed. Without a stamp on disk there is no cooldown, and this hook
+    # is a fresh process on every prompt, so an in memory throttle would not
+    # survive to see the next call: every prompt would launch another restart
+    # of a server that a restart cannot fix. That storm is strictly worse than
+    # not restarting, and the user can still start the server by hand, so an
+    # unthrottleable restart is the one thing not worth attempting.
+    if not _record_self_heal_attempt(home):
+        logger.error(
+            "Self-heal refused: state/ is not writable, so the %d minute "
+            "cooldown cannot be enforced. Start the server by hand with "
+            "cli/server_ctl.py start once state/ is writable again.",
+            _SELF_HEAL_COOLDOWN_S // 60,
+        )
+        return
+
     try:
         subprocess.Popen(
             [sys.executable, str(home / "cli" / "server_ctl.py"), "restart"],
@@ -688,11 +833,17 @@ def main() -> int:
     )
 
     if not is_healthy:
+        # Says what is true in every case, not just the lucky one. A restart is
+        # skipped when the server was stopped on purpose, when one was tried in
+        # the last 15 minutes, and now when the cooldown cannot be persisted, so
+        # claiming "self healing initiated" here was wrong most of the time.
         print(
-            "\n[WARN] RAG SERVER UNAVAILABLE\n"
-            "Research-backed context injection is offline.\n"
-            "Self-healing initiated. Retry in 30 seconds.\n"
-            "Proceeding without injected research context.\n"
+            f"\n[WARN] clean-rag did not answer on port {port}.\n"
+            "This turn has no injected research context.\n"
+            "A restart runs at most once every 15 minutes and never at all "
+            "if the server was stopped on purpose.\n"
+            "state/rag-enforce.log says which of those happened. To start it "
+            "yourself: python clean-rag/cli/server_ctl.py start\n"
         )
         return 0
 
@@ -700,7 +851,6 @@ def main() -> int:
     reranked = _filter_by_keyword_relevance(search_query, reranked)
 
     best_score = reranked[0].get("score", 0) if reranked else 0
-    overlap = _keyword_overlap_ratio(search_query, reranked) if reranked else 0.0
 
     rag_context = _format_rag_results(reranked)
     if rag_context:

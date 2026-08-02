@@ -172,14 +172,75 @@ class TestMainAlreadyRunning:
         assert "already running" in output.lower() or "ready" in output.lower()
 
 
+def _load_proc_utils():
+    """The shared helper rag-server-start.py now imports its pid check from."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "proc_utils.py"
+    spec = importlib.util.spec_from_file_location("proc_utils_undertest", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class TestIsPidAliveEdgeCases:
-    def test_exception_in_pid_check_returns_false(self):
-        """_is_pid_alive returns False when subprocess.run raises an exception (lines 68-69)."""
-        mod = _load_rag_server_start()
+    """The probe must never answer "dead" when it simply could not tell.
+
+    These used to assert the opposite. `_is_pid_alive` returned False on any
+    exception, including a `tasklist` timeout, and its only callers are single
+    instance guards: answering "dead" starts another server. Timeouts happen
+    when the machine is loaded, which is exactly when another server is worst,
+    so the old contract was a feedback loop. Nine rag_server processes and
+    thirteen orphaned supervisors were observed live from it.
+    """
+
+    def test_unknowable_pid_state_reports_alive_not_dead(self):
+        mod = _load_proc_utils()
+        # No psutil and a failing tasklist: the probe genuinely cannot tell.
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_psutil(name, *a, **k):
+            if name == "psutil":
+                raise ImportError("simulated")
+            return real_import(name, *a, **k)
+
         import subprocess as _sp
-        with patch.object(_sp, "run", side_effect=OSError("tasklist not found")):
-            result = mod._is_pid_alive(os.getpid())
-        assert result is False
+
+        builtins.__import__ = no_psutil
+        try:
+            with patch.object(_sp, "run", side_effect=OSError("tasklist not found")):
+                result = mod.is_pid_alive(os.getpid())
+        finally:
+            builtins.__import__ = real_import
+        assert result is True, (
+            "an unknowable pid state must not read as dead: that is what "
+            "spawned duplicate supervisors"
+        )
+
+    def test_a_real_live_pid_reports_alive(self):
+        assert _load_proc_utils().is_pid_alive(os.getpid()) is True
+
+    def test_a_definitely_dead_pid_reports_dead(self):
+        assert _load_proc_utils().is_pid_alive(999999) is False
+
+    def test_nonsense_pids_report_dead(self):
+        mod = _load_proc_utils()
+        assert mod.is_pid_alive(0) is False
+        assert mod.is_pid_alive(-1) is False
+
+    def test_no_substring_match_on_the_pid_field(self):
+        """`str(pid) in stdout` matched 12345 for pid 1234, and any column
+        that happened to contain those digits."""
+        mod = _load_proc_utils()
+        mypid = os.getpid()
+        prefix = int(str(mypid)[:-1]) if len(str(mypid)) > 1 else 0
+        if prefix in (0, mypid):
+            return
+        import psutil
+
+        assert mod.is_pid_alive(prefix) == psutil.pid_exists(prefix)
 
 
 class TestMainStaleServerRestart:
@@ -206,33 +267,65 @@ class TestMainStaleServerRestart:
         )
 
 
-class TestIsPidAliveNonWindows:
-    """Cover lines 71-75: the non-Windows branch that uses os.kill(pid, 0)."""
+class TestIsPidAlivePosixFallback:
+    """The POSIX branch, reached only when psutil is unavailable."""
 
-    def test_alive_pid_returns_true_on_linux(self):
-        """On a non-Windows platform, os.kill(pid, 0) succeeding means the pid is alive."""
-        mod = _load_rag_server_start()
-        # Patch sys.platform inside the module to non-win32 so the else branch runs.
-        with patch.object(mod.sys, "platform", "linux"):
-            # os.kill with our own pid should not raise on any OS.
-            result = mod._is_pid_alive(os.getpid())
-        assert result is True
+    @staticmethod
+    def _without_psutil(mod, fn):
+        import builtins
 
-    def test_dead_pid_oserror_returns_false_on_linux(self):
-        """On a non-Windows platform, os.kill raising OSError means the pid is dead."""
-        mod = _load_rag_server_start()
-        with patch.object(mod.sys, "platform", "linux"):
-            with patch.object(mod.os, "kill", side_effect=OSError("no such process")):
-                result = mod._is_pid_alive(99999999)
-        assert result is False
+        real_import = builtins.__import__
 
-    def test_alive_pid_confirmed_via_os_kill_mock(self):
-        """os.kill returning None (no exception) means the process is alive."""
-        mod = _load_rag_server_start()
+        def no_psutil(name, *a, **k):
+            if name == "psutil":
+                raise ImportError("simulated")
+            return real_import(name, *a, **k)
+
+        builtins.__import__ = no_psutil
+        try:
+            return fn()
+        finally:
+            builtins.__import__ = real_import
+
+    def test_os_kill_succeeding_means_alive(self):
+        mod = _load_proc_utils()
         with patch.object(mod.sys, "platform", "linux"):
             with patch.object(mod.os, "kill", return_value=None):
-                result = mod._is_pid_alive(12345)
+                result = self._without_psutil(mod, lambda: mod.is_pid_alive(12345))
         assert result is True
+
+    def test_process_lookup_error_means_dead(self):
+        mod = _load_proc_utils()
+        with patch.object(mod.sys, "platform", "linux"):
+            with patch.object(mod.os, "kill", side_effect=ProcessLookupError()):
+                result = self._without_psutil(mod, lambda: mod.is_pid_alive(99999999))
+        assert result is False
+
+    def test_permission_error_means_ALIVE(self):
+        """Access denied proves the process exists. Only a live process can
+        refuse you."""
+        mod = _load_proc_utils()
+        with patch.object(mod.sys, "platform", "linux"):
+            with patch.object(mod.os, "kill", side_effect=PermissionError()):
+                result = self._without_psutil(mod, lambda: mod.is_pid_alive(1))
+        assert result is True
+
+
+class TestPortInUse:
+    def test_free_port_is_not_in_use(self):
+        assert _load_proc_utils().port_in_use(59997) is False
+
+    def test_bound_port_is_in_use(self):
+        import socket
+
+        mod = _load_proc_utils()
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        try:
+            assert mod.port_in_use(srv.getsockname()[1]) is True
+        finally:
+            srv.close()
 
 
 class TestMainTimeoutPath:

@@ -108,9 +108,12 @@ def _parse_task(path: Path) -> dict[str, Any] | None:
     session = path.parent.name
 
     try:
-        mtime = path.stat().st_mtime
+        stat = path.stat()
+        mtime = stat.st_mtime
+        ctime = stat.st_ctime
     except OSError:
         mtime = 0
+        ctime = 0
 
     project = _get_project_path(session)
 
@@ -128,6 +131,7 @@ def _parse_task(path: Path) -> dict[str, Any] | None:
         "project_name": Path(project).name if project else None,
         "file": str(path),
         "mtime": mtime,
+        "ctime": ctime,
     }
 
 

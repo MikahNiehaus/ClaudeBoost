@@ -27,9 +27,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1202,7 +1204,6 @@ def install_rag_server() -> None:
 # primer.py doesn't block the first prompt after setup.
 # ---------------------------------------------------------------------------
 def _prime_rag_session() -> None:
-    import tempfile
     import urllib.request
     import urllib.error
 
@@ -1323,81 +1324,249 @@ def _claude_cmd() -> list[str] | None:
     return None
 
 
-def register_mcp_debugger() -> None:
-    _info("\nVerifying mcp-debugger...")
-    claude = _claude_cmd()
-    if claude is None:
-        _skip("claude CLI not found — skipping mcp-debugger registration")
+# The debugging surface, one row per server. Everything an agent needs to step
+# through code, watch a browser, read coverage, or attach a native debugger is
+# registered from this table. Adding a server means adding a row here AND
+# enumerating its tool names in the agent frontmatter that should see it —
+# Claude Code rejects `mcp__<server>__*` wildcards, so there is no shortcut.
+#
+# `name` is load-bearing: the tool prefix is derived from it, so changing a
+# name here silently breaks every enumerated `mcp__<name>__<tool>` downstream.
+MCP_SERVERS: list[dict] = [
+    {
+        "name": "mcp-debugger",
+        "label": "mcp-debugger",
+        "args": ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"],
+        "needs": "npx",
+        "hint": "ensure Node 22+ is installed",
+        "why": "step-through debugging: Python, Ruby, Node, Go, Java, .NET, Rust",
+    },
+    {
+        "name": "playwright",
+        "label": "Playwright MCP",
+        "args": ["npx", "-y", "@playwright/mcp@latest"],
+        "needs": "npx",
+        "why": "browser automation for browser-agent and /qa",
+    },
+    {
+        "name": "test-coverage",
+        "label": "test-coverage MCP",
+        "args": ["npx", "-y", "test-coverage-mcp"],
+        "needs": "npx",
+        "why": "LCOV coverage summaries and diff-since-start for bad-cop",
+    },
+    {
+        "name": "chrome-devtools",
+        "label": "Chrome DevTools MCP",
+        "args": ["npx", "-y", "chrome-devtools-mcp@latest"],
+        "needs": "npx",
+        "why": "network capture, performance traces, Lighthouse, Hermes/React Native over CDP",
+    },
+]
+
+
+def parse_mcp_list(stdout: str) -> dict[str, str]:
+    """Map each server name in `claude mcp list` output to its OWN status text.
+
+    Real output is a header line then one server per line, shaped
+    `<name>: <command-or-url> - <status>`:
+
+        Checking MCP server health...
+
+        mcp-debugger: npx -y @debugmcp/mcp-debugger stdio - ✔ Connected
+        playwright: npx -y @playwright/mcp@latest - ✗ Failed to connect
+        claude.ai GitHub: https://api.githubcopilot.com/mcp - ! Needs authentication
+
+    Names may contain spaces and commands may contain colons (URLs, Windows
+    paths), so the name is everything before the FIRST ": " and the status is
+    everything after the LAST " - ". Lines without a ": " (the header, blanks)
+    are not servers and are dropped.
+
+    Parsing per line is the whole point: a substring test against the joined
+    output reports one server's status for another, and reports "mdb" present
+    when only an unrelated "cmdb" is registered.
+    """
+    servers: dict[str, str] = {}
+    for line in stdout.splitlines():
+        name, sep, rest = line.partition(": ")
+        if not sep or not name.strip():
+            continue
+        _, dash, status = rest.rpartition(" - ")
+        servers[name.strip()] = status.strip() if dash else ""
+    return servers
+
+
+def _is_connected(status: str) -> bool:
+    """True only for a genuinely connected status, not "Failed to connect"."""
+    return re.search(r"\bconnected\b", status, re.IGNORECASE) is not None
+
+
+def _register_one(claude: list[str], listed: str, server: dict) -> None:
+    """Register a single MCP server at user scope. Never fatal.
+
+    Body is the original per-server logic from register_mcp_debugger and
+    register_playwright_mcp, with only the name and args parameterized.
+    """
+    name, label = server["name"], server["label"]
+    args = server["args"]
+
+    needs = server.get("needs")
+    if needs and not shutil.which(needs):
+        _warn(f"{needs} not found — {label} needs it, skipping")
+        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
         return
 
-    rc, out = run_cmd(claude + ["mcp", "list"])
-    if rc != 0:
-        _skip(f"claude mcp list failed (exit {rc}) — skipping mcp-debugger registration")
-        return
-
-    if "mcp-debugger" in out:
-        if "Connected" in out or "connected" in out:
-            _ok("mcp-debugger already registered and connected")
+    status = parse_mcp_list(listed).get(name)
+    if status is not None:
+        if _is_connected(status):
+            _ok(f"{label} already registered and connected")
         else:
-            _warn("mcp-debugger registered but not connected — ensure Node 22+ is installed")
+            hint = server.get("hint", "run /mcp to connect")
+            _warn(f"{label} registered but not connected — {hint}")
         return
 
-    _info("Registering mcp-debugger (user scope)...")
-    rc, out = run_cmd(claude + [
-        "mcp", "add", "mcp-debugger",
-        "--scope", "user",
-        "--", "npx", "-y", "@debugmcp/mcp-debugger", "stdio",
-    ])
+    _info(f"Registering {label} (user scope)...")
+    rc, out = run_cmd(claude + ["mcp", "add", name, "--scope", "user", "--"] + args)
     if rc == 0:
-        _ok("mcp-debugger registered — run /mcp to connect")
+        _ok(f"{label} registered — run /mcp to connect")
     else:
-        _warn(f"mcp-debugger registration failed (exit {rc})")
+        _warn(f"{label} registration failed (exit {rc})")
         if out:
             _warn(f"  {out[:200]}")
-        _warn("  To register manually: claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
+        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
 
 
-# ---------------------------------------------------------------------------
-# Playwright MCP: browser automation tools for browser-agent and /end-to-end-test.
-# Registered at user scope via `claude mcp add` so it's available in every
-# project. Requires Node/npx — works on Windows, macOS, and Linux.
-# ---------------------------------------------------------------------------
-def register_playwright_mcp() -> None:
-    _info("\nVerifying Playwright MCP...")
+# Note the upstream rename: this was GDB-MCP. Cloning the old name 404s.
+MDB_MCP_REPO = "https://github.com/smadi0x86/MDB-MCP.git"
 
-    if not shutil.which("npx"):
-        _warn("npx not found — Playwright MCP requires Node.js")
-        _warn("  Install Node.js from https://nodejs.org/ then re-run /setup")
-        _warn("  Or register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
-        return
+
+def _clone_mdb_mcp(dest: Path) -> bool:
+    """Clone MDB-MCP into `dest`. Self-healing and never leaves partial state.
+
+    `git clone` refuses a destination that exists and is not empty, so an
+    interrupted clone used to leave a directory that made every later run fail
+    identically, forever, with no way out but deleting it by hand.
+
+    Two changes close that off, following pre-commit's Store._new_repo, which
+    clones into a staging directory beside the store, wrapped in
+    `clean_path_on_failure`, and only moves it into place once the clone
+    worked:
+      - any leftover checkout without a server.py is removed first, so an
+        already wedged install heals itself on the next run;
+      - the clone lands in a staging directory and is moved into place only
+        once it really produced server.py, so neither an interruption nor a
+        half-finished checkout can leave something at `dest` that later runs
+        mistake for a working install.
+
+    The staging path is a fixed sibling rather than pre-commit's
+    `tempfile.mkdtemp`, because there is exactly one destination here: a fixed
+    name can be swept on the next run, where a random one would litter
+    ~/.claude/mcp-servers with an orphan directory per interrupted install.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = dest.parent / ".MDB-MCP-clone"
+
+    for stale, why in ((dest, "incomplete MDB-MCP checkout"),
+                       (staging, "leftover MDB-MCP clone staging directory")):
+        if not stale.exists():
+            continue
+        _info(f"Removing {why} before re-cloning...")
+        try:
+            shutil.rmtree(stale)
+        except OSError as e:
+            _warn(f"MDB-MCP: could not remove {stale} ({e})")
+            _warn("  Delete that directory, then re-run setup to retry.")
+            return False
+
+    try:
+        _info("Cloning MDB-MCP (native GDB/LLDB debugging)...")
+        rc, out = run_cmd(["git", "clone", "--depth", "1", MDB_MCP_REPO, str(staging)])
+        if rc != 0 or not (staging / "server.py").exists():
+            _warn("MDB-MCP clone failed — native GDB/LLDB debugging unavailable")
+            if out:
+                _warn(f"  {out[:200]}")
+            return False
+        try:
+            staging.replace(dest)
+        except OSError as e:
+            _warn(f"MDB-MCP: could not move the clone into {dest} ({e})")
+            return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return True
+
+
+def _mdb_mcp_server() -> list[str] | None:
+    """Vendor smadi0x86/MDB-MCP and return its stdio launch args, or None.
+
+    Native GDB/LLDB debugging. Unlike every other row in MCP_SERVERS this is
+    not an npx package — it is a Python stdio server that has to be cloned and
+    given its deps. Low maintenance signal upstream (small repo, LLDB support
+    marked experimental), so every failure path here is a soft skip: a missing
+    native debugger must never fail the install.
+    """
+    if not shutil.which("git"):
+        _skip("git not found — skipping MDB-MCP (native GDB/LLDB debugging)")
+        return None
+
+    dest = CLAUDE_DIR / "mcp-servers" / "MDB-MCP"
+    server_py = dest / "server.py"
+
+    if not server_py.exists() and not _clone_mdb_mcp(dest):
+        return None
+
+    rc, _ = run_cmd([sys.executable, "-c", "import mcp, pygdbmi"])
+    if rc != 0:
+        _info("Installing MDB-MCP dependencies (mcp, pygdbmi)...")
+        rc, out = _pip_install(["mcp", "pygdbmi"])
+        if rc != 0:
+            _warn("MDB-MCP deps failed to install — native GDB/LLDB debugging unavailable")
+            if out:
+                _warn(f"  {out[:200]}")
+            return None
+
+    return [sys.executable, str(server_py)]
+
+
+def register_mcp_servers() -> None:
+    """Register every MCP server in MCP_SERVERS, plus the vendored MDB-MCP.
+
+    Idempotent: `claude mcp list` is read once up front and each server is
+    skipped if it is already there. Nothing here is fatal — a missing runtime
+    or an offline network degrades the debugging surface, it does not break
+    the install.
+    """
+    _info("\nVerifying MCP servers...")
 
     claude = _claude_cmd()
     if claude is None:
-        _skip("claude CLI not found — skipping Playwright MCP registration")
+        _skip("claude CLI not found — skipping MCP server registration")
         return
 
-    rc, out = run_cmd(claude + ["mcp", "list"])
+    rc, listed = run_cmd(claude + ["mcp", "list"])
     if rc != 0:
-        _skip(f"claude mcp list failed (exit {rc}) — skipping Playwright MCP registration")
+        _skip(f"claude mcp list failed (exit {rc}) — skipping MCP server registration")
         return
 
-    if "playwright" in out:
-        _ok("Playwright MCP already registered")
-        return
+    for server in MCP_SERVERS:
+        _register_one(claude, listed, server)
 
-    _info("Registering Playwright MCP (user scope)...")
-    rc, out = run_cmd(claude + [
-        "mcp", "add", "playwright",
-        "--scope", "user",
-        "--", "npx", "-y", "@playwright/mcp@latest",
-    ])
-    if rc == 0:
-        _ok("Playwright MCP registered — browser tools available after Claude Code restart")
-    else:
-        _warn(f"Playwright MCP registration failed (exit {rc})")
-        if out:
-            _warn(f"  {out[:200]}")
-        _warn("  To register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
+    # Native debugging is opt-in-shaped: it only registers if the clone and the
+    # deps both land. Checked last so a failure can't stop the npx servers.
+    # Exact name lookup, not `"mdb" in listed` — that matched any server whose
+    # name merely contains "mdb" (a "cmdb" server, say) and silently skipped
+    # the real registration, leaving every mcp__mdb__* tool orphaned.
+    if "mdb" in parse_mcp_list(listed):
+        _ok("MDB-MCP already registered")
+        return
+    args = _mdb_mcp_server()
+    if args:
+        _register_one(claude, listed, {
+            "name": "mdb",
+            "label": "MDB-MCP (native GDB/LLDB)",
+            "args": args,
+            "why": "native C/C++ debugging via GDB and LLDB",
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -1595,8 +1764,7 @@ def main() -> int:
     update_settings()
     _clean_project_local_settings()
     install_rag_server()
-    register_mcp_debugger()
-    register_playwright_mcp()
+    register_mcp_servers()
     install_edge_tts()
     install_netcoredbg()
     install_clean_rag()

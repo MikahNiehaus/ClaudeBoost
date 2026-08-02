@@ -26,7 +26,6 @@ Grounded facts (from fast-graphrag source and Ollama docs):
 Manual only. Nothing here auto triggers a build. Stdlib http.server, no web dep.
 """
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -80,10 +79,35 @@ def _scan_project(project_path):
 
 
 def _project_dir(project_path):
-    key = hashlib.sha256(str(Path(project_path).resolve()).encode("utf-8")).hexdigest()[:12]
-    d = CLEAN_RAG_HOME / "databases" / "_projects" / key / "graphrag"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """Where this project's graphrag data lives. Resolve only, never create.
+
+    project_id.py is stdlib only, so it imports fine in this isolated venv
+    even though most of server/ does not. Sharing it is the point: this
+    directory name has to match what the main server computes or the two
+    write to different places for the same project.
+
+    There is deliberately no fallback name. The only way this import fails is
+    a CLEAN_RAG_HOME that is not a clean-rag checkout, and then projects_root
+    below is wrong too, so a locally computed name would name a directory the
+    main server never reads: a second, invisible store for the project, which
+    is the exact split project_id.py exists to end. Guessing is worse than
+    stopping ("errors should never pass silently... refuse the temptation to
+    guess", PEP 20), so this raises with the path to fix.
+
+    Creating the directory is build_graph's job, the only writer. A status or
+    query call for a project that was never built leaves nothing behind.
+    """
+    if str(CLEAN_RAG_HOME) not in sys.path:
+        sys.path.insert(0, str(CLEAN_RAG_HOME))
+    try:
+        from server.project_id import resolve_project_dir
+    except ImportError as e:
+        raise RuntimeError(
+            f"cannot import server.project_id from CLEAN_RAG_HOME={CLEAN_RAG_HOME}; "
+            "point CLEAN_RAG_HOME at the clean-rag checkout"
+        ) from e
+    projects_root = CLEAN_RAG_HOME / "databases" / "_projects"
+    return resolve_project_dir(projects_root, project_path) / "graphrag"
 
 
 def _read_json(path, default=None):
@@ -156,11 +180,21 @@ def _prune_builds(pdir, active_version):
 
 def build_graph(project_path):
     """Build (or resume) the graph for a project. Blocking; run it in a thread."""
+    # Resolved before the lock: _project_dir raises on a broken CLEAN_RAG_HOME
+    # and there is no lock to leak yet if it does.
+    pdir = _project_dir(project_path)
+    # Pure path arithmetic, cannot raise, and the except clause below writes to
+    # it, so it has to be bound before the try or a failing mkdir surfaces as
+    # UnboundLocalError instead of the real error.
+    prog = pdir / "progress.json"
     if not _build_lock.acquire(blocking=False):
         return {"error": "a build is already running"}
-    pdir = _project_dir(project_path)
-    prog = pdir / "progress.json"
+    # Nothing goes between the acquire and the try. Anything that raises here
+    # leaves the lock held forever and every later build is refused until the
+    # process restarts. mkdir sat here and did exactly that. This is the shape
+    # the threading docs give as the equivalent of `with lock:`.
     try:
+        pdir.mkdir(parents=True, exist_ok=True)  # the only writer creates it
         files = _scan_project(project_path)
         total = len(files)
         if total == 0:

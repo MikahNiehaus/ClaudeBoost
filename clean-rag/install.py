@@ -213,6 +213,115 @@ def install_npm_qa_tools() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 2b2: Register the debugging MCP servers (best effort)
+#
+# bad-cop and good-cop enumerate these servers' tools by literal name in their
+# frontmatter, because Claude Code rejects mcp__<server>__* wildcards. An agent
+# whose server was never registered silently has no such tool, so shipping the
+# agents without registering the servers is a broken install, not a partial one.
+#
+# Mirrors ClaudeBoost's scripts/setup.py MCP_SERVERS table. Kept as its own copy
+# so clean-rag stays installable standalone, without ClaudeBoost present.
+# ---------------------------------------------------------------------------
+MCP_SERVERS: list[tuple[str, list[str]]] = [
+    ("mcp-debugger", ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"]),
+    ("playwright", ["npx", "-y", "@playwright/mcp@latest"]),
+    ("test-coverage", ["npx", "-y", "test-coverage-mcp"]),
+    ("chrome-devtools", ["npx", "-y", "chrome-devtools-mcp@latest"]),
+]
+
+
+def _claude_cmd() -> list[str] | None:
+    """A subprocess safe `claude` invocation, or None if it is not on PATH.
+
+    On Windows claude installs as claude.cmd, which subprocess cannot launch
+    without going through cmd.exe.
+    """
+    for candidate in ("claude", "claude.cmd"):
+        path = shutil.which(candidate)
+        if path:
+            return ["cmd", "/c", path] if candidate.endswith(".cmd") else [path]
+    return None
+
+
+def parse_mcp_list(stdout: str) -> dict[str, str]:
+    """Map each server name in `claude mcp list` output to its OWN status text.
+
+    Its own copy, for the same standalone reason as MCP_SERVERS above; the
+    ClaudeBoost twin is scripts/setup.py's parse_mcp_list. Real output is a
+    header line then one server per line, `<name>: <command-or-url> - <status>`:
+
+        mcp-debugger: npx -y @debugmcp/mcp-debugger stdio - ✔ Connected
+        claude.ai GitHub: https://api.githubcopilot.com/mcp - ! Needs authentication
+
+    Names can contain spaces and commands can contain colons, so the name is
+    everything before the FIRST ": " and the status everything after the LAST
+    " - ". A bare `name in stdout` substring test instead matches a name that
+    only appears inside another server's name or command, and silently skips
+    registering the real one.
+    """
+    servers: dict[str, str] = {}
+    for line in stdout.splitlines():
+        name, sep, rest = line.partition(": ")
+        if not sep or not name.strip():
+            continue
+        _, dash, status = rest.rpartition(" - ")
+        servers[name.strip()] = status.strip() if dash else ""
+    return servers
+
+
+def register_mcp_servers() -> None:
+    """Register every debugging MCP server at user scope. Never fatal.
+
+    Idempotent: reads `claude mcp list` once and skips anything already there.
+    """
+    _say("\nRegistering debugging MCP servers...")
+
+    claude = _claude_cmd()
+    if claude is None:
+        _warn("claude CLI not found, skipping MCP server registration")
+        return
+
+    if not shutil.which("npx"):
+        _warn("npx not found, skipping MCP server registration (needs Node.js)")
+        for name, args in MCP_SERVERS:
+            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+        return
+
+    try:
+        listed = subprocess.run(
+            claude + ["mcp", "list"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"claude mcp list failed ({e}), skipping MCP server registration")
+        return
+
+    if listed.returncode != 0:
+        _warn("claude mcp list failed, skipping MCP server registration")
+        return
+
+    registered = parse_mcp_list(listed.stdout)
+    for name, args in MCP_SERVERS:
+        if name in registered:
+            _ok(f"{name} already registered")
+            continue
+        try:
+            result = subprocess.run(
+                claude + ["mcp", "add", name, "--scope", "user", "--"] + args,
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{name} registration failed: {e}")
+            continue
+        if result.returncode == 0:
+            _ok(f"{name} registered")
+        else:
+            _warn(f"{name} registration failed: {result.stderr[:200]}")
+            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+
+
+# ---------------------------------------------------------------------------
 # Step 2c: Install deck tooling for the powerpoint skill (best effort)
 # ---------------------------------------------------------------------------
 def _module_available(module: str) -> bool:
@@ -1018,6 +1127,13 @@ def main():
         install_npm_qa_tools()
     else:
         print("\nStep 2b: Skipped (--skip-deps)")
+
+    # Step 2b2
+    if not args.skip_deps:
+        print("\nStep 2b2: Registering debugging MCP servers...")
+        register_mcp_servers()
+    else:
+        print("\nStep 2b2: Skipped (--skip-deps)")
 
     # Step 2c
     if not args.skip_deps:

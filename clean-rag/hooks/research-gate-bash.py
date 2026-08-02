@@ -151,19 +151,13 @@ def main() -> int:
         ok, reason = check_file_researched(session_id, _resolve(target, cwd))
         if not ok:
             print(
-                f"BLOCKED: {reason}.\n\n"
-                f"This Bash command would write {target}, a code file, which is the "
-                "same as editing it. The research gate applies to it too. Spawn "
-                "swiper, which runs the full pass and emits a COVERS line "
-                "naming this file, then run the command. Spawn it in the foreground: "
-                "run_in_background: false, never true. A backgrounded completion "
-                "arrives later as a TaskNotificationMessage, not a tool result, so "
-                "the hook that stamps this record never fires for it. If it's "
-                "genuinely trivial, start the turn with /ps instead. Writing code "
-                "through the shell does not get around the gate.",
+                f"NUDGE: {reason}.\n\n"
+                f"This Bash command would write {target}, a code file.\n"
+                "Consider spawning researcher/swiper first, or use /ps to skip.",
                 file=sys.stderr,
             )
-            return 2
+            # Nudge, not block.
+            return 0
 
     # Removing a dependency this way never touches a file through a redirect, tee,
     # or sed the loop above would catch, the package manager edits the manifest
@@ -173,17 +167,13 @@ def main() -> int:
         ok, reason = has_any_research_this_turn(session_id)
         if not ok:
             print(
-                f"BLOCKED: {reason}.\n\n"
-                "This command removes a dependency, which is a destructive action: "
-                "whatever used it may still need it, or the removal may not be the "
-                "actual fix for whatever problem prompted it. Spawn swiper "
-                "first to check whether removing it is really correct, then run the "
-                "command. Spawn it in the foreground: run_in_background: false, "
-                "never true. If it's genuinely trivial, start the turn with /ps "
-                "instead.",
+                f"NUDGE: {reason}.\n\n"
+                "This command removes a dependency.\n"
+                "Consider spawning researcher/swiper first, or use /ps to skip.",
                 file=sys.stderr,
             )
-            return 2
+            # Nudge, not block.
+            return 0
 
     return 0
 

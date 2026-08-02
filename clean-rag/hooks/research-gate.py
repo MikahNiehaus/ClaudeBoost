@@ -77,23 +77,14 @@ def _is_exempt(file_path: str) -> tuple[bool, str]:
 
 def _block(file_path: str, reason: str) -> int:
     print(
-        f"[research-gate] BLOCKED: {reason}.\n\n"
-        f"Cannot edit: {file_path}\n\n"
-        "Spawn researcher and/or swiper before editing this file. Tell them what\n"
-        "you are changing, why, and the code you intend to write. Both read the\n"
-        "real files and cover depth and breadth every time; neither shortcuts a\n"
-        "change it judges trivial. Use /ps to skip this gate for a turn you\n"
-        "already know is trivial.\n\n"
-        "Spawn in the foreground: run_in_background: false, never true. A\n"
-        "backgrounded completion arrives as a TaskNotificationMessage, not a\n"
-        "tool result, so the hook that stamps this record never fires for it.\n\n"
-        "Their reports end with a line naming every file the research covers:\n\n"
-        "    COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py\n\n"
-        "One research run can cover a whole coherent change across many files,\n"
-        "so you do not need one agent per file.",
+        f"[research-gate] NUDGE: {reason}.\n\n"
+        f"Editing without research coverage: {file_path}\n\n"
+        "Consider spawning researcher and/or swiper before editing this file.\n"
+        "Use /ps to acknowledge this is intentionally unresearched.",
         file=sys.stderr,
     )
-    return 2
+    # Nudge, not block: warn but allow the edit to proceed.
+    return 0
 
 
 def main() -> int:

@@ -100,6 +100,38 @@ def _venv_roots(root: Path) -> set:
     return roots
 
 
+#: How much of a file to sniff. git reads the first blob-sized chunk for the
+#: same decision; 8KB is plenty to find a NUL in any real binary.
+_SNIFF_BYTES = 8192
+
+
+def looks_binary(path) -> bool:
+    """Is this file binary, judged by content rather than by its name?
+
+    Extension is not enough. ``.txt`` is in CODE_EXTENSIONS, so a log file with
+    a stray 0x97 byte passed every name and size filter here and then died in
+    ``index_project``'s ``read_text(encoding="utf-8")``. That failure left no
+    manifest entry, so ``find_changed_files`` reported the file as changed on
+    every single sweep and the indexer refused it every single time: an
+    infinite retry, and a file permanently missing from search.
+
+    The rule is git's, from ``convert.c``'s ``convert_is_binary``: a single NUL
+    byte anywhere in the sniffed chunk is decisive, and separately a
+    nonprintable to printable ratio worse than 1:128 catches binaries that
+    contain no NUL at all. Only the first is implemented here; the ratio check
+    is the second line of defence and is not worth building speculatively.
+
+    Errs toward "not binary": a file we cannot open is left for the indexer to
+    report properly rather than silently dropped from the scan.
+    """
+    try:
+        with open(path, "rb") as fh:
+            chunk = fh.read(_SNIFF_BYTES)
+    except OSError:
+        return False
+    return b"\x00" in chunk
+
+
 def scan_project(project_path: str) -> list:
     """Scan a project directory for indexable source files.
 
@@ -128,6 +160,8 @@ def scan_project(project_path: str) -> list:
             if path.stat().st_size > MAX_FILE_SIZE:
                 continue
         except OSError:
+            continue
+        if looks_binary(path):
             continue
         files.append(str(path))
 

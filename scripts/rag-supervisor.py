@@ -256,28 +256,36 @@ def _read_supervisor_state() -> dict | None:
         return None
 
 
-def _is_pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(
-                ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
-                capture_output=True, text=True, timeout=5,
-            )
-            return str(pid) in result.stdout
-        except Exception:
-            return False
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import is_pid_alive as _is_pid_alive  # noqa: E402
+from proc_utils import port_in_use as _port_in_use  # noqa: E402
 
 
 def cmd_start(args) -> int:
     """Start the supervisor and managed servers."""
+    only = getattr(args, "only", None)
+
+    # Port check FIRST, before trusting any recorded PID.
+    #
+    # This is the guard that actually stops duplicates. session-primer.py runs
+    # rag-server-start.py whenever the server looks down, which lands here, so
+    # every session and every agent spawn is a chance to start another
+    # supervisor. Each supervisor launches its own managed servers and each of
+    # those loads its own embedding model at 1 to 2 GB. Nine rag_server
+    # processes totalling ~3 GB were observed from exactly this, because the
+    # only guard was a PID check that failed toward "not running" under load.
+    wanted = []
+    if only in (None, "rag"):
+        wanted.append(("rag", 8612))
+    if only in (None, "clean-rag"):
+        wanted.append(("clean-rag", 8613))
+
+    already = [(name, port) for name, port in wanted if _port_in_use(port)]
+    if already and len(already) == len(wanted):
+        for name, port in already:
+            print(f"{name} already serving on port {port}. Not starting a second one.")
+        return 0
+
     state = _read_supervisor_state()
     if state:
         sup_pid = state.get("supervisor_pid", 0)
@@ -287,8 +295,6 @@ def cmd_start(args) -> int:
                 status = "alive" if s.get("alive") else "dead"
                 print(f"  {s['name']}: pid={s.get('pid', 0)} port={s['port']} {status} restarts={s.get('restart_count', 0)}")
             return 0
-
-    only = getattr(args, "only", None)
 
     # Launch the supervisor itself as a detached background process
     python = sys.executable

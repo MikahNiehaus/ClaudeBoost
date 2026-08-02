@@ -10,6 +10,8 @@ Ported from ClaudeBoost mcp-rag-server. Fully self-contained, no external import
 import logging
 import sqlite3
 import sys
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -316,6 +318,7 @@ class SQLiteGraphStore:
         depth: int = 1,
         direction: str = "both",
         max_nodes: int = 200,
+        depths_out: dict[str, int] | None = None,
     ) -> list[GraphEdge]:
         """Return edges incident on file, expanded transitively out to `depth` hops.
 
@@ -333,6 +336,11 @@ class SQLiteGraphStore:
             Falls back to deterministic (sorted) truncation if no PageRank
             data exists yet (e.g. a project indexed before compute_pagerank
             was wired into indexing.py).
+        depths_out: optional dict, populated with file -> shortest hop count
+            from `file` (1 for a direct neighbour). The returned GraphEdge list
+            is flat and carries no hop information, so a caller that wants to
+            weight a neighbour by how far away it is has no way to recover that
+            afterwards; this is the only place the hop number exists.
         """
         depth = min(max(depth, 1), 5)
         if direction not in ("both", "callers", "dependencies"):
@@ -410,6 +418,9 @@ class SQLiteGraphStore:
                 if tf != file and tf and tf != _EXTERNAL_SENTINEL:
                     frontier.add(tf)
             visited |= frontier
+            if depths_out is not None:
+                for f in frontier:
+                    depths_out[f] = 1
 
             hop = 2
             while hop <= depth and frontier:
@@ -424,6 +435,10 @@ class SQLiteGraphStore:
                     neighbor = _next_hop_neighbor(r)
                     if neighbor and neighbor not in visited:
                         next_frontier.add(neighbor)
+                        if depths_out is not None:
+                            # `visited` already excluded anything seen earlier, so
+                            # the first hop to reach a file is its shortest path.
+                            depths_out[neighbor] = hop
                 visited |= next_frontier
                 frontier = next_frontier
                 hop += 1
@@ -455,6 +470,22 @@ class SQLiteGraphStore:
         """Total edge count."""
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    def row_signature(self) -> tuple[int, int]:
+        """(edge count, highest id ever allocated), for change detection.
+
+        The second half comes from ``sqlite_sequence``, which SQLite maintains
+        because ``edges.id`` is AUTOINCREMENT and so is never reused. That is
+        what makes this able to tell "deleted two edges and added two
+        different ones" apart from "nothing happened", which a plain count
+        cannot. Read in one connection so the pair is consistent.
+        """
+        with self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+            row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'edges'"
+            ).fetchone()
+        return (count, row[0] if row else 0)
 
     def get_all_edges(self) -> list[GraphEdge]:
         """Return every stored edge. Used for whole-graph analysis (PageRank)."""
@@ -589,6 +620,190 @@ class SQLiteGraphStore:
                 "SELECT file, score FROM node_pagerank"
             ).fetchall()
         return {r["file"]: r["score"] for r in rows}
+
+
+#: Built nx.DiGraph per graph.db, keyed by resolved path. Same shape as
+#: ChromaStore's module level connection cache in store.py: a module level
+#: dict, a lock, and an evict function the reindex path calls.
+#:
+#: Bounded because this lives in the server process while a multi day reindex
+#: runs elsewhere. Measured 6.2 MB for a 4500 node / 45000 edge graph, so four
+#: resident graphs cost about 25 MB.
+_GRAPH_CACHE_MAX = 4
+_graph_cache: "OrderedDict[str, tuple[tuple, object]]" = OrderedDict()
+_graph_cache_lock = threading.Lock()
+
+
+def _graph_fingerprint(store: "SQLiteGraphStore") -> tuple:
+    """A value that changes whenever the stored edges could have changed.
+
+    A cache that misses a reindex is worse than no cache, and a cache that
+    invalidates on every read is no cache at all, so each candidate key was
+    measured against a real mutation instead of assumed. What was rejected:
+
+    graph.db mtime and size: UNSAFE. The store runs in WAL mode
+    (``PRAGMA journal_mode=WAL``), so a committed write lands in graph.db-wal
+    and leaves graph.db's own mtime and size untouched. Measured: two
+    consecutive ``add_edges`` calls, identical stat.
+
+    ``count_edges()`` alone: UNSAFE. An incremental reindex is
+    ``delete_edges_for_file()`` then ``add_edges()``; a file whose new version
+    has the same number of edges leaves the count identical while every target
+    changed. That is the ordinary reindex-after-edit path, not a corner case.
+
+    ``PRAGMA data_version``: UNSAFE here. It only advances for writes made by
+    OTHER connections, and ``_connect()`` opens a fresh one per call.
+
+    Stat of the WAL sidecar: safe but THRASHES. Connections are closed by the
+    garbage collector at unpredictable times, and the last close checkpoints
+    the WAL away, so the key moved on read-only traffic. Measured: 3 rebuilds
+    across 5 identical queries.
+
+    What is used instead is stable under checkpointing because it names no
+    byte offsets, only identity and row level facts:
+
+    ``st_ino``/``st_dev`` catch the whole file being replaced, which is what
+    ``force=True`` does (``_init_graph_store`` unlinks graph.db). Measured: a
+    rebuild producing byte identical content still changes st_ino.
+
+    ``COUNT(*)`` catches deletions. ``sqlite_sequence`` catches everything
+    else: the edges table is ``INTEGER PRIMARY KEY AUTOINCREMENT``, so SQLite
+    guarantees ids are never reused, and the sequence therefore advances on
+    any insert even when a matching number of rows was just deleted.
+
+    Cost is one stat plus two lookups (a 3ms COUNT on a 45000 edge graph)
+    against the 146ms of graph construction being avoided.
+    """
+    try:
+        st = store._db_path.stat()
+        identity: tuple = (st.st_ino, st.st_dev)
+    except OSError:
+        # No file to identify. Rebuild rather than trust an entry keyed on a
+        # path whose database has gone.
+        identity = (None, None)
+    return (*identity, *store.row_signature())
+
+
+def evict_graph_cache(db_path: str | Path) -> None:
+    """Drop the cached graph for one project's graph.db.
+
+    The fingerprint already catches an out of process rebuild; this is the
+    in process counterpart, so a sweep that just rewrote a project does not
+    hold 6 MB of a graph nothing will ask for again.
+    """
+    key = str(Path(db_path).resolve())
+    with _graph_cache_lock:
+        _graph_cache.pop(key, None)
+
+
+def _build_digraph(edges: list[GraphEdge]):
+    import networkx as nx
+
+    graph = nx.DiGraph()
+    for e in edges:
+        graph.add_node(e.source_file)
+        if e.target_file and e.target_file != _EXTERNAL_SENTINEL:
+            graph.add_node(e.target_file)
+            graph.add_edge(e.source_file, e.target_file)
+    return graph
+
+
+def _cached_digraph(store: "SQLiteGraphStore"):
+    """The project's nx.DiGraph, rebuilt only when its edges actually changed.
+
+    Rebuilding per query cost a measured 0.146s on a 4500 node graph
+    (0.086s to fetch every edge, 0.060s to build), which was 62% of the total
+    per query PageRank cost and was paid again for every single search.
+    """
+    key = str(store._db_path.resolve())
+    fingerprint = _graph_fingerprint(store)
+
+    with _graph_cache_lock:
+        cached = _graph_cache.get(key)
+        if cached is not None and cached[0] == fingerprint:
+            _graph_cache.move_to_end(key)
+            return cached[1]
+
+    # Built outside the lock: a concurrent search must not block for the
+    # length of a rebuild. Two queries racing on a cold cache each build one
+    # and the second overwrites the first, which wastes work but cannot
+    # produce a wrong graph.
+    graph = _build_digraph(store.get_all_edges())
+
+    with _graph_cache_lock:
+        _graph_cache[key] = (fingerprint, graph)
+        _graph_cache.move_to_end(key)
+        while len(_graph_cache) > _GRAPH_CACHE_MAX:
+            evicted, _ = _graph_cache.popitem(last=False)
+            logger.debug("Evicted cached graph for %s", evicted)
+
+    return graph
+
+
+def compute_personalized_pagerank(
+    graph_store: "SQLiteGraphStore", seed_files: list[str] | set[str],
+) -> dict[str, float]:
+    """PageRank biased toward *seed_files*, computed per query.
+
+    Global PageRank answers "what is important in this repo", which is a
+    constant. Every query gets the same answer, so a widely imported utils.py
+    outranks a directly relevant file for every question ever asked. That is
+    why the global score was never wired into result ranking: it was the wrong
+    question, not a missing line.
+
+    Personalization changes the question to "what is important NEAR HERE".
+    The random surfer restarts at the seed files rather than uniformly, so
+    rank concentrates around the part of the graph the query actually landed
+    in. This is what Aider's repo map does (``aider/repomap.py``,
+    ``get_ranked_tags``, which seeds ``personalization`` on the files and
+    identifiers in play and passes both ``personalization=`` and ``dangling=``
+    to ``nx.pagerank``); clean-rag's seeds are the vector hits instead of chat
+    files, but the mechanism is the same.
+
+    Returns {} on any failure, so callers fall back to their existing scoring
+    rather than losing results.
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        logger.debug("Personalized PageRank skipped: networkx not installed")
+        return {}
+
+    seeds = {s for s in (seed_files or ()) if s}
+    if not seeds:
+        return {}
+
+    try:
+        # The graph only changes when the project is reindexed, so it is built
+        # once and reused across queries. See _graph_fingerprint for why the
+        # invalidation key is what it is.
+        graph: "nx.DiGraph" = _cached_digraph(graph_store)
+        if graph.number_of_nodes() == 0:
+            return {}
+
+        # Only seeds that are actually in the graph can be personalized on. A
+        # seed with no edges at all is a real case (a brand new file, or a
+        # language the extractor has no parser for) and networkx raises if the
+        # personalization dict names a node it does not have.
+        present = [s for s in seeds if graph.has_node(s)]
+        if not present:
+            return {}
+
+        weight = 1.0 / len(present)
+        personalization = {node: weight for node in present}
+
+        # dangling= as well as personalization=, matching Aider. Without it a
+        # node with no outgoing edges redistributes its rank uniformly across
+        # the whole graph, which leaks the bias we just established straight
+        # back out. Leaf files with no imports are extremely common in code.
+        return nx.pagerank(
+            graph, alpha=0.85, max_iter=100,
+            personalization=personalization,
+            dangling=personalization,
+        )
+    except Exception:
+        logger.exception("Personalized PageRank failed, falling back to edge scoring")
+        return {}
 
 
 def compute_pagerank(graph_store: "SQLiteGraphStore") -> dict[str, float]:

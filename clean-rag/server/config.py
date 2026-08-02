@@ -104,6 +104,72 @@ def _detect_device() -> str:
 
 DEVICE: str = _detect_device()
 
+# ---------------------------------------------------------------------------
+# CPU budget
+#
+# Embedding is the only genuinely CPU hungry thing this server does, and torch
+# defaults to every core it can see, which makes the machine unusable during a
+# rebuild. Two independent limits, because neither is sufficient alone:
+#
+#   CPU_MAX_PERCENT is the ceiling on TOTAL system CPU. A background sweep
+#   checks it between files and waits while the machine is busier than this,
+#   which is what accounts for load this process did not create.
+#
+#   TORCH_THREADS is the structural cap on this process. It holds even when
+#   nothing is sampling, and it is what stops a single embed call from
+#   saturating every core between samples.
+# ---------------------------------------------------------------------------
+
+CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "80"))
+
+# Minimum free RAM, in MB, before a background reindex is allowed to start or
+# continue. A sweep observed here grew to a 43 GB virtual commit and drove the
+# machine to 0.2 GB free with 16.8 GB paged out, which is worse than the CPU
+# problem: CPU contention makes the machine slow, memory exhaustion makes it
+# stop. Checked on the same schedule as the CPU ceiling.
+MIN_FREE_RAM_MB = float(os.environ.get("CLEAN_RAG_MIN_FREE_RAM_MB", "3072"))
+
+
+def _default_torch_threads() -> int:
+    """Cap torch at CPU_MAX_PERCENT of the machine's cores, at least one."""
+    cores = os.cpu_count() or 1
+    return max(1, int(cores * CPU_MAX_PERCENT / 100.0))
+
+
+TORCH_THREADS = int(
+    os.environ.get("CLEAN_RAG_TORCH_THREADS", "") or _default_torch_threads()
+)
+
+# ---------------------------------------------------------------------------
+# Background reindex schedule
+#
+# Hourly is fine, but only because the sweep now backs off: it waits while the
+# machine is busy and it refuses to start when the previous sweep is still
+# running. Without both of those, an hourly timer against a sweep that takes
+# longer than an hour stacks sweeps until nothing else can run.
+# ---------------------------------------------------------------------------
+
+SWEEP_INTERVAL_S = int(os.environ.get("CLEAN_RAG_SWEEP_INTERVAL_S", str(60 * 60)))
+
+# How long to wait before re-sampling when the machine is over CPU_MAX_PERCENT.
+CPU_BACKOFF_S = float(os.environ.get("CLEAN_RAG_CPU_BACKOFF_S", "5"))
+
+# Give up waiting for a quiet machine after this long and skip the sweep
+# entirely rather than queue behind sustained load.
+CPU_BACKOFF_MAX_WAIT_S = float(
+    os.environ.get("CLEAN_RAG_CPU_BACKOFF_MAX_WAIT_S", str(30 * 60))
+)
+
+# How often a running index stops to ask whether it should give the machine
+# back. This is the checkpoint *inside* one project's index, which is the only
+# thing that bounds how long a single large project can hold the machine: the
+# between-projects check can only refuse to start the next one. 15s means the
+# user waits at most one more file plus 15s to get their cores back, while the
+# sample itself costs one psutil read per 15s.
+INDEX_PRESSURE_CHECK_S = float(
+    os.environ.get("CLEAN_RAG_INDEX_PRESSURE_CHECK_S", "15")
+)
+
 # Web search fallback config
 WEB_SEARCH_ENABLED = os.environ.get("CLEAN_RAG_WEB_SEARCH", "true").lower() in ("true", "1", "yes")
 WEB_SEARCH_TIMEOUT = float(os.environ.get("CLEAN_RAG_WEB_SEARCH_TIMEOUT", "4.0"))

@@ -22,9 +22,7 @@ Exit code is always 0 -- this hook only informs, never blocks. proof-gate.py
 is the separate hook that actually gates edits.
 """
 from __future__ import annotations
-import hashlib
 import json
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -86,9 +84,24 @@ def _detect_project_root(file_path: str) -> Path | None:
 def _fetch_caller_context(file_path: str, project_root: Path) -> dict | None:
     """Direct local graph lookup -- no HTTP, no vector seeding, no server
     dependency. Returns None if there's no graph for this project."""
-    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
     databases_dir = _clean_rag_databases_dir()
-    graph_db_path = databases_dir / "_projects" / pid / "graph.db"
+    projects_root = databases_dir / "_projects"
+    try:
+        from server.project_id import resolve_project_dir
+    except ImportError:
+        # Same soft fail as the graph_store import below: a hook root that is
+        # not a clean-rag checkout should degrade, not take the edit down.
+        # It degrades to skipping the lookup, not to a locally computed name:
+        # if this import fails then projects_root is wrong too, so any name
+        # guessed here would point at a directory nothing else reads. Losing
+        # one context hint is cheap; a second store for the project is not.
+        # Not silent either. The operator gets the path to fix.
+        print(f"[graph-context] cannot import server.project_id from {_CLEAN_RAG_ROOT}; "
+              "skipping caller context", file=sys.stderr)
+        return None
+    index_dir = resolve_project_dir(projects_root, project_root)
+    pid = index_dir.name
+    graph_db_path = index_dir / "graph.db"
     if not graph_db_path.exists():
         return None
 

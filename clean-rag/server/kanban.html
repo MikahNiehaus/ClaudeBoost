@@ -19,6 +19,8 @@
     --card-bg: #1c2129;
     --card-hover: #22272e;
     --accent-dim: rgba(88,166,255,0.15);
+    --bg-hover: #1c2129;
+    --bg-elevated: #22272e;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -84,6 +86,12 @@
     border-color: var(--in-progress);
   }
 
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
   .status {
     display: flex;
     align-items: center;
@@ -105,18 +113,186 @@
     animation: none;
   }
 
+  #lastUpdated {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
   }
 
-  /* Main layout: board + detail panel */
+  /* Main layout: sidebar + board/timeline + detail panel */
   .main {
     display: flex;
     flex: 1;
     overflow: hidden;
   }
 
+  /* Sidebar */
+  .sidebar {
+    width: 240px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 12px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .sidebar-header button {
+    background: none;
+    border: none;
+    color: var(--in-progress);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .sidebar-header button:hover {
+    background: var(--accent-dim);
+  }
+
+  .search-container {
+    padding: 0 12px 8px;
+    position: relative;
+  }
+
+  .search-input {
+    width: 100%;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 28px 6px 8px;
+    border-radius: 6px;
+    outline: none;
+  }
+
+  .search-input:focus {
+    border-color: var(--in-progress);
+  }
+
+  .search-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.6;
+  }
+
+  .search-clear {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px;
+    display: none;
+    line-height: 1;
+  }
+
+  .search-clear.visible {
+    display: block;
+  }
+
+  .sessions-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 8px 8px;
+  }
+
+  .sessions-list::-webkit-scrollbar { width: 6px; }
+  .sessions-list::-webkit-scrollbar-track { background: transparent; }
+  .sessions-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .session-item {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 2px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: left;
+    color: var(--text);
+  }
+
+  .session-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+
+  .session-item.active {
+    background: var(--bg-elevated);
+    border-color: var(--border);
+  }
+
+  .session-name {
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .session-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .session-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .progress-bar {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--completed);
+    transition: width 0.3s ease;
+  }
+
+  .progress-text {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--completed);
+    min-width: 28px;
+    text-align: right;
+  }
+
+  /* Board */
   .board {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -125,6 +301,8 @@
     flex: 1;
     overflow: hidden;
   }
+
+  .board.hidden { display: none; }
 
   .column {
     display: flex;
@@ -184,12 +362,18 @@
     margin-bottom: 8px;
     cursor: pointer;
     transition: all 0.15s;
+    outline: none;
   }
 
   .card:hover {
     background: var(--card-hover);
     border-color: #484f58;
     transform: translateY(-1px);
+  }
+
+  .card:focus {
+    border-color: var(--in-progress);
+    box-shadow: 0 0 0 1px var(--in-progress);
   }
 
   .card.in-progress {
@@ -267,6 +451,98 @@
     color: var(--text-muted);
     font-size: 13px;
     opacity: 0.5;
+  }
+
+  /* Timeline view */
+  .timeline {
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    padding: 24px;
+    overflow: auto;
+  }
+
+  .timeline.visible {
+    display: flex;
+  }
+
+  .timeline-axis {
+    position: relative;
+    height: 24px;
+    margin-left: 160px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .timeline-axis-label {
+    position: absolute;
+    font-size: 10px;
+    color: var(--text-muted);
+    transform: translateX(-50%);
+    bottom: 4px;
+    white-space: nowrap;
+  }
+
+  .timeline-row {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.1s;
+  }
+
+  .timeline-row:hover {
+    background: var(--bg-hover);
+  }
+
+  .timeline-row-label {
+    width: 160px;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 8px;
+  }
+
+  .timeline-row-track {
+    flex: 1;
+    position: relative;
+    height: 20px;
+  }
+
+  .timeline-bar {
+    position: absolute;
+    height: 20px;
+    top: 0;
+    border-radius: 4px;
+    min-width: 4px;
+    transition: opacity 0.15s;
+  }
+
+  .timeline-bar.pending {
+    background: var(--pending);
+    opacity: 0.7;
+  }
+
+  .timeline-bar.in_progress {
+    background: var(--in-progress);
+    box-shadow: 0 0 8px var(--accent-dim);
+  }
+
+  .timeline-bar.completed {
+    background: var(--completed);
+    opacity: 0.8;
+  }
+
+  .timeline-empty {
+    padding: 32px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
   }
 
   /* Detail panel */
@@ -490,6 +766,25 @@
   }
 
   .toast.visible { opacity: 1; }
+
+  /* Keyboard help hint */
+  .kbd-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.5;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  kbd {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+  }
 </style>
 </head>
 <body>
@@ -497,18 +792,43 @@
     <div class="header-left">
       <h1>Claude Code Kanban</h1>
       <div class="header-actions">
+        <button class="header-btn active" id="btnViewKanban" title="Kanban view">Board</button>
+        <button class="header-btn" id="btnViewTimeline" title="Timeline view">Timeline</button>
         <button class="header-btn" id="btnDeps" title="Show dependency graph">Dependencies</button>
-        <button class="header-btn" id="btnNotify" title="Enable desktop notifications">Notify</button>
+        <button class="header-btn" id="btnNotify" title="Enable desktop notifications + audio chime">Notify</button>
       </div>
     </div>
-    <div class="status">
-      <div class="status-dot" id="statusDot"></div>
-      <span id="statusText">Connecting...</span>
+    <div class="header-right">
+      <span id="lastUpdated"></span>
+      <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
     </div>
   </header>
 
   <div class="main">
-    <div class="board">
+    <!-- Sidebar: session list with filter -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <span>Sessions</span>
+        <button id="btnAllSessions" title="Show all sessions">All</button>
+      </div>
+      <div class="search-container">
+        <input id="searchInput" type="text" class="search-input"
+               placeholder="Search tasks, sessions..." />
+        <button id="searchClear" class="search-clear">&times;</button>
+      </div>
+      <div id="sessionsList" class="sessions-list"></div>
+      <div class="kbd-hint">
+        <kbd>j</kbd><kbd>k</kbd> navigate
+        <kbd>h</kbd><kbd>l</kbd> columns
+        <kbd>Enter</kbd> open
+      </div>
+    </div>
+
+    <!-- Kanban board -->
+    <div class="board" id="boardContainer">
       <div class="column col-pending">
         <div class="column-header">
           <div><span class="dot"></span>Pending</div>
@@ -532,6 +852,13 @@
       </div>
     </div>
 
+    <!-- Timeline view -->
+    <div class="timeline" id="timelineContainer">
+      <div class="timeline-axis" id="timelineAxis"></div>
+      <div id="timelineRows"></div>
+    </div>
+
+    <!-- Detail panel -->
     <aside class="detail-panel" id="detailPanel">
       <div class="detail-header">
         <h3>Task Details</h3>
@@ -568,6 +895,9 @@
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
   mermaid.initialize({ startOnLoad: false, theme: 'dark' });
 
+  // -----------------------------------------------------------------------
+  // DOM references
+  // -----------------------------------------------------------------------
   const cols = {
     pending:     document.getElementById('colPending'),
     in_progress: document.getElementById('colInProgress'),
@@ -578,56 +908,342 @@
     in_progress: document.getElementById('countInProgress'),
     completed:   document.getElementById('countCompleted'),
   };
-  const statusDot    = document.getElementById('statusDot');
-  const statusText   = document.getElementById('statusText');
-  const toast        = document.getElementById('toast');
-  const detailPanel  = document.getElementById('detailPanel');
-  const detailContent = document.getElementById('detailContent');
-  const closeDetail  = document.getElementById('closeDetail');
-  const btnDeps      = document.getElementById('btnDeps');
-  const depsModal    = document.getElementById('depsModal');
-  const depsContent  = document.getElementById('depsContent');
-  const closeDeps    = document.getElementById('closeDeps');
-  const btnNotify    = document.getElementById('btnNotify');
+  const statusDot       = document.getElementById('statusDot');
+  const statusText      = document.getElementById('statusText');
+  const lastUpdatedEl   = document.getElementById('lastUpdated');
+  const toast           = document.getElementById('toast');
+  const detailPanel     = document.getElementById('detailPanel');
+  const detailContent   = document.getElementById('detailContent');
+  const closeDetail     = document.getElementById('closeDetail');
+  const btnDeps         = document.getElementById('btnDeps');
+  const depsModal       = document.getElementById('depsModal');
+  const depsContent     = document.getElementById('depsContent');
+  const closeDeps       = document.getElementById('closeDeps');
+  const btnNotify       = document.getElementById('btnNotify');
+  const btnViewKanban   = document.getElementById('btnViewKanban');
+  const btnViewTimeline = document.getElementById('btnViewTimeline');
+  const boardContainer  = document.getElementById('boardContainer');
+  const timelineContainer = document.getElementById('timelineContainer');
+  const searchInput     = document.getElementById('searchInput');
+  const searchClear     = document.getElementById('searchClear');
+  const sessionsList    = document.getElementById('sessionsList');
+  const btnAllSessions  = document.getElementById('btnAllSessions');
 
+  // -----------------------------------------------------------------------
+  // State (module scope, survives re-renders)
+  // -----------------------------------------------------------------------
   let allTasks = [];
   let selectedTaskId = null;
   let selectedSession = null;
   let notificationsEnabled = false;
   let previousStatuses = {};
 
+  // Sidebar filter state
+  let sidebarSearchQuery = '';
+  let sidebarSelectedSession = null;
+
+  // View state
+  let activeView = 'kanban'; // 'kanban' or 'timeline'
+
+  // Keyboard cursor
+  let cursor = { col: 'pending', idx: 0 };
+
+  // SSE reconnect
+  let reconnectDelay = 1000;
+  const RECONNECT_MAX = 30000;
+  let reconnectTimer = null;
+  let currentEs = null;
+
+  // Stale data tracking
+  let lastUpdateTime = null;
+  let staleTimer = null;
+  let staleTickInterval = null;
+
+  // Audio
+  let audioCtx = null;
+
+  // Hash routing debounce
+  let hashUpdatePending = false;
+
+  // -----------------------------------------------------------------------
+  // Utilities
+  // -----------------------------------------------------------------------
   function escapeHtml(s) {
     const d = document.createElement('div');
     d.textContent = s || '';
     return d.innerHTML;
   }
 
+  function safeStatus(s) {
+    var valid = { pending: 1, in_progress: 1, completed: 1 };
+    return valid[s] ? s : 'pending';
+  }
+
+  function fuzzyMatch(text, query) {
+    if (!query) return true;
+    if (!text) return false;
+    text = text.toLowerCase();
+    query = query.toLowerCase();
+    if (text.includes(query)) return true;
+    var words = text.split(/[\s\-_\/\\.]+/);
+    for (var i = 0; i < words.length; i++) {
+      if (words[i].startsWith(query)) return true;
+    }
+    for (var i = 0; i < words.length; i++) {
+      if (words[i].includes(query)) return true;
+    }
+    return false;
+  }
+
+  function formatAge(ts) {
+    var age = Math.round((Date.now() - ts) / 1000);
+    if (age < 5) return 'just now';
+    if (age < 60) return age + 's ago';
+    if (age < 3600) return Math.round(age / 60) + 'm ago';
+    return Math.round(age / 3600) + 'h ago';
+  }
+
+  function formatTimelineLabel(ts, span) {
+    var d = new Date(ts);
+    if (span > 86400000) {
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    if (span > 3600000) {
+      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  // -----------------------------------------------------------------------
+  // Audio chime (Web Audio API)
+  // -----------------------------------------------------------------------
+  function playChime() {
+    if (!audioCtx) return;
+    var oscillator = audioCtx.createOscillator();
+    var gainNode = audioCtx.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.01);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.15);
+  }
+
+  // -----------------------------------------------------------------------
+  // Hash routing
+  // -----------------------------------------------------------------------
+  function pushHash() {
+    if (hashUpdatePending) return;
+    hashUpdatePending = true;
+    requestAnimationFrame(function() {
+      hashUpdatePending = false;
+      var state = {};
+      if (activeView === 'timeline') state.v = 't';
+      if (sidebarSelectedSession) state.s = sidebarSelectedSession;
+      if (sidebarSearchQuery) state.q = sidebarSearchQuery;
+      if (selectedTaskId) state.tid = selectedTaskId;
+      var hash = Object.keys(state).length
+        ? '#' + new URLSearchParams(state).toString()
+        : '';
+      if (location.hash !== hash && ('#' + location.hash.slice(1)) !== hash) {
+        history.replaceState(null, '', hash || location.pathname);
+      }
+    });
+  }
+
+  function readHash() {
+    if (!location.hash || location.hash === '#') return;
+    try {
+      var params = new URLSearchParams(location.hash.slice(1));
+      if (params.get('v') === 't') {
+        activeView = 'timeline';
+      }
+      if (params.get('s')) {
+        sidebarSelectedSession = params.get('s');
+      }
+      if (params.get('q')) {
+        sidebarSearchQuery = params.get('q');
+        searchInput.value = sidebarSearchQuery;
+        searchClear.classList.add('visible');
+      }
+      if (params.get('tid')) {
+        selectedTaskId = params.get('tid');
+      }
+    } catch(e) {
+      console.error('Hash parse error:', e);
+    }
+  }
+
+  window.addEventListener('hashchange', function() {
+    readHash();
+    refreshView();
+  });
+
+  // -----------------------------------------------------------------------
+  // Filter logic
+  // -----------------------------------------------------------------------
+  function applyFilters(tasks) {
+    var filtered = tasks;
+
+    // Session filter
+    if (sidebarSelectedSession) {
+      filtered = filtered.filter(function(t) {
+        return t.session_full === sidebarSelectedSession;
+      });
+    }
+
+    // Search filter
+    if (sidebarSearchQuery) {
+      filtered = filtered.filter(function(t) {
+        return fuzzyMatch(t.subject, sidebarSearchQuery) ||
+               fuzzyMatch(t.description, sidebarSearchQuery) ||
+               fuzzyMatch(t.project_name, sidebarSearchQuery) ||
+               fuzzyMatch(t.session, sidebarSearchQuery) ||
+               fuzzyMatch(t.active_form, sidebarSearchQuery);
+      });
+    }
+
+    return filtered;
+  }
+
+  // -----------------------------------------------------------------------
+  // Sidebar rendering
+  // -----------------------------------------------------------------------
+  function buildSessions() {
+    var sessionMap = {};
+    allTasks.forEach(function(t) {
+      var key = t.session_full;
+      if (!sessionMap[key]) {
+        sessionMap[key] = {
+          id: key,
+          shortId: t.session,
+          project: t.project_name || null,
+          projectPath: t.project || null,
+          tasks: [],
+        };
+      }
+      sessionMap[key].tasks.push(t);
+    });
+    return Object.values(sessionMap);
+  }
+
+  function renderSidebar() {
+    var sessions = buildSessions();
+
+    // Apply search filter to sessions
+    if (sidebarSearchQuery) {
+      sessions = sessions.filter(function(s) {
+        if (fuzzyMatch(s.shortId, sidebarSearchQuery)) return true;
+        if (fuzzyMatch(s.project, sidebarSearchQuery)) return true;
+        return s.tasks.some(function(t) {
+          return fuzzyMatch(t.subject, sidebarSearchQuery) ||
+                 fuzzyMatch(t.description, sidebarSearchQuery) ||
+                 fuzzyMatch(t.active_form, sidebarSearchQuery);
+        });
+      });
+    }
+
+    // Sort: sessions with in-progress tasks first, then by most recent mtime
+    sessions.sort(function(a, b) {
+      var aActive = a.tasks.some(function(t) { return t.status === 'in_progress'; }) ? 1 : 0;
+      var bActive = b.tasks.some(function(t) { return t.status === 'in_progress'; }) ? 1 : 0;
+      if (bActive !== aActive) return bActive - aActive;
+      var aMax = Math.max.apply(null, a.tasks.map(function(t) { return t.mtime || 0; }));
+      var bMax = Math.max.apply(null, b.tasks.map(function(t) { return t.mtime || 0; }));
+      return bMax - aMax;
+    });
+
+    sessionsList.innerHTML = sessions.map(function(s) {
+      var isActive = sidebarSelectedSession === s.id;
+      var completed = s.tasks.filter(function(t) { return t.status === 'completed'; }).length;
+      var total = s.tasks.length;
+      var percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+      var label = s.project || s.shortId;
+
+      return '<button class="session-item' + (isActive ? ' active' : '') + '" data-session-id="' + escapeHtml(s.id) + '">' +
+        '<div class="session-name">' + escapeHtml(label) + '</div>' +
+        '<div class="session-meta">' +
+          '<span>' + total + ' task' + (total !== 1 ? 's' : '') + '</span>' +
+          '<span>' + escapeHtml(s.shortId) + '</span>' +
+        '</div>' +
+        '<div class="session-progress">' +
+          '<div class="progress-bar"><div class="progress-fill" style="width:' + percent + '%"></div></div>' +
+          '<span class="progress-text">' + percent + '%</span>' +
+        '</div>' +
+      '</button>';
+    }).join('');
+
+    // Attach click handlers
+    sessionsList.querySelectorAll('.session-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        var sid = el.getAttribute('data-session-id');
+        if (sidebarSelectedSession === sid) {
+          sidebarSelectedSession = null;
+        } else {
+          sidebarSelectedSession = sid;
+        }
+        refreshView();
+        pushHash();
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Search input
+  // -----------------------------------------------------------------------
+  searchInput.addEventListener('input', function() {
+    sidebarSearchQuery = searchInput.value.trim();
+    searchClear.classList.toggle('visible', sidebarSearchQuery.length > 0);
+    refreshView();
+    pushHash();
+  });
+
+  searchClear.addEventListener('click', function() {
+    searchInput.value = '';
+    sidebarSearchQuery = '';
+    searchClear.classList.remove('visible');
+    refreshView();
+    pushHash();
+  });
+
+  btnAllSessions.addEventListener('click', function() {
+    sidebarSelectedSession = null;
+    refreshView();
+    pushHash();
+  });
+
+  // -----------------------------------------------------------------------
+  // Card rendering
+  // -----------------------------------------------------------------------
   function renderCard(task) {
-    const shortId = String(task.id || '').substring(0, 8);
-    const isInProgress = task.status === 'in_progress';
-    const isSelected = selectedTaskId === task.id && selectedSession === task.session;
-    const classes = ['card'];
+    var shortId = String(task.id || '').substring(0, 8);
+    var isInProgress = task.status === 'in_progress';
+    var isSelected = selectedTaskId === task.id && selectedSession === task.session;
+    var classes = ['card'];
     if (isInProgress) classes.push('in-progress');
     if (isSelected) classes.push('selected');
 
-    let activeFormHtml = '';
+    var activeFormHtml = '';
     if (isInProgress && task.active_form) {
       activeFormHtml = '<div class="card-active-form">' + escapeHtml(task.active_form) + '</div>';
     }
 
-    let depsHtml = '';
-    const blockedBy = task.blocked_by || [];
-    const blocks = task.blocks || [];
+    var depsHtml = '';
+    var blockedBy = task.blocked_by || [];
+    var blocks = task.blocks || [];
     if (blockedBy.length > 0 || blocks.length > 0) {
-      const badges = [];
+      var badges = [];
       if (blockedBy.length > 0) badges.push('<span class="dep-badge">blocked by ' + blockedBy.length + '</span>');
       if (blocks.length > 0) badges.push('<span class="dep-badge">blocks ' + blocks.length + '</span>');
       depsHtml = '<div class="card-deps">' + badges.join('') + '</div>';
     }
 
-    const projectLabel = task.project_name || task.session || '';
+    var projectLabel = task.project_name || task.session || '';
 
-    return '<div class="' + classes.join(' ') + '" data-task-id="' + escapeHtml(String(task.id)) + '" data-session="' + escapeHtml(task.session || '') + '">' +
+    return '<div class="' + classes.join(' ') + '" data-task-id="' + escapeHtml(String(task.id)) + '" data-session="' + escapeHtml(task.session || '') + '" tabindex="-1">' +
       '<div class="card-subject">' + escapeHtml(task.subject) + '</div>' +
       activeFormHtml +
       '<div class="card-meta">' +
@@ -639,17 +1255,17 @@
   }
 
   function renderBoard(tasks) {
-    const buckets = { pending: [], in_progress: [], completed: [] };
+    var buckets = { pending: [], in_progress: [], completed: [] };
 
     tasks.forEach(function(t) {
-      const status = t.status || 'pending';
-      const key = status === 'in_progress' ? 'in_progress' :
-                  status === 'completed'   ? 'completed'   : 'pending';
+      var status = t.status || 'pending';
+      var key = status === 'in_progress' ? 'in_progress' :
+                status === 'completed'   ? 'completed'   : 'pending';
       buckets[key].push(t);
     });
 
     Object.keys(cols).forEach(function(key) {
-      const list = buckets[key] || [];
+      var list = buckets[key] || [];
       counts[key].textContent = list.length;
       if (list.length === 0) {
         cols[key].innerHTML = '<div class="empty-col">No tasks</div>';
@@ -661,53 +1277,205 @@
     // Attach click handlers to cards
     document.querySelectorAll('.card').forEach(function(el) {
       el.addEventListener('click', function() {
-        const taskId = el.getAttribute('data-task-id');
-        const cardSession = el.getAttribute('data-session');
-        const task = allTasks.find(function(t) { return String(t.id) === taskId && t.session === cardSession; })
-                  || allTasks.find(function(t) { return String(t.id) === taskId; });
+        var taskId = el.getAttribute('data-task-id');
+        var cardSession = el.getAttribute('data-session');
+        var task = allTasks.find(function(t) { return String(t.id) === taskId && t.session === cardSession; })
+                || allTasks.find(function(t) { return String(t.id) === taskId; });
+        if (task) showDetail(task);
+      });
+    });
+
+    restoreFocus();
+  }
+
+  // -----------------------------------------------------------------------
+  // Keyboard navigation (roving tabindex)
+  // -----------------------------------------------------------------------
+  function restoreFocus() {
+    var colOrder = ['pending', 'in_progress', 'completed'];
+    // Set all cards to tabindex -1 first
+    document.querySelectorAll('#boardContainer .card').forEach(function(el) {
+      el.setAttribute('tabindex', '-1');
+    });
+    // Set the cursor card to tabindex 0
+    var colEl = cols[cursor.col];
+    if (colEl) {
+      var cards = colEl.querySelectorAll('.card');
+      if (cards.length > 0) {
+        var idx = Math.min(cursor.idx, cards.length - 1);
+        cursor.idx = idx;
+        cards[idx].setAttribute('tabindex', '0');
+      }
+    }
+  }
+
+  function focusCursorCard() {
+    var colEl = cols[cursor.col];
+    if (!colEl) return;
+    var cards = colEl.querySelectorAll('.card');
+    var idx = Math.min(cursor.idx, cards.length - 1);
+    if (idx >= 0 && cards[idx]) {
+      cards[idx].focus();
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Timeline rendering
+  // -----------------------------------------------------------------------
+  function renderTimeline(tasks) {
+    var timelineAxis = document.getElementById('timelineAxis');
+    var timelineRows = document.getElementById('timelineRows');
+
+    var withTime = tasks.filter(function(t) { return t.ctime; });
+    if (withTime.length === 0) {
+      timelineRows.innerHTML = '<div class="timeline-empty">No tasks with timestamp data</div>';
+      timelineAxis.innerHTML = '';
+      return;
+    }
+
+    withTime.sort(function(a, b) { return (a.ctime || 0) - (b.ctime || 0); });
+
+    var minTime = withTime[0].ctime * 1000;
+    var maxTime = Math.max(
+      Math.max.apply(null, withTime.map(function(t) { return (t.mtime || t.ctime) * 1000; })),
+      Date.now()
+    );
+    var span = maxTime - minTime || 1;
+
+    // Axis labels
+    var labelCount = 6;
+    timelineAxis.innerHTML = '';
+    for (var i = 0; i <= labelCount; i++) {
+      var t = minTime + (span * i / labelCount);
+      var pct = (i / labelCount) * 100;
+      var label = document.createElement('span');
+      label.className = 'timeline-axis-label';
+      label.style.left = pct + '%';
+      label.textContent = formatTimelineLabel(t, span);
+      timelineAxis.appendChild(label);
+    }
+
+    // Task bars
+    timelineRows.innerHTML = withTime.map(function(task) {
+      var start = task.ctime * 1000;
+      var end = (task.mtime || task.ctime) * 1000;
+      var leftPct = ((start - minTime) / span) * 100;
+      var widthPct = Math.max(((end - start) / span) * 100, 0.5);
+      var statusClass = safeStatus(task.status);
+      var shortLabel = '#' + escapeHtml(String(task.id || '').substring(0, 8)) + ' ' + escapeHtml((task.subject || '').substring(0, 40));
+
+      return '<div class="timeline-row" data-task-id="' + escapeHtml(String(task.id)) + '" data-session="' + escapeHtml(task.session || '') + '">' +
+        '<div class="timeline-row-label">' + shortLabel + '</div>' +
+        '<div class="timeline-row-track">' +
+          '<div class="timeline-bar ' + statusClass + '" style="left:' + leftPct + '%;width:' + widthPct + '%"></div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    // Click handlers on timeline rows
+    timelineRows.querySelectorAll('.timeline-row').forEach(function(el) {
+      el.addEventListener('click', function() {
+        var taskId = el.getAttribute('data-task-id');
+        var cardSession = el.getAttribute('data-session');
+        var task = allTasks.find(function(t) { return String(t.id) === taskId && t.session === cardSession; })
+                || allTasks.find(function(t) { return String(t.id) === taskId; });
         if (task) showDetail(task);
       });
     });
   }
 
+  // -----------------------------------------------------------------------
+  // View toggle
+  // -----------------------------------------------------------------------
+  function setView(view) {
+    activeView = view;
+    if (view === 'kanban') {
+      boardContainer.classList.remove('hidden');
+      timelineContainer.classList.remove('visible');
+      btnViewKanban.classList.add('active');
+      btnViewTimeline.classList.remove('active');
+    } else {
+      boardContainer.classList.add('hidden');
+      timelineContainer.classList.add('visible');
+      btnViewKanban.classList.remove('active');
+      btnViewTimeline.classList.add('active');
+    }
+    refreshView();
+    pushHash();
+  }
+
+  btnViewKanban.addEventListener('click', function() { setView('kanban'); });
+  btnViewTimeline.addEventListener('click', function() { setView('timeline'); });
+
+  // -----------------------------------------------------------------------
+  // Central refresh: re-renders everything from allTasks + filter state
+  // -----------------------------------------------------------------------
+  function refreshView() {
+    var filtered = applyFilters(allTasks);
+    renderSidebar();
+    if (activeView === 'kanban') {
+      renderBoard(filtered);
+    } else {
+      renderTimeline(filtered);
+    }
+    updateViewToggle();
+  }
+
+  function updateViewToggle() {
+    if (activeView === 'kanban') {
+      boardContainer.classList.remove('hidden');
+      timelineContainer.classList.remove('visible');
+      btnViewKanban.classList.add('active');
+      btnViewTimeline.classList.remove('active');
+    } else {
+      boardContainer.classList.add('hidden');
+      timelineContainer.classList.add('visible');
+      btnViewKanban.classList.remove('active');
+      btnViewTimeline.classList.add('active');
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Detail panel
+  // -----------------------------------------------------------------------
   function showDetail(task) {
     selectedTaskId = task.id;
     selectedSession = task.session;
     detailPanel.classList.add('visible');
 
-    const statusClass = (task.status || 'pending').replace('_', '-');
-    const statusLabel = (task.status || 'pending').replace('_', ' ');
+    var statusClass = safeStatus(task.status).replace('_', '-');
+    var statusLabel = safeStatus(task.status).replace('_', ' ');
 
-    const taskMap = {};
+    var taskMap = {};
     allTasks.forEach(function(t) { taskMap[t.id] = t; });
 
-    let blocksHtml = '';
+    var blocksHtml = '';
     if (task.blocks && task.blocks.length > 0) {
-      const items = task.blocks.map(function(id) {
-        const t = taskMap[id];
+      var items = task.blocks.map(function(id) {
+        var t = taskMap[id];
         return '<li>#' + escapeHtml(String(id)) + (t ? ' ' + escapeHtml(t.subject) : '') + '</li>';
       }).join('');
       blocksHtml = '<div class="detail-field"><div class="detail-label">Blocks</div><ul class="detail-dep-list">' + items + '</ul></div>';
     }
 
-    let blockedByHtml = '';
+    var blockedByHtml = '';
     if (task.blocked_by && task.blocked_by.length > 0) {
-      const items = task.blocked_by.map(function(id) {
-        const t = taskMap[id];
+      var items = task.blocked_by.map(function(id) {
+        var t = taskMap[id];
         return '<li>#' + escapeHtml(String(id)) + (t ? ' ' + escapeHtml(t.subject) : '') + '</li>';
       }).join('');
       blockedByHtml = '<div class="detail-field"><div class="detail-label">Blocked By</div><ul class="detail-dep-list">' + items + '</ul></div>';
     }
 
-    let descHtml = '';
+    var descHtml = '';
     if (task.description) {
-      const rendered = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
+      var rendered = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
         ? DOMPurify.sanitize(marked.parse(task.description))
         : escapeHtml(task.description);
       descHtml = '<div class="detail-field"><div class="detail-label">Description</div><div class="detail-description">' + rendered + '</div></div>';
     }
 
-    let activeFormHtml = '';
+    var activeFormHtml = '';
     if (task.active_form) {
       activeFormHtml = '<div class="detail-field"><div class="detail-label">Currently Working On</div><div class="detail-value" style="color:var(--in-progress);font-style:italic">' + escapeHtml(task.active_form) + '</div></div>';
     }
@@ -735,60 +1503,145 @@
       blockedByHtml;
 
     // Re-render board to show selected state
-    renderBoard(allTasks);
+    var filtered = applyFilters(allTasks);
+    if (activeView === 'kanban') {
+      renderBoard(filtered);
+    }
+    pushHash();
   }
 
   function closeDetailPanel() {
     selectedTaskId = null;
     selectedSession = null;
     detailPanel.classList.remove('visible');
-    renderBoard(allTasks);
+    refreshView();
+    pushHash();
   }
 
   closeDetail.addEventListener('click', closeDetailPanel);
 
-  // Esc closes detail panel or deps modal
+  // -----------------------------------------------------------------------
+  // Keyboard navigation
+  // -----------------------------------------------------------------------
   document.addEventListener('keydown', function(e) {
+    // Don't capture when typing in search input
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+      if (e.key === 'Escape') {
+        document.activeElement.blur();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    // Escape closes panels/modals
     if (e.key === 'Escape') {
       if (depsModal.classList.contains('visible')) {
         depsModal.classList.remove('visible');
       } else if (detailPanel.classList.contains('visible')) {
         closeDetailPanel();
       }
+      return;
+    }
+
+    // '/' focuses search
+    if (e.key === '/') {
+      e.preventDefault();
+      searchInput.focus();
+      return;
+    }
+
+    // Vim navigation only in kanban view
+    if (activeView !== 'kanban') return;
+
+    var colOrder = ['pending', 'in_progress', 'completed'];
+    var colIdx = colOrder.indexOf(cursor.col);
+
+    switch (e.key) {
+      case 'j':
+      case 'ArrowDown': {
+        e.preventDefault();
+        var cards = cols[cursor.col].querySelectorAll('.card');
+        cursor.idx = Math.min(cursor.idx + 1, cards.length - 1);
+        restoreFocus();
+        focusCursorCard();
+        break;
+      }
+      case 'k':
+      case 'ArrowUp': {
+        e.preventDefault();
+        cursor.idx = Math.max(cursor.idx - 1, 0);
+        restoreFocus();
+        focusCursorCard();
+        break;
+      }
+      case 'l':
+      case 'ArrowRight': {
+        e.preventDefault();
+        var newColIdx = Math.min(colIdx + 1, colOrder.length - 1);
+        cursor.col = colOrder[newColIdx];
+        cursor.idx = 0;
+        restoreFocus();
+        focusCursorCard();
+        break;
+      }
+      case 'h':
+      case 'ArrowLeft': {
+        e.preventDefault();
+        var newColIdx = Math.max(colIdx - 1, 0);
+        cursor.col = colOrder[newColIdx];
+        cursor.idx = 0;
+        restoreFocus();
+        focusCursorCard();
+        break;
+      }
+      case 'Enter':
+      case ' ': {
+        e.preventDefault();
+        var focused = document.activeElement;
+        if (focused && focused.classList.contains('card')) {
+          focused.click();
+        }
+        break;
+      }
     }
   });
 
+  // -----------------------------------------------------------------------
   // Dependency graph
+  // -----------------------------------------------------------------------
   function buildDependencyGraph(tasks) {
-    const relevant = tasks.filter(function(t) {
+    var relevant = tasks.filter(function(t) {
       return (t.blocks && t.blocks.length > 0) || (t.blocked_by && t.blocked_by.length > 0);
     });
     if (relevant.length === 0) return null;
 
-    const taskMap = {};
+    var taskMap = {};
     tasks.forEach(function(t) { taskMap[t.id] = t; });
 
-    const lines = ['graph TD'];
-    const seen = new Set();
-    const statusColors = { pending: '#f0883e', in_progress: '#58a6ff', completed: '#3fb950' };
+    var lines = ['graph TD'];
+    var seen = new Set();
+    var statusColors = { pending: '#f0883e', in_progress: '#58a6ff', completed: '#3fb950' };
 
-    for (const task of relevant) {
-      const fromLabel = (task.subject || String(task.id)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
-      const fromId = 'T' + String(task.id).replace(/[^a-zA-Z0-9]/g, '_');
+    for (var ti = 0; ti < relevant.length; ti++) {
+      var task = relevant[ti];
+      var fromLabel = (task.subject || String(task.id)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
+      var fromId = 'T' + String(task.id).replace(/[^a-zA-Z0-9]/g, '_');
       if (!seen.has(String(task.id))) {
         lines.push('  ' + fromId + '["' + fromLabel + '"]');
-        const color = statusColors[task.status] || statusColors.pending;
+        var color = statusColors[task.status] || statusColors.pending;
         lines.push('  style ' + fromId + ' fill:' + color + '22,stroke:' + color + ',color:#e6edf3');
         seen.add(String(task.id));
       }
-      for (const blockedId of (task.blocks || [])) {
-        const target = taskMap[blockedId];
-        const toLabel = (target ? target.subject : String(blockedId)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
-        const toId = 'T' + String(blockedId).replace(/[^a-zA-Z0-9]/g, '_');
+      var blocksArr = task.blocks || [];
+      for (var bi = 0; bi < blocksArr.length; bi++) {
+        var blockedId = blocksArr[bi];
+        var target = taskMap[blockedId];
+        var toLabel = (target ? target.subject : String(blockedId)).substring(0, 40).replace(/[\[\]"{}|<>\n\r]/g, ' ');
+        var toId = 'T' + String(blockedId).replace(/[^a-zA-Z0-9]/g, '_');
         if (!seen.has(String(blockedId))) {
           lines.push('  ' + toId + '["' + toLabel + '"]');
-          const color = target ? (statusColors[target.status] || statusColors.pending) : statusColors.pending;
-          lines.push('  style ' + toId + ' fill:' + color + '22,stroke:' + color + ',color:#e6edf3');
+          var color2 = target ? (statusColors[target.status] || statusColors.pending) : statusColors.pending;
+          lines.push('  style ' + toId + ' fill:' + color2 + '22,stroke:' + color2 + ',color:#e6edf3');
           seen.add(String(blockedId));
         }
         lines.push('  ' + fromId + ' --> ' + toId);
@@ -797,17 +1650,17 @@
     return lines.join('\n');
   }
 
-  let mermaidCounter = 0;
+  var mermaidCounter = 0;
 
   btnDeps.addEventListener('click', async function() {
-    const graphDef = buildDependencyGraph(allTasks);
+    var graphDef = buildDependencyGraph(allTasks);
     if (!graphDef) {
       depsContent.innerHTML = '<span class="modal-empty">No task dependencies found</span>';
     } else {
       try {
         mermaidCounter++;
-        const { svg } = await mermaid.render('mermaidGraph' + mermaidCounter, graphDef);
-        depsContent.innerHTML = svg;
+        var result = await mermaid.render('mermaidGraph' + mermaidCounter, graphDef);
+        depsContent.innerHTML = result.svg;
       } catch (err) {
         depsContent.innerHTML = '<span class="modal-empty">Failed to render graph: ' + escapeHtml(err.message) + '</span>';
       }
@@ -823,16 +1676,22 @@
     if (e.target === depsModal) depsModal.classList.remove('visible');
   });
 
-  // Desktop notifications
+  // -----------------------------------------------------------------------
+  // Desktop notifications + audio chime
+  // -----------------------------------------------------------------------
   btnNotify.addEventListener('click', async function() {
     if (!notificationsEnabled) {
       if ('Notification' in window) {
-        const perm = await Notification.requestPermission();
+        var perm = await Notification.requestPermission();
         if (perm === 'granted') {
           notificationsEnabled = true;
           btnNotify.classList.add('active');
           btnNotify.textContent = 'Notify ON';
-          showToast('Desktop notifications enabled');
+          // Initialize AudioContext on user gesture
+          if (!audioCtx && window.AudioContext) {
+            audioCtx = new AudioContext();
+          }
+          showToast('Desktop notifications + audio enabled');
         } else {
           showToast('Notification permission denied');
         }
@@ -847,50 +1706,95 @@
   });
 
   function checkForCompletions(newTasks) {
-    if (!notificationsEnabled) return;
-    const newStatuses = {};
+    var newStatuses = {};
     newTasks.forEach(function(t) {
       newStatuses[t.session + '_' + t.id] = t.status;
     });
-    for (const key in newStatuses) {
-      const prev = previousStatuses[key];
+    for (var key in newStatuses) {
+      var prev = previousStatuses[key];
       if (prev && prev === 'in_progress' && newStatuses[key] === 'completed') {
-        const task = newTasks.find(function(t) { return (t.session + '_' + t.id) === key; });
-        if (task) {
-          new Notification('Task Completed', {
-            body: task.subject || 'A task was completed',
-            icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%233fb950"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>'),
-          });
+        if (notificationsEnabled) {
+          var task = newTasks.find(function(t) { return (t.session + '_' + t.id) === key; });
+          if (task) {
+            new Notification('Task Completed', {
+              body: task.subject || 'A task was completed',
+              icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%233fb950"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>'),
+            });
+            playChime();
+          }
         }
       }
     }
     previousStatuses = newStatuses;
   }
 
+  // -----------------------------------------------------------------------
+  // Stale data indicator
+  // -----------------------------------------------------------------------
+  function updateLastUpdated() {
+    if (!lastUpdateTime) {
+      lastUpdatedEl.textContent = '';
+      return;
+    }
+    lastUpdatedEl.textContent = 'Updated ' + formatAge(lastUpdateTime);
+  }
+
+  function markStale() {
+    statusDot.className = 'status-dot disconnected';
+    statusText.textContent = 'Stale';
+  }
+
+  function resetStaleTimer() {
+    lastUpdateTime = Date.now();
+    updateLastUpdated();
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(markStale, 60000);
+  }
+
+  // Tick the "updated X ago" display every 10s
+  staleTickInterval = setInterval(updateLastUpdated, 10000);
+
+  // -----------------------------------------------------------------------
+  // Toast
+  // -----------------------------------------------------------------------
   function showToast(msg) {
     toast.textContent = msg;
     toast.classList.add('visible');
     setTimeout(function() { toast.classList.remove('visible'); }, 2000);
   }
 
+  // -----------------------------------------------------------------------
+  // SSE handling
+  // -----------------------------------------------------------------------
   function handleTaskUpdate(tasks) {
     checkForCompletions(tasks);
     allTasks = tasks;
-    renderBoard(tasks);
+    resetStaleTimer();
+    refreshView();
+
     // Refresh detail panel if open
     if (selectedTaskId) {
-      const task = allTasks.find(function(t) { return String(t.id) === String(selectedTaskId) && t.session === selectedSession; })
-                || allTasks.find(function(t) { return String(t.id) === String(selectedTaskId); });
+      var task = allTasks.find(function(t) { return String(t.id) === String(selectedTaskId) && t.session === selectedSession; })
+              || allTasks.find(function(t) { return String(t.id) === String(selectedTaskId); });
       if (task) showDetail(task);
     }
   }
 
+  // -----------------------------------------------------------------------
+  // SSE connect with exponential backoff
+  // -----------------------------------------------------------------------
   function connect() {
-    const es = new EventSource('/kanban/events');
+    if (currentEs) {
+      currentEs.close();
+      currentEs = null;
+    }
+
+    var es = new EventSource('/kanban/events');
+    currentEs = es;
 
     es.addEventListener('tasks', function(e) {
       try {
-        const data = JSON.parse(e.data);
+        var data = JSON.parse(e.data);
         handleTaskUpdate(data.tasks || []);
       } catch(err) {
         console.error('Parse error:', err);
@@ -898,17 +1802,32 @@
     });
 
     es.onopen = function() {
+      reconnectDelay = 1000;
       statusDot.className = 'status-dot';
       statusText.textContent = 'Connected';
     };
 
     es.onerror = function() {
       statusDot.className = 'status-dot disconnected';
-      statusText.textContent = 'Reconnecting...';
+      statusText.textContent = 'Reconnecting in ' + Math.round(reconnectDelay / 1000) + 's...';
+      es.close();
+      currentEs = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(function() {
+        reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
+        connect();
+      }, reconnectDelay);
     };
   }
 
-  // Initial load via REST, then switch to SSE for live updates
+  // -----------------------------------------------------------------------
+  // Initial load
+  // -----------------------------------------------------------------------
+
+  // Restore state from URL hash before first render
+  readHash();
+  updateViewToggle();
+
   fetch('/kanban/tasks')
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -917,7 +1836,14 @@
       allTasks.forEach(function(t) {
         previousStatuses[t.session + '_' + t.id] = t.status;
       });
-      renderBoard(allTasks);
+      resetStaleTimer();
+      refreshView();
+
+      // If hash had a selected task, open it
+      if (selectedTaskId) {
+        var task = allTasks.find(function(t) { return String(t.id) === String(selectedTaskId); });
+        if (task) showDetail(task);
+      }
     })
     .catch(function() {});
 

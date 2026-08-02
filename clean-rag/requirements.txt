@@ -10,3 +10,28 @@ radon>=5.1,<7.0
 bandit>=1.7,<2.0
 mutatest>=3.0,<4.0
 lizard>=1.17,<2.0
+
+# Used by resource_guard, auto_reindex and indexing for CPU and RAM sampling and
+# for the index lock's dead-PID check. Every call site guards the import, so an
+# unpinned psutil did not crash, it silently turned the whole resource guard off
+# and let a sweep take the machine.
+psutil>=5.9,<8.0
+
+# DuckDuckGo transport. Replaces ~140 lines that regex scraped
+# html.duckduckgo.com and unwrapped its uddg= redirect by hand, which broke
+# every time DuckDuckGo touched their markup. The source ranking and the
+# unicode sanitizing stay ours; only the fetching moved.
+ddgs>=9.0,<10.0
+
+# Keyword retrieval, the leg this had none of. Vector search alone misses exact
+# identifier matches, which is the one thing a developer most often searches for.
+rank-bm25>=0.2.2,<0.3
+
+# Tree-sitter. tree-sitter-language-pack ships parsers for 300+ languages as
+# prebuilt wheels, replacing one pinned grammar per language and the importlib
+# dance that loaded them. grep-ast is Aider's extracted extension-to-language
+# map: the hand kept 24 entry version it replaces is what mis-detected language
+# and routed 8 of 16 projects to a model that cannot load.
+tree-sitter>=0.25.2,<0.26
+tree-sitter-language-pack>=0.9,<1.0
+grep-ast>=0.9,<1.0

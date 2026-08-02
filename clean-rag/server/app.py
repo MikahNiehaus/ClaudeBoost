@@ -46,6 +46,11 @@ _model_cache: ModelCache | None = None
 _doc_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
 
+# Set when the startup warmup raises. Without it "the model has not finished
+# loading" and "the model will never load" both render as "warming_up", and a
+# permanent failure reads as a transient one that callers keep waiting out.
+_warmup_error: str | None = None
+
 # Heartbeat: writes a JSON file every 30s so the supervisor (and health checks)
 # can detect a stuck process without HTTP calls.
 _HEARTBEAT_PATH = STATE_DIR / ".heartbeat"
@@ -53,12 +58,32 @@ _HEARTBEAT_INTERVAL_S = 30
 
 
 def _write_heartbeat(model_loaded: bool = False, index_ok: bool = False) -> None:
+    """Write the liveness file consumed by status lines and health checks.
+
+    Carries an explicit `status` alongside `model_loaded`. The bool alone has
+    only two values and cannot say "this model will never load", so a permanent
+    failure and a model still downloading both wrote `model_loaded: false` and
+    any reader had to guess "starting" for both. That is the same bug /status
+    had, one file over, and it is why the three state fix was invisible to
+    anything watching the heartbeat rather than polling HTTP.
+    """
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        _HEARTBEAT_PATH.write_text(
-            json.dumps({"ts": time.time(), "model_loaded": model_loaded, "index_ok": index_ok}),
-            encoding="utf-8",
-        )
+        if model_loaded:
+            status = "ready"
+        elif _warmup_error is not None:
+            status = "failed"
+        else:
+            status = "warming_up"
+        payload = {
+            "ts": time.time(),
+            "model_loaded": model_loaded,
+            "index_ok": index_ok,
+            "status": status,
+        }
+        if status == "failed":
+            payload["last_error"] = _warmup_error
+        _HEARTBEAT_PATH.write_text(json.dumps(payload), encoding="utf-8")
     except Exception:
         logger.debug("Heartbeat write failed (not fatal)", exc_info=True)
 
@@ -104,11 +129,23 @@ async def handle_status(request: web.Request) -> web.Response:
     """GET /status: server health, model status, indexed projects."""
     projects = _list_projects()
 
-    return _json_response({
-        "status": "ready" if _model_cache and len(_model_cache) > 0 else "warming_up",
+    loaded = _model_cache is not None and len(_model_cache) > 0
+    if loaded:
+        status = "ready"
+    elif _warmup_error is not None:
+        # Distinct from warming_up on purpose. Callers poll warming_up and back
+        # off, which is right for a model still loading and wrong for one that
+        # raised: no amount of waiting fixes it, and neither does the restart
+        # that waiting eventually escalates to.
+        status = "failed"
+    else:
+        status = "warming_up"
+
+    payload = {
+        "status": status,
         "uptime_s": round(time.time() - _start_time, 1),
         "code_embedding_model": CODE_EMBEDDING_MODEL,
-        "code_embedding_loaded": len(_model_cache) > 0 if _model_cache else False,
+        "code_embedding_loaded": loaded,
         "loaded_models": _model_cache.loaded_models() if _model_cache else [],
         "projects": {
             "count": len(projects),
@@ -116,7 +153,138 @@ async def handle_status(request: web.Request) -> web.Response:
         },
         "clean_rag_home": str(CLEAN_RAG_HOME),
         "ram_mb": _get_ram_mb(),
-    })
+    }
+    # Only while still broken. A handler that later retried the load and
+    # succeeded flips status to ready, and a stale error string next to it
+    # would read as a live problem.
+    if status == "failed":
+        payload["last_error"] = _warmup_error
+    return _json_response(payload)
+
+
+_PROJECT_SOURCE_PREFIX = "project:"
+
+
+def _complete_project_sources(sources: list, coverage_gaps: list[dict]) -> list[str]:
+    """The distinct project paths this request searched with no coverage gap recorded.
+
+    These are the sources whose "no match" is real evidence of absence: the
+    whole tree was indexed by the current model and queried. Everything else in
+    the request is either gapped (it is in *coverage_gaps*) or not a project.
+
+    ``search.search`` takes ``source[8:]`` and records that exact string in
+    ``stale_projects[].project``, so slicing identically here -- no
+    normalising, no stripping -- is what makes a source comparable to a gap
+    entry. A source that names no project at all (a non-string, or a bare
+    ``"project:"``) is dropped rather than counted complete, since it can
+    contribute neither results nor a gap. Deduped, so naming one project twice
+    is one source.
+    """
+    gapped = {gap.get("project") for gap in coverage_gaps}
+    complete: dict[str, None] = {}
+    for source in sources:
+        if not (isinstance(source, str) and source.startswith(_PROJECT_SOURCE_PREFIX)):
+            continue
+        path = source[len(_PROJECT_SOURCE_PREFIX):]
+        if path.strip() and path not in gapped:
+            complete[path] = None
+    return list(complete)
+
+
+def _web_fallback(
+    query: str, top_score: float, coverage_gaps: list[dict],
+    complete_projects: list[str],
+) -> tuple[list[dict], dict | None]:
+    """Web results to stand in for a thin local answer, or why they were withheld.
+
+    Returns (results, suppression), of which at most one is ever populated:
+    either the web ran and found something, or it deliberately did not run and
+    the second value says so in the response.
+
+    The fallback exists to answer "the local index does not have this, so here
+    is the web instead". When a searched project's index is known to be partial,
+    or was skipped outright for a provenance mismatch, that premise is not
+    established: the code may sit in a file the aborted run never reached.
+    Answering with web content anyway asserts, in the part of the response
+    callers actually read, that the code is absent.
+
+    Suppressed rather than run and then labelled, because a label only helps a
+    caller that reads it, and this whole family of bugs is callers that do not.
+    Elasticsearch hit the same shape with partial shard results: the flags are
+    on the response, and elastic/elasticsearch#28494 ("make search results fail
+    rather than return partial results") is their maintainers' own account of
+    clients "unwittingly present[ing] partial results with no indication that
+    results are incomplete". hooks/rag-enforce.py:361 is that caller here: it
+    pulls "results" and "web_search_results" out of the response and passes them
+    onward, reading no other field, so "stale_projects" never leaves the socket.
+    The fix therefore has to hold for a caller that reads nothing but the two
+    fields it already wanted, which means not producing the misleading payload.
+
+    This refuses nothing. Whatever the partial index did match is still returned
+    and still marked served=True in stale_projects. Only the "...and here is the
+    internet instead" half is withheld, because that half asserts something the
+    search cannot support.
+
+    Scoped to the request's evidence, not to any gap in it. The premise needs
+    ONE source that genuinely searched and found nothing, not every source: a
+    complete, provenance-matching project that was queried in full and returned
+    no hit has established absence for its own tree, and an unrelated project's
+    unfinished index does not retract that. So the fallback is withheld only
+    when *complete_projects* is empty, i.e. every project source in the request
+    was gapped and there is no sound negative evidence at all. This is
+    Elasticsearch's cross-cluster shape again: a remote cluster that could not
+    be searched is reported as ``skipped`` in ``_clusters.details`` while the
+    clusters that did answer still produce the response
+    (https://www.elastic.co/docs/explore-analyze/cross-cluster-search); the gap
+    is surfaced per source, it does not void the sources that succeeded.
+
+    Two alternatives were weighed and rejected. Per-source scoping (run the web
+    for the complete sources, suppress for the gapped one) cannot be expressed:
+    there is one query and one ``web_search_results`` field for the whole
+    response, so it would have to emit results and a suppression together, and
+    those two are deliberately mutually exclusive. Weighting by whether the
+    gapped project could plausibly have matched requires predicting what the
+    unindexed files contain, which is precisely the thing an unfinished index
+    makes unknowable -- a guess dressed as a check.
+
+    The narrowing is real and stated plainly: with a mixed request the fallback
+    now asserts "the complete sources do not have this", not "none of the
+    sources have this". The gapped source stays in stale_projects next to the
+    web results so that difference is on the response. The alternative was
+    withholding the fallback from every multi-project search that touches one
+    unfinished index, which on a machine mid-reindex is every search.
+    """
+    if coverage_gaps and not complete_projects:
+        gap_projects = [gap.get("project") for gap in coverage_gaps]
+        logger.warning(
+            "Web search fallback suppressed for query %r (score=%.2f): every "
+            "project source searched has unverified index coverage (%s)",
+            query, top_score, gap_projects,
+        )
+        return [], {
+            "reason": "index_coverage_unverified",
+            "detail": (
+                "the local result set is thin, and every project source "
+                "searched has a known index problem (see stale_projects), so a "
+                "web fallback here would read as 'this code does not exist "
+                "locally' when it may simply be unindexed; reindex those "
+                "projects, add a fully indexed project source, or call "
+                "/web-search directly to search the web on purpose"
+            ),
+            "projects": gap_projects,
+        }
+
+    from .web_search import web_search
+    web_result = web_search(query, max_results=WEB_SEARCH_MAX_RESULTS, timeout=WEB_SEARCH_TIMEOUT)
+    results = web_result.get("results") or []
+    if results:
+        logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
+    # Background indexing on fallback deprecated: casual conversational queries
+    # were triggering this fallback and getting permanently written into the KB
+    # (confirmed real pollution, medical content indexed from a message using
+    # "injection" in the RAG sense, among others). Web results still returned
+    # for this call, just no longer auto indexed.
+    return results, None
 
 
 async def handle_search(request: web.Request) -> web.Response:
@@ -164,13 +332,25 @@ async def handle_search(request: web.Request) -> web.Response:
             {"error": "direction must be 'both', 'callers', or 'dependencies'"}, 400,
         )
 
-    if not _model_cache:
+    # `is None` rather than a truthiness test. ModelCache defines __len__ but
+    # not __bool__, so `not _model_cache` is also true for a real cache that
+    # happens to be empty, which made a failed warmup permanently
+    # indistinguishable from "create_app has not run yet" and short circuited
+    # every request before it could retry the load.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    # Get the default code embedder for query embedding
+    # Get the default code embedder for query embedding. This retries a load
+    # that failed at startup, so repairing the model cache on disk recovers the
+    # server without a restart. ModelCache rate limits the retry internally, so
+    # a model that is genuinely broken is attempted once per its failure TTL
+    # rather than once per request. Run in the executor: a cold load blocks for
+    # seconds and would otherwise stall the whole event loop.
     loop = asyncio.get_running_loop()
     try:
-        _code_embedder = _model_cache.get(CODE_EMBEDDING_MODEL)
+        _code_embedder = await loop.run_in_executor(
+            None, _model_cache.get, CODE_EMBEDDING_MODEL
+        )
     except Exception as e:
         logger.exception("Code embedding model failed to load")
         return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
@@ -205,25 +385,29 @@ async def handle_search(request: web.Request) -> web.Response:
 
     search_id = _log_search(query=query, sources=sources, mode=mode, results=results, graph_meta=graph_meta)
 
+    # Every reason this search's local coverage is not what the caller asked
+    # for: a project refused outright for a provenance mismatch (served=False)
+    # or served from an unfinished indexing run (served=True). Either way, a
+    # thin result set already has a local explanation.
+    coverage_gaps = graph_meta.get("stale_projects") or []
+
+    # ...and, for the fallback decision, which project sources are NOT in that
+    # state. A gap is recorded per project source, so a request naming several
+    # projects can hold both a gapped source and one that searched its whole
+    # tree and genuinely found nothing. The second is real evidence of absence
+    # and the first does not retract it (see _web_fallback).
+    complete_projects = _complete_project_sources(sources, coverage_gaps)
+
     # Check if fallback web search is needed (low scores or no results)
     top_score = max((r.get("score", 0.0) for r in results), default=0.0)
-    fallback_triggered = False
-    web_search_results = []
+    web_search_results: list[dict] = []
+    web_search_suppressed: dict | None = None
 
     if WEB_SEARCH_ENABLED and (len(results) == 0 or top_score < WEB_SEARCH_SCORE_THRESHOLD):
-        # Trigger web search as fallback
-        from .web_search import web_search
-        web_result = web_search(query, max_results=WEB_SEARCH_MAX_RESULTS, timeout=WEB_SEARCH_TIMEOUT)
-        if web_result.get("results"):
-            web_search_results = web_result["results"]
-            fallback_triggered = True
-            logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
-            # Background indexing on fallback deprecated: casual conversational
-            # queries were triggering this fallback and getting permanently
-            # written into the KB (confirmed real pollution — medical
-            # content indexed from a message using "injection" in the RAG
-            # sense, among others). Web results still returned for this
-            # call, just no longer auto-indexed.
+        web_search_results, web_search_suppressed = _web_fallback(
+            query, top_score, coverage_gaps, complete_projects,
+        )
+    fallback_triggered = bool(web_search_results)
 
     response = {
         "results": results,
@@ -231,8 +415,23 @@ async def handle_search(request: web.Request) -> web.Response:
         "fallback_triggered": fallback_triggered,
     }
 
+    # Both ways an index can be untrustworthy surface here, and neither may be
+    # silent. A project skipped for a provenance mismatch (served=False)
+    # returns no results, which is indistinguishable from "nothing matched"; a
+    # project served from an incomplete index (served=True) returns real
+    # results that are only a subset of the project. Either way the caller
+    # would otherwise read a thin result set as evidence the code does not
+    # exist.
+    if coverage_gaps:
+        response["stale_projects"] = coverage_gaps
+
     if web_search_results:
         response["web_search_results"] = web_search_results
+
+    # Withholding the fallback silently would swap one invisible signal for
+    # another, so the suppression names itself and says what to do about it.
+    if web_search_suppressed is not None:
+        response["web_search_suppressed"] = web_search_suppressed
 
     return _json_response(response)
 
@@ -300,7 +499,10 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     force = body.get("force", False)
 
-    if not _model_cache:
+    # `is None`, not truthiness: an empty ModelCache is falsy. index_project
+    # resolves and loads the model it needs itself, so an empty cache is no
+    # reason to refuse the request.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
     if not acquire_index_lock("index-project"):
@@ -494,7 +696,9 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     if not Path(project_path).is_dir():
         return _json_response({"error": f"Project path not found: {project_path}"}, 400)
 
-    if not _model_cache:
+    # `is None`, not truthiness: an empty ModelCache is falsy, and reindex_file
+    # loads the project's own recorded model itself.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
     loop = asyncio.get_running_loop()
@@ -1041,14 +1245,22 @@ def create_app() -> web.Application:
         before opening the listening socket, so doing it here is guaranteed
         single-threaded and race-free.
         """
+        global _warmup_error
+
         loop = asyncio.get_running_loop()
         try:
             # Warm up the default code model before accepting connections.
             # sentence-transformers' first import is not thread safe, so this
             # must complete single-threaded before request handlers fire.
             await loop.run_in_executor(None, _model_cache.get, CODE_EMBEDDING_MODEL)
+            _warmup_error = None
             logger.info("Code embedder warmed up at startup (model=%s)", CODE_EMBEDDING_MODEL)
-        except Exception:
+        except Exception as exc:
+            # Serve anyway: /status, the web search routes and the docs routes
+            # do not need this model, and a request handler can still retry the
+            # load later. But record why, so /status can say "failed" with a
+            # reason instead of "warming_up" forever.
+            _warmup_error = f"{type(exc).__name__}: {exc}"
             logger.exception("Embedder warmup failed at startup")
 
         _write_heartbeat(model_loaded=len(_model_cache) > 0, index_ok=True)

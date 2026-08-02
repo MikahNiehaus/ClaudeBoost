@@ -1,13 +1,310 @@
 """Search logic for clean-rag. Searches project codebase indexes."""
 
-import hashlib
 import logging
+import re
 from pathlib import Path
 
 from .config import DATABASES_DIR, DEFAULT_MIN_SCORE, DEFAULT_SEARCH_LIMIT
+from .project_id import resolve_project_dir
 from .store import ChromaStore
 
 logger = logging.getLogger(__name__)
+
+
+#: Relation strength, the primary ranking signal for a graph neighbour.
+#: Module level so the tiebreaker invariant below can be asserted against the
+#: real numbers instead of a copy of them.
+EDGE_WEIGHTS = {
+    "imports": 0.9,
+    "inherits": 0.85,
+    "implements": 0.85,
+    "calls": 0.8,
+}
+
+#: Applied to any edge type not named above.
+DEFAULT_EDGE_WEIGHT = 0.7
+
+#: Distance has to cost something. Without the decay a file 5 hops out scored
+#: identically to a direct neighbour of the same edge type, so with depth>1 and
+#: a 200 node frontier per hop, distant noise could outrank a direct neighbour
+#: of a slightly weaker seed. 1 hop is unchanged (0.7**0 == 1.0).
+DEPTH_DECAY = 0.7
+
+#: How much the centrality ranking counts against the structural one when the
+#: two are fused. Below 1.0 on purpose: structural proximity is measured
+#: evidence, centrality is a hint. At 0.1 the hint can move a file past its
+#: immediate neighbours, which is what it is for, but cannot carry one from the
+#: bottom of the list to the top, which is what it did at parity.
+CENTRALITY_WEIGHT = 0.1
+
+
+def _personalized_ranks(graph, seed_files) -> dict[str, float]:
+    """Personalized PageRank for this query, or {} if it cannot be computed.
+
+    Never raises: ranking must degrade to the previous edge weighted behaviour
+    rather than losing the search.
+    """
+    try:
+        from .graph_store import compute_personalized_pagerank
+
+        return compute_personalized_pagerank(graph, list(seed_files or ()))
+    except Exception:
+        logger.debug("Personalized PageRank unavailable", exc_info=True)
+        return {}
+
+
+def reciprocal_rank_fusion(
+    *ranked_lists: list[dict], k: int = 60, key=None, weights=None,
+) -> list[dict]:
+    """Merge ranked result lists by RANK rather than by score.
+
+    Vector search returns a cosine similarity; the graph walk returns an edge
+    weighted product. Those are different scales, so the previous merge (keep
+    whichever number is larger) was comparing quantities that were never
+    comparable, and whichever scoring scheme happened to produce bigger floats
+    won regardless of which result was better.
+
+    RRF sidesteps that entirely by throwing the scores away and using only
+    position: score(d) = sum over lists of 1 / (k + rank(d)). Cormack et al.
+    2009, and the same formula Elasticsearch, OpenSearch and Qdrant use for
+    hybrid search. k=60 is their shared default; it damps the difference
+    between the top few positions so one list cannot dominate purely by being
+    confident.
+
+    Each input list must already be sorted best first. The returned dicts are
+    the originals with an added ``rrf_score``, ordered by it.
+
+    *weights* optionally scales each list's contribution, so
+    ``score(d) = sum over lists of wi / (k + rank_i(d))``. Elasticsearch and
+    Qdrant both expose the same per retriever weight, and it is needed for the
+    same reason they expose it: unweighted, every list is equally authoritative,
+    so a list that is only a hint can outvote the one carrying the evidence. A
+    file ranked LAST on structure but first on centrality won outright before
+    this existed. Defaults to 1.0 per list, which is plain RRF.
+    """
+    if key is None:
+        def key(r):
+            return f"{r.get('file', '')}:{r.get('line_start', 0)}"
+
+    if weights is None:
+        weights = [1.0] * len(ranked_lists)
+    if len(weights) != len(ranked_lists):
+        raise ValueError(
+            f"weights has {len(weights)} entries for {len(ranked_lists)} lists"
+        )
+
+    scores: dict[str, float] = {}
+    best: dict[str, dict] = {}
+
+    for weight, results in zip(weights, ranked_lists):
+        for rank, result in enumerate(results):
+            identity = key(result)
+            scores[identity] = scores.get(identity, 0.0) + weight / (k + rank + 1)
+            # Keep the richer record when the same chunk appears in both lists.
+            # Graph results carry relation/seed_file that vector results lack,
+            # and losing those would drop the explanation of why a file is here.
+            if identity not in best or len(result) > len(best[identity]):
+                best[identity] = result
+
+    fused = []
+    for identity, score in sorted(scores.items(), key=lambda kv: kv[1], reverse=True):
+        record = dict(best[identity])
+        record["rrf_score"] = round(score, 6)
+        fused.append(record)
+    return fused
+
+
+_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Identifier aware tokens, lowercased.
+
+    Splits camelCase and snake_case as well as keeping the whole identifier, so
+    a query for ``sweepProject`` matches ``_sweep_project`` and vice versa.
+    BM25 scores on exact token overlap, so the tokenizer decides what "exact"
+    even means here.
+    """
+    out: list[str] = []
+    for word in _TOKEN.findall(text or ""):
+        lowered = word.lower()
+        out.append(lowered)
+        parts = [p for p in word.split("_") if p]
+        for part in parts:
+            for piece in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+", part):
+                piece = piece.lower()
+                if piece and piece != lowered:
+                    out.append(piece)
+    return out
+
+
+def _search_project_keyword(query: str, candidates: list[dict], limit: int) -> list[dict]:
+    """Rank *candidates* by BM25 over their own text.
+
+    Reranks what vector and graph already found rather than scanning the whole
+    project. That keeps it cheap and needs no second index, and it still fixes
+    the failure it exists for: a chunk containing the literal identifier being
+    ranked below one that is merely semantically close.
+
+    Returns [] when rank_bm25 is missing or there is nothing to rank, which
+    makes it inert rather than a hard dependency.
+    """
+    if not candidates:
+        return []
+    try:
+        from rank_bm25 import BM25Okapi
+    except ImportError:
+        logger.debug("rank_bm25 not installed, skipping the keyword leg")
+        return []
+
+    tokenized_query = _tokenize(query)
+    if not tokenized_query:
+        return []
+
+    # Deduplicate on the same identity the fusion uses, or one chunk appearing
+    # in both input lists would get two BM25 ranks and count twice.
+    seen: dict[str, dict] = {}
+    for r in candidates:
+        seen.setdefault(f"{r.get('file', '')}:{r.get('line_start', 0)}", r)
+    unique = list(seen.values())
+
+    corpus = [
+        _tokenize(f"{r.get('file', '')} {r.get('content', '')}") for r in unique
+    ]
+    if not any(corpus):
+        return []
+
+    try:
+        scores = BM25Okapi(corpus).get_scores(tokenized_query)
+    except Exception:
+        logger.debug("BM25 scoring failed", exc_info=True)
+        return []
+
+    # Membership is decided by token overlap, NOT by score > 0.
+    #
+    # BM25's IDF term goes negative for anything appearing in more than half
+    # the documents, which is normal and harmless over a whole corpus and
+    # completely wrong here: this reranks a handful of candidates, so with two
+    # documents EVERY score came out negative and a `score > 0` filter threw
+    # away all of them, including the exact identifier match it existed to
+    # promote. Measured: the literal `_sweep_project` chunk scored -0.084.
+    #
+    # Overlap answers the actual question ("does this chunk contain a token
+    # the user typed") and does not move with corpus size. The score then only
+    # has to order the survivors, which is what it is good at.
+    wanted = set(tokenized_query)
+    scored = [
+        (r, s) for r, s, toks in zip(unique, scores, corpus) if wanted & set(toks)
+    ]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return [r for r, _s in scored][:limit]
+
+
+def _provenance_mismatch(project_path: str, code_embedder) -> str | None:
+    """Return a reason string if this project's index cannot be trusted.
+
+    A vector index only means anything to the model that produced it. Two
+    different models of the same width (CodeRankEmbed and
+    st-codesearch-distilroberta-base are both 768) produce vectors that are
+    dimensionally compatible and semantically unrelated, so every width check in
+    the stack passes and the results come back confidently wrong rather than
+    empty. The recorded model id is the only thing that catches it.
+
+    Returns None when the index is safe to query.
+    """
+    from .indexing import read_project_provenance
+
+    current = getattr(code_embedder, "model_name", None)
+    if current is None:
+        return None  # not a model-identifying embedder, nothing to compare
+
+    recorded = read_project_provenance(project_path).get("model_id")
+    if recorded is None:
+        return (
+            f"index has no recorded embedding model, so it cannot be confirmed to "
+            f"match the current model ({current}); reindex to make it searchable"
+        )
+    if recorded != current:
+        return (
+            f"index was built with {recorded} but queries now use {current}; "
+            f"reindex to make it searchable"
+        )
+    return None
+
+
+def _incomplete_index_warning(project_path: str) -> str | None:
+    """Return a warning if this project's index covers only part of the tree.
+
+    An indexing run that hit the pressure guard, or a server that went down
+    mid sweep, leaves a manifest marked ``__incomplete__`` listing a real
+    subset of the project. Every chunk in it was produced by the current model
+    from a real file, so the hits are genuine; what is missing is coverage.
+
+    Returns None when the index covers the whole project.
+    """
+    from .indexing import index_is_incomplete
+
+    if not index_is_incomplete(project_path):
+        return None
+    return (
+        "index is incomplete: an indexing run stopped before it reached every "
+        "file, so these results cover only part of the project and a missing "
+        "hit does not mean the code is absent; reindex to complete it"
+    )
+
+
+def _check_index_before_search(project_path: str, code_embedder, meta_out: dict | None) -> bool:
+    """Record anything the caller must know about this project's index.
+
+    Returns False when the index must not be queried at all, True when it is
+    safe to query, which may still leave a warning recorded in *meta_out*.
+
+    Two ways an index can be untrustworthy, and they get opposite answers,
+    because one makes the results WRONG and the other only makes them PARTIAL.
+
+    Wrong: an index built in a different embedding space. Every score is
+    confident nonsense and nothing downstream can tell those hits from real
+    ones, so refuse and state the reason. Returning nothing with a reason is
+    recoverable; returning plausible wrong files is not.
+
+    Partial: an indexing run stopped early. The chunks that made it in are real
+    and correctly embedded, there are just fewer of them than the project has
+    files. Served with a warning rather than refused, deliberately. Refusing
+    would throw away correct results to avoid a coverage gap, and would make
+    any interrupted sweep un-searchable until it finishes, which is open ended
+    on the machine that interrupted it in the first place, exactly when search
+    matters. This is the call Elasticsearch makes for the same shape of
+    problem: when shards fail it returns what the surviving shards found and
+    sets ``_shards.failed`` / ``timed_out`` on the response rather than
+    erroring the whole search
+    (https://www.elastic.co/docs/solutions/search/the-search-api).
+
+    The risk of a warning is that the caller ignores it, so noticing a thin
+    result set is not left to the caller: the entry rides the same
+    ``stale_projects`` channel /search already surfaces for a refusal, and
+    ``served`` is what tells the two apart, so "results plus a stale_projects
+    entry" can never be misread as "refused".
+    """
+    def note(reason: str, served: bool) -> None:
+        if meta_out is not None:
+            meta_out.setdefault("stale_projects", []).append({
+                "project": project_path,
+                "reason": reason,
+                "served": served,
+            })
+
+    stale_reason = _provenance_mismatch(project_path, code_embedder)
+    if stale_reason is not None:
+        logger.warning("Skipping stale index for %s: %s", project_path, stale_reason)
+        note(stale_reason, served=False)
+        return False
+
+    incomplete_reason = _incomplete_index_warning(project_path)
+    if incomplete_reason is not None:
+        logger.warning("Partial index for %s: %s", project_path, incomplete_reason)
+        note(incomplete_reason, served=True)
+
+    return True
 
 
 def search(
@@ -59,20 +356,34 @@ def search(
     for source in sources:
         if source.startswith("project:"):
             project_path = source[8:]
+
+            if not _check_index_before_search(project_path, code_embedder, meta_out):
+                continue
+
             if mode == "both":
-                # Run vector and graph, merge results
+                # Run vector and graph, then fuse by rank.
+                #
+                # This used to dedupe on file+line and keep whichever score was
+                # numerically larger, which silently compared a cosine
+                # similarity against an edge weighted graph product. Those have
+                # no common scale, so the merge was decided by which formula
+                # emitted bigger floats rather than which hit was better.
                 vec = _search_project(query, project_path, code_embedder, limit, min_score)
                 graph = _search_project_graph(
                     query, project_path, code_embedder, limit, min_score,
                     meta_out, depth, direction,
                 )
-                # Deduplicate by file+line_start, keeping higher score
-                seen: dict[str, dict] = {}
-                for r in vec + graph:
-                    key = f"{r['file']}:{r.get('line_start', 0)}"
-                    if key not in seen or r["score"] > seen[key]["score"]:
-                        seen[key] = r
-                all_results.extend(seen.values())
+                # Keyword is the third leg, and it covers the one thing
+                # embeddings are worst at: an exact identifier. A query for
+                # `_sweep_project` should find the literal token, and cosine
+                # similarity will happily return something that merely reads
+                # like it instead.
+                keyword = _search_project_keyword(
+                    query, vec + graph, limit,
+                )
+                all_results.extend(
+                    reciprocal_rank_fusion(vec, graph, keyword)
+                )
             elif mode == "graph":
                 results = _search_project_graph(
                     query, project_path, code_embedder, limit, min_score,
@@ -93,7 +404,19 @@ def search(
             logger.warning("Unknown source specifier: %s", source)
 
     # Sort by score descending, trim to limit
-    all_results.sort(key=lambda r: r["score"], reverse=True)
+    # Sort on the fused rank where there is one, otherwise the raw score.
+    #
+    # Sorting purely on "score" here would have thrown away the fusion the
+    # moment it was computed: RRF deliberately ignores the raw scores because
+    # they are not comparable across sources, so re-sorting by exactly those
+    # scores puts the incomparable ordering right back. Results from a single
+    # source have no rrf_score and keep their own ordering, and a mixed list
+    # (project: fused, docs: not) puts the fused ones first, which is correct:
+    # a result corroborated by two retrieval methods outranks one seen by one.
+    all_results.sort(
+        key=lambda r: (r.get("rrf_score") is not None, r.get("rrf_score", 0.0), r["score"]),
+        reverse=True,
+    )
     return all_results[:limit]
 
 
@@ -102,7 +425,7 @@ def _search_project(
 ) -> list[dict]:
     """Search a project's codebase index (vector mode)."""
     project_root = Path(project_path).resolve()
-    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
+    pid = resolve_project_dir(DATABASES_DIR / "_projects", project_root).name
 
     chroma_dir = DATABASES_DIR / "_projects" / pid / "chroma"
     if not chroma_dir.exists():
@@ -142,11 +465,14 @@ def _search_project_graph(
     2. Graph traversal from each seed to find structural neighbors
        (imports, callers, inheritance, out to `depth` hops)
     3. Fetch chunks for neighbor files from ChromaDB
-    4. Score neighbors based on edge type and depth from seed, prune to
-       the top `limit`*3 by that score (edge-weight/relation-strength to
-       the seed is the primary pruning signal here -- PageRank is only
-       used inside get_neighbours() as a frontier tiebreaker during
-       traversal itself, not for ranking final results)
+    4. Rank neighbours two ways and fuse by rank: structurally (edge type and
+       hop distance) and by personalized PageRank, then prune to the top
+       `limit`*3.
+
+    This function backs both mode="graph" and mode="both". `score` on each
+    result stays the pure structural number, so it is comparable with what
+    this function has always returned; the PageRank signal affects the ORDER
+    and which neighbours survive the prune, not the score value.
 
     Returns results tagged with source_type="project" and
     relation metadata showing the graph edge that surfaced them.
@@ -165,8 +491,8 @@ def _search_project_graph(
         meta_out["caller_count"] = 0
 
     project_root = Path(project_path).resolve()
-    pid = hashlib.sha256(str(project_root).encode("utf-8")).hexdigest()[:12]
-    index_dir = DATABASES_DIR / "_projects" / pid
+    index_dir = resolve_project_dir(DATABASES_DIR / "_projects", project_root)
+    pid = index_dir.name
 
     graph_db_path = index_dir / "graph.db"
     chroma_dir = index_dir / "chroma"
@@ -212,8 +538,11 @@ def _search_project_graph(
     # Step 2: traverse graph from each seed
     neighbor_files: dict[str, dict] = {}  # file -> {edge_type, seed, depth, is_caller}
     for seed_file in seed_files:
+        hop_of: dict[str, int] = {}
         try:
-            neighbors = graph.get_neighbours(seed_file, depth=depth, direction=direction)
+            neighbors = graph.get_neighbours(
+                seed_file, depth=depth, direction=direction, depths_out=hop_of,
+            )
         except Exception as e:
             logger.warning("Graph traversal failed for %s: %s", seed_file, e)
             continue
@@ -254,6 +583,9 @@ def _search_project_graph(
                     "seed": seed_file,
                     "seed_score": seed_scores[seed_file],
                     "is_caller": is_caller,
+                    # 1 if the traversal never reported a hop for this file,
+                    # which keeps the decay a no-op rather than a KeyError.
+                    "depth": hop_of.get(neighbor, 1),
                 }
 
     if meta_out is not None:
@@ -278,30 +610,68 @@ def _search_project_graph(
             if r.score >= min_score
         ]
 
-    # Score weighting by edge type -- this, not PageRank, is the primary
-    # signal for how relevant a neighbor is to the seed. PageRank (used
-    # inside get_neighbours()) only decides which frontier nodes are worth
-    # expanding further during traversal; it doesn't rank final results,
-    # since a globally-central file (e.g. a shared utils.py) isn't
-    # necessarily more relevant to THIS seed than a weakly-global but
-    # directly, strongly connected one.
-    edge_weights = {
-        "imports": 0.9,
-        "inherits": 0.85,
-        "implements": 0.85,
-        "calls": 0.8,
-    }
-    for info in neighbor_files.values():
-        weight = edge_weights.get(info["edge_type"], 0.7)
-        info["graph_score"] = round(info["seed_score"] * weight, 4)
+    # Two orderings, fused by rank.
+    #
+    # Structural: edge type times hop decay times how good the seed was. This
+    # is the evidence, and on its own it is what this function always used.
+    #
+    # Centrality: personalized PageRank, which answers "important relative to
+    # THESE seeds" rather than the global "utils.py is central to the repo",
+    # which is equally true for every query and therefore worthless for
+    # ranking.
+    #
+    # They are fused rather than multiplied together. Multiplying was the
+    # original attempt and it was the exact mistake reciprocal_rank_fusion
+    # exists to prevent, stated in its own docstring twenty lines up: a
+    # PageRank value and an edge weight product share no scale, so combining
+    # them by arithmetic means whichever happens to produce bigger floats wins.
+    # That was not theoretical. It put a 2 hop hub at 0.8505 above a direct
+    # neighbour at 0.7902. Capping the multiplier below the smallest structural
+    # gap did fix the inversion, but it took a bespoke derivation to prove a
+    # bound that RRF gets for free by never touching the raw numbers at all.
+    #
+    # Consequence worth naming: RRF is rank based, so centrality can now break
+    # a tie between two files that differ structurally but land adjacent in the
+    # ordering, not only between exactly equal scores. That is a slightly
+    # stronger tiebreak than the capped multiplier allowed, and it is the
+    # intended trade for deleting the derivation.
+    for nfile, info in neighbor_files.items():
+        weight = EDGE_WEIGHTS.get(info["edge_type"], DEFAULT_EDGE_WEIGHT)
+        decay = DEPTH_DECAY ** (max(info["depth"], 1) - 1)
+        info["graph_score"] = round(info["seed_score"] * weight * decay, 4)
 
-    # Prune by graph_score before the chunk-fetch loop (each fetch is a
-    # ChromaDB call) -- depth up to 5 with a 200-node frontier budget per
-    # hop can still surface far more neighbors than any caller wants
-    # results for.
-    ranked_neighbors = sorted(
-        neighbor_files.items(), key=lambda kv: kv[1]["graph_score"], reverse=True,
-    )[: max(limit * 3, 15)]
+    by_structure = sorted(
+        neighbor_files, key=lambda f: neighbor_files[f]["graph_score"], reverse=True,
+    )
+    ppr = _personalized_ranks(graph, seed_files)
+    by_centrality = (
+        sorted(neighbor_files, key=lambda f: ppr.get(f, 0.0), reverse=True)
+        if ppr else []
+    )
+
+    # Same fusion the vector and graph lists get in search(), so there is one
+    # answer to "these scores are not comparable" in this file rather than two.
+    #
+    # Weighted, because these two lists are not equally authoritative.
+    # Structure is the evidence: this file really is one import hop from
+    # something the query matched. Centrality is a hint about the shape of the
+    # neighbourhood. Unweighted, the hint outvoted the evidence outright, and a
+    # file ranked LAST on structure but first on centrality came back first.
+    fused_order = [
+        r["file"] for r in reciprocal_rank_fusion(
+            [{"file": f} for f in by_structure],
+            [{"file": f} for f in by_centrality],
+            key=lambda r: r["file"],
+            weights=(1.0, CENTRALITY_WEIGHT),
+        )
+    ]
+
+    # Prune before the chunk-fetch loop (each fetch is a ChromaDB call) --
+    # depth up to 5 with a 200-node frontier budget per hop can still surface
+    # far more neighbors than any caller wants results for.
+    ranked_neighbors = [
+        (f, neighbor_files[f]) for f in fused_order[: max(limit * 3, 15)]
+    ]
 
     # Step 3: fetch chunks for neighbor files from ChromaDB
     results: list[dict] = []
