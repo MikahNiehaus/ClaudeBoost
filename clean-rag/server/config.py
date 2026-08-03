@@ -118,9 +118,24 @@ DEVICE: str = _detect_device()
 #   TORCH_THREADS is the structural cap on this process. It holds even when
 #   nothing is sampling, and it is what stops a single embed call from
 #   saturating every core between samples.
+#
+# The two must not be derived from the same number, which is the bug this
+# comment now exists to prevent. TORCH_THREADS used to be CPU_MAX_PERCENT of
+# the cores, so on a 14 core machine the process was allowed 11 threads (79%)
+# against an 80% ceiling. Embedding at full tilt then tripped the ceiling on
+# its own, with nothing else running: pause, CPU falls, resume, spike, pause.
+#
+# Measured cost of that oscillation: 406 pauses on one project, 64 s/file, and
+# a log line reading "DONE 4 files, 477.5 min". The sweep was not yielding to
+# other work, it was yielding to itself.
 # ---------------------------------------------------------------------------
 
 CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "80"))
+
+# Fraction of cores torch may use. Deliberately well below CPU_MAX_PERCENT so
+# this process at full speed still leaves headroom under the ceiling it is
+# checked against, instead of sitting exactly on it.
+TORCH_CORE_FRACTION = float(os.environ.get("CLEAN_RAG_TORCH_CORE_FRACTION", "0.55"))
 
 # Minimum free RAM, in MB, before a background reindex is allowed to start or
 # continue. A sweep observed here grew to a 43 GB virtual commit and drove the
@@ -131,9 +146,14 @@ MIN_FREE_RAM_MB = float(os.environ.get("CLEAN_RAG_MIN_FREE_RAM_MB", "3072"))
 
 
 def _default_torch_threads() -> int:
-    """Cap torch at CPU_MAX_PERCENT of the machine's cores, at least one."""
+    """Cap torch at TORCH_CORE_FRACTION of the machine's cores, at least one.
+
+    Sized against the core count, NOT against CPU_MAX_PERCENT: deriving it from
+    the ceiling is what made the process throttle itself. Leaving a real gap
+    between the two is the whole point.
+    """
     cores = os.cpu_count() or 1
-    return max(1, int(cores * CPU_MAX_PERCENT / 100.0))
+    return max(1, int(cores * TORCH_CORE_FRACTION))
 
 
 TORCH_THREADS = int(
