@@ -20,6 +20,7 @@ from .config import (
     CHUNK_OVERLAP_TOKENS,
     DATABASES_DIR,
     DEGENERATE_CHUNK_MIN_TOKENS,
+    INDEX_MANIFEST_CHECKPOINT_S,
     MAX_CHUNK_TOKENS,
     MIN_CHUNK_TOKENS,
     PIPELINE_VERSION,
@@ -600,6 +601,11 @@ def index_project(
     stopped_early: str | None = None
     start_time = time.time()
 
+    # Next wall clock moment the manifest gets flushed. Monotonic, so a system
+    # clock change part way through a multi hour run cannot stall the
+    # checkpointing or fire it every iteration.
+    next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
+
     for file_path in file_paths:
         # Cooperative abort point: between files, never part way through one.
         # A file only enters the manifest once its chunks are actually in the
@@ -718,6 +724,40 @@ def index_project(
         except Exception as e:
             logger.error("Failed to embed/store %s: %s", rel_path, e)
             files_failed += 1
+
+        # Flush what has actually been indexed so far.
+        #
+        # Placed here, after add_chunks has already committed (store.py wraps
+        # its inserts in `with self._conn:`), never before. The manifest is a
+        # claim that a file's chunks are in the store, so writing it ahead of
+        # the chunks would survive a crash as a permanent lie: neither
+        # find_changed_files nor the unchanged hash skip above compares against
+        # store contents, so nothing would ever notice the file was missing and
+        # nothing would reindex it. Late is recoverable, early is not.
+        #
+        # incomplete=True on every intermediate write, explicitly. Passing None
+        # would let _save_project_manifest carry over whatever __incomplete__ is
+        # already on disk, so a project whose previous run finished cleanly
+        # would keep claiming it was complete all the way through this one, and
+        # index_is_incomplete() would tell the next sweep to rebuild instead of
+        # resume. The end of run save below is what clears it back to False.
+        #
+        # Outside the try above on purpose. A failed manifest write has nothing
+        # to do with embedding, and letting it land in that except would count a
+        # file whose chunks are safely stored as a failure. It is also not worth
+        # killing an hours long run over: the dict is still intact in memory, so
+        # the next checkpoint or the final save picks it up.
+        if time.monotonic() >= next_checkpoint_at:
+            try:
+                _save_project_manifest(
+                    manifest_path, manifest, str(project_root),
+                    pipeline_version=PIPELINE_VERSION,
+                    model_id=model_id or None,
+                    incomplete=True,
+                )
+            except OSError as e:
+                logger.warning("Manifest checkpoint failed for %s: %s", project_path, e)
+            next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
 
     # GC before graph post-processing
     _gc_cleanup(f"project:{project_path}")
@@ -862,6 +902,73 @@ def reindex_file(
         except Exception:
             manifest = {}
 
+    # Resolved before the embedder on purpose: a file that has been deleted is
+    # handled below without ever loading a model, and an embedder is 1 to 2 GB
+    # resident. Nothing here depends on the embedder.
+    abs_file = Path(file_path).resolve()
+    try:
+        rel_path = str(abs_file.relative_to(project_root)).replace("\\", "/")
+    except ValueError:
+        return {"error": f"File {file_path} is not under project root {project_path}"}
+
+    if not abs_file.is_file():
+        # The file is gone. This used to return an error and bail, which is why
+        # auto_reindex forced a whole project rebuild whenever anything was
+        # deleted: no path existed to drop one file's rows. The store never
+        # actually needed one to exist. delete_by_source and
+        # delete_edges_for_file are both plain SQL deletes keyed on the stored
+        # rel_path, with no filesystem check, so they work on a vanished file
+        # exactly as they do on a live one. The bail was the only obstacle.
+        store = ChromaStore(persist_dir=str(chroma_dir))
+        if not store.collection_exists("codebase"):
+            return {"error": "Project collection does not exist. Run index-project first."}
+
+        removed = store.delete_by_source("codebase", rel_path)
+
+        # Unconditional, unlike the update path below which skips docs. Skipping
+        # here would rely on the extension to decide whether edges can exist,
+        # and if that guess is ever wrong the edges are orphaned permanently
+        # with the file gone and nothing left to reindex. Deleting zero rows
+        # costs nothing, so ask the question rather than predict the answer.
+        #
+        # Both directions, unlike the update path below. That one re-extracts
+        # the file and adds its outgoing edges straight back, so it must keep
+        # the inbound ones it cannot re-derive. Here the file is gone: nothing
+        # will ever reindex it, so an edge from a surviving file INTO this path
+        # would leak permanently and keep mode=graph search returning a file
+        # that no longer exists. delete_ghost_edges is the bulk form of the
+        # same rule, but it only runs inside a full index_project and takes the
+        # whole current_files set, which this path does not have.
+        graph_db_path = index_dir / "graph.db"
+        if graph_db_path.exists():
+            try:
+                from .graph_store import SQLiteGraphStore
+                edges_removed = SQLiteGraphStore(
+                    str(graph_db_path)
+                ).delete_edges_referencing_file(rel_path)
+                logger.debug(
+                    "Removed %d graph edge(s) referencing deleted %s",
+                    edges_removed, rel_path,
+                )
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.warning("Graph edge cleanup failed for deleted %s: %s", rel_path, e)
+
+        # Dropping the entry, not blanking it. A leftover entry would keep
+        # claiming chunks that are gone, and find_changed_files only reports a
+        # path as deleted while the manifest still lists it, so leaving it would
+        # hand this same file back on every sweep from now on.
+        manifest.pop(rel_path, None)
+        _save_project_manifest(manifest_path, manifest, str(project_root))
+
+        # Deletes are what grow the freelist, so this is the path that most
+        # wants the reclaim. Threshold guarded, so it is a no-op until it isn't.
+        store.vacuum_if_needed()
+
+        logger.info("Removed deleted file from index: %s", rel_path)
+        return {"file": rel_path, "deleted": True, "chunks_removed": removed}
+
     # Resolve the embedder: use the project's stored model from ModelCache,
     # or fall back to the passed object if it's a plain embedder.
     from .lang_router import ModelCache
@@ -873,15 +980,6 @@ def reindex_file(
             code_embedder = model_cache.get(CODE_EMBEDDING_MODEL)
     else:
         code_embedder = model_cache
-
-    abs_file = Path(file_path).resolve()
-    try:
-        rel_path = str(abs_file.relative_to(project_root)).replace("\\", "/")
-    except ValueError:
-        return {"error": f"File {file_path} is not under project root {project_path}"}
-
-    if not abs_file.is_file():
-        return {"error": f"File not found: {file_path}"}
 
     suffix = abs_file.suffix.lower()
     if suffix not in CODE_EXTENSIONS:

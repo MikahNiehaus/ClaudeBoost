@@ -456,9 +456,58 @@ class SQLiteGraphStore:
         ]
 
     def delete_edges_for_file(self, file: str) -> None:
-        """Remove all edges where source_file == file (used on incremental reindex)."""
+        """Remove all edges where source_file == file (used on incremental reindex).
+
+        Outgoing only, deliberately. The caller re-extracts this file's edges
+        and adds them straight back, and it has no way to re-derive the
+        INCOMING ones, which belong to other files that are not being parsed.
+        Matching target_file here would silently drop every inbound edge on
+        every ordinary edit. Use ``delete_edges_referencing_file`` when the
+        file is gone and nothing is coming back.
+        """
         with self._connect() as conn:
             conn.execute("DELETE FROM edges WHERE source_file = ?", (file,))
+
+    def delete_edges_referencing_file(self, file: str) -> int:
+        """Remove every edge incident to ``file``, as source OR as target.
+
+        For a file deleted from the project, where dropping the inbound edges
+        is the point: no file is left to re-extract them from, so an edge whose
+        target_file is this path would otherwise survive forever and keep
+        mode=graph search walking into a file that is not there
+        (search.py get_neighbours -> edge.target_file).
+
+        Same rule ``delete_ghost_edges`` applies in bulk after a full index,
+        narrowed to one path, and it needs the same guard against this table's
+        two in-band column sentinels. ``target_file`` is not purely a path:
+        ``''`` means unresolved, and ``_EXTERNAL_SENTINEL`` is stamped on every
+        unresolved stdlib or third party import edge in the whole project by
+        ``resolve_target_files``. An equality test against either value matches
+        thousands of unrelated rows rather than one file's.
+
+        The guard cannot be left to the caller. ``reindex_file``'s deletion
+        branch is entered on ``not abs_file.is_file()``, which is true for a
+        path that was never indexable and never existed, and it runs before the
+        only ``CODE_EXTENSIONS`` suffix check; a file named ``_external_`` at
+        the project root arrives here as exactly the sentinel. Returning 0 is
+        the true answer, not a suppressed one: neither reserved value can name
+        an indexed file, so no edge belongs to it.
+
+        Returns the number of rows deleted.
+        """
+        if not file or file == _EXTERNAL_SENTINEL:
+            logger.warning(
+                "Refusing to delete edges for %r: that is an edges-table "
+                "sentinel, not a project path", file,
+            )
+            return 0
+
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM edges WHERE source_file = ? OR target_file = ?",
+                (file, file),
+            )
+            return cur.rowcount
 
     def has_graph(self) -> bool:
         """Return True if at least one edge has been stored."""

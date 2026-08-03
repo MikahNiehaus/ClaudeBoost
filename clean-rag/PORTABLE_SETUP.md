@@ -53,7 +53,7 @@ The hook registrations (also written by `install.py`) route every hook through
 - **Audit log**: hash chained record of every edit and whether research covered
   it. `python clean-rag/cli/audit.py verify`.
 - **Server**: headed, single instance on port 8613, auto reindexes every project
-  every 60 minutes. `python clean-rag/cli/server_ctl.py start` or double click
+  every 10 minutes. `python clean-rag/cli/server_ctl.py start` or double click
   `runragserver.bat`.
 - **Branch safety**: `hook-run.py` no ops a missing hook script instead of
   bricking Claude, so switching to a branch that lacks a script is harmless.

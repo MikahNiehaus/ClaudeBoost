@@ -284,18 +284,62 @@ async def _sweep_project(
         return
 
     try:
-        # Deletions leave stale chunks behind that reindex_file cannot clear on
-        # its own, so a deletion always means a full rebuild. Same for a change
-        # set big enough that per file calls stop being the cheap option.
-        if deleted or len(changed) >= FULL_REINDEX_THRESHOLD:
-            reason = "files were deleted" if deleted else f"{len(changed)} files changed"
+        # Deletions first, one file at a time, never by rebuilding.
+        #
+        # This used to force a full rebuild of the whole project the moment any
+        # file vanished, on the grounds that stale chunks could not be cleared
+        # any other way. That was never true of the store: delete_by_source and
+        # delete_edges_referencing_file are plain SQL deletes on the stored path and do
+        # not care whether the file still exists. reindex_file just refused to
+        # get that far for a missing file. It no longer does, so a deletion now
+        # costs one SQL delete instead of re embedding thousands of untouched
+        # files.
+        #
+        # Handled before the branch below so the rebuild decision is about
+        # `changed` alone. No pressure check in this loop: these are row deletes
+        # measured in milliseconds, not embedding work.
+        #
+        # find_changed_files returns `deleted` RELATIVE to the project root
+        # while `changed` is absolute, so these have to be joined back before
+        # reindex_file resolves them.
+        dropped = 0
+        for rel_path in deleted:
+            abs_path = str(Path(project_path) / rel_path)
+            try:
+                outcome = await loop.run_in_executor(
+                    None, partial(reindex_file, project_path, abs_path, model_cache)
+                )
+                if outcome.get("deleted"):
+                    dropped += 1
+                else:
+                    logger.warning(
+                        "Could not drop deleted %s from %s: %s",
+                        rel_path, project_path, outcome,
+                    )
+            except Exception as e:
+                logger.error(
+                    "Failed dropping deleted %s: %s: %s", rel_path, type(e).__name__, e
+                )
+        if deleted:
+            logger.info(
+                "Dropped %d of %d deleted file(s) from %s",
+                dropped, len(deleted), project_path,
+            )
+
+        # A change set big enough that per file calls stop being the cheap
+        # option. Deletions no longer reach this branch on their own.
+        if len(changed) >= FULL_REINDEX_THRESHOLD:
+            reason = f"{len(changed)} files changed"
             # A previous pass that gave the machine back left a manifest naming
             # exactly the files whose chunks really are in the store, so
             # resuming keeps that work instead of wiping it and starting the
-            # same large project over. A deletion still forces the wipe: stale
-            # chunks cannot be cleared any other way, which is why this branch
-            # exists at all.
-            resuming = index_is_incomplete(project_path) and not deleted
+            # same large project over.
+            #
+            # Requiring every deletion to have actually been dropped before
+            # resuming, rather than assuming it: a deletion that failed above
+            # leaves stale chunks that only a wipe clears, which is the one
+            # thing the old force-on-any-deletion rule got right.
+            resuming = index_is_incomplete(project_path) and dropped == len(deleted)
             if resuming:
                 reason += ", resuming an index that stopped early"
             logger.info("Full reindex of %s (%s)", project_path, reason)

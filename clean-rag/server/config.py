@@ -130,12 +130,26 @@ DEVICE: str = _detect_device()
 # other work, it was yielding to itself.
 # ---------------------------------------------------------------------------
 
-CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "80"))
+# CPU THROTTLING IS OFF by default, by explicit request after the history above.
+#
+# 100 or more means disabled, and sample_pressure skips the CPU check entirely
+# rather than comparing against an unreachable number. Set a real percentage
+# here (or CLEAN_RAG_CPU_MAX_PERCENT) to turn pausing back on.
+#
+# What this gives up: the sweep no longer yields to other work on the machine.
+# What it keeps: MIN_FREE_RAM_MB below, and the RSS ceiling in the batch driver.
+# Those are not throttles, they are the guards against the failure that actually
+# hurt, a machine driven to 0.2 GB free with 16.8 GB paged out. CPU contention
+# makes a machine slow; memory exhaustion makes it stop.
+CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "100"))
 
-# Fraction of cores torch may use. Deliberately well below CPU_MAX_PERCENT so
-# this process at full speed still leaves headroom under the ceiling it is
-# checked against, instead of sitting exactly on it.
-TORCH_CORE_FRACTION = float(os.environ.get("CLEAN_RAG_TORCH_CORE_FRACTION", "0.55"))
+# Fraction of cores torch may use. 1.0 means every core.
+#
+# This was 0.55 to keep the process clear of the pause ceiling it was checked
+# against. With pausing off there is nothing to stay clear of, so the reason for
+# holding cores back is gone too. Half a machine sitting idle was only ever the
+# price of politeness, and politeness is now off.
+TORCH_CORE_FRACTION = float(os.environ.get("CLEAN_RAG_TORCH_CORE_FRACTION", "1.0"))
 
 # Minimum free RAM, in MB, before a background reindex is allowed to start or
 # continue. A sweep observed here grew to a 43 GB virtual commit and drove the
@@ -169,7 +183,7 @@ TORCH_THREADS = int(
 # longer than an hour stacks sweeps until nothing else can run.
 # ---------------------------------------------------------------------------
 
-SWEEP_INTERVAL_S = int(os.environ.get("CLEAN_RAG_SWEEP_INTERVAL_S", str(60 * 60)))
+SWEEP_INTERVAL_S = int(os.environ.get("CLEAN_RAG_SWEEP_INTERVAL_S", str(10 * 60)))
 
 # How long to wait before re-sampling when the machine is over CPU_MAX_PERCENT.
 CPU_BACKOFF_S = float(os.environ.get("CLEAN_RAG_CPU_BACKOFF_S", "5"))
@@ -188,6 +202,27 @@ CPU_BACKOFF_MAX_WAIT_S = float(
 # sample itself costs one psutil read per 15s.
 INDEX_PRESSURE_CHECK_S = float(
     os.environ.get("CLEAN_RAG_INDEX_PRESSURE_CHECK_S", "15")
+)
+
+# How often a running index flushes its manifest to disk.
+#
+# index_project used to write the manifest exactly once, at the end. A graceful
+# abort still saved (marked incomplete, and the next sweep resumed from it), but
+# a hard kill saved nothing at all, so every file read as changed on the next
+# pass, tripped FULL_REINDEX_THRESHOLD, and forced a rebuild from zero. That is
+# not theoretical: it cost hours on a real run.
+#
+# An interval rather than a file count because per file cost here is nowhere
+# near uniform, milliseconds for a small file against seconds for a large one,
+# so "every N files" bounds the lost work unpredictably while an interval bounds
+# it directly. Same reasoning as INDEX_PRESSURE_CHECK_S above.
+#
+# 30s against a manifest measured at 55 to 60KB for ~790 files, so roughly
+# 1.2MB per write on a 16,000 file project. At this interval that is a couple of
+# writes a minute, against the multi gigabyte total that saving per file would
+# cost over a full run.
+INDEX_MANIFEST_CHECKPOINT_S = float(
+    os.environ.get("CLEAN_RAG_INDEX_MANIFEST_CHECKPOINT_S", "30")
 )
 
 # Web search fallback config

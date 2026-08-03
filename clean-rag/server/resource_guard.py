@@ -95,12 +95,18 @@ def sample_pressure(
     except ImportError:
         return None
 
+    # A ceiling of 100 or more cannot be exceeded in any useful sense, so treat
+    # it as "CPU throttling off" and skip the sample rather than comparing
+    # against a number nothing can reach. Skipping also drops psutil's cost on
+    # the hot path, which is the whole point of turning it off.
+    cpu_check_on = max_percent < 100
+
     with _SAMPLE_LOCK:
-        cpu = psutil.cpu_percent(interval=None)
+        cpu = psutil.cpu_percent(interval=None) if cpu_check_on else 0.0
         free_mb = psutil.virtual_memory().available / (1024 * 1024)
 
     pressure = []
-    if cpu >= max_percent:
+    if cpu_check_on and cpu >= max_percent:
         pressure.append(f"CPU {cpu:.0f}% (limit {max_percent:.0f}%)")
     if free_mb < min_free_ram_mb:
         pressure.append(f"free RAM {free_mb:.0f} MB (need {min_free_ram_mb:.0f} MB)")

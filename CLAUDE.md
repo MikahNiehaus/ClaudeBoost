@@ -209,7 +209,7 @@ scraped topic knowledge base.
   characters. Snippets are cheap, so survey with it and only fetch a full page
   when you need the substance.
 - Index a project once with `/index-project`. It reindexes itself: after every
-  edit, and a full sweep every 60 minutes for outside changes. The server runs
+  edit, and a full sweep every 10 minutes for outside changes. The server runs
   headed so you can watch it.
 
 If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
