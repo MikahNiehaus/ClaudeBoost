@@ -810,9 +810,6 @@ def index_project(
     # A run that stopped early still saves, and that is the deliberate choice
     # over leaving the previous manifest untouched. The manifest is the record
     # of what is actually in the store, and after the break above it holds
-    # A run that stopped early still saves, and that is the deliberate choice
-    # over leaving the previous manifest untouched. The manifest is the record
-    # of what is actually in the store, and after the break above it holds
     # exactly the files this run embedded (plus, when force is off, the ones
     # already there and untouched). The files never reached are simply absent,
     # so the next sweep sees them as changed and finishes the job.
