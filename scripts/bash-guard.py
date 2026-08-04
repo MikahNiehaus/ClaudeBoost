@@ -377,6 +377,82 @@ def check_db_mutation(command: str) -> str | None:
     return None
 
 
+def check_production_environment(command: str) -> str | None:
+    """Block starting a local app in a way that resolves to the production environment.
+
+    The danger here is the opposite of the usual guard: the command contains no
+    dangerous looking token at all. ASP.NET Core defaults to Production whenever
+    ASPNETCORE_ENVIRONMENT is unset, so *removing* a guardrail is what does the
+    damage. Config then binds appsettings.json rather than
+    appsettings.Development.json, which on real projects means the production
+    database catalog and the production key vault.
+
+    Seen in practice: `dotnet run --no-launch-profile` on a dev machine resolved
+    a production database and a production secret store. Whether such a run
+    actually connects comes down to incidental things like credential resolution
+    order, which is not a safeguard.
+
+    A keyword scan for "production" would NOT have caught it, which is why this
+    matches the known risk flag and the explicit assignment instead.
+
+    Covered patterns:
+    - dotnet run / dotnet watch run with --no-launch-profile
+    - an explicit --environment Production on a dotnet run
+    - inline ASPNETCORE_ENVIRONMENT=Production or DOTNET_ENVIRONMENT=Production
+    """
+    unquoted = _strip_quoted(command)
+
+    if re.search(
+        r"\bdotnet\s+(?:watch\s+)?run\b[^|;&]*--no-launch-profile\b",
+        unquoted,
+        re.IGNORECASE,
+    ):
+        return (
+            "BLOCKED: `dotnet run --no-launch-profile` skips launchSettings.json, so "
+            "ASPNETCORE_ENVIRONMENT is unset and ASP.NET Core defaults to Production. "
+            "That binds appsettings.json instead of appsettings.Development.json, which "
+            "commonly points at the production database and the production secret store. "
+            "Name the environment explicitly instead:\n"
+            '  ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="https://localhost:PORT" \\\n'
+            '    dotnet run --project "<path to csproj>"\n'
+            "Then confirm the startup log says `Hosting environment: Development` before using it."
+        )
+
+    if re.search(
+        r"\bdotnet\s+(?:watch\s+)?run\b[^|;&]*--environment[=\s]+(Production|Staging)\b",
+        unquoted,
+        re.IGNORECASE,
+    ):
+        return (
+            "BLOCKED: starting a local app with `--environment Production` (or Staging) "
+            "points it at that environment's real database and secrets. "
+            "Run this yourself after confirming that is what you intend."
+        )
+
+    # Matched against the RAW command, not the stripped one. _strip_quoted deletes the
+    # quoted value, so ASPNETCORE_ENVIRONMENT="Production" would survive the stripped
+    # pass with nothing left to match (found by testing this rule, not by inspection).
+    # The anchor is what keeps the false positive out: a real assignment sits at the
+    # start of a command, after a separator, or just inside a quoted -c payload, so
+    # `git commit -m "set ASPNETCORE_ENVIRONMENT=Production in CI"` does not match
+    # because the word `set ` precedes it.
+    match = re.search(
+        r"(?:^|[;&|]\s*|[\"']\s*)(ASPNETCORE_ENVIRONMENT|DOTNET_ENVIRONMENT)"
+        r"\s*=\s*[\"']?(Production|Staging)\b",
+        command,
+        re.IGNORECASE,
+    )
+    if match:
+        return (
+            f"BLOCKED: this command sets {match.group(1)}={match.group(2)}, which points the "
+            "app at that environment's real database and secrets. "
+            "Use Development locally. If you genuinely need to run against "
+            f"{match.group(2)}, run it yourself in the terminal."
+        )
+
+    return None
+
+
 # Matches an ordinary relative-path rm -rf on purpose, since that class of
 # command runs constantly for legitimate cleanup (e.g. `rm -rf test/build`
 # before a fresh run) -- blocking every rm -rf would be far too disruptive.
@@ -509,7 +585,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_db_mutation, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_db_mutation, check_production_environment, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

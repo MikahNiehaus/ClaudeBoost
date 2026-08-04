@@ -8,6 +8,7 @@ Cross-platform: works on Windows, macOS, Linux.
 Output examples (ANSI colored):
   > ClaudeBoost | RAG ●                  (server live, project indexed)
   > ClaudeBoost | RAG ○                  (server starting, model loading)
+  > ClaudeBoost | RAG x                  (server up, model init failed, waiting will not fix it)
   > ClaudeBoost                          (server down)
 """
 from __future__ import annotations
@@ -44,22 +45,33 @@ def _rag_index_dir() -> Path:
 
 
 def _heartbeat_status() -> str:
-    """Return 'live', 'starting', or 'down' based on heartbeat file."""
+    """Return 'live', 'starting', 'failed', or 'down' from the heartbeat file.
+
+    'failed' is separate from 'starting' on purpose. A heartbeat only carrying
+    `model_loaded: false` cannot distinguish a model still loading from one that
+    raised and will never load, so a permanently broken server displayed as
+    "starting" indefinitely. A server that writes an explicit `status` gets
+    reported honestly; one that does not keeps the old two state behaviour.
+    """
     hb = _rag_index_dir() / ".heartbeat"
     if not hb.exists():
         return "down"
     try:
         raw = hb.read_text(encoding="utf-8").strip()
+        explicit = ""
         try:
             data = json.loads(raw)
             ts = float(data.get("ts", 0))
             model_loaded = bool(data.get("model_loaded", True))
+            explicit = str(data.get("status", "") or "")
         except (ValueError, KeyError):
             ts = float(raw)
             model_loaded = True
         age = time.time() - ts
         if age > 90:
             return "down"
+        if explicit == "failed":
+            return "failed"
         return "live" if model_loaded else "starting"
     except Exception:
         return "down"
@@ -114,6 +126,10 @@ def main() -> None:
         parts.append(f"{DIM}|{RESET} {GREEN}RAG ●{RESET}")
     elif status == "starting":
         parts.append(f"{DIM}|{RESET} {YELLOW}RAG ○{RESET}")
+    elif status == "failed":
+        # Red and distinct from starting. The whole point is that waiting will
+        # not fix this one, so it must not look like the yellow one that will.
+        parts.append(f"{DIM}|{RESET} {RED}RAG x{RESET}")
     # "down" — no RAG segment shown
 
     if _mcp_registered("playwright"):
@@ -121,6 +137,12 @@ def main() -> None:
 
     if _mcp_registered("mcp-debugger"):
         parts.append(f"{DIM}|{RESET} {GREEN}DBG ●{RESET}")
+
+    if _mcp_registered("chrome-devtools"):
+        parts.append(f"{DIM}|{RESET} {GREEN}CDP ●{RESET}")
+
+    if _mcp_registered("test-coverage"):
+        parts.append(f"{DIM}|{RESET} {GREEN}COV ●{RESET}")
 
     ws = _active_workspace()
     if ws:

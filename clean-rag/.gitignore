@@ -20,12 +20,27 @@ state/*.log
 # machine builds its own via install.py, never committed.
 .venv-router/
 .venv-coref/
+graphrag-venv/
+
+# Local AI models for the GraphRAG extraction service (GGUF and friends). Large,
+# machine specific, never committed. Each machine provides its own model file.
+*.gguf
+*.ggml
+*.safetensors
+models/
+graphrag-models/
 
 # Machine specific config. Each checkout keeps its own. The committed template
 # is .env.example.
 .env
 .env.*
 !.env.example
+
+# Configured doc-rag source lists name whatever topic you're personally
+# researching (medical debt law, or anything else), never committed. The
+# tracked template documents the schema for a fresh clone.
+docs_sources/*.json
+!docs_sources/*.template.json
 
 # Python
 __pycache__/

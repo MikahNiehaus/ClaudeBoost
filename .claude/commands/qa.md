@@ -1,7 +1,7 @@
 ---
 argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
 description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, and reports what was tested AND what was not
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
 ---
 
 # /qa — QA Session
@@ -46,7 +46,7 @@ This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:
 Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
-Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8613/status` and check `indexed_projects` for the detected path.
 
 - **Indexed**: note file/chunk counts and continue.
 - **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
@@ -61,10 +61,10 @@ Call `GET http://127.0.0.1:8612/status` and check `indexed_projects` for the det
 Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3 and G4d)
 - `--fresh` present → force a new workspace (already handled in 0c)
-- `--code` present → set `CODE_FLAG = true` (used in 0a-iii to set MODE = general)
+- `--code` present → set `CODE_FLAG = true` (used in 0a-i to set MODE = general)
 - Remaining tokens after stripping all flags: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
 
-**0a-iii — Set MODE based on parsed arguments.**
+**0a-i — Set MODE based on parsed arguments.**
 
 | Condition | MODE | GENERAL_TARGET |
 |-----------|------|----------------|
@@ -82,13 +82,13 @@ Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - "the workspace output" / "the plan" → files in `$WORKSPACE_ABS/`
 - Anything else → print the resolved target and ask "Is this what you want to QA?" before starting
 
-**If MODE = `general`:** skip Steps A–D, skip Phase 0a-ii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
+**If MODE = `general`:** skip Steps A–D, skip Phase 0a-iii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
 
 **If MODE = `detect` and Steps A–C find a running server:** set `MODE = browser` and `TARGET_URL` to the detected address.
 
 **If MODE = `detect` and no server found (Step D):** ask: "No running server found. Paste a URL for browser testing, or describe what to QA (file, workspace ID, or `--code` for recent git changes)." Set MODE based on the reply.
 
-**0a-i — Auto-detect TARGET_URL if not provided.**
+**0a-ii — Auto-detect TARGET_URL if not provided.**
 
 If `TARGET_URL` is empty after parsing, do NOT ask the user yet. Work through these steps in order and stop at the first hit:
 
@@ -131,7 +131,20 @@ Wait for the user's response. Set MODE and TARGET based on what they provide:
 - URL → `browser`
 - File name, path, description of scripts/code, or `--code` → `general`
 
-**0a-ii — Ticket tracing (ask if not provided).**
+**0a-ii-b — Visual feedback loop (browser mode only).**
+
+When `MODE = browser`, apply this loop for every UI-related test case:
+1. `browser_navigate` to the route under test
+2. `browser_snapshot` — read the accessibility and text state first, before any screenshot
+3. `browser_take_screenshot` — capture the visual state
+4. Note findings with pixel precise specifics before proposing any fix (e.g. "gap between cards is 8px, design requires 24px")
+5. `browser_resize` at 375px, 768px, 1280px for any responsive test case
+6. `browser_console_messages` after each test case — show the output, never assume silent
+
+Confirm with the user before implementing any visual change found in QA.
+Verify with a before/after screenshot pair after any fix is applied.
+
+**0a-iii — Ticket tracing (ask if not provided).**
 
 If the user is working from a ticket (e.g., `ASC-1175`, `FEAT-42`), ask:
 ```
@@ -167,7 +180,7 @@ pwd
 
 **Step 1 — Ticket workspace check (runs first if TICKET_ID is set):**
 
-If `TICKET_ID` was captured in Phase 0a-ii (not 'none'):
+If `TICKET_ID` was captured in Phase 0a-iii (not 'none'):
 
 First check the registry for a project-scoped workspace:
 ```bash
@@ -293,9 +306,19 @@ Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_descriptio
 
 This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test generation, annotation technique), playwright knowledge, and testing patterns.
 
+**0e-ii — Load cross-session memory (browser mode only).**
+
+Before any browser navigation, check for prior-session knowledge files:
+
+1. Check for `$WORKSPACE_ABS/ui-quirks.md` — if it exists, read it fully. These are known tricky elements from prior sessions: wrong-click corrections, elements that need parent-div clicks, custom components with unreliable selectors. Apply this context when deciding how to interact with any element during the session.
+2. Check for `$WORKSPACE_ABS/known-failures.md` — if it exists, read it fully. These are flows that were BLOCKED in prior sessions with the exact step that blocked them. Do not re-attempt a known-blocked step the same way — try a different approach or mark BLOCKED immediately with reference to the prior failure.
+3. If neither file exists: proceed normally. They will be created during this session if navigation corrections or blocked flows occur.
+
+**Write rule:** Append to `$WORKSPACE_ABS/ui-quirks.md` after any successful navigation correction (wrong click fixed, parent-div workaround discovered). Create the file if it doesn't exist. Never delete existing entries. Append to `$WORKSPACE_ABS/known-failures.md` when any flow is marked BLOCKED, with the exact blocking step.
+
 **0f — Index project codebase.**
 
-Call `POST http://127.0.0.1:8612/index with project_path=<WORKSPACE_ROOT>`. Report: "X files indexed."
+Call `POST http://127.0.0.1:8613/index-project {"project_path":"<WORKSPACE_ROOT>"}`. Report: "X files indexed."
 
 Use the WORKSPACE_ROOT detected in step 0c — not raw CWD. CWD may be the ClaudeBoost directory even when the project under test is elsewhere.
 
@@ -307,38 +330,38 @@ This is how a QA person learns the project BEFORE opening the browser. Run all s
 
 **Search 1 — Routes and pages:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=vector limit=20
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="page route URL path controller action handler navigation" mode=graph limit=20
+POST http://127.0.0.1:8613/search {"query":"page route URL path controller action handler navigation","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":20}
+POST http://127.0.0.1:8613/search {"query":"page route URL path controller action handler navigation","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":20}
 ```
 
 **Search 2 — Forms and mutations:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=vector limit=15
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update edit delete save mutation POST PUT PATCH DELETE" mode=graph limit=15
+POST http://127.0.0.1:8613/search {"query":"form submit create update edit delete save mutation POST PUT PATCH DELETE","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":15}
+POST http://127.0.0.1:8613/search {"query":"form submit create update edit delete save mutation POST PUT PATCH DELETE","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":15}
 ```
 
 **Search 3 — Authentication and authorization:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=vector limit=12
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication authorization login logout session role permission access control" mode=graph limit=12
+POST http://127.0.0.1:8613/search {"query":"authentication authorization login logout session role permission access control","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":12}
+POST http://127.0.0.1:8613/search {"query":"authentication authorization login logout session role permission access control","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":12}
 ```
 
 **Search 4 — Data models and entities:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=vector limit=15
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="model entity schema database table class record" mode=graph limit=15
+POST http://127.0.0.1:8613/search {"query":"model entity schema database table class record","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":15}
+POST http://127.0.0.1:8613/search {"query":"model entity schema database table class record","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":15}
 ```
 
 **Search 5 — Background jobs and async processing:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=vector limit=8
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="background job worker queue scheduled task cron async" mode=graph limit=8
+POST http://127.0.0.1:8613/search {"query":"background job worker queue scheduled task cron async","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":8}
+POST http://127.0.0.1:8613/search {"query":"background job worker queue scheduled task cron async","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":8}
 ```
 
 **Search 6 — External integrations:**
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=vector limit=8
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="external API integration webhook email notification payment third-party" mode=graph limit=8
+POST http://127.0.0.1:8613/search {"query":"external API integration webhook email notification payment third-party","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":8}
+POST http://127.0.0.1:8613/search {"query":"external API integration webhook email notification payment third-party","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":8}
 ```
 
 **If ticket was provided — also search ticket entities:**
@@ -599,7 +622,7 @@ The most common source of bad E2E tests is generating them from what the browser
 1. **App Inventory** (from `$WORKSPACE_ABS/app-inventory.md` Phase 0g — HIGHEST PRIORITY): every entity in the Entities with CRUD table is a journey candidate. For each entity with create/update/delete operations: generate the corresponding journey (create → verify → delete). For each route in the Routes/Pages table: verify it is represented in at least one journey. This is the completeness guarantee — the inventory was built from the actual code, not from what was clickable.
 2. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
 3. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
-4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8612/search scope=codebase query="route controller action" mode=graph limit=5`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8613/search` with `{"query":"route controller action","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
 
 **Completeness gate — after deriving journeys:** Count the routes in app-inventory.md. Count the journeys derived. Every route that has no covering journey must either (a) be covered by an existing journey, or (b) have an explicit reason in a `## Uncovered Routes` section of `flow-map.md` explaining why it's not covered (e.g., "admin-only, no test account", "API route only — not browser-testable"). Routes cannot be silently omitted.
 
@@ -646,7 +669,18 @@ Routes from app-inventory.md that have no covering journey — must list a reaso
 
 **2b — Generate test cases from flow-map.md journeys + intelligent rules.**
 
-TCs come from journeys, not from components. For each journey in flow-map.md:
+TCs come from journeys, not from components.
+
+**Derive journey invariants first.** Before generating TCs, state what each
+journey must hold regardless of input:
+- "After completing J1, the user MUST see [expected state] on [page]"
+- "J1 MUST NOT leave orphaned records if the user abandons mid-flow"
+- "J1 MUST reject [invalid input class] at step N before reaching step N+1"
+
+Use these invariants to drive TC generation: a good TC disproves an
+invariant on a wrong implementation, not just confirms a known-good path.
+
+For each journey in flow-map.md:
 - Generate TCs that walk the journey end-to-end: entry → actions → final observable state
 - Take the **most direct path to the feature** — no roundabout navigation through unrelated pages
 - Each TC must reference its parent journey: `[Journey: J1 — User Registration, Step 3]`
@@ -1165,7 +1199,7 @@ This step produces the code-level proof that the server actually executed. Witho
 
    **Tier 3 — RAG graph search (fallback):**
    ```
-   POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="[TC primary action — e.g. 'create order controller handler']" mode=graph limit=3
+   POST http://127.0.0.1:8613/search {"query":"[TC primary action — e.g. 'create order controller handler']","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":3}
    ```
    Use the top result's `source` and `line_start`.
 
@@ -1285,8 +1319,8 @@ NOT legitimate: UI shows a success toast or list update — use the UI instead.
 
 Protocol:
 1. Run both searches to find the server-side function handling the operation:
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service"` — semantic match
-   - `POST http://127.0.0.1:8612/search with scope="codebase", query="[operation] handler controller service", mode="graph"` — caller chain and module wiring
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[operation] handler controller service","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":5}` — semantic match
+   - `POST http://127.0.0.1:8613/search` with `{"query":"[operation] handler controller service","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}` — caller chain and module wiring
 2. `Read` the target file
 3. Insert: `console.log('[E2E-TEMP] TC-NNN: [description]');` after the operation
 4. Perform the browser action
@@ -1303,7 +1337,7 @@ Legitimate uses: cron jobs, Hangfire/Sidekiq/Quartz workers, service-bus consume
 NOT legitimate: UI shows a success toast, list update, or status badge — use the UI instead. Also NOT a replacement for temp-logging when a synchronous server-side function needs verification.
 
 Protocol:
-1. `POST http://127.0.0.1:8612/search with scope="codebase", query="[job class name] job worker execute schedule", mode="graph")` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job alongside the class itself.
+1. `POST http://127.0.0.1:8613/search` with `{"query":"[job class name] job worker execute schedule","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}` — find the job class, its scheduler/dispatcher, and the table/column it writes. mode=graph surfaces the wiring (what registers or enqueues this job alongside the class itself.
 2. `Read` the job class file. Identify:
    - What DB table/column the job writes (the "write side" — this is what must be verified)
    - Any dev/admin endpoint that can trigger the job manually (e.g., `/admin/jobs/trigger`, `/api/internal/run-job`, a dev-only controller action)
@@ -1601,9 +1635,12 @@ Phase 5 has two jobs:
 Before calling `/audit`, inventory what proof exists:
 
 **Code proof (always required when `DEBUG_ENABLED = true`):**
-Count files in `$DEBUG_PROOF_DIR/`. For each TC in plan.md marked `[x] PASS`:
+
+**If MODE = browser:** Count files in `$DEBUG_PROOF_DIR/`. For each TC in plan.md marked `[x] PASS`:
 - Does a `TC-NNN-debug.json` exist in `$DEBUG_PROOF_DIR/`? If no → flag as "PASS without code proof"
 - A "not hit" json counts as attempted — it is NOT a gap. A missing json IS a gap.
+
+**If MODE = general:** Read `$DEBUG_PROOF_DIR/session-summary.json` (written by G4d). Check `paths_debugged` — if the file does not exist or `paths_debugged = 0`, flag as "no code proof collected." Do NOT check for `TC-NNN-debug.json` files — general mode writes `path-NNN-[function-name].json` artifacts, not TC-named files.
 
 **Screenshot proof (required for browser mode, not required for general mode):**
 Only check this if `MODE = browser`. For each TC in plan.md marked `[x] PASS`:
@@ -1613,10 +1650,10 @@ Only check this if `MODE = browser`. For each TC in plan.md marked `[x] PASS`:
 Print the proof inventory:
 ```
 Proof inventory:
-  TCs with PASS                     : [N]
-  TCs with debug json (code proof)  : [N]  ← gaps: [list TC-IDs missing debug json]
-  TCs with screenshot (UI proof)    : [N]  ← N/A for general mode
-  TCs flagged as PASS without proof : [list]
+  TCs/paths with PASS                : [N]
+  Code proof collected               : [N]  ← gaps: [list TC-IDs or "paths_debugged=0"]  (browser: TC-NNN-debug.json / general: session-summary.json)
+  Screenshots (UI proof)             : [N]  ← N/A for general mode
+  Items flagged as PASS without proof: [list]
 ```
 
 ---
@@ -1794,10 +1831,26 @@ Understand the target before testing it.
 
 **G2b — RAG search for related code.** Run both modes:
 ```
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=vector limit=10
-POST http://127.0.0.1:8612/search scope=codebase project_path=<WORKSPACE_ROOT> query="<target description>" mode=graph limit=10
+POST http://127.0.0.1:8613/search {"query":"<target description>","sources":["project:<WORKSPACE_ROOT>"],"mode":"vector","limit":10}
+POST http://127.0.0.1:8613/search {"query":"<target description>","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":10}
 ```
 Use results to find: callers, tests that already exist, related modules the change might affect.
+
+**G2b-ii — Caller-graph regression surface.**
+
+For each changed function or entry point found in G2b, enumerate its callers via graph search:
+```
+POST http://127.0.0.1:8613/search {"query":"<changed function name>","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":10}
+```
+
+Add a `## Caller Regression Surface` section to `session-inventory.md` (written in G2c):
+```markdown
+## Caller Regression Surface
+| Changed Symbol | Callers Found | Risk |
+|---------------|---------------|------|
+| [function] | [callers from graph result] | [high if many/external callers, low if private/internal] |
+```
+These callers define the regression surface. Include at least one TC in G4b that exercises each distinct caller path — a passing test suite that never exercises the changed function through its real callers proves nothing about backward compatibility.
 
 **G2c — Write inventory to `$WORKSPACE_ABS/session-inventory.md`:**
 ```markdown
@@ -1812,6 +1865,11 @@ Use results to find: callers, tests that already exist, related modules the chan
 | File | Relationship |
 |------|-------------|
 | ... | calls this, imports from this, tested alongside |
+
+## Caller Regression Surface
+| Changed Symbol | Callers Found | Risk |
+|---------------|---------------|------|
+| [from G2b-ii] | | |
 
 ## Risk Areas
 - [things that could break, edge cases, surprising inputs]
@@ -1862,9 +1920,11 @@ Build a coverage table in `$WORKSPACE_ABS/coverage-map.md`:
 | OnPostCreateTableauDashboard | ReportsSettings.cshtml.cs:396 | UNCOVERED | none |
 ```
 
-**G3.5b — Write tests for every UNCOVERED symbol.**
+**G3.5b — Write tests for every UNCOVERED symbol in changed or newly-added code.**
 
-For every UNCOVERED symbol: write at least one test using the project's established pattern (extract logic into a local helper, test in isolation — no live DI or DB needed). Each auth/validation branch is a separate test case — one test covering the happy path is insufficient.
+Scope: only symbols that appear in the git diff (changed or new). Pre-existing uncovered symbols are noted in `coverage-map.md` as `pre-existing gap — out of session scope` and left for a dedicated coverage pass.
+
+For every in-scope UNCOVERED symbol: write at least one test using the project's established pattern (extract logic into a local helper, test in isolation — no live DI or DB needed). Each auth/validation branch is a separate test case — one test covering the happy path is insufficient.
 
 If a symbol genuinely cannot be unit tested in isolation (requires live DB, live session, etc.): document it as INTEGRATION_REQUIRED, explain why, and describe what would be needed to test it with a running server.
 
@@ -1935,11 +1995,44 @@ Do not move to Phase 5 (audit) until all discovered bugs are fixed and verified.
 
 Write targeted tests for things the existing suite does not cover.
 
-**G4a — Identify gaps.** From the inventory risk areas and static pass results, list what is not tested:
+**G4a — Identify gaps.** Three passes, each surfacing different gaps:
+
+**Pass 1 — Equivalence partitioning.** For each public entry point in the
+changed code, name five input classes: valid-typical, valid-boundary,
+invalid-format, null/empty, and type-wrong. Any class with no covering test
+is a gap.
+
+**Pass 2 — Caller regression.** From the Caller Regression Surface in
+`session-inventory.md`, check which callers have a test that exercises the
+changed path. A caller with no test is a gap.
+
+**Pass 3 — Behavioral gaps.** From the inventory risk areas and static pass
+results, list what is not tested:
 - Error paths (what happens when X fails?)
-- Boundary conditions (empty input, null, max length, negative numbers)
 - False positive / false negative risks (for checks and validators)
 - Interaction effects (does this change break something it calls or that calls it?)
+- Prior-behavior differential: does the change alter return value, type, or
+  side effect for any existing caller? If so, a test that asserts the old
+  behavior is a gap.
+
+**G4a-ii — Derive correctness invariants (runs before G4b).**
+
+Before writing edge case tests, derive the invariants the changed logic must hold. For each function or handler in scope, complete:
+- "For any input X, this function must [return/produce/not produce] Y"
+- "This function must NEVER [raise uncaught / return null when non-null expected / corrupt state / produce a value outside bounds]"
+
+Write these as comments at the top of the edge case test file. Use them to drive G4b: a good edge case test disproves an invariant on wrong inputs, not just confirms a known-good path.
+
+Common invariants to check against wrong implementations:
+- Off-by-one: does the boundary value (0, 1, N, N+1) trigger the correct branch?
+- Null/empty: does None, "", or [] reach the correct guard without raising?
+- Idempotency: does calling the function twice with the same input produce the same result?
+- Contract: does the function uphold its documented preconditions on invalid input?
+
+When the edge cases are combinatorial (multiple parameters, each with
+boundary values), prefer the language's property-based testing library
+(`Hypothesis` for Python, `fast-check` for JS/TS, `jqwik` for Java) over
+hand-listing a few examples. It generates the inputs you wouldn't think of.
 
 **G4b — Write edge case tests.** For each gap, write a minimal test. Place it alongside the existing test file if one exists, or create `$WORKSPACE_ABS/edge-case-tests.py` (or `.ts`, `.js`).
 
@@ -1951,6 +2044,21 @@ Each test must be:
 **G4c — Run edge case tests.** Record results. A test that was expected to fail and does pass is a regression catch — flag it.
 
 Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
+
+**G4c-ii — Mutation check (runs after edge case tests pass).**
+
+Passing tests are necessary, not proof the tests catch bugs. Run the mutation check on changed files only:
+```
+POST http://127.0.0.1:8613/mutation-test {"project_path":"<WORKSPACE_ROOT>","changed_files":["<files from GENERAL_TARGET>"]}
+```
+This runs the language's real mutation tool (`mutmut` for Python, `StrykerJS` for JS/TS, `cargo-mutants` for Rust) and returns a kill score. A surviving mutant is a test that would pass on broken code — tighten the test to kill it.
+
+Record the kill score in `$WORKSPACE_ABS/static-results.md` under "Mutation Check":
+```
+Mutation kill score: [N]% ([K] killed / [T] total mutants)
+Surviving mutants: [list or "none"]
+```
+A kill score below 80% on a non-trivial change is a gap worth addressing before shipping. If the mutation server is unavailable, note it and skip.
 
 ---
 
@@ -1965,6 +2073,8 @@ Write all results to `$WORKSPACE_ABS/static-results.md` under "Edge Case Pass".
 > **The only valid skip condition is `--no-debug` explicitly passed by the user.** Skipping for any other reason produces an incomplete session — write `INCOMPLETE: debugger skipped — [reason]` in the report and surface it to the user.
 
 Running tests tells you pass/fail. The debugger tells you *why* — and whether the code does what the comments claim at runtime. The debug log is the equivalent of a screenshot in browser mode: it is the evidence that the path actually executed.
+
+**When a failure will not yield:** invoke the `debugging-methodology` skill and pick a technique from its symptom table by name rather than stepping the same path again. Regressed since a known good commit is `git bisect`. A large failing input is delta debugging. A working case beside the failing one is differential debugging. Intermittent is record replay. At 2-3 iterations with no new information, switch technique. That skill also carries the per stack CLI recipes (React Native, .NET, Python) for the surfaces `mcp-debugger` does not reach, and the rule that databases are read only in QA: understand the schema from the project's migrations and models, never execute against a live one.
 
 Set `DEBUG_PROOF_DIR = $WORKSPACE_ABS/debug-proof` and create it if it does not exist.
 

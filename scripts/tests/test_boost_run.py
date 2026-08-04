@@ -355,21 +355,33 @@ class TestBoostRunHelpers:
             result = mod.step_mcp_debugger()
         assert result == "unknown"
 
+    # Fixtures below use the real `claude mcp list` shape — a header line then
+    # `<name>: <command-or-url> - <status>` per server — because that is what
+    # the CLI actually prints. They used to use an invented single-line shape
+    # ("mcp-debugger connected ✓") that no `claude mcp list` ever emits, and
+    # they only covered one of the four expected servers, so both the connected
+    # and unhealthy cases reported "missing" and failed.
     def test_step_mcp_debugger_not_registered(self, tmp_path):
         mod = self._load_mod(tmp_path)
-        with patch.object(mod, "_run", return_value=(0, "some-other-mcp\nother-mcp")):
+        listed = "Checking MCP server health…\n\nsome-other-mcp: npx -y x - ✔ Connected"
+        with patch.object(mod, "_run", return_value=(0, listed)):
             result = mod.step_mcp_debugger()
         assert result == "missing"
 
     def test_step_mcp_debugger_connected(self, tmp_path):
         mod = self._load_mod(tmp_path)
-        with patch.object(mod, "_run", return_value=(0, "mcp-debugger connected ✓")):
+        listed = "\n".join(
+            f"{name}: npx -y {name} - ✔ Connected" for name, _ in mod.MCP_SERVERS_EXPECTED)
+        with patch.object(mod, "_run", return_value=(0, listed)):
             result = mod.step_mcp_debugger()
         assert result == "connected"
 
     def test_step_mcp_debugger_unhealthy(self, tmp_path):
         mod = self._load_mod(tmp_path)
-        with patch.object(mod, "_run", return_value=(0, "mcp-debugger registered but offline")):
+        listed = "\n".join(
+            f"{name}: npx -y {name} - ✗ Failed to connect"
+            for name, _ in mod.MCP_SERVERS_EXPECTED)
+        with patch.object(mod, "_run", return_value=(0, listed)):
             result = mod.step_mcp_debugger()
         assert result == "unhealthy"
 

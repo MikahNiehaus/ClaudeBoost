@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08 (counts updated 2026-07-05)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 109 knowledge XMLs (55 domain + 21 lang + 33 framework), 35 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 109 knowledge XMLs (55 domain + 21 lang + 33 framework), 36 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
 
 ---
 
@@ -1474,7 +1474,24 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.6 /changes [scope]
+### 5.6 /walkthrough <url> <feature description> [--output <dir>]
+**File:** `.claude/commands/walkthrough.md`  
+**Skill:** `skills/walkthrough/SKILL.md`  
+**Description:** Generate an interactive step by step tutorial with annotated screenshots  
+**Tools:** Read, Write, Edit, Bash, Glob, Grep, Agent, Playwright MCP (navigate, snapshot, click, type, take_screenshot, evaluate, fill_form, select_option, wait_for, press_key, console_messages, resize, close, hover, find)  
+**Steps:**
+1. Parse arguments: URL (localhost only), feature description, optional output dir
+2. Plan 5 to 15 steps, save plan, show to user for approval
+3. For each step: navigate/act, wait for stability, inject annotations (Driver.js popovers, numbered badges, arrows, highlight boxes) via `browser_evaluate`, capture screenshot via `browser_take_screenshot`, clean up injected DOM, perform the action
+4. Assemble markdown doc with embedded screenshots at `{OUTPUT_DIR}/{SLUG}.md`
+5. Verify all screenshot paths exist and step numbering is sequential
+
+**Annotation types:** Driver.js spotlight+popover (CDN injected at runtime, re-injected on navigation), numbered callout badges, directional arrows with labels, highlight boxes. Falls back to pure DOM injection when CDN is unreachable.  
+**Safety:** Localhost only. Headed browser. Read only intent (no app code changes). Cleans up all injected DOM.
+
+---
+
+### 5.7 /changes [scope]
 **File:** `.claude/commands/changes.md`  
 **Description:** Interactive change explorer with AI-generated explanations  
 **Tools:** Read, Write, Bash, Glob, Grep  
@@ -1489,7 +1506,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.7 /xray [--deep] [--staged | --branch | --pr <url>]
+### 5.8 /xray [--deep] [--staged | --branch | --pr <url>]
 **File:** `.claude/commands/xray.md`  
 **Description:** Quick A-F grade code review by default; add `--deep` for the full 16-pass parallel review with deterministic pre-scan, test execution, and Opus evaluator  
 **Tools:** Bash(git diff, gh pr diff), Task (--deep mode)  
@@ -1505,7 +1522,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.8 /index-project [path or name] [languages] [force]
+### 5.9 /index-project [path or name] [languages] [force]
 **File:** `.claude/commands/index-project.md`  
 **Description:** Index a project's codebase for semantic search (Project RAG)  
 **Steps:**
@@ -1519,21 +1536,21 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.9 /done
+### 5.10 /done
 **File:** `.claude/commands/done.md`  
 **Description:** Verify work is clean and push to remote  
 **Steps:** Pre-flight (git status clean, at least 1 commit) → `git push` (or `git push -u origin HEAD` if no upstream)
 
 ---
 
-### 5.10 /handoff [message]
+### 5.11 /handoff [message]
 **File:** `.claude/commands/handoff.md`  
 **Description:** Save session state and prepare for a fresh context  
 **Steps:** Runs `session-clear-save.py` to snapshot active workspace → optionally stores message in handoff-latest.json → instructs user to `/clear` then `/boost` in next session (SessionStart hook restores context automatically)
 
 ---
 
-### 5.11 /setup
+### 5.12 /setup
 **File:** `.claude/commands/setup.md`  
 **Description:** Full ClaudeBoost setup and verification — idempotent, safe after any git pull  
 **Phases:** Locate home (0) → run setup.ps1 (1) → verify 6 checks in loop with auto-repair (2) → status table (3)  
@@ -1543,7 +1560,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.12 /qa [target-url] [scope]
+### 5.13 /qa [target-url] [scope]
 **File:** `.claude/commands/qa.md`  
 **Description:** Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with annotated screenshot evidence, and reports what was AND was not tested  
 **Argument:** optional `<target-url>` (localhost only; auto-detected if omitted) + optional `scope` (auth|crud|nav|errors|responsive|all|quick; default: all) + `--no-debug` + `--fresh`  
@@ -1560,7 +1577,7 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 5.13 /clear-safe
+### 5.14 /clear-safe
 
 **File:** `.claude/commands/clear-safe.md`  
 **Description:** Pre-flight verified context clear — verifies workspace state is captured before you type /clear  

@@ -1,0 +1,728 @@
+diff --git a/.claude/commands/debug.md b/.claude/commands/debug.md
+index c7507eb..00794c9 100644
+--- a/.claude/commands/debug.md
++++ b/.claude/commands/debug.md
+@@ -1,7 +1,7 @@
+ ---
+ argument-hint: ["error message" | file.py:42 | --live | --static | --no-log]
+ description: Debug a bug — static analysis, live step-through, and test-project debugging. Works with Python, .NET/ASP.NET, Go, Node.js, TypeScript, Java, and Rust. Handles test projects (xUnit/VSTest, pytest, Jest, go test, JUnit, cargo test) with runner-specific attach workflows. Outputs a Bug Analysis Report.
+-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__redefine_classes
++allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
+ ---
+ 
+ # /debug — Debugging Session
+@@ -247,6 +247,20 @@ Do NOT block on this — it's informational.
+ 
+ Applies when `MODE = STATIC` or as the first pass in `MODE = HYBRID`.
+ 
++**Before the first pass, and again at every stall:** invoke the
++`debugging-methodology` skill and name the technique you are using. Match it to
++the symptom rather than defaulting to reading the code again. Regressed since a
++known good commit is `git bisect`. A large input that fails while small ones pass
++is delta debugging. A long call chain with one bad value is binary search on
++state. A working case beside the failing one is differential debugging.
++Intermittent is record replay. At 2-3 iterations with no new information, switch
++technique by name; do not alternate between rereading the code and adding another
++print statement, that is one technique, not two. That skill also carries the per
++stack CLI recipes (React Native via `adb logcat` and Hermes over CDP, .NET via
++`dotnet-trace`/`dotnet-dump`, Python via `py-spy`) and the rule that databases are
++read only here: understand the schema from migrations and models, never execute
++against a live one.
++
+ ### 3a — Read the relevant files
+ 
+ For each file returned by the Phase 2a RAG search (top 5): read the file. Focus on the function or method that contains the error.
+diff --git a/.claude/commands/qa.md b/.claude/commands/qa.md
+index 179741e..e10ab81 100644
+--- a/.claude/commands/qa.md
++++ b/.claude/commands/qa.md
+@@ -1,7 +1,7 @@
+ ---
+ argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
+ description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, and reports what was tested AND what was not
+-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__get_stack_trace
++allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
+ ---
+ 
+ # /qa — QA Session
+@@ -2074,6 +2074,8 @@ A kill score below 80% on a non-trivial change is a gap worth addressing before
+ 
+ Running tests tells you pass/fail. The debugger tells you *why* — and whether the code does what the comments claim at runtime. The debug log is the equivalent of a screenshot in browser mode: it is the evidence that the path actually executed.
+ 
++**When a failure will not yield:** invoke the `debugging-methodology` skill and pick a technique from its symptom table by name rather than stepping the same path again. Regressed since a known good commit is `git bisect`. A large failing input is delta debugging. A working case beside the failing one is differential debugging. Intermittent is record replay. At 2-3 iterations with no new information, switch technique. That skill also carries the per stack CLI recipes (React Native, .NET, Python) for the surfaces `mcp-debugger` does not reach, and the rule that databases are read only in QA: understand the schema from the project's migrations and models, never execute against a live one.
++
+ Set `DEBUG_PROOF_DIR = $WORKSPACE_ABS/debug-proof` and create it if it does not exist.
+ 
+ **Debugger pre-flight.**
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 295804e..f6b67bd 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -139,6 +139,47 @@ edge cases matter, let the language's property based library (`Hypothesis`,
+ `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
+ guessing which inputs to test, which is the weak version the research warned about.
+ 
++## Debugging, testing and QA
++
++When a bug does not yield, the failure mode is applying one technique harder.
++Two or three iterations with no new information means the technique is wrong,
++not that you need more logging. Invoke the **`debugging-methodology`** skill and
++pick a different one by name from its symptom table:
++
++- Regressed since a known good commit, use `git bisect` (`git bisect run <cmd>`
++  automates it entirely).
++- Large input fails, small ones pass, use delta debugging to shrink it.
++- Long call chain with one bad value, binary search on state.
++- A working case sits beside the failing one, differential debugging.
++- Reproduces but the cause is unclear, hypothesis first: write the claim down,
++  then design the smallest test that would falsify it.
++- Intermittent or a race, record replay (`rr`). Re running it is not a strategy.
++- No reliable reproduction at all, stop and get one. A fix without a repro is a
++  guess you cannot validate.
++
++That skill also carries the per stack recipes for surfaces no MCP server
++reaches: React Native (`adb logcat`, `npx react-native log-ios`, Hermes over CDP
++through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
++(`dotnet-trace`, `dotnet-dump`, `dotnet-gcdump`, `dotnet-counters`), and Python
++(`py-spy dump`/`record`, which attach to a live process without restarting it).
++
++**Reach for the debugger over print statements.** `mcp-debugger` covers Python,
++Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
++`start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
++performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
++is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
++registered, so run the installer; every server comes from one table there.
++
++**Databases are read only.** Understand the schema from the project's own
++artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic versions,
++`schema.sql`), reason about the query, and hand it to the human to run. Do not
++execute against a live database and do not automate SSMS or any equivalent GUI
++client. A wrong statement against real data is not recoverable by a retry.
++
++Running `/qa` gives the full session: inventory, a risk ranked test plan, and
++execution with evidence. `/debug` is the focused single bug path. Both enumerate
++the debugging tools already, and both point back at this same skill.
++
+ ## UI / Frontend Work
+ 
+ When the task involves editing or creating frontend files (`.tsx`, `.jsx`,
+diff --git a/agents/debug-agent.xml b/agents/debug-agent.xml
+index 7ecdadf..4a12dfd 100644
+--- a/agents/debug-agent.xml
++++ b/agents/debug-agent.xml
+@@ -13,13 +13,30 @@
+   <capability>Diagnose memory leaks and resource issues</capability>
+   <capability>Debug async/concurrent code</capability>
+   <capability>Performance bottleneck identification</capability>
+-  <capability>Live breakpoint debugging via mcp-debugger MCP tools (Python, Node.js,
++  <capability>Live breakpoint debugging via mcp-debugger MCP tools (Python, Ruby, Node.js,
+   TypeScript, Go, Rust, Java, C#/.NET, browser JS) — set breakpoints, step through
+   execution, inspect runtime variables without print statements</capability>
++  <capability>Browser, network and performance debugging via chrome-devtools MCP tools —
++  console messages, network requests, performance traces, Lighthouse audits. Also the
++  route to React Native: RN DevTools talks CDP to Hermes, so the JS side is reachable
++  here at the URL Metro prints.</capability>
++  <capability>Coverage inspection via test-coverage MCP tools — find the untested path
++  the bug is hiding in</capability>
++  <capability>Native C/C++ debugging via mdb MCP tools (GDB and LLDB), when registered</capability>
+ </capabilities>
+ 
++<tooling>
++  This agent definition is XML and has no tools declaration mechanism, unlike the
++  markdown subagents. The authoritative enumerated tool list for debugging lives in
++  .claude/commands/debug.md's allowed-tools frontmatter — mcp-debugger (21),
++  test-coverage (4), chrome-devtools (17) and mdb (13). Do not maintain a third list
++  here. If a tool is missing at runtime, its MCP server is not registered: run
++  scripts/setup.py, which registers all of them from one table.
++</tooling>
++
+ <knowledge-base>
+-  <primary file="knowledge/debugging.xml">Debugging methodology</primary>
++  <primary file="knowledge/debugging.xml">When debugging is going wrong: failure indicators, time boxing</primary>
++  <primary skill="debugging-methodology">What to do instead: technique selection by symptom, per stack CLI recipes (React Native, .NET, Python), read only database rule</primary>
+   <secondary file="knowledge/testing.xml">Creating reproduction tests</secondary>
+   <secondary file="knowledge/netcoredbg-dotnet-attach.xml">netcoredbg TCP attach for .NET — DAP protocol flow, .NET 10 incompatibility, mcp-debugger limitations</secondary>
+ </knowledge-base>
+@@ -51,6 +68,14 @@
+ </rag-enforcement>
+ 
+ <behavioral-guidelines>
++  <guideline>Pick the technique, don't default to one: invoke the debugging-methodology
++  skill and match the symptom to a named technique (git bisect for a regression since a
++  known good commit, delta debugging to shrink a large failing input, binary search on
++  state for a long call chain, differential debugging when a working case sits beside the
++  failing one, hypothesis first when it reproduces but the cause is unclear, record replay
++  for intermittent races). At 2-3 iterations without new information, switch technique
++  rather than applying the current one harder. If nothing in the table fits, research how
++  this class of bug is debugged in this stack before trying again.</guideline>
+   <guideline>Reproduce first: No fix without reliable reproduction</guideline>
+   <guideline>Question assumptions: The "impossible" bug is often possible</guideline>
+   <guideline>Check recent changes: Most bugs come from recent code</guideline>
+diff --git a/clean-rag/install.py b/clean-rag/install.py
+index df704a0..0b5f6b6 100644
+--- a/clean-rag/install.py
++++ b/clean-rag/install.py
+@@ -212,6 +212,88 @@ def install_npm_qa_tools() -> None:
+             _warn(f"{package} install failed: {e}")
+ 
+ 
++# ---------------------------------------------------------------------------
++# Step 2b2: Register the debugging MCP servers (best effort)
++#
++# bad-cop and good-cop enumerate these servers' tools by literal name in their
++# frontmatter, because Claude Code rejects mcp__<server>__* wildcards. An agent
++# whose server was never registered silently has no such tool, so shipping the
++# agents without registering the servers is a broken install, not a partial one.
++#
++# Mirrors ClaudeBoost's scripts/setup.py MCP_SERVERS table. Kept as its own copy
++# so clean-rag stays installable standalone, without ClaudeBoost present.
++# ---------------------------------------------------------------------------
++MCP_SERVERS: list[tuple[str, list[str]]] = [
++    ("mcp-debugger", ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"]),
++    ("playwright", ["npx", "-y", "@playwright/mcp@latest"]),
++    ("test-coverage", ["npx", "-y", "test-coverage-mcp"]),
++    ("chrome-devtools", ["npx", "-y", "chrome-devtools-mcp@latest"]),
++]
++
++
++def _claude_cmd() -> list[str] | None:
++    """A subprocess safe `claude` invocation, or None if it is not on PATH.
++
++    On Windows claude installs as claude.cmd, which subprocess cannot launch
++    without going through cmd.exe.
++    """
++    for candidate in ("claude", "claude.cmd"):
++        path = shutil.which(candidate)
++        if path:
++            return ["cmd", "/c", path] if candidate.endswith(".cmd") else [path]
++    return None
++
++
++def register_mcp_servers() -> None:
++    """Register every debugging MCP server at user scope. Never fatal.
++
++    Idempotent: reads `claude mcp list` once and skips anything already there.
++    """
++    _say("\nRegistering debugging MCP servers...")
++
++    claude = _claude_cmd()
++    if claude is None:
++        _warn("claude CLI not found, skipping MCP server registration")
++        return
++
++    if not shutil.which("npx"):
++        _warn("npx not found, skipping MCP server registration (needs Node.js)")
++        for name, args in MCP_SERVERS:
++            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
++        return
++
++    try:
++        listed = subprocess.run(
++            claude + ["mcp", "list"],
++            capture_output=True, text=True, timeout=60,
++        )
++    except Exception as e:  # noqa: BLE001
++        _warn(f"claude mcp list failed ({e}), skipping MCP server registration")
++        return
++
++    if listed.returncode != 0:
++        _warn("claude mcp list failed, skipping MCP server registration")
++        return
++
++    for name, args in MCP_SERVERS:
++        if name in listed.stdout:
++            _ok(f"{name} already registered")
++            continue
++        try:
++            result = subprocess.run(
++                claude + ["mcp", "add", name, "--scope", "user", "--"] + args,
++                capture_output=True, text=True, timeout=120,
++            )
++        except Exception as e:  # noqa: BLE001
++            _warn(f"{name} registration failed: {e}")
++            continue
++        if result.returncode == 0:
++            _ok(f"{name} registered")
++        else:
++            _warn(f"{name} registration failed: {result.stderr[:200]}")
++            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
++
++
+ # ---------------------------------------------------------------------------
+ # Step 2c: Install deck tooling for the powerpoint skill (best effort)
+ # ---------------------------------------------------------------------------
+@@ -1019,6 +1101,13 @@ def main():
+     else:
+         print("\nStep 2b: Skipped (--skip-deps)")
+ 
++    # Step 2b2
++    if not args.skip_deps:
++        print("\nStep 2b2: Registering debugging MCP servers...")
++        register_mcp_servers()
++    else:
++        print("\nStep 2b2: Skipped (--skip-deps)")
++
+     # Step 2c
+     if not args.skip_deps:
+         print("\nStep 2c: Installing deck tooling for the powerpoint skill...")
+diff --git a/clean-rag/portable/CLAUDE.md b/clean-rag/portable/CLAUDE.md
+index 88109e5..6e1df22 100644
+--- a/clean-rag/portable/CLAUDE.md
++++ b/clean-rag/portable/CLAUDE.md
+@@ -134,6 +134,47 @@ edge cases matter, let the language's property based library (`Hypothesis`,
+ `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
+ guessing which inputs to test, which is the weak version the research warned about.
+ 
++## Debugging, testing and QA
++
++When a bug does not yield, the failure mode is applying one technique harder.
++Two or three iterations with no new information means the technique is wrong,
++not that you need more logging. Invoke the **`debugging-methodology`** skill and
++pick a different one by name from its symptom table:
++
++- Regressed since a known good commit, use `git bisect` (`git bisect run <cmd>`
++  automates it entirely).
++- Large input fails, small ones pass, use delta debugging to shrink it.
++- Long call chain with one bad value, binary search on state.
++- A working case sits beside the failing one, differential debugging.
++- Reproduces but the cause is unclear, hypothesis first: write the claim down,
++  then design the smallest test that would falsify it.
++- Intermittent or a race, record replay (`rr`). Re running it is not a strategy.
++- No reliable reproduction at all, stop and get one. A fix without a repro is a
++  guess you cannot validate.
++
++That skill also carries the per stack recipes for surfaces no MCP server
++reaches: React Native (`adb logcat`, `npx react-native log-ios`, Hermes over CDP
++through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
++(`dotnet-trace`, `dotnet-dump`, `dotnet-gcdump`, `dotnet-counters`), and Python
++(`py-spy dump`/`record`, which attach to a live process without restarting it).
++
++**Reach for the debugger over print statements.** `mcp-debugger` covers Python,
++Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
++`start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
++performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
++is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
++registered, so run the installer; every server comes from one table there.
++
++**Databases are read only.** Understand the schema from the project's own
++artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic versions,
++`schema.sql`), reason about the query, and hand it to the human to run. Do not
++execute against a live database and do not automate SSMS or any equivalent GUI
++client. A wrong statement against real data is not recoverable by a retry.
++
++Running `/qa` gives the full session: inventory, a risk ranked test plan, and
++execution with evidence. `/debug` is the focused single bug path. Both enumerate
++the debugging tools already, and both point back at this same skill.
++
+ ## UI / Frontend Work
+ 
+ When the task involves editing or creating frontend files (`.tsx`, `.jsx`,
+diff --git a/clean-rag/portable/agents/bad-cop.md b/clean-rag/portable/agents/bad-cop.md
+index f1e7d38..e40d01d 100644
+--- a/clean-rag/portable/agents/bad-cop.md
++++ b/clean-rag/portable/agents/bad-cop.md
+@@ -1,7 +1,7 @@
+ ---
+ name: bad-cop
+ description: Adversarial QA on a change that already passed its existing tests. Writes new tests aimed at breaking it, runs the code, adds temporary logging to observe real behavior, checks the diff against the pasted ticket or the user's actual scope, and hunts for provable issues, the high stakes surfaces (auth, money, SQL, subprocess, concurrency) when present. Reports only, does not fix anything. Stamps VERIFIED itself when it genuinely finds nothing (no good-cop needed); hands off to good-cop only when it found a real issue to fix. Not the research agent, and never given the builder's reasoning.
+-tools: Read, Grep, Glob, Bash, Write, Edit, WebSearch, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_find, mcp__playwright__browser_close, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary
++tools: Read, Grep, Glob, Bash, Write, Edit, WebSearch, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_find, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
+ model: sonnet
+ color: red
+ ---
+@@ -40,6 +40,14 @@ own opinion. Cite what you found. If the correctness properties you were
+ handed include a real reference snippet, test the diff against what that
+ reference actually guarantees, not just the properties as stated.
+ 
++When a failure you found will not yield, or you cannot reproduce it reliably,
++invoke the `debugging-methodology` skill and pick a technique from its symptom
++table by name. Two or three attempts with no new information means the
++technique is wrong for this bug, not that you should add more logging. That
++skill also carries the per stack recipes (React Native, .NET, Python) and the
++rule that you never execute against a live database, only read its schema from
++the project's own migrations and models.
++
+ Reach for clean-rag's own search endpoints first, they're source ranked and
+ sanitized against injection, and cheaper than the generic tool:
+ 
+diff --git a/clean-rag/portable/agents/good-cop.md b/clean-rag/portable/agents/good-cop.md
+index 69c77af..46c7b7f 100644
+--- a/clean-rag/portable/agents/good-cop.md
++++ b/clean-rag/portable/agents/good-cop.md
+@@ -1,7 +1,7 @@
+ ---
+ name: good-cop
+ description: Only runs when bad-cop actually found something. Takes bad-cop's findings, researches the root cause and the correct fix, applies it, and gets every test green (bad-cop's new adversarial tests plus the existing suite). Stamps the verifier gate once everything is green; bad-cop stamps it directly instead when it found nothing, so this agent is skipped entirely on a clean adversarial pass. Not the research agent, and never given the builder's original reasoning, only bad-cop's findings and the stated correctness properties.
+-tools: Read, Grep, Glob, Bash, Write, Edit, WebSearch, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__close_debug_session, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_find, mcp__playwright__browser_close
++tools: Read, Grep, Glob, Bash, Write, Edit, WebSearch, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_find, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
+ model: opus
+ color: green
+ ---
+@@ -30,6 +30,17 @@ GitHub file, not a summary, and that snippet should be passed forward here,
+ not just its description), fix toward that real code, not toward your own
+ idea of what it should look like.
+ 
++Finding the root cause is its own skill. When bad-cop's finding does not lead
++straight to a cause, invoke the `debugging-methodology` skill and choose a
++technique from its symptom table by name: `git bisect` when it regressed since
++a known good commit, delta debugging to shrink a large failing input,
++differential debugging when a working case sits next to the failing one,
++record replay for anything intermittent. Two or three attempts with no new
++information means switch technique, not try harder. That skill also carries
++the per stack recipes (React Native, .NET, Python) and the rule that you never
++execute against a live database, only read its schema from the project's own
++migrations and models.
++
+ Reach for clean-rag's own search endpoints first, they're source ranked and
+ sanitized against injection, and cheaper than the generic tool:
+ 
+diff --git a/knowledge/debugging.xml b/knowledge/debugging.xml
+index 76fbf92..ab65f64 100644
+--- a/knowledge/debugging.xml
++++ b/knowledge/debugging.xml
+@@ -206,7 +206,7 @@ and continue with UI-only testing. Never silently skip — always explain why de
+   </location-bias>
+ </known-limitations>
+ 
+-<failure-indicators description="Stop and escalate when:">
++<failure-indicators description="Switch technique when (see the debugging-methodology skill for which one):">
+   <indicator>After 2-3 iterations without meaningful progress</indicator>
+   <indicator>Suggestions become repetitive without new information</indicator>
+   <indicator>Solutions becoming more complex instead of simpler</indicator>
+@@ -218,6 +218,14 @@ and continue with UI-only testing. Never silently skip — always explain why de
+     <pattern name="Hallucination">Confidently incorrect API/method info</pattern>
+     <pattern name="Surface fix">Masks symptoms without addressing design flaws</pattern>
+   </false-progress-patterns>
++  <escalation-path>
++    Hitting any indicator above means the current technique is wrong for this
++    bug, not that you should apply it harder. Invoke the debugging-methodology
++    skill and pick a different technique by name from its symptom table
++    (git bisect, delta debugging, binary search on state, differential
++    debugging, hypothesis-first, record-replay). If nothing there fits, research
++    how this class of bug is debugged in this stack before trying again.
++  </escalation-path>
+ </failure-indicators>
+ 
+ <complexity-hierarchy>
+@@ -254,6 +262,16 @@ and continue with UI-only testing. Never silently skip — always explain why de
+   <rule>Maximum 20-30 minutes before reassessing strategy</rule>
+   <rule>If Claude repeatedly suggests same fixes → stop, switch approaches</rule>
+   <rule>If more time explaining context than debugging → problem exceeds Claude's capabilities</rule>
++  <rule>"Switch approaches" means name a different technique from the
++        debugging-methodology skill, not reword the current one</rule>
+ </time-boxing>
+ 
++<methodology-reference>
++  Technique selection, the stall rule, per-stack CLI recipes (React Native,
++  .NET, Python) and the read-only database rule live in one place: the
++  debugging-methodology skill. This file describes when debugging is going
++  wrong; that skill describes what to do instead. Do not duplicate its content
++  here — update it there.
++</methodology-reference>
++
+ </knowledge-base>
+diff --git a/scripts/boost-run.py b/scripts/boost-run.py
+index 5520da3..e2b2ee0 100644
+--- a/scripts/boost-run.py
++++ b/scripts/boost-run.py
+@@ -253,20 +253,44 @@ def step_mode() -> str:
+     return mode
+ 
+ 
++# Mirrors setup.py's MCP_SERVERS table. Kept as (name, fix-hint) pairs rather
++# than imported so /boost verify stays a standalone script with no import path
++# into scripts/setup.py. Adding a server there means adding it here too.
++MCP_SERVERS_EXPECTED: list[tuple[str, str]] = [
++    ("mcp-debugger", "claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio"),
++    ("playwright", "claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest"),
++    ("test-coverage", "claude mcp add test-coverage --scope user -- npx -y test-coverage-mcp"),
++    ("chrome-devtools", "claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest"),
++    # mdb (native GDB/LLDB) is optional — setup.py only registers it if the
++    # clone and its deps both land, so a missing one is not a health failure.
++]
++
++
+ def step_mcp_debugger() -> str:
++    """Health-check every debugging MCP server. Worst status wins."""
+     rc, out = _run(["claude", "mcp", "list"], timeout=20)
+     if rc == 127:
+-        print("  mcp-debugger: not checked (claude CLI not on PATH)")
++        print("  MCP servers: not checked (claude CLI not on PATH)")
+         return "unknown"
+-    line = next((l for l in out.splitlines() if "mcp-debugger" in l.lower()), "")
+-    if not line:
+-        print("  mcp-debugger: NOT registered — claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
+-        return "missing"
+-    if "connected" in line.lower() or "✓" in line:
+-        print("  mcp-debugger: connected")
+-        return "connected"
+-    print(f"  mcp-debugger: registered but not healthy ({line.strip()})")
+-    return "unhealthy"
++
++    lines = out.splitlines()
++    worst = "connected"
++    for name, fix in MCP_SERVERS_EXPECTED:
++        line = next((l for l in lines if name in l.lower()), "")
++        if not line:
++            print(f"  {name}: NOT registered — {fix}")
++            worst = "missing"
++        elif "connected" in line.lower() or "✓" in line:
++            print(f"  {name}: connected")
++        else:
++            print(f"  {name}: registered but not healthy ({line.strip()})")
++            if worst != "missing":
++                worst = "unhealthy"
++
++    if any("mdb" in l.lower() for l in lines):
++        print("  mdb: registered (native GDB/LLDB, optional)")
++
++    return worst
+ 
+ 
+ def step_workspaces() -> list[str]:
+diff --git a/scripts/rag-statusline.py b/scripts/rag-statusline.py
+index cba24b0..f2002b6 100644
+--- a/scripts/rag-statusline.py
++++ b/scripts/rag-statusline.py
+@@ -122,6 +122,12 @@ def main() -> None:
+     if _mcp_registered("mcp-debugger"):
+         parts.append(f"{DIM}|{RESET} {GREEN}DBG ●{RESET}")
+ 
++    if _mcp_registered("chrome-devtools"):
++        parts.append(f"{DIM}|{RESET} {GREEN}CDP ●{RESET}")
++
++    if _mcp_registered("test-coverage"):
++        parts.append(f"{DIM}|{RESET} {GREEN}COV ●{RESET}")
++
+     ws = _active_workspace()
+     if ws:
+         parts.append(f"{DIM}|{RESET} {BLUE}WS {ws}{RESET}")
+diff --git a/scripts/setup.py b/scripts/setup.py
+index 9688563..9f8f75d 100644
+--- a/scripts/setup.py
++++ b/scripts/setup.py
+@@ -1323,81 +1323,161 @@ def _claude_cmd() -> list[str] | None:
+     return None
+ 
+ 
+-def register_mcp_debugger() -> None:
+-    _info("\nVerifying mcp-debugger...")
+-    claude = _claude_cmd()
+-    if claude is None:
+-        _skip("claude CLI not found — skipping mcp-debugger registration")
+-        return
++# The debugging surface, one row per server. Everything an agent needs to step
++# through code, watch a browser, read coverage, or attach a native debugger is
++# registered from this table. Adding a server means adding a row here AND
++# enumerating its tool names in the agent frontmatter that should see it —
++# Claude Code rejects `mcp__<server>__*` wildcards, so there is no shortcut.
++#
++# `name` is load-bearing: the tool prefix is derived from it, so changing a
++# name here silently breaks every enumerated `mcp__<name>__<tool>` downstream.
++MCP_SERVERS: list[dict] = [
++    {
++        "name": "mcp-debugger",
++        "label": "mcp-debugger",
++        "args": ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"],
++        "needs": "npx",
++        "hint": "ensure Node 22+ is installed",
++        "why": "step-through debugging: Python, Ruby, Node, Go, Java, .NET, Rust",
++    },
++    {
++        "name": "playwright",
++        "label": "Playwright MCP",
++        "args": ["npx", "-y", "@playwright/mcp@latest"],
++        "needs": "npx",
++        "why": "browser automation for browser-agent and /qa",
++    },
++    {
++        "name": "test-coverage",
++        "label": "test-coverage MCP",
++        "args": ["npx", "-y", "test-coverage-mcp"],
++        "needs": "npx",
++        "why": "LCOV coverage summaries and diff-since-start for bad-cop",
++    },
++    {
++        "name": "chrome-devtools",
++        "label": "Chrome DevTools MCP",
++        "args": ["npx", "-y", "chrome-devtools-mcp@latest"],
++        "needs": "npx",
++        "why": "network capture, performance traces, Lighthouse, Hermes/React Native over CDP",
++    },
++]
+ 
+-    rc, out = run_cmd(claude + ["mcp", "list"])
+-    if rc != 0:
+-        _skip(f"claude mcp list failed (exit {rc}) — skipping mcp-debugger registration")
++
++def _register_one(claude: list[str], listed: str, server: dict) -> None:
++    """Register a single MCP server at user scope. Never fatal.
++
++    Body is the original per-server logic from register_mcp_debugger and
++    register_playwright_mcp, with only the name and args parameterized.
++    """
++    name, label = server["name"], server["label"]
++    args = server["args"]
++
++    needs = server.get("needs")
++    if needs and not shutil.which(needs):
++        _warn(f"{needs} not found — {label} needs it, skipping")
++        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+         return
+ 
+-    if "mcp-debugger" in out:
+-        if "Connected" in out or "connected" in out:
+-            _ok("mcp-debugger already registered and connected")
++    if name in listed:
++        if "Connected" in listed or "connected" in listed:
++            _ok(f"{label} already registered and connected")
+         else:
+-            _warn("mcp-debugger registered but not connected — ensure Node 22+ is installed")
++            hint = server.get("hint", "run /mcp to connect")
++            _warn(f"{label} registered but not connected — {hint}")
+         return
+ 
+-    _info("Registering mcp-debugger (user scope)...")
+-    rc, out = run_cmd(claude + [
+-        "mcp", "add", "mcp-debugger",
+-        "--scope", "user",
+-        "--", "npx", "-y", "@debugmcp/mcp-debugger", "stdio",
+-    ])
++    _info(f"Registering {label} (user scope)...")
++    rc, out = run_cmd(claude + ["mcp", "add", name, "--scope", "user", "--"] + args)
+     if rc == 0:
+-        _ok("mcp-debugger registered — run /mcp to connect")
++        _ok(f"{label} registered — run /mcp to connect")
+     else:
+-        _warn(f"mcp-debugger registration failed (exit {rc})")
++        _warn(f"{label} registration failed (exit {rc})")
+         if out:
+             _warn(f"  {out[:200]}")
+-        _warn("  To register manually: claude mcp add mcp-debugger --scope user -- npx -y @debugmcp/mcp-debugger stdio")
++        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+ 
+ 
+-# ---------------------------------------------------------------------------
+-# Playwright MCP: browser automation tools for browser-agent and /end-to-end-test.
+-# Registered at user scope via `claude mcp add` so it's available in every
+-# project. Requires Node/npx — works on Windows, macOS, and Linux.
+-# ---------------------------------------------------------------------------
+-def register_playwright_mcp() -> None:
+-    _info("\nVerifying Playwright MCP...")
++def _mdb_mcp_server() -> list[str] | None:
++    """Vendor smadi0x86/MDB-MCP and return its stdio launch args, or None.
++
++    Native GDB/LLDB debugging. Unlike every other row in MCP_SERVERS this is
++    not an npx package — it is a Python stdio server that has to be cloned and
++    given its deps. Low maintenance signal upstream (small repo, LLDB support
++    marked experimental), so every failure path here is a soft skip: a missing
++    native debugger must never fail the install.
++
++    Note the upstream rename: this was GDB-MCP. Cloning the old name 404s.
++    """
++    if not shutil.which("git"):
++        _skip("git not found — skipping MDB-MCP (native GDB/LLDB debugging)")
++        return None
++
++    dest = CLAUDE_DIR / "mcp-servers" / "MDB-MCP"
++    server_py = dest / "server.py"
++
++    if not server_py.exists():
++        dest.parent.mkdir(parents=True, exist_ok=True)
++        _info("Cloning MDB-MCP (native GDB/LLDB debugging)...")
++        rc, out = run_cmd([
++            "git", "clone", "--depth", "1",
++            "https://github.com/smadi0x86/MDB-MCP.git", str(dest),
++        ])
++        if rc != 0 or not server_py.exists():
++            _warn("MDB-MCP clone failed — native GDB/LLDB debugging unavailable")
++            if out:
++                _warn(f"  {out[:200]}")
++            return None
++
++    rc, _ = run_cmd([sys.executable, "-c", "import mcp, pygdbmi"])
++    if rc != 0:
++        _info("Installing MDB-MCP dependencies (mcp, pygdbmi)...")
++        rc, out = _pip_install(["mcp", "pygdbmi"])
++        if rc != 0:
++            _warn("MDB-MCP deps failed to install — native GDB/LLDB debugging unavailable")
++            if out:
++                _warn(f"  {out[:200]}")
++            return None
++
++    return [sys.executable, str(server_py)]
+ 
+-    if not shutil.which("npx"):
+-        _warn("npx not found — Playwright MCP requires Node.js")
+-        _warn("  Install Node.js from https://nodejs.org/ then re-run /setup")
+-        _warn("  Or register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
+-        return
++
++def register_mcp_servers() -> None:
++    """Register every MCP server in MCP_SERVERS, plus the vendored MDB-MCP.
++
++    Idempotent: `claude mcp list` is read once up front and each server is
++    skipped if it is already there. Nothing here is fatal — a missing runtime
++    or an offline network degrades the debugging surface, it does not break
++    the install.
++    """
++    _info("\nVerifying MCP servers...")
+ 
+     claude = _claude_cmd()
+     if claude is None:
+-        _skip("claude CLI not found — skipping Playwright MCP registration")
++        _skip("claude CLI not found — skipping MCP server registration")
+         return
+ 
+-    rc, out = run_cmd(claude + ["mcp", "list"])
++    rc, listed = run_cmd(claude + ["mcp", "list"])
+     if rc != 0:
+-        _skip(f"claude mcp list failed (exit {rc}) — skipping Playwright MCP registration")
++        _skip(f"claude mcp list failed (exit {rc}) — skipping MCP server registration")
+         return
+ 
+-    if "playwright" in out:
+-        _ok("Playwright MCP already registered")
+-        return
++    for server in MCP_SERVERS:
++        _register_one(claude, listed, server)
+ 
+-    _info("Registering Playwright MCP (user scope)...")
+-    rc, out = run_cmd(claude + [
+-        "mcp", "add", "playwright",
+-        "--scope", "user",
+-        "--", "npx", "-y", "@playwright/mcp@latest",
+-    ])
+-    if rc == 0:
+-        _ok("Playwright MCP registered — browser tools available after Claude Code restart")
+-    else:
+-        _warn(f"Playwright MCP registration failed (exit {rc})")
+-        if out:
+-            _warn(f"  {out[:200]}")
+-        _warn("  To register manually: claude mcp add playwright --scope user -- npx -y @playwright/mcp@latest")
++    # Native debugging is opt-in-shaped: it only registers if the clone and the
++    # deps both land. Checked last so a failure can't stop the npx servers.
++    if "mdb" in listed:
++        _ok("MDB-MCP already registered")
++        return
++    args = _mdb_mcp_server()
++    if args:
++        _register_one(claude, listed, {
++            "name": "mdb",
++            "label": "MDB-MCP (native GDB/LLDB)",
++            "args": args,
++            "why": "native C/C++ debugging via GDB and LLDB",
++        })
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -1595,8 +1675,7 @@ def main() -> int:
+     update_settings()
+     _clean_project_local_settings()
+     install_rag_server()
+-    register_mcp_debugger()
+-    register_playwright_mcp()
++    register_mcp_servers()
+     install_edge_tts()
+     install_netcoredbg()
+     install_clean_rag()

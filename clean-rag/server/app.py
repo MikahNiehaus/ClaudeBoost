@@ -7,6 +7,7 @@ Bundled with ClaudeBoost: routes registered under /clean-rag/* on port 8612.
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -28,14 +29,27 @@ from .config import (
     WEB_SEARCH_SCORE_THRESHOLD,
 )
 from .embedding import SentenceTransformerEmbedding
-from .indexing import index_project, reindex_file
+from .lang_router import ModelCache
+from .github_search import github_fetch_file, github_search
+from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
+from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
+from .mutation import run_mutation
+from .security import run_security_scan
 from .search import search
+from .stackexchange import stackoverflow_search
+from .wikipedia import wikipedia_search
 
 logger = logging.getLogger(__name__)
 
 # Server-wide singletons (initialized in create_app)
-_code_embedder: SentenceTransformerEmbedding | None = None
+_model_cache: ModelCache | None = None
+_doc_embedder: SentenceTransformerEmbedding | None = None
 _start_time: float = 0.0
+
+# Set when the startup warmup raises. Without it "the model has not finished
+# loading" and "the model will never load" both render as "warming_up", and a
+# permanent failure reads as a transient one that callers keep waiting out.
+_warmup_error: str | None = None
 
 # Heartbeat: writes a JSON file every 30s so the supervisor (and health checks)
 # can detect a stuck process without HTTP calls.
@@ -44,12 +58,32 @@ _HEARTBEAT_INTERVAL_S = 30
 
 
 def _write_heartbeat(model_loaded: bool = False, index_ok: bool = False) -> None:
+    """Write the liveness file consumed by status lines and health checks.
+
+    Carries an explicit `status` alongside `model_loaded`. The bool alone has
+    only two values and cannot say "this model will never load", so a permanent
+    failure and a model still downloading both wrote `model_loaded: false` and
+    any reader had to guess "starting" for both. That is the same bug /status
+    had, one file over, and it is why the three state fix was invisible to
+    anything watching the heartbeat rather than polling HTTP.
+    """
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        _HEARTBEAT_PATH.write_text(
-            json.dumps({"ts": time.time(), "model_loaded": model_loaded, "index_ok": index_ok}),
-            encoding="utf-8",
-        )
+        if model_loaded:
+            status = "ready"
+        elif _warmup_error is not None:
+            status = "failed"
+        else:
+            status = "warming_up"
+        payload = {
+            "ts": time.time(),
+            "model_loaded": model_loaded,
+            "index_ok": index_ok,
+            "status": status,
+        }
+        if status == "failed":
+            payload["last_error"] = _warmup_error
+        _HEARTBEAT_PATH.write_text(json.dumps(payload), encoding="utf-8")
     except Exception:
         logger.debug("Heartbeat write failed (not fatal)", exc_info=True)
 
@@ -61,7 +95,7 @@ def _start_heartbeat_thread() -> None:
         while True:
             time.sleep(_HEARTBEAT_INTERVAL_S)
             _write_heartbeat(
-                model_loaded=_code_embedder is not None and _code_embedder.is_loaded,
+                model_loaded=_model_cache is not None and len(_model_cache) > 0,
                 index_ok=True,
             )
 
@@ -95,18 +129,162 @@ async def handle_status(request: web.Request) -> web.Response:
     """GET /status: server health, model status, indexed projects."""
     projects = _list_projects()
 
-    return _json_response({
-        "status": "ready" if _code_embedder and _code_embedder.is_loaded else "warming_up",
+    loaded = _model_cache is not None and len(_model_cache) > 0
+    if loaded:
+        status = "ready"
+    elif _warmup_error is not None:
+        # Distinct from warming_up on purpose. Callers poll warming_up and back
+        # off, which is right for a model still loading and wrong for one that
+        # raised: no amount of waiting fixes it, and neither does the restart
+        # that waiting eventually escalates to.
+        status = "failed"
+    else:
+        status = "warming_up"
+
+    payload = {
+        "status": status,
         "uptime_s": round(time.time() - _start_time, 1),
         "code_embedding_model": CODE_EMBEDDING_MODEL,
-        "code_embedding_loaded": _code_embedder.is_loaded if _code_embedder else False,
+        "code_embedding_loaded": loaded,
+        "loaded_models": _model_cache.loaded_models() if _model_cache else [],
         "projects": {
             "count": len(projects),
             "entries": projects,
         },
         "clean_rag_home": str(CLEAN_RAG_HOME),
         "ram_mb": _get_ram_mb(),
-    })
+    }
+    # Only while still broken. A handler that later retried the load and
+    # succeeded flips status to ready, and a stale error string next to it
+    # would read as a live problem.
+    if status == "failed":
+        payload["last_error"] = _warmup_error
+    return _json_response(payload)
+
+
+_PROJECT_SOURCE_PREFIX = "project:"
+
+
+def _complete_project_sources(sources: list, coverage_gaps: list[dict]) -> list[str]:
+    """The distinct project paths this request searched with no coverage gap recorded.
+
+    These are the sources whose "no match" is real evidence of absence: the
+    whole tree was indexed by the current model and queried. Everything else in
+    the request is either gapped (it is in *coverage_gaps*) or not a project.
+
+    ``search.search`` takes ``source[8:]`` and records that exact string in
+    ``stale_projects[].project``, so slicing identically here -- no
+    normalising, no stripping -- is what makes a source comparable to a gap
+    entry. A source that names no project at all (a non-string, or a bare
+    ``"project:"``) is dropped rather than counted complete, since it can
+    contribute neither results nor a gap. Deduped, so naming one project twice
+    is one source.
+    """
+    gapped = {gap.get("project") for gap in coverage_gaps}
+    complete: dict[str, None] = {}
+    for source in sources:
+        if not (isinstance(source, str) and source.startswith(_PROJECT_SOURCE_PREFIX)):
+            continue
+        path = source[len(_PROJECT_SOURCE_PREFIX):]
+        if path.strip() and path not in gapped:
+            complete[path] = None
+    return list(complete)
+
+
+def _web_fallback(
+    query: str, top_score: float, coverage_gaps: list[dict],
+    complete_projects: list[str],
+) -> tuple[list[dict], dict | None]:
+    """Web results to stand in for a thin local answer, or why they were withheld.
+
+    Returns (results, suppression), of which at most one is ever populated:
+    either the web ran and found something, or it deliberately did not run and
+    the second value says so in the response.
+
+    The fallback exists to answer "the local index does not have this, so here
+    is the web instead". When a searched project's index is known to be partial,
+    or was skipped outright for a provenance mismatch, that premise is not
+    established: the code may sit in a file the aborted run never reached.
+    Answering with web content anyway asserts, in the part of the response
+    callers actually read, that the code is absent.
+
+    Suppressed rather than run and then labelled, because a label only helps a
+    caller that reads it, and this whole family of bugs is callers that do not.
+    Elasticsearch hit the same shape with partial shard results: the flags are
+    on the response, and elastic/elasticsearch#28494 ("make search results fail
+    rather than return partial results") is their maintainers' own account of
+    clients "unwittingly present[ing] partial results with no indication that
+    results are incomplete". hooks/rag-enforce.py:361 is that caller here: it
+    pulls "results" and "web_search_results" out of the response and passes them
+    onward, reading no other field, so "stale_projects" never leaves the socket.
+    The fix therefore has to hold for a caller that reads nothing but the two
+    fields it already wanted, which means not producing the misleading payload.
+
+    This refuses nothing. Whatever the partial index did match is still returned
+    and still marked served=True in stale_projects. Only the "...and here is the
+    internet instead" half is withheld, because that half asserts something the
+    search cannot support.
+
+    Scoped to the request's evidence, not to any gap in it. The premise needs
+    ONE source that genuinely searched and found nothing, not every source: a
+    complete, provenance-matching project that was queried in full and returned
+    no hit has established absence for its own tree, and an unrelated project's
+    unfinished index does not retract that. So the fallback is withheld only
+    when *complete_projects* is empty, i.e. every project source in the request
+    was gapped and there is no sound negative evidence at all. This is
+    Elasticsearch's cross-cluster shape again: a remote cluster that could not
+    be searched is reported as ``skipped`` in ``_clusters.details`` while the
+    clusters that did answer still produce the response
+    (https://www.elastic.co/docs/explore-analyze/cross-cluster-search); the gap
+    is surfaced per source, it does not void the sources that succeeded.
+
+    Two alternatives were weighed and rejected. Per-source scoping (run the web
+    for the complete sources, suppress for the gapped one) cannot be expressed:
+    there is one query and one ``web_search_results`` field for the whole
+    response, so it would have to emit results and a suppression together, and
+    those two are deliberately mutually exclusive. Weighting by whether the
+    gapped project could plausibly have matched requires predicting what the
+    unindexed files contain, which is precisely the thing an unfinished index
+    makes unknowable -- a guess dressed as a check.
+
+    The narrowing is real and stated plainly: with a mixed request the fallback
+    now asserts "the complete sources do not have this", not "none of the
+    sources have this". The gapped source stays in stale_projects next to the
+    web results so that difference is on the response. The alternative was
+    withholding the fallback from every multi-project search that touches one
+    unfinished index, which on a machine mid-reindex is every search.
+    """
+    if coverage_gaps and not complete_projects:
+        gap_projects = [gap.get("project") for gap in coverage_gaps]
+        logger.warning(
+            "Web search fallback suppressed for query %r (score=%.2f): every "
+            "project source searched has unverified index coverage (%s)",
+            query, top_score, gap_projects,
+        )
+        return [], {
+            "reason": "index_coverage_unverified",
+            "detail": (
+                "the local result set is thin, and every project source "
+                "searched has a known index problem (see stale_projects), so a "
+                "web fallback here would read as 'this code does not exist "
+                "locally' when it may simply be unindexed; reindex those "
+                "projects, add a fully indexed project source, or call "
+                "/web-search directly to search the web on purpose"
+            ),
+            "projects": gap_projects,
+        }
+
+    from .web_search import web_search
+    web_result = web_search(query, max_results=WEB_SEARCH_MAX_RESULTS, timeout=WEB_SEARCH_TIMEOUT)
+    results = web_result.get("results") or []
+    if results:
+        logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
+    # Background indexing on fallback deprecated: casual conversational queries
+    # were triggering this fallback and getting permanently written into the KB
+    # (confirmed real pollution, medical content indexed from a message using
+    # "injection" in the RAG sense, among others). Web results still returned
+    # for this call, just no longer auto indexed.
+    return results, None
 
 
 async def handle_search(request: web.Request) -> web.Response:
@@ -154,17 +332,38 @@ async def handle_search(request: web.Request) -> web.Response:
             {"error": "direction must be 'both', 'callers', or 'dependencies'"}, 400,
         )
 
-    if not _code_embedder:
+    # `is None` rather than a truthiness test. ModelCache defines __len__ but
+    # not __bool__, so `not _model_cache` is also true for a real cache that
+    # happens to be empty, which made a failed warmup permanently
+    # indistinguishable from "create_app has not run yet" and short circuited
+    # every request before it could retry the load.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    # Warm up the code embedder on first search (lazy load)
+    # Get the default code embedder for query embedding. This retries a load
+    # that failed at startup, so repairing the model cache on disk recovers the
+    # server without a restart. ModelCache rate limits the retry internally, so
+    # a model that is genuinely broken is attempted once per its failure TTL
+    # rather than once per request. Run in the executor: a cold load blocks for
+    # seconds and would otherwise stall the whole event loop.
     loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
+    try:
+        _code_embedder = await loop.run_in_executor(
+            None, _model_cache.get, CODE_EMBEDDING_MODEL
+        )
+    except Exception as e:
+        logger.exception("Code embedding model failed to load")
+        return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+
+    # docs: sources need the separate prose embedder, warmed up the same way,
+    # only when one is actually present so a pure project: search never pays
+    # for a model it doesn't use.
+    if any(s.startswith("docs:") for s in sources) and _doc_embedder and not _doc_embedder.is_loaded:
         try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
+            await loop.run_in_executor(None, _doc_embedder.embed_query, "warmup")
         except Exception as e:
-            logger.exception("Code embedding model failed to load")
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+            logger.exception("Docs embedding model failed to load")
+            return _json_response({"error": f"Docs embedding model failed to load: {e}"}, 503)
 
     graph_meta: dict = {}
     results = await loop.run_in_executor(
@@ -180,30 +379,41 @@ async def handle_search(request: web.Request) -> web.Response:
             meta_out=graph_meta,
             depth=depth,
             direction=direction,
+            doc_embedder=_doc_embedder,
+            # Let each project be queried with the model its own index was
+            # built with. lang_router picks that per project at index time and
+            # the query side never followed, so every routed project refused
+            # every search. ModelCache.get is already the loader indexing uses,
+            # and it is safe to call from this executor thread.
+            embedder_for=_model_cache.get,
         ),
     )
 
     search_id = _log_search(query=query, sources=sources, mode=mode, results=results, graph_meta=graph_meta)
 
+    # Every reason this search's local coverage is not what the caller asked
+    # for: a project refused outright for a provenance mismatch (served=False)
+    # or served from an unfinished indexing run (served=True). Either way, a
+    # thin result set already has a local explanation.
+    coverage_gaps = graph_meta.get("stale_projects") or []
+
+    # ...and, for the fallback decision, which project sources are NOT in that
+    # state. A gap is recorded per project source, so a request naming several
+    # projects can hold both a gapped source and one that searched its whole
+    # tree and genuinely found nothing. The second is real evidence of absence
+    # and the first does not retract it (see _web_fallback).
+    complete_projects = _complete_project_sources(sources, coverage_gaps)
+
     # Check if fallback web search is needed (low scores or no results)
     top_score = max((r.get("score", 0.0) for r in results), default=0.0)
-    fallback_triggered = False
-    web_search_results = []
+    web_search_results: list[dict] = []
+    web_search_suppressed: dict | None = None
 
     if WEB_SEARCH_ENABLED and (len(results) == 0 or top_score < WEB_SEARCH_SCORE_THRESHOLD):
-        # Trigger web search as fallback
-        from .web_search import web_search
-        web_result = web_search(query, max_results=WEB_SEARCH_MAX_RESULTS, timeout=WEB_SEARCH_TIMEOUT)
-        if web_result.get("results"):
-            web_search_results = web_result["results"]
-            fallback_triggered = True
-            logger.info("Web search fallback triggered for query: %s (score=%.2f)", query, top_score)
-            # Background indexing on fallback deprecated: casual conversational
-            # queries were triggering this fallback and getting permanently
-            # written into the KB (confirmed real pollution — medical
-            # content indexed from a message using "injection" in the RAG
-            # sense, among others). Web results still returned for this
-            # call, just no longer auto-indexed.
+        web_search_results, web_search_suppressed = _web_fallback(
+            query, top_score, coverage_gaps, complete_projects,
+        )
+    fallback_triggered = bool(web_search_results)
 
     response = {
         "results": results,
@@ -211,8 +421,23 @@ async def handle_search(request: web.Request) -> web.Response:
         "fallback_triggered": fallback_triggered,
     }
 
+    # Both ways an index can be untrustworthy surface here, and neither may be
+    # silent. A project skipped for a provenance mismatch (served=False)
+    # returns no results, which is indistinguishable from "nothing matched"; a
+    # project served from an incomplete index (served=True) returns real
+    # results that are only a subset of the project. Either way the caller
+    # would otherwise read a thin result set as evidence the code does not
+    # exist.
+    if coverage_gaps:
+        response["stale_projects"] = coverage_gaps
+
     if web_search_results:
         response["web_search_results"] = web_search_results
+
+    # Withholding the fallback silently would swap one invisible signal for
+    # another, so the suppression names itself and says what to do about it.
+    if web_search_suppressed is not None:
+        response["web_search_suppressed"] = web_search_suppressed
 
     return _json_response(response)
 
@@ -280,22 +505,179 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     force = body.get("force", False)
 
-    if not _code_embedder:
+    # `is None`, not truthiness: an empty ModelCache is falsy. index_project
+    # resolves and loads the model it needs itself, so an empty cache is no
+    # reason to refuse the request.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-        except Exception as e:
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
+    if not acquire_index_lock("index-project"):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
 
-    result = await loop.run_in_executor(
-        None, partial(index_project, project_path, _code_embedder, force=force)
-    )
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, partial(index_project, project_path, _model_cache, force=force)
+        )
+    finally:
+        release_index_lock()
 
     status = 200 if "error" not in result else 400
     return _json_response(result, status)
+
+
+async def handle_docs_ingest(request: web.Request) -> web.Response:
+    """POST /docs-ingest: fetch, chunk, citation tag, and store official
+    document sources under a persistent topic, searchable afterward via
+    POST /search with sources: ["docs:<topic>"].
+
+    Body fields:
+        topic (str): topic name, e.g. "medical-debt-law" (required)
+        sources (list[dict]): each entry:
+            source_id (str): stable id for this source, e.g. a URL (required)
+            type (str): "ecfr" or "html" (required)
+            heading_pattern (str): regex identifying a citation heading line
+                (required)
+            citation_prefix (str): jurisdiction/code prefix, e.g.
+                "Tex. Fin. Code" or "45 CFR" (required)
+            jurisdiction (str): e.g. "Texas" or "Federal" (required)
+            url (str): source URL, required for type "html"
+            title (int), date (str), section (str, optional): required for
+                type "ecfr"
+        force (bool): re ingest even if content hash is unchanged
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    topic = body.get("topic", "").strip()
+    if not topic:
+        return _json_response({"error": "Missing 'topic' field"}, 400)
+
+    source_entries = body.get("sources", [])
+    if not source_entries or not isinstance(source_entries, list):
+        return _json_response({"error": "'sources' must be a non empty list"}, 400)
+
+    force = body.get("force", False)
+
+    if not _doc_embedder:
+        return _json_response({"error": "Server not initialized"}, 503)
+
+    loop = asyncio.get_running_loop()
+    if not _doc_embedder.is_loaded:
+        try:
+            await loop.run_in_executor(None, _doc_embedder.embed_query, "warmup")
+        except Exception as e:
+            return _json_response({"error": f"Docs embedding model failed to load: {e}"}, 503)
+
+    from .docs_chunker import heading_pattern_matches
+    from .docs_fetch import fetch_ecfr_section, fetch_html_as_text
+    from .docs_store import ingest_source
+
+    results = []
+    for entry in source_entries:
+        source_id = entry.get("source_id", "").strip()
+        source_type = entry.get("type", "").strip()
+        heading_pattern = entry.get("heading_pattern", "")
+        citation_prefix = entry.get("citation_prefix", "")
+        jurisdiction = entry.get("jurisdiction", "")
+
+        if not all([source_id, source_type, heading_pattern, citation_prefix, jurisdiction]):
+            results.append({"source_id": source_id or "?", "error": "missing required field(s)"})
+            continue
+
+        # Validate the caller-supplied heading regex once, up front. A malformed
+        # pattern otherwise raises an uncaught re.error later (in
+        # heading_pattern_matches for html, or in chunk_by_heading for any
+        # source type), which propagates as a request-wide 500 and aborts every
+        # other well-formed source in the batch. Surface it as a scoped
+        # per-source error instead, same shape as the other validation failures.
+        try:
+            re.compile(heading_pattern)
+        except re.error as e:
+            results.append({
+                "source_id": source_id,
+                "error": f"invalid heading_pattern regex ({heading_pattern!r}): {e}",
+            })
+            continue
+
+        if source_type == "ecfr":
+            title = entry.get("title")
+            date = entry.get("date", "")
+            section = entry.get("section")
+            if not title or not date:
+                results.append({"source_id": source_id, "error": "ecfr source needs title and date"})
+                continue
+            text = await loop.run_in_executor(
+                None, partial(fetch_ecfr_section, title, date, section)
+            )
+            source_url = f"https://www.ecfr.gov/current/title-{title}"
+        elif source_type == "html":
+            url = entry.get("url", "")
+            if not url:
+                results.append({"source_id": source_id, "error": "html source needs url"})
+                continue
+            text = await loop.run_in_executor(None, partial(fetch_html_as_text, url))
+            source_url = url
+        else:
+            results.append({"source_id": source_id, "error": f"unknown type {source_type!r}"})
+            continue
+
+        if not text:
+            results.append({"source_id": source_id, "error": "fetch returned no content"})
+            continue
+
+        # Content-sanity check for html sources: a non-empty fetch can still be
+        # junk (a JS-rendered shell returns its nav chrome, not the statute), and
+        # that junk would otherwise be chunked and stamped with a clean-looking
+        # but false citation. Require the source's own heading_pattern to match
+        # at least once. The never-match sentinel "(?!)" marks an intentionally
+        # single-section fetch (no heading line by design), so it's exempt.
+        if (
+            source_type == "html"
+            and heading_pattern.strip() != "(?!)"
+            and not heading_pattern_matches(text, heading_pattern)
+        ):
+            results.append({
+                "source_id": source_id,
+                "error": (
+                    f"fetched content has no heading_pattern match ({heading_pattern!r}); "
+                    "the page is likely a client-rendered shell or the wrong URL, "
+                    "not the expected multi-section document"
+                ),
+            })
+            continue
+
+        stats = await loop.run_in_executor(
+            None,
+            partial(
+                ingest_source,
+                topic, source_id, text, heading_pattern, citation_prefix,
+                source_url, jurisdiction, _doc_embedder, force=force,
+            ),
+        )
+        results.append(stats)
+
+    return _json_response({"topic": topic, "results": results})
+
+
+async def handle_docs_status(request: web.Request) -> web.Response:
+    """GET/POST /docs-status: what's been ingested for a docs topic."""
+    if request.method == "GET":
+        topic = request.query.get("topic", "").strip()
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON body"}, 400)
+        topic = body.get("topic", "").strip()
+
+    if not topic:
+        return _json_response({"error": "Missing 'topic' field"}, 400)
+
+    from .docs_store import topic_status
+    return _json_response(topic_status(topic))
 
 
 async def handle_reindex_file(request: web.Request) -> web.Response:
@@ -320,22 +702,204 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     if not Path(project_path).is_dir():
         return _json_response({"error": f"Project path not found: {project_path}"}, 400)
 
-    if not _code_embedder:
+    # `is None`, not truthiness: an empty ModelCache is falsy, and reindex_file
+    # loads the project's own recorded model itself.
+    if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
     loop = asyncio.get_running_loop()
-    if not _code_embedder.is_loaded:
-        try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-        except Exception as e:
-            return _json_response({"error": f"Code embedding model failed to load: {e}"}, 503)
 
-    result = await loop.run_in_executor(
-        None, partial(reindex_file, project_path, file_path, _code_embedder)
-    )
+    if not acquire_index_lock("reindex-file"):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
+
+    try:
+        result = await loop.run_in_executor(
+            None, partial(reindex_file, project_path, file_path, _model_cache)
+        )
+    finally:
+        release_index_lock()
 
     status = 200 if "error" not in result else 400
     return _json_response(result, status)
+
+
+def _has_pytest_tests(root: Path) -> bool:
+    """True if this looks like a pytest project worth running.
+
+    pyproject/pytest.ini or any test_*.py / *_test.py at the root or under
+    tests/. Kept cheap on purpose so it never walks a huge tree.
+    """
+    if (root / "pyproject.toml").is_file() or (root / "pytest.ini").is_file():
+        return True
+    for pat in ("test_*.py", "*_test.py"):
+        for _ in root.glob(pat):
+            return True
+    tests_dir = root / "tests"
+    if tests_dir.is_dir():
+        for _ in tests_dir.rglob("test_*.py"):
+            return True
+    return False
+
+
+def _run_project_tests(project_path: str) -> dict:
+    """Detect the project's test command, run it, report the real result.
+
+    Blocking (subprocess), so callers run it in an executor. Returns
+    has_tests False when there's nothing to run, which is the signal the Stop
+    hook needs to tell "tests passed" apart from "no tests here" and never
+    block on the latter.
+
+    Command strings are fixed literals run with shell=True so npm/npx/python
+    resolve the same way on Windows and posix. project_path is never spliced
+    into the command, it's only the cwd, so there's no shell injection surface.
+    """
+    root = Path(project_path)
+    cmd = None
+    label = ""
+
+    pkg = root / "package.json"
+    if pkg.is_file():
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        scripts = data.get("scripts") or {}
+        test_script = scripts.get("test") or ""
+        # The npm init default is a placeholder that always exits 1. Running it
+        # would report a fake failure, so skip it and fall through to a real runner.
+        if test_script and "no test specified" not in test_script:
+            cmd, label = "npm test", "npm test"
+        else:
+            deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+            if "vitest" in deps:
+                cmd, label = "npx vitest run", "vitest"
+            elif "jest" in deps:
+                cmd, label = "npx jest", "jest"
+
+    if cmd is None and _has_pytest_tests(root):
+        cmd, label = "python -m pytest -q", "pytest"
+
+    if cmd is None:
+        return {"has_tests": False, "passed": None, "summary": "no test command found"}
+
+    import os
+    import subprocess
+    # CI=true stops watch mode runners (create-react-app, vitest) from hanging.
+    env = {**os.environ, "CI": "true"}
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(root), shell=True, capture_output=True, text=True,
+            timeout=120, env=env, errors="replace",
+        )
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or "") + (e.stderr or "") if isinstance(e.stdout, str) else ""
+        return {
+            "has_tests": True, "passed": False, "exit_code": None,
+            "summary": f"{label} timed out after 120s",
+            "failures": out[-2000:],
+        }
+    except Exception as e:
+        return {
+            "has_tests": True, "passed": None, "exit_code": None,
+            "summary": f"could not run {label}: {e}",
+            "failures": str(e)[-2000:],
+        }
+
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    passed = proc.returncode == 0
+    summary = f"{label}: {'passed' if passed else f'failed (exit {proc.returncode})'}"
+    return {
+        "has_tests": True,
+        "passed": passed,
+        "exit_code": proc.returncode,
+        "summary": summary,
+        # Tail only. The full log is noise, the tail is where the assertion diff
+        # and stack trace live, which is the feedback a weak model actually needs.
+        "failures": "" if passed else combined[-2000:],
+    }
+
+
+async def handle_run_tests(request: web.Request) -> web.Response:
+    """POST /run-tests: detect and run a project's tests, return the real result.
+
+    Body: {"project_path": "<abs>"}. Runs the detected command in an executor so
+    the event loop stays free. See _run_project_tests for detection order.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(_run_project_tests, project_path))
+    return _json_response(result)
+
+
+async def handle_mutation_test(request: web.Request) -> web.Response:
+    """POST /mutation-test: prove the tests bite, by running the mutation tool.
+
+    Body: {"project_path": "<abs>", "changed_files": ["src/a.py", ...]}. Runs the
+    detected tool (mutmut, StrykerJS, cargo mutants) scoped to changed_files in an
+    executor. A surviving mutant means a test that should have caught a broken
+    version did not. No tool for the language reports has_tool false, which is a
+    real answer rather than a silent skip. See server/mutation.py.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    changed_files = body.get("changed_files") or []
+    if not isinstance(changed_files, list):
+        return _json_response({"error": "'changed_files' must be a list"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, partial(run_mutation, project_path, changed_files)
+    )
+    return _json_response(result)
+
+
+async def handle_security_scan(request: web.Request) -> web.Response:
+    """POST /security-scan: run security tools on changed files.
+
+    Body: {"project_path": "<abs>", "changed_files": ["src/a.py", ...]}. Runs
+    available scanners (bandit, pip-audit, semgrep) scoped to changed_files in
+    an executor. A missing tool reports has_tool false with install instructions.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    project_path = body.get("project_path", "").strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+
+    changed_files = body.get("changed_files") or []
+    if not isinstance(changed_files, list):
+        return _json_response({"error": "'changed_files' must be a list"}, 400)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, partial(run_security_scan, project_path, changed_files)
+    )
+    return _json_response(result)
 
 
 async def handle_web_search(request: web.Request) -> web.Response:
@@ -372,6 +936,172 @@ async def handle_web_search(request: web.Request) -> web.Response:
         logger.error("Web search failed for %r: %s", query, result["error"])
 
     return _json_response({"query": query, **result})
+
+
+async def handle_github_search(request: web.Request) -> web.Response:
+    """POST /github-search: search GitHub repositories, best maintained first.
+
+    For finding a real repo to adopt, ranked by stars and recency that GitHub
+    knows and DuckDuckGo does not. Token optional via GITHUB_TOKEN in .env (10 per
+    minute unauthenticated, 30 with a token). Blocking, so run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+
+    max_results = min(int(body.get("max_results", 5)), 50)
+    sort = body.get("sort", "stars")
+    timeout = min(float(body.get("timeout", 6.0)), 20.0)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: github_search(query, max_results=max_results, sort=sort, timeout=timeout)
+    )
+
+    if result.get("error"):
+        logger.error("GitHub search failed for %r: %s", query, result["error"])
+
+    return _json_response({"query": query, **result})
+
+
+async def handle_github_file(request: web.Request) -> web.Response:
+    """POST /github-file: fetch one file's text from a public GitHub repo.
+
+    Body: {"owner", "repo", "path", "ref"?}. For pulling a real reference file to
+    study once the repo search finds the repo. Code is returned intact (only the
+    invisible injection characters stripped) and is untrusted reference data.
+    Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    owner = (body.get("owner") or "").strip()
+    repo = (body.get("repo") or "").strip()
+    path = (body.get("path") or "").strip()
+    if not (owner and repo and path):
+        return _json_response({"error": "owner, repo, and path are required"}, 400)
+    ref = body.get("ref") or None
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: github_fetch_file(owner, repo, path, ref=ref)
+    )
+    if result.get("error"):
+        logger.error("GitHub file fetch failed for %s/%s %s: %s", owner, repo, path, result["error"])
+    return _json_response(result)
+
+
+async def handle_stackoverflow_search(request: web.Request) -> web.Response:
+    """POST /stackoverflow-search: top accepted StackOverflow answers, with code.
+
+    Body: {"query", "max_results"?}. For the few lines that do X, human voted. Key
+    optional via STACKEXCHANGE_KEY in .env. Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+    max_results = min(int(body.get("max_results", 3)), 10)
+    timeout = min(float(body.get("timeout", 8.0)), 20.0)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: stackoverflow_search(query, max_results=max_results, timeout=timeout)
+    )
+    if result.get("error"):
+        logger.error("StackOverflow search failed for %r: %s", query, result["error"])
+    return _json_response({"query": query, **result})
+
+
+async def handle_wikipedia_search(request: web.Request) -> web.Response:
+    """POST /wikipedia-search: human curated general knowledge, free and keyless.
+
+    Body: {"query", "max_results"?}. The high quality general info tier, a fact or
+    concept from a human edited encyclopedia. Blocking, run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+    max_results = min(int(body.get("max_results", 3)), 10)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: wikipedia_search(query, max_results=max_results)
+    )
+    if result.get("error"):
+        logger.error("Wikipedia search failed for %r: %s", query, result["error"])
+    return _json_response({"query": query, **result})
+
+
+async def handle_graphrag_build(request: web.Request) -> web.Response:
+    """POST /graphrag-build: start the GraphRAG build for a project (manual, overnight).
+
+    Body: {"project_path": "<abs>"}. Returns immediately; poll /graphrag-status for
+    percent. Proxies to the isolated graph service (auto started) in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+    project_path = (body.get("project_path") or "").strip()
+    if not project_path:
+        return _json_response({"error": "project_path is required"}, 400)
+    if not Path(project_path).is_dir():
+        return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_build, project_path))
+    return _json_response(result)
+
+
+async def handle_graphrag_query(request: web.Request) -> web.Response:
+    """POST /graphrag-query: ask the built semantic graph a cross file question.
+
+    Body: {"project_path": "<abs>", "query": "..."}. The semantic layer, for the
+    why and intent a query the import graph cannot answer. Proxied in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+    project_path = (body.get("project_path") or "").strip()
+    q = (body.get("query") or "").strip()
+    if not project_path or not q:
+        return _json_response({"error": "project_path and query are required"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_query, project_path, q))
+    return _json_response(result)
+
+
+async def handle_graphrag_status(request: web.Request) -> web.Response:
+    """GET /graphrag-status?project_path=<abs> (or POST body): build progress."""
+    project_path = (request.query.get("project_path") or "").strip()
+    if not project_path and request.method == "POST":
+        try:
+            body = await request.json()
+            project_path = (body.get("project_path") or "").strip()
+        except Exception:
+            pass
+    if not project_path:
+        return _json_response({"error": "project_path is required"}, 400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(graphrag_status, project_path))
+    return _json_response(result)
 
 
 async def handle_projects(request: web.Request) -> web.Response:
@@ -477,14 +1207,35 @@ async def _on_shutdown(app: web.Application) -> None:
         pass
 
 
+@web.middleware
+async def error_middleware(request: web.Request, handler) -> web.Response:
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise  # preserve 4xx/5xx raised intentionally by handlers
+    except Exception as exc:
+        logger.exception(
+            "Unhandled error in %s %s: %s: %s",
+            request.method, request.path, type(exc).__name__, exc,
+        )
+        return _json_response({"error": "Internal server error"}, 500)
+
+
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
-    global _code_embedder, _start_time
+    global _model_cache, _doc_embedder, _start_time
 
     _start_time = time.time()
 
-    # Create the code embedder (loaded lazily, model downloads on first use)
-    _code_embedder = SentenceTransformerEmbedding(model_name=CODE_EMBEDDING_MODEL)
+    # Model cache with language-based routing (loads models lazily on first use)
+    _model_cache = ModelCache()
+    # General prose embedder for docs: sources (statutes, regulations, etc),
+    # a separate model from the code search tuned one above. Also loaded
+    # lazily, on first docs: search or ingest, not at startup: the code
+    # embedder's startup warmup already imports sentence_transformers once,
+    # single threaded, so the thread safety concern that warmup exists for
+    # does not apply a second time here.
+    _doc_embedder = SentenceTransformerEmbedding()
 
     # Ensure state directory exists
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -500,14 +1251,25 @@ def create_app() -> web.Application:
         before opening the listening socket, so doing it here is guaranteed
         single-threaded and race-free.
         """
+        global _warmup_error
+
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, _code_embedder.embed_query, "warmup")
-            logger.info("Code embedder warmed up at startup")
-        except Exception:
+            # Warm up the default code model before accepting connections.
+            # sentence-transformers' first import is not thread safe, so this
+            # must complete single-threaded before request handlers fire.
+            await loop.run_in_executor(None, _model_cache.get, CODE_EMBEDDING_MODEL)
+            _warmup_error = None
+            logger.info("Code embedder warmed up at startup (model=%s)", CODE_EMBEDDING_MODEL)
+        except Exception as exc:
+            # Serve anyway: /status, the web search routes and the docs routes
+            # do not need this model, and a request handler can still retry the
+            # load later. But record why, so /status can say "failed" with a
+            # reason instead of "warming_up" forever.
+            _warmup_error = f"{type(exc).__name__}: {exc}"
             logger.exception("Embedder warmup failed at startup")
 
-        _write_heartbeat(model_loaded=True, index_ok=True)
+        _write_heartbeat(model_loaded=len(_model_cache) > 0, index_ok=True)
         _start_heartbeat_thread()
         logger.info("Heartbeat thread started (interval=%ds)", _HEARTBEAT_INTERVAL_S)
 
@@ -516,18 +1278,36 @@ def create_app() -> web.Application:
         # confidently returning code that no longer exists.
         from .auto_reindex import auto_reindex_loop
         app["auto_reindex_task"] = asyncio.create_task(
-            auto_reindex_loop(lambda: _code_embedder)
+            auto_reindex_loop(lambda: _model_cache)
         )
         logger.info("Auto reindex loop started")
 
-    app = web.Application()
+    app = web.Application(middlewares=[error_middleware])
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
     app.router.add_post("/web-search", handle_web_search)
+    app.router.add_post("/github-search", handle_github_search)
+    app.router.add_post("/github-file", handle_github_file)
+    app.router.add_post("/stackoverflow-search", handle_stackoverflow_search)
+    app.router.add_post("/wikipedia-search", handle_wikipedia_search)
+    app.router.add_post("/graphrag-build", handle_graphrag_build)
+    app.router.add_post("/graphrag-query", handle_graphrag_query)
+    app.router.add_get("/graphrag-status", handle_graphrag_status)
+    app.router.add_post("/graphrag-status", handle_graphrag_status)
     app.router.add_post("/index-project", handle_index_project)
     app.router.add_post("/reindex-file", handle_reindex_file)
+    app.router.add_post("/docs-ingest", handle_docs_ingest)
+    app.router.add_get("/docs-status", handle_docs_status)
+    app.router.add_post("/docs-status", handle_docs_status)
+    app.router.add_post("/run-tests", handle_run_tests)
+    app.router.add_post("/mutation-test", handle_mutation_test)
+    app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/register-project", handle_register_project)
+
+    from .kanban import setup_kanban
+    setup_kanban(app)
+
     app.on_startup.append(_on_startup)
     app.on_shutdown.append(_on_shutdown)
 

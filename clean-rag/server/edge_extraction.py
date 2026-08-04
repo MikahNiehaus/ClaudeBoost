@@ -17,101 +17,97 @@ logger = logging.getLogger(__name__)
 # Tree-sitter language modules, imported lazily to avoid hard failure
 _PARSERS: dict = {}
 
-# Map file extensions to tree-sitter language key
-_EXT_TO_LANG: dict[str, str] = {
-    ".py":    "python",
-    ".js":    "javascript",
-    ".jsx":   "javascript",
-    ".mjs":   "javascript",
-    ".ts":    "typescript",
-    ".tsx":   "typescript",
-    ".go":    "go",
-    ".rs":    "rust",
-    ".java":  "java",
-    ".c":     "c",
-    ".h":     "c",
-    ".cpp":   "cpp",
-    ".cc":    "cpp",
-    ".cxx":   "cpp",
-    ".hpp":   "cpp",
-    ".rb":    "ruby",
-    ".sh":    "bash",
-    ".bash":  "bash",
-    ".lua":   "lua",
-    ".kt":    "kotlin",
-    ".kts":   "kotlin",
-    ".swift": "swift",
-    ".php":   "php",
-    ".cs":    "csharp",
+#: Extensions this module has hand mapped, kept ONLY where our name differs
+#: from grep-ast's or where grep-ast has no entry. Everything else now comes
+#: from grep_ast.filename_to_lang, which carries 45 extensions on its own and
+#: 150+ alongside tree-sitter-language-pack.
+#:
+#: The hand kept version of this map was 24 entries, and its gaps were not
+#: cosmetic. Language detection feeds the embedding model router, so an
+#: unmapped extension counted as "unknown", and enough unknowns made "unknown"
+#: win the vote: Nectar's 3138 unmapped .html/.yml/.cshtml files outvoted its
+#: 1323 real C# files and routed the project to bigcode/starencoder, a gated
+#: model that cannot load. Eight of sixteen projects went the same way.
+_EXT_OVERRIDES: dict[str, str] = {
+    # grep-ast returns "c_sharp"; the router, DOC_LANGUAGES and the routing
+    # table all speak "csharp". Normalize here rather than in five places.
+    ".cs": "csharp",
+    # grep-ast maps .h to "c"; keep that explicit since it is genuinely
+    # ambiguous with C++ and we index far more C than C++.
+    ".h": "c",
 }
 
-# Map language key -> (module_name, method_name) for dynamic import
-_LANG_MODULE_MAP: dict[str, tuple[str, str]] = {
-    "python":     ("tree_sitter_python",     "language"),
-    "javascript": ("tree_sitter_javascript", "language"),
-    "go":         ("tree_sitter_go",         "language"),
-    "rust":       ("tree_sitter_rust",       "language"),
-    "c":          ("tree_sitter_c",          "language"),
-    "cpp":        ("tree_sitter_cpp",        "language"),
-    "java":       ("tree_sitter_java",       "language"),
-    "ruby":       ("tree_sitter_ruby",       "language"),
-    "bash":       ("tree_sitter_bash",       "language"),
-    "lua":        ("tree_sitter_lua",        "language"),
-    "kotlin":     ("tree_sitter_kotlin",     "language"),
-    "swift":      ("tree_sitter_swift",      "language"),
-    "php":        ("tree_sitter_php",        "language"),
-    "csharp":     ("tree_sitter_c_sharp",    "language"),
-}
 
+def ext_to_lang(path: str) -> str | None:
+    """Language name for a path, or None when nothing recognises it.
+
+    Delegates to grep-ast, Aider's extracted extension map, so new languages
+    arrive with a dependency bump rather than when somebody notices.
+    """
+    override = _EXT_OVERRIDES.get(Path(path).suffix.lower())
+    if override:
+        return override
+    try:
+        from grep_ast import filename_to_lang
+
+        return filename_to_lang(path)
+    except Exception:
+        logger.debug("grep-ast could not classify %s", path, exc_info=True)
+        return None
+
+
+class _ExtToLangCompat(dict):
+    """Keeps the ``_EXT_TO_LANG.get(suffix, "unknown")`` call shape working.
+
+    Several callers treat this as a plain dict keyed by suffix. Rather than
+    edit each one and risk missing a call site, the lookup itself now resolves
+    through grep-ast.
+    """
+
+    def get(self, key, default=None):  # type: ignore[override]
+        return ext_to_lang(f"x{key}") or default
+
+    def __getitem__(self, key):
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __contains__(self, key) -> bool:  # type: ignore[override]
+        return self.get(key) is not None
+
+
+_EXT_TO_LANG = _ExtToLangCompat()
 
 def _get_parser(language: str):
     """Lazy load a tree-sitter parser for the given language.
 
-    Returns None (and caches None) if the tree-sitter grammar package
-    is not installed. Callers should handle None gracefully.
+    Backed by tree-sitter-language-pack, which ships prebuilt wheels for 300+
+    grammars. This replaced one pinned ``tree-sitter-<lang>`` dependency per
+    language plus an importlib map that had to name the module and the accessor
+    function for each: fourteen entries that only ever grew when someone
+    remembered to add one, and where a missing grammar degraded to "this
+    language contributes zero edges" with nothing but a warning.
+
+    Returns None (and caches None) when the pack has no such grammar. Callers
+    handle None, so an unknown language still degrades rather than raising.
     """
     if language in _PARSERS:
         return _PARSERS[language]
 
-    # tsx shares the typescript grammar package
-    if language == "tsx":
-        _get_parser("typescript")
-        return _PARSERS.get("tsx")
-
-    if language == "typescript":
-        return _load_typescript_parsers()
-
-    if language not in _LANG_MODULE_MAP:
-        _PARSERS[language] = None
-        return None
-
-    module_name, method_name = _LANG_MODULE_MAP[language]
     try:
-        from tree_sitter import Language, Parser
-        ts_mod = importlib.import_module(module_name)
-        lang_fn = getattr(ts_mod, method_name)
-        parser = Parser(Language(lang_fn()))
-        _PARSERS[language] = parser
-        return parser
-    except (ImportError, AttributeError, Exception) as e:
+        from tree_sitter_language_pack import get_parser
+
+        # No alias table: the pack accepts both its own grammar names and the
+        # common spellings, so "csharp" and "c_sharp" both resolve. One less
+        # hand kept map to drift.
+        _PARSERS[language] = get_parser(language)
+    except Exception as e:
+        # LookupError for a language the pack does not carry, ImportError if
+        # the pack itself is missing. Neither should stop the rest of a scan.
         logger.warning("tree-sitter grammar not available for %s: %s", language, e)
         _PARSERS[language] = None
-        return None
-
-
-def _load_typescript_parsers():
-    """Load tree-sitter-typescript, which exposes ts and tsx as separate parsers."""
-    try:
-        import tree_sitter_typescript as ts_mod
-        from tree_sitter import Language, Parser
-        _PARSERS["typescript"] = Parser(Language(ts_mod.language_typescript()))
-        _PARSERS["tsx"] = Parser(Language(ts_mod.language_tsx()))
-        return _PARSERS["typescript"]
-    except (ImportError, Exception) as e:
-        logger.warning("tree-sitter grammar not available for typescript: %s", e)
-        _PARSERS["typescript"] = None
-        _PARSERS["tsx"] = None
-        return None
+    return _PARSERS[language]
 
 
 def _walk(node):
@@ -137,9 +133,12 @@ def _first_identifier(node) -> str:
 
 
 def get_language(filepath: str) -> str | None:
-    """Get the tree-sitter language key for a file path. Returns None if unsupported."""
-    ext = Path(filepath).suffix
-    return _EXT_TO_LANG.get(ext)
+    """Get the tree-sitter language key for a file path. Returns None if unsupported.
+
+    Takes the whole path, not just the suffix, because grep-ast also recognises
+    extensionless files by name (Dockerfile, go.mod, Makefile).
+    """
+    return ext_to_lang(filepath)
 
 
 def extract_edges(text: str, language: str, filepath: str) -> list[GraphEdge]:

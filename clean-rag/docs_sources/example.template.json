@@ -1,0 +1,27 @@
+{
+  "_comment": "Template for a doc-rag source list. Copy this file to <your-topic>.json in this same directory (that name is gitignored, so your topic never gets committed), fill in real values, then POST its 'topic' and 'sources' fields to /docs-ingest. See the doc-rag skill for the full schema explanation.",
+  "topic": "your-topic-name",
+  "description": "One line description of what this topic covers and why.",
+  "sources": [
+    {
+      "source_id": "a-stable-id-for-this-source",
+      "type": "ecfr",
+      "title": 0,
+      "date": "YYYY-MM-DD",
+      "section": "0.0",
+      "heading_pattern": "(?!)",
+      "citation_prefix": "e.g. 45 CFR 160.103",
+      "jurisdiction": "e.g. Federal",
+      "_comment_ecfr": "type=ecfr fetches straight from eCFR's real REST API. heading_pattern '(?!)' never matches, correct for a single already-scoped section fetch like this one."
+    },
+    {
+      "source_id": "another-stable-id",
+      "type": "html",
+      "url": "https://example.gov/real-static-page",
+      "heading_pattern": "^Sec\\.\\s*\\d+\\.\\d+\\.",
+      "citation_prefix": "e.g. Some State Code ch. 1",
+      "jurisdiction": "e.g. Some State",
+      "_comment_html": "type=html fetches and converts a page to text. heading_pattern MUST actually match real section headings in that page's real fetched text (verify this yourself before shipping a source, a client rendered JS-only site will fail this check loudly rather than silently ingest garbage)."
+    }
+  ]
+}

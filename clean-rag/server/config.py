@@ -57,11 +57,16 @@ DATABASES_DIR = CLEAN_RAG_HOME / "databases"
 STATE_DIR = CLEAN_RAG_HOME / "state"
 
 # Embedding model for project codebase indexing.
-# st-codesearch-distilroberta-base (768d) trained on code-query pairs.
+# CodeRankEmbed (768d) trained on CodeSearchNet code-query pairs.
 CODE_EMBEDDING_MODEL = os.environ.get(
     "CLEAN_RAG_CODE_EMBEDDING_MODEL",
-    "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+    "nomic-ai/CodeRankEmbed",
 )
+
+# Bumped when the chunking or embedding pipeline changes in a way that
+# requires a full re-index. When a project's manifest records a different
+# version, the next index_project run forces a rebuild automatically.
+PIPELINE_VERSION = 2
 
 # Server port: 8613 standalone, 8612 routes when bundled with ClaudeBoost
 STANDALONE_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
@@ -94,16 +99,131 @@ def _detect_device() -> str:
             return "mps"
     except ImportError:
         pass
-    try:
-        import onnxruntime as _ort
-        if "DmlExecutionProvider" in _ort.get_available_providers():
-            return "onnx-dml"
-    except (ImportError, Exception):
-        pass
     return "cpu"
 
 
 DEVICE: str = _detect_device()
+
+# ---------------------------------------------------------------------------
+# CPU budget
+#
+# Embedding is the only genuinely CPU hungry thing this server does, and torch
+# defaults to every core it can see, which makes the machine unusable during a
+# rebuild. Two independent limits, because neither is sufficient alone:
+#
+#   CPU_MAX_PERCENT is the ceiling on TOTAL system CPU. A background sweep
+#   checks it between files and waits while the machine is busier than this,
+#   which is what accounts for load this process did not create.
+#
+#   TORCH_THREADS is the structural cap on this process. It holds even when
+#   nothing is sampling, and it is what stops a single embed call from
+#   saturating every core between samples.
+#
+# The two must not be derived from the same number, which is the bug this
+# comment now exists to prevent. TORCH_THREADS used to be CPU_MAX_PERCENT of
+# the cores, so on a 14 core machine the process was allowed 11 threads (79%)
+# against an 80% ceiling. Embedding at full tilt then tripped the ceiling on
+# its own, with nothing else running: pause, CPU falls, resume, spike, pause.
+#
+# Measured cost of that oscillation: 406 pauses on one project, 64 s/file, and
+# a log line reading "DONE 4 files, 477.5 min". The sweep was not yielding to
+# other work, it was yielding to itself.
+# ---------------------------------------------------------------------------
+
+# CPU THROTTLING IS OFF by default, by explicit request after the history above.
+#
+# 100 or more means disabled, and sample_pressure skips the CPU check entirely
+# rather than comparing against an unreachable number. Set a real percentage
+# here (or CLEAN_RAG_CPU_MAX_PERCENT) to turn pausing back on.
+#
+# What this gives up: the sweep no longer yields to other work on the machine.
+# What it keeps: MIN_FREE_RAM_MB below, and the RSS ceiling in the batch driver.
+# Those are not throttles, they are the guards against the failure that actually
+# hurt, a machine driven to 0.2 GB free with 16.8 GB paged out. CPU contention
+# makes a machine slow; memory exhaustion makes it stop.
+CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "100"))
+
+# Fraction of cores torch may use. 1.0 means every core.
+#
+# This was 0.55 to keep the process clear of the pause ceiling it was checked
+# against. With pausing off there is nothing to stay clear of, so the reason for
+# holding cores back is gone too. Half a machine sitting idle was only ever the
+# price of politeness, and politeness is now off.
+TORCH_CORE_FRACTION = float(os.environ.get("CLEAN_RAG_TORCH_CORE_FRACTION", "1.0"))
+
+# Minimum free RAM, in MB, before a background reindex is allowed to start or
+# continue. A sweep observed here grew to a 43 GB virtual commit and drove the
+# machine to 0.2 GB free with 16.8 GB paged out, which is worse than the CPU
+# problem: CPU contention makes the machine slow, memory exhaustion makes it
+# stop. Checked on the same schedule as the CPU ceiling.
+MIN_FREE_RAM_MB = float(os.environ.get("CLEAN_RAG_MIN_FREE_RAM_MB", "3072"))
+
+
+def _default_torch_threads() -> int:
+    """Cap torch at TORCH_CORE_FRACTION of the machine's cores, at least one.
+
+    Sized against the core count, NOT against CPU_MAX_PERCENT: deriving it from
+    the ceiling is what made the process throttle itself. Leaving a real gap
+    between the two is the whole point.
+    """
+    cores = os.cpu_count() or 1
+    return max(1, int(cores * TORCH_CORE_FRACTION))
+
+
+TORCH_THREADS = int(
+    os.environ.get("CLEAN_RAG_TORCH_THREADS", "") or _default_torch_threads()
+)
+
+# ---------------------------------------------------------------------------
+# Background reindex schedule
+#
+# Hourly is fine, but only because the sweep now backs off: it waits while the
+# machine is busy and it refuses to start when the previous sweep is still
+# running. Without both of those, an hourly timer against a sweep that takes
+# longer than an hour stacks sweeps until nothing else can run.
+# ---------------------------------------------------------------------------
+
+SWEEP_INTERVAL_S = int(os.environ.get("CLEAN_RAG_SWEEP_INTERVAL_S", str(10 * 60)))
+
+# How long to wait before re-sampling when the machine is over CPU_MAX_PERCENT.
+CPU_BACKOFF_S = float(os.environ.get("CLEAN_RAG_CPU_BACKOFF_S", "5"))
+
+# Give up waiting for a quiet machine after this long and skip the sweep
+# entirely rather than queue behind sustained load.
+CPU_BACKOFF_MAX_WAIT_S = float(
+    os.environ.get("CLEAN_RAG_CPU_BACKOFF_MAX_WAIT_S", str(30 * 60))
+)
+
+# How often a running index stops to ask whether it should give the machine
+# back. This is the checkpoint *inside* one project's index, which is the only
+# thing that bounds how long a single large project can hold the machine: the
+# between-projects check can only refuse to start the next one. 15s means the
+# user waits at most one more file plus 15s to get their cores back, while the
+# sample itself costs one psutil read per 15s.
+INDEX_PRESSURE_CHECK_S = float(
+    os.environ.get("CLEAN_RAG_INDEX_PRESSURE_CHECK_S", "15")
+)
+
+# How often a running index flushes its manifest to disk.
+#
+# index_project used to write the manifest exactly once, at the end. A graceful
+# abort still saved (marked incomplete, and the next sweep resumed from it), but
+# a hard kill saved nothing at all, so every file read as changed on the next
+# pass, tripped FULL_REINDEX_THRESHOLD, and forced a rebuild from zero. That is
+# not theoretical: it cost hours on a real run.
+#
+# An interval rather than a file count because per file cost here is nowhere
+# near uniform, milliseconds for a small file against seconds for a large one,
+# so "every N files" bounds the lost work unpredictably while an interval bounds
+# it directly. Same reasoning as INDEX_PRESSURE_CHECK_S above.
+#
+# 30s against a manifest measured at 55 to 60KB for ~790 files, so roughly
+# 1.2MB per write on a 16,000 file project. At this interval that is a couple of
+# writes a minute, against the multi gigabyte total that saving per file would
+# cost over a full run.
+INDEX_MANIFEST_CHECKPOINT_S = float(
+    os.environ.get("CLEAN_RAG_INDEX_MANIFEST_CHECKPOINT_S", "30")
+)
 
 # Web search fallback config
 WEB_SEARCH_ENABLED = os.environ.get("CLEAN_RAG_WEB_SEARCH", "true").lower() in ("true", "1", "yes")

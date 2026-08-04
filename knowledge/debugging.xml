@@ -206,7 +206,7 @@ and continue with UI-only testing. Never silently skip — always explain why de
   </location-bias>
 </known-limitations>
 
-<failure-indicators description="Stop and escalate when:">
+<failure-indicators description="Switch technique when (see the debugging-methodology skill for which one):">
   <indicator>After 2-3 iterations without meaningful progress</indicator>
   <indicator>Suggestions become repetitive without new information</indicator>
   <indicator>Solutions becoming more complex instead of simpler</indicator>
@@ -218,6 +218,14 @@ and continue with UI-only testing. Never silently skip — always explain why de
     <pattern name="Hallucination">Confidently incorrect API/method info</pattern>
     <pattern name="Surface fix">Masks symptoms without addressing design flaws</pattern>
   </false-progress-patterns>
+  <escalation-path>
+    Hitting any indicator above means the current technique is wrong for this
+    bug, not that you should apply it harder. Invoke the debugging-methodology
+    skill and pick a different technique by name from its symptom table
+    (git bisect, delta debugging, binary search on state, differential
+    debugging, hypothesis-first, record-replay). If nothing there fits, research
+    how this class of bug is debugged in this stack before trying again.
+  </escalation-path>
 </failure-indicators>
 
 <complexity-hierarchy>
@@ -254,6 +262,16 @@ and continue with UI-only testing. Never silently skip — always explain why de
   <rule>Maximum 20-30 minutes before reassessing strategy</rule>
   <rule>If Claude repeatedly suggests same fixes → stop, switch approaches</rule>
   <rule>If more time explaining context than debugging → problem exceeds Claude's capabilities</rule>
+  <rule>"Switch approaches" means name a different technique from the
+        debugging-methodology skill, not reword the current one</rule>
 </time-boxing>
+
+<methodology-reference>
+  Technique selection, the stall rule, per-stack CLI recipes (React Native,
+  .NET, Python) and the read-only database rule live in one place: the
+  debugging-methodology skill. This file describes when debugging is going
+  wrong; that skill describes what to do instead. Do not duplicate its content
+  here — update it there.
+</methodology-reference>
 
 </knowledge-base>

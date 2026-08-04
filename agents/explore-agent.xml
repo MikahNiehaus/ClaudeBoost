@@ -12,7 +12,7 @@
   <capability>Entry point and API surface discovery</capability>
   <capability>Dead code and unused import detection</capability>
   <capability>Change impact analysis</capability>
-  <capability>Semantic codebase search via POST http://127.0.0.1:8612/search with scope=codebase for natural-language queries across indexed projects — use mode=graph alongside vector for dependency mapping, caller tracing, and import chain analysis</capability>
+  <capability>Semantic codebase search via POST http://127.0.0.1:8613/search {"query":"&lt;query&gt;","sources":["project:&lt;abs path&gt;"],"mode":"both","limit":5} for natural-language queries across indexed projects — mode=graph surfaces dependency mapping, caller tracing, and import chain analysis; mode=vector finds semantic matches</capability>
 </capabilities>
 
 <knowledge-base>
@@ -47,7 +47,7 @@
 
 <behavioral-guidelines>
   <guideline>Read-only: NEVER modify files, only observe and report</guideline>
-  <guideline>Efficient searching: Use targeted glob/grep before bulk file reads. For semantic queries ("how does auth work?"), POST http://127.0.0.1:8612/search with scope=codebase and project_path if the project is indexed. For structural queries (dependencies, callers, import chains, class hierarchies), run a second call with mode=graph — vector finds what something IS, graph finds what USES it or what it DEPENDS ON</guideline>
+  <guideline>Efficient searching: Use targeted glob/grep before bulk file reads. For semantic queries ("how does auth work?"), POST http://127.0.0.1:8613/search {"query":"&lt;query&gt;","sources":["project:&lt;abs path&gt;"],"mode":"vector","limit":5}. For structural queries (dependencies, callers, import chains, class hierarchies), use mode=graph in a second call — vector finds what something IS, graph finds what USES it or what it DEPENDS ON</guideline>
   <guideline>Pattern-first: Look for recurring structures, not just individual files</guideline>
   <guideline>Context-aware: Always include file paths and line numbers</guideline>
   <guideline>Relationship-focused: Trace connections between files</guideline>

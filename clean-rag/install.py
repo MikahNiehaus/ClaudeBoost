@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -22,12 +23,19 @@ SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 # Hook sentinels: unique strings in hook commands for idempotent registration
 RAG_ENFORCE_SENTINEL = "rag-enforce.py"
 REINDEX_SENTINEL = "reindex-after-edit.py"
+VERIFY_AFTER_EDIT_SENTINEL = "verify-after-edit.py"
 SESSION_SENTINEL = "CLEAN-RAG ENFORCEMENT"
 GRAPH_CONTEXT_SENTINEL = "graph-context-inject.py"
 SPEC_COMPLIANCE_GATE_SENTINEL = "spec-compliance-gate.py"
 CODE_PATTERN_INJECT_SENTINEL = "code-pattern-inject.py"
 RESEARCH_GATE_SENTINEL = "research-gate.py"
+RESEARCH_GATE_BASH_SENTINEL = "research-gate-bash.py"
 RESEARCH_RECORD_SENTINEL = "research-record.py"
+AUTO_TEST_GATE_SENTINEL = "auto-test-gate.py"
+VERIFIER_GATE_SENTINEL = "verifier-gate.py"
+VERIFIER_RECORD_SENTINEL = "verifier-record.py"
+RECORD_EDIT_SENTINEL = "record-edit.py"
+LINT_GATE_SENTINEL = "lint-gate.py"
 
 
 def _say(msg: str) -> None:
@@ -124,19 +132,30 @@ def install_user_assets() -> None:
         shutil.copy2(src, dst)
         _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
 
+    # The global instructions describing the research gate and the agents. Both
+    # this installer and ClaudeBoost's setup.py (which delegates here) keep it
+    # current. A newer local edit is preserved by _copy_file, so hand tweaks
+    # survive a re-install.
+    _copy_file(portable / "CLAUDE.md", CLAUDE_DIR / "CLAUDE.md")
+
     # The branch safety launcher. Lives outside the repo on purpose, so a branch
     # switch can't remove it out from under a live hook registration.
     _copy_file(portable / "hook-run.py", CLAUDE_DIR / "hook-run.py")
 
-    # Agents. research-agent (Sonnet) and triage-agent (Haiku).
+    # Agents. research-agent (Sonnet) is the gatekeeper; verifier-agent (Opus)
+    # validates the diff afterward.
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
-    # Skills. Copied whole so a skill can carry more than one file later.
+    # Skills. Copied whole, so a skill can carry a scripts/ subfolder (the
+    # powerpoint skill does). __pycache__ is excluded: running the skill's
+    # helper leaves bytecode in the repo copy that has no business shipping.
     skills_src = portable / "skills"
     if skills_src.is_dir():
-        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True)
-        _ok("installed .claude/skills (research, research-routing)")
+        shutil.copytree(skills_src, CLAUDE_DIR / "skills", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        names = sorted(d.name for d in skills_src.iterdir() if d.is_dir())
+        _ok(f"installed .claude/skills ({len(names)}: {', '.join(names)})")
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +178,226 @@ def install_deps() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 2b: Install npm QA tools (best effort)
+# ---------------------------------------------------------------------------
+def install_npm_qa_tools() -> None:
+    """Install npm QA tools for bad-cop and good-cop agents.
+
+    Best effort: warns and continues if npm is not available or if any
+    install fails. odiff provides pixel level screenshot diffing; jscpd
+    provides duplication detection with an AI optimized reporter.
+    """
+    npm = shutil.which("npm")
+    if not npm:
+        _warn("npm not found, skipping QA tool install (odiff, jscpd)")
+        _say("Install Node.js to enable visual diffing and duplication detection")
+        return
+
+    tools = [("odiff-bin", "odiff"), ("jscpd@5", "jscpd")]
+    for package, binary in tools:
+        if shutil.which(binary):
+            _ok(f"{binary} already installed")
+            continue
+        _say(f"Installing {package}...")
+        try:
+            result = subprocess.run(
+                [npm, "install", "-g", package],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                _ok(f"{package} installed")
+            else:
+                _warn(f"{package} install failed: {result.stderr[:200]}")
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{package} install failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Step 2b2: Register the debugging MCP servers (best effort)
+#
+# bad-cop and good-cop enumerate these servers' tools by literal name in their
+# frontmatter, because Claude Code rejects mcp__<server>__* wildcards. An agent
+# whose server was never registered silently has no such tool, so shipping the
+# agents without registering the servers is a broken install, not a partial one.
+#
+# Mirrors ClaudeBoost's scripts/setup.py MCP_SERVERS table. Kept as its own copy
+# so clean-rag stays installable standalone, without ClaudeBoost present.
+# ---------------------------------------------------------------------------
+MCP_SERVERS: list[tuple[str, list[str]]] = [
+    ("mcp-debugger", ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"]),
+    ("playwright", ["npx", "-y", "@playwright/mcp@latest"]),
+    ("test-coverage", ["npx", "-y", "test-coverage-mcp"]),
+    ("chrome-devtools", ["npx", "-y", "chrome-devtools-mcp@latest"]),
+]
+
+
+def _claude_cmd() -> list[str] | None:
+    """A subprocess safe `claude` invocation, or None if it is not on PATH.
+
+    On Windows claude installs as claude.cmd, which subprocess cannot launch
+    without going through cmd.exe.
+    """
+    for candidate in ("claude", "claude.cmd"):
+        path = shutil.which(candidate)
+        if path:
+            return ["cmd", "/c", path] if candidate.endswith(".cmd") else [path]
+    return None
+
+
+def parse_mcp_list(stdout: str) -> dict[str, str]:
+    """Map each server name in `claude mcp list` output to its OWN status text.
+
+    Its own copy, for the same standalone reason as MCP_SERVERS above; the
+    ClaudeBoost twin is scripts/setup.py's parse_mcp_list. Real output is a
+    header line then one server per line, `<name>: <command-or-url> - <status>`:
+
+        mcp-debugger: npx -y @debugmcp/mcp-debugger stdio - ✔ Connected
+        claude.ai GitHub: https://api.githubcopilot.com/mcp - ! Needs authentication
+
+    Names can contain spaces and commands can contain colons, so the name is
+    everything before the FIRST ": " and the status everything after the LAST
+    " - ". A bare `name in stdout` substring test instead matches a name that
+    only appears inside another server's name or command, and silently skips
+    registering the real one.
+    """
+    servers: dict[str, str] = {}
+    for line in stdout.splitlines():
+        name, sep, rest = line.partition(": ")
+        if not sep or not name.strip():
+            continue
+        _, dash, status = rest.rpartition(" - ")
+        servers[name.strip()] = status.strip() if dash else ""
+    return servers
+
+
+def register_mcp_servers() -> None:
+    """Register every debugging MCP server at user scope. Never fatal.
+
+    Idempotent: reads `claude mcp list` once and skips anything already there.
+    """
+    _say("\nRegistering debugging MCP servers...")
+
+    claude = _claude_cmd()
+    if claude is None:
+        _warn("claude CLI not found, skipping MCP server registration")
+        return
+
+    if not shutil.which("npx"):
+        _warn("npx not found, skipping MCP server registration (needs Node.js)")
+        for name, args in MCP_SERVERS:
+            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+        return
+
+    try:
+        listed = subprocess.run(
+            claude + ["mcp", "list"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"claude mcp list failed ({e}), skipping MCP server registration")
+        return
+
+    if listed.returncode != 0:
+        _warn("claude mcp list failed, skipping MCP server registration")
+        return
+
+    registered = parse_mcp_list(listed.stdout)
+    for name, args in MCP_SERVERS:
+        if name in registered:
+            _ok(f"{name} already registered")
+            continue
+        try:
+            result = subprocess.run(
+                claude + ["mcp", "add", name, "--scope", "user", "--"] + args,
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{name} registration failed: {e}")
+            continue
+        if result.returncode == 0:
+            _ok(f"{name} registered")
+        else:
+            _warn(f"{name} registration failed: {result.stderr[:200]}")
+            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+
+
+# ---------------------------------------------------------------------------
+# Step 2c: Install deck tooling for the powerpoint skill (best effort)
+# ---------------------------------------------------------------------------
+def _module_available(module: str) -> bool:
+    """Is an importable module already present for this interpreter?
+
+    The in-process counterpart of install_npm_qa_tools()'s shutil.which: it
+    answers without spawning anything, so it cannot hang the installer the way
+    `python -c "import x"` can when a package blocks at import time. find_spec
+    locates the module without executing it, which is also why it is what the
+    powerpoint skill's own helper uses (pptx_env._have_module).
+    """
+    try:
+        return importlib.util.find_spec(module) is not None
+    except Exception:  # noqa: BLE001  a broken spec means "not usable", not a crash
+        return False
+
+
+def install_pptx_tools() -> None:
+    """Install what the powerpoint skill needs to build and narrate a deck.
+
+    Best effort, same contract as install_npm_qa_tools: warn and continue,
+    never abort. python-pptx builds the deck and edge-tts voices the optional
+    narration, both pip installable. LibreOffice, poppler and ffmpeg are
+    native packages, so they are only detected here and reported with a
+    manual install hint; auto-installing them across three OS package
+    managers is a worse failure mode than a warning.
+    """
+    packages = [("python-pptx", "pptx"), ("edge-tts", "edge_tts")]
+    for package, module in packages:
+        if _module_available(module):
+            _ok(f"{package} already installed")
+            continue
+        _say(f"Installing {package}...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", package],
+                capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode == 0:
+                _ok(f"{package} installed")
+            else:
+                _warn(f"{package} install failed: {result.stderr[:200]}")
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{package} install failed: {e}")
+
+    # Native tools. The skill's own helper knows the per-OS search paths, so
+    # ask it rather than duplicating that list here.
+    helper = CLEAN_RAG_HOME / "portable" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    natives = [
+        ("soffice", "LibreOffice", "render and video",
+         "winget install TheDocumentFoundation.LibreOffice | brew install --cask libreoffice | apt install libreoffice"),
+        ("pdftoppm", "poppler", "slide images",
+         "winget install oschwartz10612.Poppler | brew install poppler | apt install poppler-utils"),
+        ("ffmpeg", "ffmpeg", "narrated video",
+         "winget install Gyan.FFmpeg | brew install ffmpeg | apt install ffmpeg"),
+    ]
+    if not helper.is_file():
+        _warn("powerpoint skill helper not found, skipping native tool detection")
+        return
+    for probe, label, purpose, how in natives:
+        try:
+            result = subprocess.run(
+                [sys.executable, str(helper), probe],
+                capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"could not probe for {label}: {e}")
+            continue
+        if result.returncode == 0:
+            _ok(f"{label} found at {result.stdout.strip()}")
+        else:
+            _warn(f"{label} not found, powerpoint skill loses {purpose}")
+            _say(f"  {how}")
+
+
+# ---------------------------------------------------------------------------
 # Hook registration helpers
 # ---------------------------------------------------------------------------
 
@@ -166,8 +405,19 @@ def install_deps() -> None:
 # point of it.
 HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
 
+# Portable launcher for clean-rag's own hooks: an env var each install resolves
+# per machine, living in the repo so it can't drift from the hooks it wraps.
+# Foreign hooks keep the shared ~/.claude/hook-run.py.
+PORTABLE_HOOK_RUNNER = "$CLEAN_RAG_HOME/portable/hook-run.py"
 
-def _wrap_command(command: str) -> str:
+# A hook is clean-rag's to wipe and rebuild if its command or prompt carries one
+# of these. Every clean-rag command references $CLEAN_RAG_HOME; the lone prompt
+# hook carries the session sentinel. ClaudeBoost ($CLAUDEBOOST_HOME) and user
+# hooks match neither, so they're left alone.
+CLEAN_RAG_OWNED_MARKERS = ("$CLEAN_RAG_HOME", SESSION_SENTINEL)
+
+
+def _wrap_command(command: str, runner: str | None = None) -> str:
     """Route a hook command through hook-run.py so a branch switch can't brick Claude.
 
     Hook commands are registered in the global settings.json, which does not
@@ -187,7 +437,8 @@ def _wrap_command(command: str) -> str:
     if not command or ".py" not in command or "hook-run.py" in command:
         return command
 
-    runner = str(HOOK_RUNNER).replace("\\", "/")
+    if runner is None:
+        runner = str(HOOK_RUNNER).replace("\\", "/")
 
     # Split the interpreter off the front, keep whatever it was.
     match = re.match(r'^\s*("[^"]*"|\S+)\s+(.*)$', command)
@@ -210,6 +461,38 @@ def _hook_target_script(command: str) -> Path | None:
     raw = scripts[-1]
     expanded = os.path.expandvars(os.path.expanduser(raw))
     return Path(expanded.replace("\\", "/"))
+
+
+def wipe_clean_rag_hooks() -> None:
+    """Remove every hook clean-rag owns, so the registrations that follow rebuild
+    the whole set from a clean slate.
+
+    Ownership is by marker (CLEAN_RAG_OWNED_MARKERS): clean-rag's command hooks all
+    carry $CLEAN_RAG_HOME and its one prompt hook carries the session sentinel.
+    ClaudeBoost ($CLAUDEBOOST_HOME) and user hooks match neither, so they survive.
+    This makes a re-install deterministic: no stale entry lingers, and no duplicate
+    forms appear when a command path or launcher changed. heal_stale_hooks still
+    handles foreign dead hooks afterward.
+    """
+    settings = read_json(SETTINGS_PATH)
+    hooks = settings.get("hooks", {})
+    if not hooks:
+        return
+    removed = 0
+    for event, entries in list(hooks.items()):
+        kept = []
+        for entry in entries:
+            text = "".join(
+                h.get("command", "") + h.get("prompt", "")
+                for h in entry.get("hooks", [])
+            )
+            if any(marker in text for marker in CLEAN_RAG_OWNED_MARKERS):
+                removed += 1
+            else:
+                kept.append(entry)
+        hooks[event] = kept
+    write_json(SETTINGS_PATH, settings)
+    _ok(f"wiped {removed} clean-rag hook(s) for a clean reinstall")
 
 
 def heal_stale_hooks() -> None:
@@ -287,10 +570,11 @@ def _register_hook(
         hook_list = []
 
     # Every registration funnels through here, so wrapping in this one place
-    # covers hooks that don't exist yet too.
+    # covers hooks that don't exist yet too. clean-rag's own hooks get the
+    # portable env-var launcher, not a machine-specific absolute path.
     for h in hook_entry.get("hooks", []):
         if "command" in h:
-            h["command"] = _wrap_command(h["command"])
+            h["command"] = _wrap_command(h["command"], runner=PORTABLE_HOOK_RUNNER)
 
     new_cmd = ""
     for h in hook_entry.get("hooks", []):
@@ -453,6 +737,93 @@ def register_reindex_hook() -> None:
     )
 
 
+def register_verify_after_edit_hook() -> None:
+    # The post write half of the gate: after code is written, nudge to verify it
+    # by running a check, not by self reviewing. See verify-after-edit.py.
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verify-after-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", VERIFY_AFTER_EDIT_SENTINEL,
+        hook_entry, label="verify-after-edit",
+    )
+
+
+def register_record_edit_hook() -> None:
+    # Records which files an edit touched, so the Stop gates fire even when the
+    # session cwd is not the repo being edited. See record-edit.py and
+    # turn_edits.py.
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/record-edit.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", RECORD_EDIT_SENTINEL,
+        hook_entry, label="record-edit",
+    )
+
+
+def setup_graphrag() -> None:
+    """Set up the isolated GraphRAG stack: venv, fast-graphrag, and Ollama models.
+
+    Idempotent and best effort: it skips whatever is already present and never
+    aborts the install if an optional piece fails. Matches the per machine venv
+    convention (these isolated venvs are built here, never committed).
+    """
+    import shutil
+    import subprocess
+
+    home = Path(__file__).resolve().parent
+    venv = home / "graphrag-venv"
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    venv_py = venv / scripts / ("python.exe" if os.name == "nt" else "python")
+
+    try:
+        if not venv_py.is_file():
+            print("  creating graphrag-venv ...")
+            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [skip] could not create graphrag-venv: {e}")
+        return
+
+    try:
+        probe = subprocess.run(
+            [str(venv_py), "-c", "import importlib.util as u; print(u.find_spec('fast_graphrag') is not None)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "True" in probe.stdout:
+            print("  fast-graphrag already installed")
+        else:
+            print("  installing fast-graphrag into graphrag-venv (moderate download) ...")
+            subprocess.run([str(venv_py), "-m", "pip", "install", "--quiet", "fast-graphrag"], check=True, timeout=600)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] fast-graphrag install failed: {e}")
+
+    if not shutil.which("ollama"):
+        print("  [action needed] Ollama not found. Install it, then pull the models:")
+        print("    ollama pull qwen2.5:7b-instruct")
+        print("    ollama pull nomic-embed-text")
+        return
+    try:
+        listed = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=15).stdout
+    except Exception:  # noqa: BLE001
+        listed = ""
+    for model in ("qwen2.5:7b-instruct", "nomic-embed-text"):
+        if model in listed:
+            print(f"  {model} already pulled")
+            continue
+        try:
+            print(f"  pulling {model} (this can be large) ...")
+            subprocess.run(["ollama", "pull", model], check=True, timeout=3600)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] could not pull {model}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
@@ -475,6 +846,78 @@ def register_spec_compliance_gate_hook() -> None:
     _register_hook(
         settings, "Stop", SPEC_COMPLIANCE_GATE_SENTINEL,
         hook_entry, label="spec-compliance-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5h: register the autotest gate Stop hook, the execution feedback loop.
+# When code changed this turn, it runs the project's tests and blocks the stop
+# once on a real failure so the model fixes from the actual output. Loop safe:
+# it honors stop_hook_active and caps blocks per session.
+# ---------------------------------------------------------------------------
+def register_auto_test_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/auto-test-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", AUTO_TEST_GATE_SENTINEL,
+        hook_entry, label="auto-test-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 5h2: register the verifier gate Stop hook. On a high stakes diff (auth,
+# money, SQL, subprocess, concurrency) it nudges the main agent to spawn the
+# fresh verifier-agent, after the tests pass. Same loop safe shape as the test
+# gate: stop_hook_active guard, per session block cap, fail open.
+# ---------------------------------------------------------------------------
+def register_verifier_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-gate.py"'
+    hook_entry = {
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "Stop", VERIFIER_GATE_SENTINEL,
+        hook_entry, label="verifier-gate",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The other half of the verifier gate: stamps the session record when
+# verifier-agent finishes. Mirrors register_research_record_hook exactly, one
+# level down (verifier_state instead of research_state). Without this the gate
+# has nothing to check and blocks every stop until the cap gives up.
+# ---------------------------------------------------------------------------
+def register_verifier_record_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-record.py"'
+    hook_entry = {
+        "matcher": "Task|Agent",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", VERIFIER_RECORD_SENTINEL,
+        hook_entry, label="verifier-record",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lint gate: PostToolUse nudge that runs ruff/eslint after code writes.
+# Always exits 0, reports to stderr. Not a blocker.
+# ---------------------------------------------------------------------------
+def register_lint_gate_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/lint-gate.py"'
+    hook_entry = {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PostToolUse", LINT_GATE_SENTINEL,
+        hook_entry, label="lint-gate",
     )
 
 
@@ -539,8 +982,8 @@ def register_code_pattern_inject_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The research gate. Blocks a code edit unless a research or triage agent has
-# actually run and declared that it covered this file.
+# The research gate. Blocks a code edit unless research-agent has actually run
+# and declared that it covered this file.
 #
 # Prepended, because it should refuse before the other pre edit hooks bother
 # doing their searches. No point injecting research context into an edit that
@@ -560,9 +1003,27 @@ def register_research_gate_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The other half of the gate: stamps the turn record when a research or triage
-# agent finishes. Without this the gate has nothing to check and blocks
-# everything, so the two are useless apart.
+# The other half of the pre edit gate: catch a code file written through the
+# shell (echo >, tee, sed -i, python open), which the Edit/Write matcher never
+# sees. Same rule, applied to Bash. Closes Claude Code issue #29709.
+# ---------------------------------------------------------------------------
+def register_research_gate_bash_hook() -> None:
+    settings = read_json(SETTINGS_PATH)
+    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate-bash.py"'
+    hook_entry = {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": hook_command}],
+    }
+    _register_hook(
+        settings, "PreToolUse", RESEARCH_GATE_BASH_SENTINEL,
+        hook_entry, label="research-gate-bash",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The other half of the gate: stamps the turn record when research-agent
+# finishes. Without this the gate has nothing to check and blocks everything, so
+# the two are useless apart.
 # ---------------------------------------------------------------------------
 def register_research_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
@@ -660,9 +1121,32 @@ def main():
     else:
         print("\nStep 2: Skipped (--skip-deps)")
 
+    # Step 2b
+    if not args.skip_deps:
+        print("\nStep 2b: Installing npm QA tools...")
+        install_npm_qa_tools()
+    else:
+        print("\nStep 2b: Skipped (--skip-deps)")
+
+    # Step 2b2
+    if not args.skip_deps:
+        print("\nStep 2b2: Registering debugging MCP servers...")
+        register_mcp_servers()
+    else:
+        print("\nStep 2b2: Skipped (--skip-deps)")
+
+    # Step 2c
+    if not args.skip_deps:
+        print("\nStep 2c: Installing deck tooling for the powerpoint skill...")
+        install_pptx_tools()
+    else:
+        print("\nStep 2c: Skipped (--skip-deps)")
+
     # Step 3
     print("\nStep 3: Registering the research gate...")
+    wipe_clean_rag_hooks()  # clean slate: drop clean-rag's own hooks, then rebuild them all
     register_research_gate_hook()
+    register_research_gate_bash_hook()
     register_research_record_hook()
 
     # Step 3b
@@ -685,6 +1169,12 @@ def main():
     # Step 5c
     print("\nStep 5c: Registering reindex hook...")
     register_reindex_hook()
+    register_verify_after_edit_hook()
+    register_record_edit_hook()
+
+    # Step 5d
+    print("\nStep 5d: Setting up GraphRAG (isolated venv + models; may download)...")
+    setup_graphrag()
 
     # Step 5e
     print("\nStep 5e: Setting up GPU memory management...")
@@ -693,6 +1183,18 @@ def main():
     # Step 5f
     print("\nStep 5f: Registering spec-compliance-gate hook...")
     register_spec_compliance_gate_hook()
+
+    # Step 5h
+    print("\nStep 5h: Registering auto-test-gate hook...")
+    register_auto_test_gate_hook()
+
+    # Step 5h2
+    print("\nStep 5h2: Registering verifier-gate hook...")
+    register_verifier_gate_hook()
+    register_verifier_record_hook()
+
+    print("\nRegistering lint-gate hook...")
+    register_lint_gate_hook()
 
     # Step 5i
     print("\nStep 5i: Configuring web search environment variables...")

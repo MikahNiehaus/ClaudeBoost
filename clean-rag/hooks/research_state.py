@@ -36,8 +36,13 @@ import sys
 import time
 from pathlib import Path
 
-# Agents whose completion counts as research having happened.
-RESEARCH_AGENTS = {"research-agent", "triage-agent"}
+# Agents whose completion counts as research having happened. Both run the full
+# pass every time: researcher maps the codebase and grounds the change in real
+# engineering standards; swiper checks existence and finds what to clone. Either
+# stamps the file scope it covered. The gate checks per-file membership in any
+# stamp's scope, not whether a specific agent ran. /ps is the human's exit for
+# a turn they already know is trivial — skips both research and the verifier gate.
+RESEARCH_AGENTS = {"swiper", "researcher"}
 
 # A record older than this is treated as gone, covering an abandoned turn whose
 # edits arrive much later without a fresh prompt.
@@ -137,40 +142,69 @@ def file_in_scope(file_path: str, covered: list[str]) -> bool:
     return False
 
 
-def extract_covered_files(text: str) -> list[str]:
+def extract_covered_files(text: str, prefix: str = "COVERS:") -> list[str]:
     """Pull the file scope out of an agent's report.
 
     An agent declares scope with a line like:
         COVERS: clean-rag/server/app.py, clean-rag/hooks/*.py
 
+    `prefix` lets a sibling gate reuse this same parser for its own marker line
+    (verifier-gate's stamps use "VERIFIED:") instead of forking the logic.
+
     If it declares nothing, it covers nothing, and the gate will block. That's
     deliberate. An agent that can't say what it looked at hasn't given the gate
     anything to check, and silently treating that as "covers everything" is
     exactly the blanket clearance this design exists to remove.
+
+    Claude Code's Agent tool appends an "agentId: ... (use SendMessage with
+    to: ..., summary: ...)" wrapper suffix to a spawned agent's final report
+    text, and it can land glued onto this exact line with no newline in
+    between. Left alone, that suffix gets swept into the file list and
+    corrupts the last entry, so it's cut off before the comma split.
     """
     if not text:
         return []
 
+    marker = prefix.upper()
     for line in text.splitlines():
         stripped = line.strip().lstrip("*# ").strip()
-        if stripped.upper().startswith("COVERS:"):
+        if stripped.upper().startswith(marker):
             raw = stripped.split(":", 1)[1]
+            raw = raw.split("agentId:", 1)[0]
             return [p.strip().strip("`") for p in raw.split(",") if p.strip()]
 
     return []
 
 
-def open_turn(session_id: str, prompt: str) -> None:
-    """Called on UserPromptSubmit. Starts a fresh turn with no research in it."""
+def open_turn(session_id: str, prompt: str, quick: bool = False) -> None:
+    """Called on UserPromptSubmit. Updates turn metadata; preserves existing stamps.
+
+    Research coverage earned this session persists across messages until it expires
+    (TURN_MAX_AGE_S) or new research lands. This is the prerequisite for the research
+    gate being a hard block: under the old reset-on-every-message design, coverage
+    from swiper was wiped by the next follow-up message before anything was edited,
+    causing constant false blocks. Preserving stamps fixes that. Coverage now expires
+    only via the TTL or when new research runs (which adds its own stamps on top).
+
+    `quick` marks a /ps turn: the human's explicit "skip the ceremony". Set
+    deterministically from the raw prompt text, never by the model.
+    """
     path = _record_path(session_id)
-    record = {
-        "session_id": session_id,
-        "started_at": time.time(),
-        "prompt_preview": (prompt or "")[:200],
-        "stamps": [],
-    }
     try:
         with _write_lock(path):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                record = {"session_id": session_id, "started_at": time.time(), "stamps": []}
+
+            # Update metadata but preserve existing stamps. Coverage persists across
+            # follow-up messages; it expires only via TTL or when new research runs.
+            record["session_id"] = session_id
+            record["started_at"] = time.time()
+            record["prompt_preview"] = (prompt or "")[:200]
+            record["quick"] = bool(quick)
+            record.setdefault("stamps", [])
+
             path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     except OSError:
         # A gate that can't write its record blocks every edit. Staying quiet is
@@ -178,8 +212,29 @@ def open_turn(session_id: str, prompt: str) -> None:
         pass
 
 
+def is_quick_turn(session_id: str) -> bool:
+    """Did this turn start with /ps? Then the gates and the verifier stand down.
+
+    Fail closed: a missing, malformed, or stale record returns False, so a broken
+    record means "still require research and verification", never a silent skip. The
+    age guard (same TURN_MAX_AGE_S the research check uses) also stops a quick flag
+    leaking into a later turn if a following open_turn write failed and left the old
+    record in place.
+    """
+    path = _record_path(session_id)
+    if not path.exists():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or not record.get("quick", False):
+            return False
+        return (time.time() - record.get("started_at", 0)) <= TURN_MAX_AGE_S
+    except Exception:  # noqa: BLE001 -- any failure means "not quick", enforce the gate
+        return False
+
+
 def record_agent(session_id: str, agent_type: str, report: str = "") -> None:
-    """Called on PostToolUse after a research or triage agent finishes."""
+    """Called on PostToolUse after researcher or swiper finishes."""
     if agent_type not in RESEARCH_AGENTS:
         return
 
@@ -212,6 +267,80 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
+def has_any_research_this_turn(session_id: str) -> tuple[bool, str]:
+    """Did swiper run at all this turn? For actions with no single file to
+    scope against, a destructive package manager command, not an edit to a file.
+    Same freshness rule as check_file_researched, just without the per file scope
+    check, since "which file does this cover" does not apply to a shell command.
+    """
+    path = _record_path(session_id)
+    if not path.exists():
+        return False, "no research agent has run this turn"
+
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "the research record is unreadable"
+
+    stamps = record.get("stamps", [])
+    last_activity = max([record.get("started_at", 0)] + [s.get("at", 0) for s in stamps])
+    age = time.time() - last_activity
+    if age > TURN_MAX_AGE_S:
+        return False, f"the research record is stale ({age / 60:.0f} minutes old)"
+
+    if not stamps:
+        return False, "no research agent has run this turn"
+
+    return True, f"research ran this turn ({stamps[-1].get('agent')})"
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped /ps persistence.
+#
+# /ps marks one message's turn record as quick. The next user message opens
+# a fresh turn record with quick=False, so the gate blocks again on the very
+# next edit. User sends /ps, then the actual task as a separate message. The
+# task message gets blocked.
+#
+# Fix: a session-keyed file with a 10-minute TTL. set_session_quick() is
+# called when /ps is detected. rag-enforce.py checks is_session_quick() on
+# new turns and carries the flag forward. clear_session_quick() is called by
+# research-record.py once real research lands, ending the sticky /ps.
+# ---------------------------------------------------------------------------
+
+SESSION_QUICK_MAX_AGE_S = 600  # 10 minutes
+
+
+def _session_quick_path(session_id: str) -> Path:
+    key = hashlib.sha256((session_id or "no-session").encode()).hexdigest()[:16]
+    return _state_dir() / f"session-quick-{key}.json"
+
+
+def set_session_quick(session_id: str) -> None:
+    path = _session_quick_path(session_id)
+    path.write_text(json.dumps({"set_at": time.time()}), encoding="utf-8")
+
+
+def clear_session_quick(session_id: str) -> None:
+    path = _session_quick_path(session_id)
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def is_session_quick(session_id: str) -> bool:
+    """True if /ps was issued recently for this session and no research has landed since."""
+    path = _session_quick_path(session_id)
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (time.time() - data.get("set_at", 0)) <= SESSION_QUICK_MAX_AGE_S
+    except Exception:
+        return False
+
+
 def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     """Was this specific file covered by research this turn?
 
@@ -227,11 +356,18 @@ def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:
     except (OSError, json.JSONDecodeError):
         return False, "the research record is unreadable"
 
-    age = time.time() - record.get("started_at", 0)
+    stamps = record.get("stamps", [])
+
+    # Freshness keys off the most recent research activity, not the turn open time.
+    # A long turn that keeps researching is not stale; only a genuinely abandoned
+    # record is (its newest stamp, or its start if nothing stamped, has aged out).
+    # Keying staleness to started_at alone bricked every edit in a session that ran
+    # past TURN_MAX_AGE_S, even right after a valid research stamp landed for this file.
+    last_activity = max([record.get("started_at", 0)] + [s.get("at", 0) for s in stamps])
+    age = time.time() - last_activity
     if age > TURN_MAX_AGE_S:
         return False, f"the research record is stale ({age / 60:.0f} minutes old)"
 
-    stamps = record.get("stamps", [])
     if not stamps:
         return False, "no research agent has run this turn"
 

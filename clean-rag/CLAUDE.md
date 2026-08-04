@@ -4,43 +4,74 @@ Forced research before code edits, plus semantic and structural search over your
 
 Two things live here:
 
-1. **The research gate.** Every code edit is blocked until a research agent has actually run this turn. Not asked for. Required.
+1. **The research gate.** Every code edit is nudged toward research from swiper, and the audit trail records whether that research actually happened this turn, but the edit itself is never refused.
 2. **The project index.** Each project you index gets a vector database and an import graph, both stored inside clean-rag.
 
 There is no topic knowledge base. There used to be, and it was removed. See "Why the KB is gone" below, because the reasoning matters and will otherwise get rebuilt by someone with good intentions.
 
 ## The research gate
 
-`hooks/research-gate.py` (PreToolUse on Edit, Write, MultiEdit) blocks any edit to a code file unless a research or triage agent completed during the current turn.
-
-The gate keys off a real agent run, not a claim of one. That distinction is the whole design:
+`hooks/research-gate.py` (PreToolUse on Edit, Write, MultiEdit) checks whether
+`swiper` completed during the current turn before an edit to a code file, and
+either way, allows the edit. It used to block (exit 2) until `swiper` had
+actually run. That per turn scoping turned out to be too disruptive in
+practice: a file swiper had just covered needed covering again the instant
+another message came in, before anything had even been edited. Rather than
+fix the scoping and keep a hard block, the block itself is gone. The hook
+still checks and still records; it just never refuses.
 
 - `hooks/rag-enforce.py` (UserPromptSubmit) opens a fresh turn record on every message.
-- `hooks/research-record.py` (PostToolUse on Task and Agent) stamps that record when a `research-agent` or `triage-agent` finishes.
-- `hooks/research-gate.py` reads the record and refuses the edit if nothing stamped it.
+- `hooks/research-record.py` (PostToolUse on Task and Agent) stamps that record when `swiper` finishes.
+- `hooks/research-gate.py` reads the record, prints a nudge to stderr when nothing covers the file, and logs the real coverage status (covered or not, and by what) to the audit trail either way.
 
-Only Claude Code can start an agent, and the stamp only lands after one completes. There is no path from "say you researched" to a stamped record. This replaced an earlier proof file design where the model wrote a JSON blob attesting it had researched, which proves nothing: the model writes the file, so the file says whatever the model wants it to say.
+Only Claude Code can start an agent, and the stamp only lands after one completes. There is no path from "say you researched" to a stamped record, so the audit trail is honest even though the gate no longer blocks on it. This replaced an earlier proof file design where the model wrote a JSON blob attesting it had researched, which proves nothing: the model writes the file, so the file says whatever the model wants it to say.
 
 **Exempt:** anything that isn't source code (`.md`, `.json`, `.yaml`, configs), plus `workspace/`, `state/`, `plans/`, `docs/`, `.claude/`, `node_modules/`, and temp directories. A markdown edit has nothing to research.
 
-**Escape hatch:** `CLEAN_RAG_RESEARCH_GATE=off`. Use it when the gate itself is broken, not when it's inconvenient.
+**`CLEAN_RAG_RESEARCH_GATE=off`** silences the nudge and the audit entry entirely. Since the gate no longer blocks anything, this only matters if you want the hook to do nothing at all rather than nudge and log.
 
-## The two agents
+## swiper
 
-**`triage-agent`** (Haiku, 12 turn cap) is the cheap first pass. It gets the message or the diff and answers in seconds: either `NONE`, or a short list of what's worth researching. `NONE` is the common case and it satisfies the gate. Measured at roughly 12k tokens and 15 seconds, against 44 to 52k and 2 to 8 minutes for full research. That gap is what makes gating *every* edit affordable.
+**`swiper`** (Sonnet) is the researcher. When the gate nudges toward research on an edit, spawn it; it picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources, a `COVERS:` line, and a `MATCH_STRATEGY:`. It hates writing code from scratch: its whole job is to find real working code (in the project, the stdlib, an installed dependency, GitHub, or StackOverflow) and hand it back exactly as found so the builder can place it, not just describe it. It does not write or edit project files itself. Writing original logic is the builder's last resort, said plainly when reached. It runs real research every time it fires (roughly 44 to 52k tokens and 2 to 8 minutes for a full pass) and does NOT guess whether a change is trivial. Spawn it in the foreground (`run_in_background: false`), never backgrounded — a backgrounded completion arrives later as a `TaskNotificationMessage`, not a tool result, so `research-record.py`'s `PostToolUse` hook never fires for it and the record never gets stamped no matter how long you wait. It's defined in `~/.claude/agents/` and preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check).
 
-**`research-agent`** (Sonnet) runs only when triage says it's worth it. It picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources.
+Its report also names a `MATCH_STRATEGY:`, one of two values: `clone-and-patch` or `pattern-only`. There is no `adapt` tier: that word let a builder rewrite a shipping ready reference from scratch instead of using it, a real observed failure, so it's gone, not softened. `clone-and-patch` means copy the verbatim quoted block as the literal starting point and make only the smallest set of changes actually required, whatever the fetched reference's original framework or scale, no rewrite, no restyle, no swapped libraries, no added structure the reference didn't have. That's a hard ceiling on the diff, not a suggestion. `pattern-only` means nothing was worth swiping; only then does a real diff from correctness properties apply.
 
-Both are defined in `~/.claude/agents/`. research-agent preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check). triage-agent doesn't: its job is just NONE versus RESEARCH, and it runs on every message, so its context floor is kept as thin as possible.
+There used to be a cheap `triage-agent` (Haiku) in front of it that answered NONE-versus-RESEARCH in seconds. It was removed: it decided whether a change needed research *without reading the code*, and that blind guess was wrong often enough to be worse than useless. The call about what deserves a full research pass is now the human's, exposed as the `/ps` skill (a quick turn that skips both the gate and the verifier), not a model's to guess. After a full pass, swiper may itself recommend `/ps` for that kind of change next time if the research turned out functionally unneeded, but it never skips on its own.
 
-### Neither agent can write, and their shell is caged
+### swiper reports, it never writes, and its shell is caged
 
-They read untrusted web content, which makes them the obvious target for an indirect prompt injection. Sanitizing that text is leaky by nature, so the defense isn't filtering, it's capability removal:
+It reads untrusted web content, which makes it the obvious target for an indirect prompt injection. Sanitizing that text is leaky by nature, so the defense isn't filtering, it's capability removal from the one channel that could act on an injected instruction:
 
-- No `Write`, no `Edit`. They cannot touch a file.
-- `hooks/research-agent-bash-guard.py` (a PreToolUse hook in their own frontmatter) restricts Bash to `curl` against `127.0.0.1` clean-rag only. Verified against 15 cases: `rm -rf`, remote exfil, `;` and `&&` chaining, piping into `sh`, `>` redirects, `python -c`, command substitution, cloud metadata endpoints, and lookalike hosts such as `127.0.0.1.evil.com`.
+- **No `Write` or `Edit`, on purpose.** swiper quotes what it found in its report; the builder places it. This used to be the other way around (swiper wrote the code straight into the target file itself), until a real observed failure: giving it that access is exactly the channel an injected instruction could act through, on top of being the wrong division of labor once a real consult step sits between "here's what's out there" and "here's what we're doing about it."
+- **Bash is capped regardless.** `hooks/research-agent-bash-guard.py` (a PreToolUse hook in its own frontmatter, name not yet renamed to match) restricts Bash to `curl` against `127.0.0.1` clean-rag only. Verified against 15 cases: `rm -rf`, remote exfil, `;` and `&&` chaining, piping into `sh`, `>` redirects, `python -c`, command substitution, cloud metadata endpoints, and lookalike hosts such as `127.0.0.1.evil.com`. `git clone https://` is allowed as a special case: `_check_git_clone()` in `research-agent-bash-guard.py` permits it when the URL starts with `https://` and no dangerous flags are present. The dangerous flag set (`--upload-pack`, `ext::` transport, `--template`, `-c`/`--config`) are the documented arbitrary-command vectors (CVE-2022-25900, GHSA-jcxm-m3jx-f287) and are still refused. All other `git` subcommands are blocked.
 
-A fully compromised research agent can search. That is all it can do.
+A fully compromised swiper can search and quote whatever it already has real fetched content for in its report, but it cannot write anything to disk and cannot run an arbitrary shell command to do anything else. `researcher` (see below) is defined the same way, for the same reason.
+
+## researcher, and the /start pipeline
+
+**`researcher`** (Sonnet) runs before swiper on `/start`. It indexes and searches the project itself (`/index-project`, then `/search` with `mode: "both"`), reaches for the `graphrag` skill on a genuinely cross file behavior question, and checks the general engineering standard for the change against a real source. No `Write`/`Edit`, same posture as swiper, same Bash cage. It replaces an ad hoc codebase exploring subagent for understanding a project, since it has clean-rag's real indexed databases behind it.
+
+`/start` is the deliberate entry point for a new build or feature: researcher first, then swiper informed by researcher's findings, then a real consult with the user (`AskUserQuestion`) before anything is written, then the main AI writes the code.
+
+## bad-cop and good-cop
+
+Post write verification is two agents, but good-cop is conditional, not
+always spawned. **`bad-cop`** (Sonnet) runs first: writes adversarial tests,
+runs the code, adds logging, and reports the real, provable failures it
+finds, with actual execution output attached. It never fixes anything. If it
+finds nothing real, it emits the `VERIFIED:` line itself and the pass is
+done, no `good-cop` run needed to re-confirm a clean adversarial pass. Only
+when it finds something real does **`good-cop`** (Opus) run: takes bad-cop's
+findings, researches the correct fix, applies it, and reruns bad-cop's new
+tests plus the existing suite until everything is actually green, and stamps
+`VERIFIED:`. After good-cop stamps, bad-cop re-runs for a final adversarial
+re-check. If bad-cop finds nothing on that re-check, it stamps `VERIFIED:`
+itself and the loop ends. If it finds more issues, good-cop runs again. The
+loop (bad-cop → good-cop → bad-cop) continues until bad-cop stamps
+`VERIFIED:` on a clean pass — that is the only terminal condition.
+`hooks/verifier-gate.py` enforces this: bad-cop's final clean stamp is what
+clears the gate. Both are defined in `~/.claude/agents/` the same way swiper
+and researcher are.
 
 ## Search
 

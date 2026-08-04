@@ -1,462 +1,373 @@
 # ClaudeBoost
 
-Multi-agent orchestration toolkit for Claude Code: agents, knowledge bases, semantic search.
+Research gated development for Claude Code. Every code edit is researched before
+it happens, and search runs over your own indexed projects, not a scraped
+knowledge base. Works standalone or with Gas Town.
 
-## How It Works
+## The research gate (this is the operative rule)
 
-You have 25 agents (`agents/*.xml`) and 109 knowledge files (`knowledge/*.xml`) — 55 domain bases, 21 language guides (`lang-*.xml`), 33 framework guides (`fw-*.xml`).
-A RAG server indexes all of them for semantic search.
+Every edit to a code file is checked against whether `research-agent` has run
+this turn and declared that it covered that file, and nudges toward research
+when it hasn't. The gate used to actually block the edit until it did; that
+per turn scoping (research reset by every single message, not just a real new
+task) turned out to be too disruptive in practice, so the block is gone and
+the nudge plus an honest audit trail replaced it. The nudge is a PreToolUse
+hook that keys off a real agent completion, not a claim of one, so the record
+it checks can't be satisfied by claiming you researched, even though it no
+longer refuses the edit either way.
 
-**RAG powers agent knowledge (REQUIRED — PreToolUse hook reminds you):**
-- Spawned agents MUST call `POST http://127.0.0.1:8612/context` as their FIRST action
-- Use `POST http://127.0.0.1:8612/search` when unsure which knowledge file applies or when reviewing code for standards
-- NEVER guess which file to read — search for it
-- Include agent name + task description in spawn prompt; no need to pre-fetch knowledge
-- PreToolUse hook on `Task` enforces a RAG context call in the spawn prompt — spawns without it are blocked (exit 2); include `POST http://127.0.0.1:8612/context` as the first action in every spawn prompt
+When the gate nudges toward research:
 
-**Use all three RAG modes when they apply:**
-- `POST /context` — knowledge and agent context (always first, via HTTP REST)
-- `POST /search` with `scope=codebase` — semantic code search
-- `POST /search` with `scope=codebase&mode=graph` — dependency and import chains
+1. **Spawn `research-agent`** (Sonnet). Tell it what you're changing, why, and the
+   code you intend to write. It covers depth and breadth, checks whether the thing
+   already exists, reads the project's import graph, and reports with sources and a
+   `COVERS:` line naming the files it covers. That scope is what the audit trail
+   checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
+   Wait for it before editing anyway; that's still the point. Spawn it in the
+   foreground (`run_in_background: false`), never backgrounded — a backgrounded
+   completion arrives later as a `TaskNotificationMessage`, not a tool result, so
+   the hook that stamps the turn record never fires for it and the record never
+   shows the coverage no matter how long you wait.
+   Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
+   verbatim quoted reference as the literal starting point and make only the
+   smallest set of changes that fixes the actual issue — no rewrite, no restyle,
+   no swapped libraries or approaches, no added structure the reference didn't
+   have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
+   allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
+2. There is no cheap triage tier anymore. The old one decided whether a change
+   needed research WITHOUT reading the code, and that blind guess was wrong often
+   enough to remove. research-agent looks first, so its judgment is grounded. It
+   does real research every time it runs; do not build a triviality shortcut into
+   it or any other agent.
+3. Genuinely trivial work that needs no research is the human's call, not a
+   model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
+   you already know the change is trivial.
 
-**Dual-mode mandate (MANDATORY):** Every codebase search MUST cover BOTH modes. Use `mode=both` in a single `POST /search scope=codebase` call — it runs vector and graph concurrently server-side and returns `{"vector": {...}, "graph": {...}}`. If mode=both is unavailable, fall back to two sequential calls (`mode=vector` then `mode=graph`). They surface different files — never run only one.
+Markdown and non code files are exempt. So are `workspace/`, `state/`, `plans/`,
+`docs/`, `.claude/`, and temp dirs.
 
-**If RAG errors mid-task, fix it — never skip it.** Run `/rag` to restart the server. Do not proceed with degraded context or substitute grep/file reads.
+**Depth versus breadth**, the split both agents use:
+- **Depth** is the general engineering question, the one an unrelated project
+  would get the same answer to. Structure, separation of responsibility,
+  testability, the standard approach to this class of problem.
+- **Breadth** is the task specific question. How this exact kind of thing gets
+  built, what people get wrong with it, what good looks like. "What's the best
+  way to build this" is breadth too, not just pitfalls.
+
+research-agent cannot write files, and its Bash is caged to the local clean-rag
+server. It reads untrusted web content, so removing its ability to act is the real
+defense against a prompt injection.
+
+## Verify by running, not by reviewing (the post write half)
+
+Research before the edit lowers the odds of a bug. It does not confirm the code
+you wrote is correct. To actually know, after writing any non trivial logic:
+
+- **Leave one small runnable check and RUN it.** An assert, a tiny test, or
+  drive the real flow. If it fails, feed the actual error back and fix once.
+  Execution feedback is the highest quality per token signal there is (measured
+  12 to 46 percent first try correctness gains), and it costs interpreter time,
+  not tokens, except for the rare fix.
+- **Do not self review your own diff in the same context.** Measured evidence
+  says intrinsic self critique without external grounding is close to useless
+  and sometimes makes things worse. Running the code is grounded. Re reading it
+  is not.
+- **A real separate context review runs on every real code change**, unless the
+  human marked the turn `/ps`. It used to be reserved for high stakes surfaces
+  (auth, money, SQL, a subprocess, concurrency); now it's the default after any
+  code change, because green tests and correct code are different questions
+  everywhere, not only there. Spawn `bad-cop` first, a fresh context critic, NOT
+  the research agent (that one reads untrusted web and stays capability stripped,
+  and any agent that wrote or researched the change inherits its own blind spot on
+  review). bad-cop writes adversarial tests, runs the code, adds logging, and
+  reports the real failures it finds, with actual execution output attached.
+  If it finds nothing real, it stamps `VERIFIED:` itself: no separate
+  `good-cop` run needed to re-confirm a clean adversarial pass. Only when it
+  finds something real, spawn `good-cop` next, same rules, handed bad-cop's
+  findings instead of the requirements alone: it researches the correct fix,
+  applies it, and reruns bad-cop's new tests plus the existing suite until
+  everything is actually green, and it is the one that stamps `VERIFIED:` in
+  that case. After good-cop stamps, spawn bad-cop again for a final
+  adversarial re-check on the fix. If bad-cop finds nothing on that re-check,
+  it stamps `VERIFIED:` itself and the loop ends. If it finds more issues,
+  spawn good-cop again. The loop (bad-cop → good-cop → bad-cop) continues
+  until bad-cop stamps `VERIFIED:` itself — that is the only terminal
+  condition, not good-cop claiming done. Give both of them the
+  requirements, the correctness properties, and the diff, never your reasoning
+  for the change, since that reasoning is exactly what biases a reviewer into
+  agreeing. If research-agent grounded the build in a real GitHub reference (a
+  `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted), pass that
+  snippet forward into their correctness properties too, not just its
+  description. Neither has web fetch access on purpose, only search, so this is
+  the only way a real reference reaches their review; do not give either its own
+  GitHub/web fetch access, that would duplicate the one injection-exposed agent
+  this codebase deliberately keeps to one. `hooks/verifier-gate.py`
+  (a Stop hook) requires a real stamp before the turn can end: bad-cop always
+  provides the terminal stamp — either directly on a clean initial pass, or
+  after a final re-check that finds nothing following good-cop's fix —
+  writing a `VERIFIED:` line naming the files it covered, checked
+  per file the same way the research gate checks `COVERS:`, invalidated if a
+  file is edited again after being reviewed. `high_stakes.py`
+  labels which surface it touched so the review points at the sharpest risk. A
+  `/ps` turn skips both, the same quick mode escape that skips the research gate.
+
+Trivial one liners need no check. This is the cheap post write complement to the
+gate's pre write research: research narrows the approach, running the code
+confirms it.
+
+This verify step is now partly enforced. `hooks/auto-test-gate.py` (a Stop hook)
+runs the project's tests when code changed this turn, and if they really fail it
+blocks the stop once and hands you back the real failure output to fix from. It is
+loop safe: it honors `stop_hook_active`, caps blocks per session, and allows on
+anything ambiguous (no tests, a missing runner, an environment problem). So on a
+project with tests you will often get the actual assertion diff or stack trace
+pushed back at you automatically. Fix from that, do not self review.
+
+If the logic you changed has no test at all, writing one IS part of verifying it,
+not an optional extra. Do not skip verification because none exists, that is the
+gap the tests were supposed to close. Write the missing test, then prove it bites
+(next paragraph), because a test written without that proof reliably asserts the
+current behavior instead of catching a bug, which is worse than no test.
+
+Passing tests are necessary, not proof the tests catch bugs. For non trivial logic
+on a real bug surface, after the tests pass run the mutation check on just the
+files you changed: `POST http://127.0.0.1:8613/mutation-test` with
+`{"project_path": "<abs>", "changed_files": [...]}`. It runs the language's real
+mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a
+surviving mutant is a test that would pass on broken code, so tighten it. When the
+edge cases matter, let the language's property based library (`Hypothesis`,
+`fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
+guessing which inputs to test, which is the weak version the research warned about.
+
+## Debugging, testing and QA
+
+When a bug does not yield, the failure mode is applying one technique harder.
+Two or three iterations with no new information means the technique is wrong,
+not that you need more logging. Invoke the **`debugging-methodology`** skill and
+pick a different one by name from its symptom table:
+
+- Regressed since a known good commit, use `git bisect` (`git bisect run <cmd>`
+  automates it entirely).
+- Large input fails, small ones pass, use delta debugging to shrink it.
+- Long call chain with one bad value, binary search on state.
+- A working case sits beside the failing one, differential debugging.
+- Reproduces but the cause is unclear, hypothesis first: write the claim down,
+  then design the smallest test that would falsify it.
+- Intermittent or a race, record replay (`rr`). Re running it is not a strategy.
+- No reliable reproduction at all, stop and get one. A fix without a repro is a
+  guess you cannot validate.
+
+That skill also carries the per stack recipes for surfaces no MCP server
+reaches: React Native (`adb logcat`, `npx react-native log-ios`, Hermes over CDP
+through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
+(`dotnet-trace`, `dotnet-dump`, `dotnet-gcdump`, `dotnet-counters`), and Python
+(`py-spy dump`/`record`, which attach to a live process without restarting it).
+
+**Reach for the debugger over print statements.** `mcp-debugger` covers Python,
+Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
+`start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
+performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
+is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
+registered, so run the installer; every server comes from one table there.
+
+**Databases are read only.** Understand the schema from the project's own
+artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic versions,
+`schema.sql`), reason about the query, and hand it to the human to run. Do not
+execute against a live database and do not automate SSMS or any equivalent GUI
+client. A wrong statement against real data is not recoverable by a retry.
+
+Running `/qa` gives the full session: inventory, a risk ranked test plan, and
+execution with evidence. `/debug` is the focused single bug path. Both enumerate
+the debugging tools already, and both point back at this same skill.
+
+## UI / Frontend Work
+
+When the task involves editing or creating frontend files (`.tsx`, `.jsx`,
+`.html`, `.css`, `.scss`, `.vue`, `.svelte`), invoke the `frontend-design`
+skill before making any design decisions. Run the two-pass process: compact
+token system (palette, typefaces, layout concept, signature element) then
+self-critique against the brief before building. Never skip to code without
+the brief-grounding pass.
+
+After any UI change, invoke the `eyes` skill to capture a screenshot and
+verify visually before calling it done. Propose changes with pixel-precise
+numbers. Confirm with the user before applying. Verify with a before/after
+comparison screenshot.
+
+## clean-rag (the search backend, port 8613)
+
+Search runs over projects you've indexed, plus live web search. There is no
+scraped topic knowledge base.
+
+- `POST http://127.0.0.1:8613/search` with `sources: ["project:<abs path>"]` and
+  `mode: "both"` runs vector similarity and import graph traversal together.
+  Graph results carry `relation` (imports, inherits, implements, calls) and
+  `seed_file`. Use `mode: "both"` on every code search, vector and graph surface
+  different files.
+- `POST http://127.0.0.1:8613/web-search` is DuckDuckGo, source ranked (GitHub
+  and StackOverflow first, content farms last), sanitized against hidden
+  characters. Snippets are cheap, so survey with it and only fetch a full page
+  when you need the substance.
+- Index a project once with `/index-project`. It reindexes itself: after every
+  edit, and a full sweep every 10 minutes for outside changes. The server runs
+  headed so you can watch it.
+
+If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
 
 ## Decision Flow
 
-Two paths, not five mandatory steps:
+Two paths, not five mandatory steps.
 
-**Simple task?** Just do it. No workspace, no ceremony — but `POST /search` still applies when you need to find something in the codebase.
+**Simple task?** Just do it. No workspace, no ceremony.
 
-**Complex task?** (ticket attached, multi-agent, multi-session, user says "plan this", or touches >5 files)
+**Complex task?** (ticket attached, multi-agent, multi-session, user says "plan
+this")
+1. Create `workspace/[task-id]/` and announce with one line.
+2. Sweep then verify across domains (testing, docs, security, architecture,
+   performance, review, clarity).
+3. Spawn the right agent(s).
 
-Scope tiers:
-- **5–10 files (FEATURE)**: workspace + subtasks
-- **>10 files (COMPLEX)**: workspace + plan + agent delegation
-- **>15 source files or new subsystem (COMPLEX+)**: create a PRD first (`/create-prd`)
-
-Steps:
-1. Create `workspace/[task-id]/` — announce with one line
-2. Sweep-then-verify across domains (testing, docs, security, architecture, performance, review, clarity, browser testing, observability)
-2b. Scope graph — after ticket analysis, run BOTH `POST /search mode=vector` AND `POST /search mode=graph` seeded from ticket entities (file names, service names, endpoints mentioned). Merge results and write to `context.md` as "Files in Scope". This is your starting navigation map for the task.
-3. Spawn the right agent(s)
-
-Sweep-then-verify across domains — every flag must cite file:line or be dropped (see Verify Gate).
+Sweep then verify: scan all domains, but for every flag you raise, prove it from
+actual code. If you can't cite specific lines, drop the flag. "Nothing found" is
+always valid.
 
 ## Agent Spawning
 
-**CRITICAL:** Always use the **Task tool** to spawn agents, never the Agent tool.
-The enforcement gate (PreToolUse hook on Task) blocks unresearched agent spawns.
-Agent tool bypasses enforcement — it will be blocked by agent-spawn-gate.py.
-
 Spawn agents when they add value: parallelism, isolation, deep specialization.
-Do the work directly when they don't. A one-line fix doesn't need an agent.
+Do the work directly when they don't. A one line fix doesn't need an agent.
+
+Specialist agents (architect, reviewer, debug, security, performance, refactor,
+ui, docs, test, and the rest) are available for focused work. They are spawned
+as needed, not on every task.
 
 ### Model Routing
-- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent
-- **Sonnet**: all others
+- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent, good-cop.
+- **Sonnet**: research-agent, researcher, bad-cop, and all other specialists.
+
+### Starting a new build or feature
+
+For an edit intent task, a new build or feature, run `/start` instead of
+diving straight into research-agent: it spawns `researcher` first (codebase
+structure via clean-rag's own index and graph, plus the general engineering
+standard for this class of change), then `swiper` informed by researcher's
+findings (what can be swiped, from the project, the stdlib, a dependency,
+GitHub, or StackOverflow, reported only, swiper never writes to the project
+itself), then consults the user with real options before anything is
+written. `researcher` also replaces an ad hoc codebase exploring subagent for
+understanding a project: it has clean-rag's real indexed vector and graph
+databases behind it, so route codebase understanding tasks to it instead.
 
 ### Parallel Limits
-- Context below 50%: up to 3 agents
-- Context 50-75%: up to 2 agents
-- Context above 75%: 1 agent, sequential
+- Context below 50%: up to 3 agents.
+- Context 50 to 75%: up to 2 agents.
+- Context above 75%: 1 agent, sequential.
 
-### Language & Framework Guides
-Language and framework knowledge files (`knowledge/lang-*.xml`, `knowledge/fw-*.xml`) are indexed in RAG and load automatically when relevant. Including the language or framework name in a spawn prompt's `task_description` improves match quality — e.g. `"fix bug in TypeScript React component"` will pull in both the TypeScript and React guides.
+## Verify Gate (anti hallucination)
 
-### Agent Return Format
-Every agent response **MUST** end with a `## Summary` block (≤300 words) containing:
-- Findings with `file:line` citations
-- Decision made or action taken
-- Specific next step
+Applies everywhere: reviews, planning, bug diagnosis, security audits, test
+planning.
 
-The orchestrator reads the `## Summary` block. It does **NOT** re-read the full response body.
-This keeps agent output from bloating the main context window (multi-agent overhead can reach 15× chat tokens — Anthropic research finding).
-Include this instruction in every agent spawn prompt: `"End your response with ## Summary (≤300 words): findings with file:line, action taken, next step."`
-
-## Verify Gate (Anti-Hallucination)
-
-Applies everywhere: reviews, planning, bug diagnosis, security audits, test planning.
-
-- Every finding must be **proven from actual code** before acting on it
-- Cite specific file + line for every flag
-- "No issues found" is always a valid outcome
-- Reviewers: finding something is NOT the goal. Finding REAL things is.
-
-Hooks remind you of this: PreToolUse nudges agents to call POST http://127.0.0.1:8612/context in spawn prompts, PostToolUse reminds the orchestrator to spawn evaluator-agent for unverified findings (it is an LLM nudge, not a mechanical gate — mark findings correctly yourself), NEEDS_VERIFICATION status flags a finding for evaluator-agent escalation.
-
-## TDD Guard
-
-PreToolUse hook on Edit, Write, and MultiEdit that enforces writing tests before source code. Uses git diff detection (no LLM calls, no external API) to check whether a corresponding test file was modified before allowing source edits.
-
-**Modes** (set via `CLAUDEBOOST_TDD_GUARD` env var):
-- `soft` (default): warns on stderr but allows the edit (exit 0)
-- `strict`: blocks the edit (exit 2) until a test file is changed
-- `off`: disabled entirely
-
-**How it works**: when you edit a source file, the hook runs `git diff --name-only HEAD` and checks if any changed file matches a test pattern for the source file's name. Test patterns: `test_{name}.*`, `{name}_test.*`, `{name}.test.*`, `{name}.spec.*`, `{name}Tests.*`, `{name}_spec.*`. Any test file in the changed set also counts.
-
-**Exempt paths**: workspace/, state/, knowledge/, plans/, docs/, .claudeboost/, .claude/, temp directories. Editing test files themselves is always allowed.
-
-**Hook order**: TDD guard fires BEFORE proof-gate. If TDD guard blocks, proof-gate never runs (no wasted proof computation).
-
-**To satisfy the guard**: write or modify a test file first, then edit the source file. The test file must be in git's uncommitted changes (staged or unstaged).
-
-## Socratic Brainstorming (Workspace Auto)
-
-Phase 7c.5 in the `/workspace --auto` pipeline. After spec creation (7c) and before code changes (7d), Claude answers 5 probing questions in `brainstorm.md`:
-
-1. What am I assuming that might not be true?
-2. What's the simplest approach that could work?
-3. What existing code am I duplicating or conflicting with?
-4. What will break if I'm wrong?
-5. Who or what depends on the code I'm changing?
-
-Each answer must cite evidence (file:line, RAG score). If any answer reveals a spec flaw, the spec gets updated before implementation begins. This phase only runs during `--auto` pipeline execution, not during manual workspace use.
+- Every finding must be proven from actual code before acting on it.
+- Cite specific file and line for every flag.
+- "No issues found" is always a valid outcome.
+- Finding something is not the goal. Finding real things is.
 
 ## Collaborative Mode (CONSULT / AUTO)
 
-Default: **CONSULT**. Before touching any file, produce a spec sheet: a plain-language summary of what the task does, then a table listing every file and the specific change planned. The user approves the spec. Claude can only edit files listed in the approved spec. Anything outside the spec requires a new spec sheet first.
+Default is **CONSULT**. Before an architectural decision, research the project,
+present options, let the user add constraints, then implement. Architectural
+triggers: a new endpoint, DB table, dependency, module, middleware, or a new
+auth/validation/error/logging strategy. Not triggers: typos, one line fixes,
+tests, docs, renames in one file.
 
-This is a per-file gate, not a one-time task-level check. The hook (`consult-gate.py`) enforces it mechanically: every Edit, Write, and MultiEdit is checked against `state/spec-sheet.json`. If no spec exists, or the target file isn't listed in `approved_files`, the hook blocks with a dialog explaining what to do.
+`/auto [reason]` switches to autonomous AUTO mode for prototyping and low rework
+cost work. `/consult` restores CONSULT.
 
-**Spec sheet format:**
+## Hard Rules (non negotiable)
+
+### Never start an app without naming the environment
+Starting a local app is the single most dangerous routine command, because the
+damage comes from what you *omit*, not from anything visibly dangerous you type.
+
+Always name the environment explicitly, and never pass a flag that skips the
+launch profile:
 
 ```
-## Spec Sheet: [task name]
-
-### What This Does
-[2-3 sentences. What the user will see or experience. Concrete, not technical.]
-
-### Approved Changes
-| # | File | Operation | What Changes |
-|---|------|-----------|--------------|
-| 1 | path/to/file.py | modify | Specific function and exactly what changes |
-| 2 | path/to/new.py  | create | New file — what it contains and why |
-
-### Out of Scope
-[files explicitly excluded from this spec]
+ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="https://localhost:PORT" \
+  dotnet run --project "<path to csproj>"
 ```
 
-Stop after producing the spec. Don't write code or files. Wait for the user's approval before writing `state/spec-sheet.json` and starting work. If you discover a new file needs changing during implementation, stop, tell the user why, wait for approval, then update the spec before proceeding.
+Then read the startup log and confirm `Hosting environment: Development` before
+opening a browser or running any test against it. Anything else is a stop.
 
-**What fires the gate**: any Edit, Write, or MultiEdit on a file not in `approved_files`.
-**What doesn't**: reads, Bash, Glob, Grep; files under `workspace/`, `state/`, `.claudeboost/`, `plans/`, `docs/`; AUTO mode bypasses everything.
+Why this is a hard rule: ASP.NET Core defaults to **Production** whenever
+`ASPNETCORE_ENVIRONMENT` is unset. `dotnet run --no-launch-profile` skips
+`launchSettings.json`, which is usually the only thing setting that variable, so
+config binds `appsettings.json` instead of `appsettings.Development.json`. On a
+real project that routinely means the production database and the production
+secret store, reached from a dev machine, with no prompt and no warning.
 
-**Bugfix exemption boundary**: "bugfix" means the user said fix/repair/correct this — not a bug Claude diagnosed on its own. If Claude identifies a bug the user didn't name, describe the finding and proposed fix and wait for confirmation before editing.
+Do not count on a failure to save you. Whether such a run actually connects
+depends on incidental things like credential resolution order, which is not a
+safeguard and can change without notice.
 
-Standards (parameterized queries, `logger.error`, input validation, auth) apply automatically throughout — never listed in the spec, never up for debate.
-Approvals logged to `state/session-approvals.json` (session-scoped).
-Approved file list logged to `state/spec-sheet.json` (overwritten per task).
-State: `$CLAUDEBOOST_HOME/state/claudeboost-mode.json` (missing = CONSULT).
-`/auto [reason]` = AUTO. `/consult` = restore. Full protocol: `knowledge/consult-mode.xml`.
+Note what makes this class hard to catch: the dangerous command contains no
+dangerous looking token at all. Do not rely on a command "looking risky" to
+decide whether to check the environment. `scripts/bash-guard.py` blocks the known
+shapes (`check_production_environment`), but it only knows the flags already
+discovered, so the rule above is what actually generalizes.
+
+The same reasoning applies to any framework with an environment default: Rails
+`RAILS_ENV`, Django `DJANGO_SETTINGS_MODULE`, Node `NODE_ENV`, Spring
+`SPRING_PROFILES_ACTIVE`. Name it, then verify it from the app's own startup
+output rather than from what you intended.
+
+### jQuery Ban
+jQuery is banned unless the user explicitly asks for it. Detect `$()`, `jQuery`,
+imports, and CDN tags. Use React hooks, vanilla JS, and native fetch instead.
+
+### Security Standards
+- Parameterized queries always. Never string concatenation in SQL.
+- Transactions for multi step database operations.
+- OWASP top 10 awareness.
+- No secrets in logs, URLs, or source.
+- Input validation at system boundaries.
+- Auth and authz checks on endpoints.
+
+### Logging Standards
+- Missing `logger.error` in a catch or error block is a blocker.
+- Sensitive data in log output is a blocker.
+- Missing INFO level on service methods and before/after on external calls is a
+  suggestion.
 
 ## Token Efficiency
 
-**Agent weight routing**:
-- **Full** (reviewer, security, performance): verify gate + evaluator-agent
-- **Standard** (workflow, refactor, debug, test, ui, architect, ticket-analyst, browser, evaluator, observability, devops, database, compliance, standards-validator, e2e, clean-rag-doctor): no verify gate
-- **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
-
-Always spawn evaluator for findings — never self-verify. Evaluator only reads cited file:lines.
-
-## Hard Rules
-See global `~/.claude/CLAUDE.md` — jQuery Ban, Security Standards, Logging Standards apply here.
-
-### No Multiline python -c or cat heredocs
-Never write `python -c "..."` or `python3 -c "..."` with multi-line code, and never use `cat > file << 'EOF'` to create files. Both trigger Claude Code's built-in safety scanner regardless of the allow list.
-
-Use the Write tool to create the file, then run it:
-1. Write tool → `$TEMP/cb_script.py` with your Python content
-2. `Bash: python "$TEMP/cb_script.py"`
-
-bash-guard.py enforces both — multiline `-c` strings and cat heredocs are blocked at the hook level.
-
-### No Hardcoded Paths in ClaudeBoost Code
-Never write literal paths like `C:/Development/ClaudeBoost/...` or `C:/Users/mniehaus/...` inside any ClaudeBoost source file (scripts, server code, hooks, agents). Always derive paths from:
-- `os.environ.get("CLAUDEBOOST_HOME")` or the `BOOST_HOME` constant
-- `Path(__file__).resolve().parent...` to traverse relative to the file
-- `os.environ.get("LOCALAPPDATA")` / `Path.home()` for user-scoped paths
-- Temp files: use `tempfile.mkstemp()` or `os.environ.get("TEMP")`, never a hardcoded drive path
-
-This applies equally to debug code, one-off scripts, and test helpers. Hardcoded paths break on other machines and other users.
-
-### Branch Creation (Non-Negotiable)
-Before creating any new git branch — including during workspace creation — STOP and ask the user for permission using AskUserQuestion. State the proposed branch name and purpose. Do not create the branch until the user confirms.
-
-After creating a workspace, explicitly tell the user: "I created branch `[branch-name]` for this workspace."
-
-This applies in every context — workspace setup, agent spawns, scripts, and direct git commands.
-
-### Irreversible Actions (Non-Negotiable)
-Before doing ANYTHING that cannot be undone — deleting files, dropping tables, force-pushing, overwriting data, sending messages, publishing to external services, running destructive shell commands — STOP.
-
-Tell the user exactly what you are about to do and why it cannot be undone. Use AskUserQuestion to get explicit YES confirmation before proceeding. If uncertain whether an action is reversible, treat it as irreversible and ask.
-
-Always prefer safe reversible alternatives when one exists: soft deletes over hard deletes, backups before overwrites, dry-runs before destructive commands.
-
-This applies in every context — not just agent spawns.
-
-### Label / String Consistency Fix Rule
-When fixing a label, field name, or string inconsistency:
-1. Grep for ALL occurrences of the old value across the entire repo before touching anything.
-2. List every match found — HTML labels, [DisplayName] attributes, export column .Name() calls, validation ErrorMessage strings, constants, comments.
-3. Default: update ALL of them in one commit.
-4. Exception: if a location is genuinely out of scope (e.g. a migration filename, a historical comment), state it explicitly and justify the skip.
-Never silently leave occurrences untouched because the bug report only mentioned a subset of surfaces.
-
-### Research Grounded Decisions (not negotiable)
-When working on a task that has a workspace KB (Tier 3c exists), every implementation decision, pattern choice, and architecture recommendation must be grounded in indexed research — not in training-data recall.
-
-Before answering "which approach should I use", "what pattern fits here", or "how should this be structured", query the workspace KB first:
-
-```bash
-POST http://127.0.0.1:8612/search
-  scope="codebase"
-  project_path="[WORKSPACE_ABS]/knowledge"
-  query="[the specific decision question]"
-  limit=3
-```
-
-If a result comes back with score ≥ 0.55: base the decision on what the indexed docs say. Cite the source.
-If score < 0.55 or no results: flag it explicitly — "no research coverage for this decision" — then proceed from code context. Never silently answer from memory.
-
-Log every grounded decision: `Decision: [what] — grounded by [source title] (score N)`
-
-This applies to spawned agents too. Include this mandate in every agent spawn prompt when a workspace_path is set.
-
-**Decision points that require a query:**
-- Choosing between two implementation approaches
-- Picking a library API method not already used in the codebase
-- Recommending a security pattern or auth flow
-- Handling an edge case the ticket leaves open
-- Any architectural choice where multiple valid options exist
-
-**Not required for:**
-- Reading or explaining existing code
-- Trivial one-line fixes with no approach choice
-- Tasks with no workspace KB (Tier 3c not built)
-
-## Human Voice Standard
-
-Every word Claude produces — responses, code comments, explanations, labels, error messages — must sound like a human wrote it. This is not optional.
-
-### Banned vocabulary (replace with plain English)
-`delve` `delving` `underscore` `pivotal` `robust` `seamless` `comprehensive` `nuanced` `leverage` `utilize` `facilitate` `harness` `illuminate` `bolster` `tapestry` `realm` `beacon` `cacophony` `foster` `intricate` `palpable` `transformative` `revolutionary` `game-changing` `paradigm` `synergy` `holistic` `empower` `embark` `spearhead`
-
-### Banned openers and filler phrases
-- "Certainly!" / "Great question!" / "Absolutely!" / "Of course!" / "I'd be happy to"
-- "In today's rapidly evolving landscape…" / "It's worth noting that…" / "It is important to note that…"
-- "Furthermore," / "Moreover," / "Additionally," / "Consequently," → use "Also", "And", or a new sentence
-- "In conclusion" / "To summarize" → just say the thing
-- "It's not just X, it's Y" → sounds like insight, contains none; cut it
-- "As an AI" → never
-
-### Structural rules
-- **Vary sentence length.** Short sentences exist. Mix them with longer ones.
-- **Use contractions** — "don't", "it's", "we'll", not "do not", "it is", "we will"
-- **No uniform lists** — "Bold term: explanation" repeated 6 times reads like a machine; use prose or vary the structure
-- **No em-dashes at all.** Rewrite as separate sentences instead.
-- **No hyphenated compound jargon.** "no-go", "hard-block", "soft-fail", "non-trivial" used as standalone terms are AI-speak. Say what you mean: "not allowed", "blocks the task", "fails gracefully", "takes some work".
-- **No hedging clusters** — "might potentially perhaps" in one breath is not caution, it's noise; pick one or cut it
-- **Concrete over abstract** — "the build broke on line 42" not "there were issues"
-- **No throat-clearing** — start with the substance, not "Let's explore…" or "This section will cover…"
-
-### Code comments
-Same rules. Comments are output too.
-- Write like a note to a colleague, not a spec document
-- Say WHY, not WHAT — the code shows what; the comment explains why
-- Skip obvious comments; short beats long
-- Informal but professional, conversational not corporate
-- No dashes of any kind (no hyphens as separators, no em dashes, no double dashes)
-- No hyphenated compound words: "non-blocking" → "not blocking", "hard-coded" → "hardcoded", "step-by-step" → "step by step". Exception: dashes inside actual code identifiers (filenames, flags, variable names) are fine
-- No: `// This function facilitates the seamless authentication flow`
-- Yes: `// Throws if the token is expired`
-
-Full framework with examples: `knowledge/human-voice.xml`
-
-## MCP Debugging Tools
-
-When a user asks for breakpoint debugging, step-through execution, or wants to inspect
-runtime variable values, use `mcp-debugger` MCP tools — not print statements.
-
-**Trigger phrases:** "set a breakpoint", "step through", "step into/over/out", "what's the
-value of X at line Y", "debug this", "walk through execution", "trace this call"
-
-**Tool sequence:**
-1. `mcp__mcp-debugger__create_debug_session` — start session, pass language + name, returns sessionId
-2. `mcp__mcp-debugger__set_breakpoint` — set breakpoint at file:line
-3. `mcp__mcp-debugger__continue_execution` — run until breakpoint hits
-4. `mcp__mcp-debugger__get_variables` — inspect locals, call stack, scope
-5. `mcp__mcp-debugger__step_over` / `step_into` / `step_out` — navigate execution
-6. `mcp__mcp-debugger__evaluate_expression` — evaluate expression in current scope
-7. `mcp__mcp-debugger__close_debug_session` — always close when done
-
-**Languages:** Python, Node.js, TypeScript, browser JS, Go, Rust, Java, C#/.NET
-
-**Anti-pattern:** Never add `print()` / `console.log()` to inspect runtime state when
-mcp-debugger is available. Use `get_variables` instead.
-
-**For complex debugging sessions:** Spawn `debug-agent` — it has this workflow built in.
-Run `/boost` — Step 4c will confirm whether `mcp-debugger` is connected.
-
-## Task Creation
-
-For any multi-step or non-trivial work, call `TaskCreate` before starting. Mark the task `in_progress` when you begin it and `completed` when you finish. Don't batch completions — update each task as you go.
-
-When in doubt, create the tasks first. It keeps the user informed and preserves progress through compaction.
-
-## When to Use What
-
-| Trigger | Action |
-|---------|--------|
-| Ticket pasted | Save verbatim to `[project]/workspace/[task-id]/ticket.md` (project-scoped; ClaudeBoost meta-work uses `$CLAUDEBOOST_HOME/workspace/[task-id]/ticket.md`), plan, then delegate |
-| Complex feature (>5 files) | `/workspace` — creates plan, workspace, and agent routing |
-| Before delegating agents | Nothing to run. The research gate handles research automatically on code edits, so agents get what they need without a separate step. |
-| New codebase / first time in repo | `/index-project <path>` to enable semantic search |
-| New subsystem or >15 files | `/create-prd` before `/workspace` — locks down scope and acceptance criteria |
-| Explaining architecture or flow | `/visualize` — interactive board in browser |
-| Code just changed | `/xray` to check quality, then `/qa --code` to run tests + edge cases, then `/qa <url>` for browser verification if there's a UI |
-| Security concern | `/security-review` — OWASP-aware review of pending branch changes |
-| Something feels off after changes | `/audit` — parallel multi-angle assessment with Opus verdict |
-| Code review | Spawn reviewer-agent (Opus) with verify gate |
-| New architecture | Spawn architect-agent (Opus) with SOLID review |
-| Ready to ship | `/done` — pre-push checklist then push |
-| Context window filling up | `/clear-safe` to save state, then `/handoff` to document progress |
-| Want to see what changed | `/changes` — interactive branch change explorer |
-| Performance bottleneck | Spawn performance-agent |
-| Logging / metrics gaps | Spawn observability-agent |
-
-## Proactive Skill Suggestions
-
-When a response naturally completes a phase or the user's message matches a trigger pattern, append a short "What's next?" suggestion. Use `knowledge/skill-routing.xml` (loaded via RAG) for the full trigger-to-skill catalog.
-
-**Four rules — apply all before suggesting:**
-1. One suggestion per response max. Don't stack hints.
-2. Phrase it as an option: "Consider running /review to..." not "Run /review now."
-3. Skip if the user is already mid-skill (they know what they're doing).
-4. Skip for trivial one-liners where a suggestion would feel patronizing.
-
-**Format — two surfaces, two styles:**
-- **Mid-conversation hint** (proactive, inline): one or two sentences — `What's next: /skill-name — [one-line reason].`
-- **Post-skill completion** (at the end of a command): the "What's Next After /skill" table in each command file — rows are `If X | Run Y`, placed after the final output block of the skill.
-
-These are distinct. Don't use the table format for inline hints, and don't use the sentence format inside command files.
-
-### SOLID Review
-Only when designing new classes, modules, interfaces, or systems.
-Not on bug fixes, config changes, styling, or docs.
-
-### Self-Critique + Teaching
-Only on workspace tasks (complex work). Simple tasks: just deliver.
-
-### Alternatives Analysis
-Ask: "Would a reasonable person pick a different approach?"
-Yes: document alternatives and rationale. No: just do it.
-
-### Per-Folder CLAUDE.md
-Create a `CLAUDE.md` in any significant subdirectory with:
-- Purpose of the folder
-- Conventions specific to that folder
-- Key patterns or constraints
-Claude Code auto-loads these when working in subdirectories.
-
-## RAG HTTP API
-
-The RAG server exposes an HTTP REST API on port 8612. All RAG access — from Claude Code, scripts, agents, and external tools — uses this API directly. No MCP required. See `knowledge/rag-http-api.xml` for full docs.
-
-## RAG Unavailable Protocol
-
-When RAG tools are missing from your tool list OR return a connection/server error:
-
-1. **STOP immediately** — no investigation, no agent spawning, no file reading as a substitute
-2. Tell the user exactly: *"RAG is not connected. Run `/rag` to reconnect, then retry."*
-3. Do NOT attempt to recover by grepping, reading files, or proceeding with degraded context
-4. Do NOT rationalize past this — "I can be helpful anyway" is the wrong call
-
-When RAG errors mid-task: `rag-error-guard.py` surfaces the error automatically. Still stop and report; do not continue.
-
-The `session-primer.py` UserPromptSubmit hook injects a HARD STOP directive when the sentinel is missing — treat it as a hard requirement, not a soft suggestion.
-
-**Agent spawn blocked by sentinel guard?** Run `/rag` immediately. Do not investigate the sentinel file, do not try to set it manually, do not look for workarounds. The block means `/rag` hasn't run this session — that's the fix, full stop.
-
-## RAG Health Check Protocol
-
-At the start of any investigation or multi-step codebase task:
-
-1. **Call `GET http://127.0.0.1:8612/status` FIRST** — before loading context, before spawning agents.
-   - Returns in under 1 second if the server is up.
-   - If it fails: **STOP. Do not proceed.** Tell the user: "RAG server is not responding. Run `/rag` to start it."
-2. **Then call `POST http://127.0.0.1:8612/context`** with `{"agent":"...","task_description":"...","project_path":"...","workspace_path":"..."}`
-   - `project_path` = absolute path to the project being worked on (enables Tier 4 codebase search and stack detection for Tier 3 boost)
-   - `workspace_path` = absolute path to the active workspace, e.g. `$CLAUDEBOOST_HOME/workspace/[task-id]` (enables Tier 3c task research). Omit only when no workspace exists for this task.
-   - If the response contains an `"error"` key: **STOP. Do not proceed.** Report the error and tell the user to run `/rag`.
-3. **Check the status response** for collection counts and indexed projects to spot stale indexes.
-4. If index is stale (`reindex-check.py` warned at session start): POST /index with `{"project_path":"<path>","force":true}` before searching.
-
-**Any RAG tool returning an error is a hard stop** — do not continue with degraded or missing context. Do not rationalize past it ("I can grep instead"). Stop and tell the user to fix RAG.
-
-Do not skip the health check because "RAG seemed to work earlier" — indexes degrade silently and the server can disconnect between calls.
-
-## Workspace Update Protocol
-
-Update `workspace/[task-id]/context.md` **after every significant finding** — not at fixed intervals:
-- After a RAG search that surfaces relevant files: write what you found and why it matters
-- After reading a file that confirms or refutes a hypothesis: record the evidence
-- After identifying root cause of a bug: write it down before fixing
-- After any architectural decision or user constraint: capture it
-- Format: current status → what was found → next step → open questions
-
-The `context-nudge.py` PostToolUse hook fires after every 5 reads as a fallback reminder. Don't wait for it — update proactively. Findings in `context.md` survive compaction; findings only in context do not.
-
-## RAG Server
-
-Two distinct RAG indexes — always distinguish between them:
-
-| Term | What it is | Tools |
-|------|-----------|-------|
-| **ClaudeBoost RAG** | Agents (`agents/`) + knowledge bases (`knowledge/`) indexed at `mcp-rag-server/.rag-index/` | `POST /search scope=agents/knowledge/all`, `POST /index`, `POST /context` |
-| **Project RAG** | A specific project's source code, indexed per-project at `<project>/workspace/.rag-index/` | `POST /index`, `POST /search scope=codebase`, `/index-project` |
-| **GraphRAG** | Structural code graph (imports, inherits) stored in `graph.db` alongside Project RAG | `POST /search scope=codebase mode=graph` — auto-built at index time, auto-augments `/context` Tier 4b |
-
-When the user says "ClaudeBoost RAG" → they mean agents/knowledge.
-When the user says "Project RAG" or "project index" → they mean the codebase index for whatever project they're working on.
-`POST /context` combines both: tiers 0-3 pull from ClaudeBoost RAG, tier 4 pulls from Project RAG (vector), tier 4b pulls structural graph neighbours when a graph index exists.
-
-**GraphRAG usage (always run both):**
-- `POST /search` with `scope=codebase mode=vector` — semantic matches (required first call)
-- `POST /search` with `scope=codebase mode=graph` — structural neighbours: imports, callers, inheritance (required second call)
-- Run BOTH on every codebase query — vector and graph find different files; omitting either leaves a gap
-- Graph index is built automatically during project indexing (POST /index) — no extra step needed
-- Graph index degrades gracefully: if no `graph.db` exists, mode=graph falls back to vector results
-
-**Parallel reindex pattern** (use when reindexing a project while doing other work):
-
-Spawn a lightweight agent to run the reindex. The main agent stays unblocked.
-
-Spawn prompt must include:
-1. Call `POST http://127.0.0.1:8612/context` with `{"agent":"rag-indexing-agent","task_description":"reindex project at <path>"}` as first action
-2. Call `POST http://127.0.0.1:8612/index` with `{"project_path":"<path>","force":true}`
-3. Read the result: if `files_failed > 0`, log each entry in `errors[]` (file, type, message)
-4. If `errors[]` contains `embed_error` entries: retry once with `force=True`; if still failing, report the specific files
-5. Call `GET http://127.0.0.1:8612/status` and confirm graph shows `graph_active: true` for the project
-6. Return summary: files_indexed, chunks_created, files_failed, elapsed_s, graph edges/resolved, any unresolved errors
-
-**Reading reindex results** — POST /index returns:
-- `files_indexed` — successfully embedded and stored
-- `files_unchanged` — skipped (hash match, no change needed)
-- `files_failed` — errored; check `errors[]` for details
-- `errors[]` — `[{file, type: "read_error|embed_error", message}]` — only present if failures occurred
-- `elapsed_s` — total time
-- `graph.edges` / `graph.resolved` — graph index health
-
-`files_failed > 0` is the signal that something went wrong. Zero failures = healthy index.
-
-## TTS (Text-to-Speech)
-
-Hook auto-speaks responses when enabled. **NEVER run edge-tts, speak-play.py, or `start` via Bash** — triggers permission prompts. Just respond normally.
-
-- `/speak on|off` — toggle TTS
-- `/speak voice <name>` — change voice
-- `/speak voices` — list voices
+Do it right the first time. Rework costs more than ceremony.
+
+- Route by weight. Full ceremony (verify gate plus evaluator) for reviewer,
+  security, performance. Standard for the rest. Lightweight for explore,
+  research, docs.
+- Always spawn an evaluator to verify findings, never self verify. A fresh
+  context catches hallucinations that same context confirmation misses.
+- Web research is cheap when you survey with snippets and fetch sparingly. The
+  research agent's cost is mostly full page fetches, not searches.
+
+## Gas Town Compatibility
+
+Works with `gt prime`, `gt hook`, `gt sling`, `gt mail`, `gt nudge`,
+`gt handoff`, and beads. The workspace convention is bead compatible, and agent
+spawning is compatible with `gt sling` to polecats.
+
+## OpenCode
+
+clean-rag has an OpenCode integration too (`clean-rag/opencode/`): the same MCP
+search tools, the two research agents ported as OpenCode subagents, and a
+research gate plugin. Install with `clean-rag/opencode/install.py`. The gate is
+enforced for the primary agent; a known OpenCode bug means subagent edits may
+bypass it until upstream fixes it.
+
+## Browser Testing Safety
+
+Playwright and browser automation are localhost only. Allowed: localhost,
+127.0.0.1, 0.0.0.0, and `*.local` / `*.test`. If unsure whether a URL is local,
+ask before navigating. Default to a headed browser, not headless.

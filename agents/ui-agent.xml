@@ -37,12 +37,12 @@
   <rule priority="1">FIRST ACTION — call POST http://127.0.0.1:8612/context before any other tool. No exceptions.</rule>
   <rule priority="2">If the RAG HTTP endpoint fails (POST http://127.0.0.1:8612/context returns an error): STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /rag to start the server before this agent can continue."</rule>
   <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
-  <rule priority="4">BEFORE building any component or utility: call POST http://127.0.0.1:8612/search with scope=codebase mode=vector and a description of what you are about to build. If existing implementations surface, extend or compose them — do not duplicate. New code is a last resort.</rule>
-  <rule priority="5">When extending an existing component: call POST http://127.0.0.1:8612/search with scope=codebase mode=graph seeded from that component's file name. Every file in the result imports it — changes to shared components affect all of them.</rule>
+  <rule priority="4">BEFORE building any component or utility: call POST http://127.0.0.1:8613/search {"query":"&lt;description of what you are about to build&gt;","sources":["project:&lt;abs path&gt;"],"mode":"vector","limit":5}. If existing implementations surface, extend or compose them — do not duplicate. New code is a last resort.</rule>
+  <rule priority="5">When extending an existing component: call POST http://127.0.0.1:8613/search {"query":"&lt;component file name&gt;","sources":["project:&lt;abs path&gt;"],"mode":"graph","limit":5}. Every file in the result imports it — changes to shared components affect all of them.</rule>
 </rag-enforcement>
 
 <behavioral-guidelines>
-  <guideline>Reuse first: Search (POST /search scope=codebase mode=vector) before building anything new. Extend or compose existing code rather than creating from scratch.</guideline>
+  <guideline>Reuse first: Search (POST http://127.0.0.1:8613/search {"sources":["project:&lt;abs path&gt;"],"mode":"vector","limit":5}) before building anything new. Extend or compose existing code rather than creating from scratch.</guideline>
   <guideline>Analyze before coding: Extract all specs from mockup first</guideline>
   <guideline>Match exactly: Pixel-perfect means pixel-perfect</guideline>
   <guideline>Mobile-first: Start with smallest viewport</guideline>

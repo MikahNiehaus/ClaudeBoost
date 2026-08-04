@@ -14,7 +14,7 @@
     <use-case>Third-party API integration — vendor docs, SDK changelogs</use-case>
 
     <not-for>
-      <item>Reading project code — use POST http://127.0.0.1:8612/search scope=codebase or direct file reads</item>
+      <item>Reading project code — use POST http://127.0.0.1:8613/search with {"query":"...","sources":["project:&lt;path&gt;"],"mode":"both"} or direct file reads</item>
       <item>Debugging a specific error — read stack traces and code directly</item>
       <item>Anything already covered by the ClaudeBoost knowledge bases (POST http://127.0.0.1:8612/search scope=knowledge)</item>
       <item>General questions answerable from training data</item>
@@ -351,18 +351,18 @@
 
   <codebase-search-modes>
     <description>
-      POST http://127.0.0.1:8612/search scope=codebase has two modes. Choose based on what you need to find.
+      POST http://127.0.0.1:8613/search with {"sources":["project:&lt;path&gt;"],...} has two modes. Choose based on what you need to find.
     </description>
 
     <mode name="vector" default="true">
-      <usage>POST http://127.0.0.1:8612/search with scope="codebase", query="...", project_path="..."</usage>
+      <usage>POST http://127.0.0.1:8613/search with {"query":"...","sources":["project:&lt;path&gt;"],"mode":"vector","limit":5}</usage>
       <what-it-finds>Semantically similar code — functions, classes, and comments whose
       meaning is close to your query. Best for: "find the payment processing logic",
       "where is user authentication handled".</what-it-finds>
     </mode>
 
     <mode name="graph">
-      <usage>POST http://127.0.0.1:8612/search with scope="codebase", query="...", project_path="...", mode="graph"</usage>
+      <usage>POST http://127.0.0.1:8613/search with {"query":"...","sources":["project:&lt;path&gt;"],"mode":"graph","limit":5}</usage>
       <what-it-finds>Vector seeds PLUS structural neighbours — files that import from,
       inherit from, or are called by the seed files. Best for: understanding a module's
       callers/dependencies, finding everything that changes when you modify a file,

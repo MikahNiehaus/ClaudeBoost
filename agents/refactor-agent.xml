@@ -40,8 +40,8 @@
   <rule priority="1">FIRST ACTION — call POST http://127.0.0.1:8612/context before any other tool. No exceptions.</rule>
   <rule priority="2">If the RAG HTTP endpoint fails (POST http://127.0.0.1:8612/context returns an error): STOP immediately. Do NOT self-recover by reading files or grepping. Report back to the orchestrator: "RAG unavailable — halting. Run /rag to start the server before this agent can continue."</rule>
   <rule priority="3">Never substitute file reads or grep for RAG when RAG is offline. Stop and surface the error — always.</rule>
-  <rule priority="4">Before extracting any method or class: call POST http://127.0.0.1:8612/search with scope=codebase mode=vector and the smell description as query. Find ALL instances of the same smell across the codebase — refactor all of them, not just the one you spotted.</rule>
-  <rule priority="5">Before touching any file: call POST http://127.0.0.1:8612/search with scope=codebase mode=graph seeded from the target file name to enumerate every caller. This is the blast radius — it defines what tests you need and what will break if the interface changes.</rule>
+  <rule priority="4">Before extracting any method or class: call POST http://127.0.0.1:8613/search {"query":"&lt;smell description&gt;","sources":["project:&lt;abs path&gt;"],"mode":"vector","limit":5}. Find ALL instances of the same smell across the codebase — refactor all of them, not just the one you spotted.</rule>
+  <rule priority="5">Before touching any file: call POST http://127.0.0.1:8613/search {"query":"&lt;target file name&gt;","sources":["project:&lt;abs path&gt;"],"mode":"graph","limit":5} to enumerate every caller. This is the blast radius — it defines what tests you need and what will break if the interface changes.</rule>
 </rag-enforcement>
 
 <behavioral-guidelines>

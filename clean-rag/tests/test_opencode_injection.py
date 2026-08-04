@@ -1,195 +1,163 @@
 #!/usr/bin/env python3
-"""Test OpenCode MCP injection pipeline.
+"""Tests for the OpenCode MCP server's tool surface.
 
-Simulates OpenCode calling the MCP server with a code analysis request.
-Tests metrics injection, RAG search, and web fallback.
+Rewritten from a manual demo script. The previous version passed
+unconditionally and tested nothing:
+
+  * ``test_mcp_call`` was a HELPER taking two required arguments, but its name
+    made pytest collect it as a test, so it errored on a missing ``tool_name``
+    fixture on every run.
+  * It spawned ``/c/prj/ClaudeBoost/clean-rag/mcp/opencode_mcp_server.py``, a
+    path from a different machine that does not exist here, so every call hit
+    ``FileNotFoundError``, was swallowed into ``{"error": ...}``, and the test
+    body returned ``False``/``None``.
+  * The bodies ``return`` a bool instead of asserting, and pytest treats any
+    non-None return as a pass, so a total failure still reported green.
+
+These exercise the request handler in process rather than over a subprocess.
+That is the part with the logic in it, and it needs no server, no network and
+no hardcoded machine paths.
 """
 
+import importlib.util
 import json
-import subprocess
 import sys
-import time
 from pathlib import Path
 
+import pytest
 
-def test_mcp_call(tool_name: str, tool_input: dict) -> dict:
-    """Call MCP server via stdin/stdout."""
-    request = {
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": tool_name, "arguments": tool_input},
-    }
-
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, "/c/prj/ClaudeBoost/clean-rag/mcp/opencode_mcp_server.py"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        output, err = proc.communicate(
-            input=json.dumps(request) + "\n", timeout=10
-        )
-
-        if output:
-            response = json.loads(output.strip())
-            return response.get("result", {"error": "no result"})
-        else:
-            return {"error": f"No output: {err}"}
-
-    except subprocess.TimeoutExpired:
-        return {"error": "timeout"}
-    except Exception as e:
-        return {"error": str(e)}
+_SERVER_PATH = Path(__file__).resolve().parent.parent / "mcp" / "opencode_mcp_server.py"
 
 
-def test_1_rag_search():
-    """Test 1: RAG search for collision detection."""
-    print("\n=== TEST 1: RAG Search ===")
-    result = test_mcp_call(
-        "rag_search",
-        {
-            "query": "collision detection game physics algorithm",
-            "limit": 3,
-        },
+def _load_server_module():
+    spec = importlib.util.spec_from_file_location("opencode_mcp_server", _SERVER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["opencode_mcp_server"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _tools_of(server):
+    """The tool declarations, however this server chooses to expose them.
+
+    Some versions have a `tools` list attribute, others a get_tools()/tools()
+    method. Resolving it here keeps the assertions about tool CONTENT from
+    breaking on a refactor of the accessor.
+    """
+    for name in ("get_tools", "tools", "list_tools", "_tools"):
+        if not hasattr(server, name):
+            continue
+        attr = getattr(server, name)
+        return attr() if callable(attr) else attr
+    pytest.skip("server exposes no recognisable tool declaration list")
+
+
+@pytest.fixture(scope="module")
+def server():
+    if not _SERVER_PATH.exists():
+        pytest.skip(f"OpenCode MCP server not present at {_SERVER_PATH}")
+    module = _load_server_module()
+    cls = next(
+        (getattr(module, n) for n in dir(module)
+         if n.endswith("Server") and isinstance(getattr(module, n), type)),
+        None,
+    )
+    if cls is None:
+        pytest.skip("no Server class found in opencode_mcp_server")
+    return cls()
+
+
+def test_server_file_exists_at_the_path_the_tests_use():
+    """The old suite pointed at a nonexistent path and still passed."""
+    assert _SERVER_PATH.exists(), (
+        f"{_SERVER_PATH} is missing; the previous suite hardcoded "
+        f"/c/prj/ClaudeBoost/... and silently passed against it"
     )
 
-    print(f"RAG Search Results: {len(result.get('results', []))} found")
-    if result.get("results"):
-        for i, r in enumerate(result["results"][:2], 1):
-            print(f"  {i}. {r.get('topic', 'unknown')} (score: {r.get('score', 0):.2f})")
-    return bool(result.get("results"))
+
+def test_rag_search_without_a_project_path_reports_an_error(server):
+    """No project path means nothing to search, and it must SAY so.
+
+    Returning an empty list here would be indistinguishable from "searched and
+    found nothing", which is the misreading the whole provenance/staleness
+    effort exists to prevent.
+    """
+    result = server.rag_search("collision detection", project_path=None)
+    assert result.get("results") == []
+    assert result.get("error"), "an unsearchable request must carry a reason"
+    assert "project_path" in result["error"]
 
 
-def test_2_code_metrics():
-    """Test 2: Code metrics for flappy bird."""
-    print("\n=== TEST 2: Code Metrics ===")
-    filepath = "/c/prj/LocalAI/tests/flappy_bird_claude_test.py"
+def test_inject_full_context_infers_a_project_path_from_the_filepath(server, tmp_path):
+    """The regression this file failed to catch.
 
-    if not Path(filepath).exists():
-        print(f"SKIP: {filepath} not found")
-        return None
+    inject_full_context used to call rag_search(prompt) with no project_path,
+    so it always hit the error branch above and never searched any index. It
+    then read the empty result as "nothing found" and went straight to the web.
+    """
+    repo = tmp_path / "someproject"
+    (repo / ".git").mkdir(parents=True)
+    target = repo / "src" / "thing.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def thing():\n    return 1\n", encoding="utf-8")
 
-    result = test_mcp_call("code_metrics", {"filepath": filepath})
-
-    if "error" not in result:
-        print(f"Metrics for {Path(filepath).name}:")
-        print(f"  Lines of Code: {result.get('lines_of_code', '?')}")
-        print(f"  Complexity: {result.get('cyclomatic_complexity', '?')}")
-        print(f"  Maintainability: {result.get('maintainability_index', '?')}")
-
-        call_graph = result.get("call_graph", {})
-        if call_graph:
-            print(f"  Functions: {', '.join(call_graph.get('functions', [])[:3])}")
-            print(f"  Classes: {', '.join(call_graph.get('classes', [])[:3])}")
-        return True
-    else:
-        print(f"ERROR: {result.get('error')}")
-        return False
+    inferred = server._infer_project_path(str(target))
+    assert inferred is not None, "a file inside a git repo must resolve to a project"
+    assert Path(inferred) == repo
 
 
-def test_3_web_search_fallback():
-    """Test 3: Web search fallback."""
-    print("\n=== TEST 3: Web Search Fallback ===")
-    result = test_mcp_call(
-        "web_search_fallback",
-        {
-            "query": "flappy bird collision detection algorithm pygame",
-            "max_results": 2,
-        },
+def test_infer_project_path_prefers_the_deepest_registered_project(server, tmp_path, monkeypatch):
+    """A repo nested inside another must resolve to the inner, more specific one."""
+    outer = tmp_path / "outer"
+    inner = outer / "nested"
+    (outer / ".git").mkdir(parents=True)
+    (inner / ".git").mkdir(parents=True)
+    f = inner / "a.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+
+    assert Path(server._infer_project_path(str(f))) == inner
+
+
+def test_infer_project_path_returns_none_without_a_filepath(server):
+    assert server._infer_project_path(None) is None
+    assert server._infer_project_path("") is None
+
+
+def test_inject_full_context_is_declared_with_project_path(server):
+    """The tool schema must expose what the implementation now accepts."""
+    tools = _tools_of(server)
+    inject = next(t for t in tools if t["name"] == "inject_full_context")
+    props = inject["inputSchema"]["properties"]
+    assert "project_path" in props, (
+        "inject_full_context accepts project_path but never advertises it, so "
+        "no MCP client would ever send one"
     )
 
-    if "error" not in result:
-        print(f"Web Search Results: {len(result.get('results', []))} found")
-        if result.get("results"):
-            for i, r in enumerate(result["results"][:2], 1):
-                print(f"  {i}. {r.get('title', 'unknown')}")
-        return bool(result.get("results"))
-    else:
-        print(f"Note: {result.get('error')} (web search may be disabled in RAG config)")
-        return None
+
+def test_unknown_tool_is_rejected(server):
+    result = server.handle_tool_call("no_such_tool", {})
+    assert "error" in result
+    assert "no_such_tool" in result["error"]
 
 
-def test_4_full_injection():
-    """Test 4: Full context injection."""
-    print("\n=== TEST 4: Full Context Injection ===")
-    filepath = "/c/prj/LocalAI/tests/flappy_bird_claude_test.py"
-
-    result = test_mcp_call(
-        "inject_full_context",
-        {
-            "prompt": "What collision detection bugs might exist in this flappy bird game?",
-            "filepath": filepath,
-            "model": "deepseek-v4-flash",
-        },
-    )
-
-    if "error" not in result:
-        injected = result.get("injected_context", "")
-        print(f"Injected Context Length: {len(injected)} characters")
-        print(f"Fallback Triggered: {result.get('fallback_triggered', False)}")
-
-        # Show what was injected
-        if "Research Context" in injected:
-            print("✓ RAG research context injected")
-        if "Code Quality Metrics" in injected:
-            print("✓ Code metrics injected")
-        if "Web Search Results" in injected:
-            print("✓ Web search results injected")
-
-        # Show a snippet
-        print("\n--- Injected Context Snippet (first 500 chars) ---")
-        print(injected[:500])
-        print("...\n")
-
-        return True
-    else:
-        print(f"ERROR: {result.get('error')}")
-        return False
+def test_every_declared_tool_has_a_schema(server):
+    tools = _tools_of(server)
+    assert tools, "the server declares no tools at all"
+    for tool in tools:
+        assert tool.get("name"), f"unnamed tool: {tool}"
+        assert tool.get("description"), f"{tool['name']} has no description"
+        schema = tool.get("inputSchema")
+        assert isinstance(schema, dict), f"{tool['name']} has no inputSchema"
+        assert schema.get("type") == "object"
+        assert isinstance(schema.get("properties"), dict)
+        # Anything listed as required must actually be declared.
+        for req in schema.get("required", []):
+            assert req in schema["properties"], (
+                f"{tool['name']} requires {req!r} but does not declare it"
+            )
 
 
-def main():
-    """Run all tests."""
-    print("=" * 60)
-    print("OpenCode RAG + Metrics Injection Test Suite")
-    print("=" * 60)
-
-    results = {}
-
-    # Test 1: RAG search
-    results["rag_search"] = test_1_rag_search()
-
-    # Test 2: Code metrics
-    results["code_metrics"] = test_2_code_metrics()
-
-    # Test 3: Web search (optional)
-    results["web_search"] = test_3_web_search_fallback()
-
-    # Test 4: Full injection
-    results["full_injection"] = test_4_full_injection()
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("Test Summary")
-    print("=" * 60)
-    passed = sum(1 for v in results.values() if v is True)
-    total = len([v for v in results.values() if v is not None])
-
-    for test_name, result in results.items():
-        status = "PASS" if result is True else "SKIP" if result is None else "FAIL"
-        print(f"  {test_name:20s} {status}")
-
-    print(f"\nPassed: {passed}/{total}")
-
-    if passed == total:
-        print("\n✓ All tests passed. OpenCode integration ready.")
-        return 0
-    else:
-        print(f"\n✗ {total - passed} test(s) failed.")
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+def test_tool_declarations_are_json_serialisable(server):
+    """MCP sends these over stdio; a non serialisable schema breaks the handshake."""
+    tools = _tools_of(server)
+    json.dumps(tools)

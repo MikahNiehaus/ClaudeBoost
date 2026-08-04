@@ -56,23 +56,8 @@ def _is_server_alive(port: int) -> bool:
         return False
 
 
-def _is_pid_alive(pid: int) -> bool:
-    """Check if a process with the given PID is still running."""
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(
-                ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
-                capture_output=True, text=True,
-            )
-            return str(pid) in result.stdout
-        except Exception:
-            return False
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import is_pid_alive as _is_pid_alive  # noqa: E402
 
 
 SUPERVISOR_SCRIPT = BOOST_HOME / "scripts" / "rag-supervisor.py"
