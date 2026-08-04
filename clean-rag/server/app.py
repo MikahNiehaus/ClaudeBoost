@@ -380,6 +380,12 @@ async def handle_search(request: web.Request) -> web.Response:
             depth=depth,
             direction=direction,
             doc_embedder=_doc_embedder,
+            # Let each project be queried with the model its own index was
+            # built with. lang_router picks that per project at index time and
+            # the query side never followed, so every routed project refused
+            # every search. ModelCache.get is already the loader indexing uses,
+            # and it is safe to call from this executor thread.
+            embedder_for=_model_cache.get,
         ),
     )
 

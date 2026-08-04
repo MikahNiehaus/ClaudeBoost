@@ -232,6 +232,58 @@ def _provenance_mismatch(project_path: str, code_embedder) -> str | None:
     return None
 
 
+def _embedder_for_project(project_path: str, default_embedder, embedder_for):
+    """The embedder that actually produced this project's vectors.
+
+    `lang_router` picks an embedding model per project at index time, from the
+    project's dominant language. The query side did not: every search embedded
+    with the one global CODE_EMBEDDING_MODEL, so `_provenance_mismatch` refused
+    every project the router had routed anywhere else. Measured, that was 12,758
+    files across 5 projects returning zero results, with the index itself
+    perfectly good. The vectors were never the problem; querying them with the
+    wrong model was.
+
+    So resolve the model from the index's own provenance and load that one. This
+    is a query side fix on purpose: nothing is reindexed, because nothing about
+    the stored vectors is wrong.
+
+    Falls back to *default_embedder* whenever the recorded model cannot be
+    determined or cannot be loaded. Failing that way keeps the old behaviour,
+    which means `_provenance_mismatch` still refuses the search rather than
+    silently answering from the wrong embedding space.
+
+    Returns (embedder, model_id_switched_to_or_None).
+    """
+    if embedder_for is None:
+        return default_embedder, None
+
+    from .indexing import read_project_provenance
+
+    try:
+        recorded = read_project_provenance(project_path).get("model_id")
+    except Exception:
+        logger.debug("Could not read provenance for %s", project_path, exc_info=True)
+        return default_embedder, None
+
+    # No recorded model is not a routing question, it is an unverifiable index.
+    # Leave it to _provenance_mismatch, which refuses it with that reason.
+    if not recorded:
+        return default_embedder, None
+
+    if recorded == getattr(default_embedder, "model_name", None):
+        return default_embedder, None
+
+    try:
+        return embedder_for(recorded), recorded
+    except Exception as e:
+        logger.warning(
+            "Index for %s was built with %s, which failed to load (%s); "
+            "falling back to the default embedder, which will refuse the search",
+            project_path, recorded, e,
+        )
+        return default_embedder, None
+
+
 def _incomplete_index_warning(project_path: str) -> str | None:
     """Return a warning if this project's index covers only part of the tree.
 
@@ -318,6 +370,7 @@ def search(
     depth: int = 2,
     direction: str = "both",
     doc_embedder=None,
+    embedder_for=None,
 ) -> list[dict]:
     """Search across project codebase indexes and persistent docs topics.
 
@@ -347,6 +400,12 @@ def search(
               "both" (default), "callers" (blast-radius direction -- files
               that depend on/call/import the seed), or "dependencies"
               (files the seed itself depends on).
+        embedder_for: Optional callable model_id -> embedder, used to query
+              each project with the model its own index was built with rather
+              than with `code_embedder`. Without it every project is queried
+              with `code_embedder`, which is what made router-routed projects
+              unsearchable. Per project source, so one request naming projects
+              on different models works.
 
     Returns:
         List of result dicts sorted by score (highest first).
@@ -357,7 +416,17 @@ def search(
         if source.startswith("project:"):
             project_path = source[8:]
 
-            if not _check_index_before_search(project_path, code_embedder, meta_out):
+            # Resolved per source, not once per request: two projects in one
+            # search can legitimately sit on different models.
+            project_embedder, switched_to = _embedder_for_project(
+                project_path, code_embedder, embedder_for,
+            )
+            if switched_to:
+                logger.info(
+                    "Querying %s with its own index model %s", project_path, switched_to,
+                )
+
+            if not _check_index_before_search(project_path, project_embedder, meta_out):
                 continue
 
             if mode == "both":
@@ -368,9 +437,9 @@ def search(
                 # similarity against an edge weighted graph product. Those have
                 # no common scale, so the merge was decided by which formula
                 # emitted bigger floats rather than which hit was better.
-                vec = _search_project(query, project_path, code_embedder, limit, min_score)
+                vec = _search_project(query, project_path, project_embedder, limit, min_score)
                 graph = _search_project_graph(
-                    query, project_path, code_embedder, limit, min_score,
+                    query, project_path, project_embedder, limit, min_score,
                     meta_out, depth, direction,
                 )
                 # Keyword is the third leg, and it covers the one thing
@@ -386,12 +455,12 @@ def search(
                 )
             elif mode == "graph":
                 results = _search_project_graph(
-                    query, project_path, code_embedder, limit, min_score,
+                    query, project_path, project_embedder, limit, min_score,
                     meta_out, depth, direction,
                 )
                 all_results.extend(results)
             else:
-                results = _search_project(query, project_path, code_embedder, limit, min_score)
+                results = _search_project(query, project_path, project_embedder, limit, min_score)
                 all_results.extend(results)
         elif source.startswith("docs:"):
             topic = source[5:]

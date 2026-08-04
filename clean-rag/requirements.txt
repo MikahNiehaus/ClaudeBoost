@@ -23,6 +23,12 @@ psutil>=5.9,<8.0
 # unicode sanitizing stay ours; only the fetching moved.
 ddgs>=9.0,<10.0
 
+# Gitignore matching in file_scan. The hand kept SKIP_DIRS list cannot keep up:
+# 47% of everything indexed across 9 projects was already declared ignored by
+# those projects, and none of it was application code. Optional by design, the
+# import is guarded so the isolated GraphRAG venv still imports file_scan.
+pathspec>=0.12,<1.2
+
 # Keyword retrieval, the leg this had none of. Vector search alone misses exact
 # identifier matches, which is the one thing a developer most often searches for.
 rank-bm25>=0.2.2,<0.3

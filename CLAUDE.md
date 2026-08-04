@@ -285,6 +285,43 @@ cost work. `/consult` restores CONSULT.
 
 ## Hard Rules (non negotiable)
 
+### Never start an app without naming the environment
+Starting a local app is the single most dangerous routine command, because the
+damage comes from what you *omit*, not from anything visibly dangerous you type.
+
+Always name the environment explicitly, and never pass a flag that skips the
+launch profile:
+
+```
+ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="https://localhost:PORT" \
+  dotnet run --project "<path to csproj>"
+```
+
+Then read the startup log and confirm `Hosting environment: Development` before
+opening a browser or running any test against it. Anything else is a stop.
+
+Why this is a hard rule: ASP.NET Core defaults to **Production** whenever
+`ASPNETCORE_ENVIRONMENT` is unset. `dotnet run --no-launch-profile` skips
+`launchSettings.json`, which is usually the only thing setting that variable, so
+config binds `appsettings.json` instead of `appsettings.Development.json`. On a
+real project that routinely means the production database and the production
+secret store, reached from a dev machine, with no prompt and no warning.
+
+Do not count on a failure to save you. Whether such a run actually connects
+depends on incidental things like credential resolution order, which is not a
+safeguard and can change without notice.
+
+Note what makes this class hard to catch: the dangerous command contains no
+dangerous looking token at all. Do not rely on a command "looking risky" to
+decide whether to check the environment. `scripts/bash-guard.py` blocks the known
+shapes (`check_production_environment`), but it only knows the flags already
+discovered, so the rule above is what actually generalizes.
+
+The same reasoning applies to any framework with an environment default: Rails
+`RAILS_ENV`, Django `DJANGO_SETTINGS_MODULE`, Node `NODE_ENV`, Spring
+`SPRING_PROFILES_ACTIVE`. Name it, then verify it from the app's own startup
+output rather than from what you intended.
+
 ### jQuery Ban
 jQuery is banned unless the user explicitly asks for it. Detect `$()`, `jQuery`,
 imports, and CDN tags. Use React hooks, vanilla JS, and native fetch instead.
