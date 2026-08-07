@@ -151,12 +151,91 @@ CPU_MAX_PERCENT = float(os.environ.get("CLEAN_RAG_CPU_MAX_PERCENT", "100"))
 # price of politeness, and politeness is now off.
 TORCH_CORE_FRACTION = float(os.environ.get("CLEAN_RAG_TORCH_CORE_FRACTION", "1.0"))
 
+#: How many embedding models may sit in RAM at once.
+#:
+#: Two, matching ModelCache.DEFAULT_MAX_RESIDENT. This was 1, and 1 is what
+#: makes a large index never finish.
+#:
+#: The old reasoning for 1 was that the query side used to embed with the global
+#: CODE_EMBEDDING_MODEL while indexing used whatever the router picked, and that
+#: search now resolves the model from each project's own provenance, so the two
+#: no longer alternate. The first half is still true. The conclusion was not:
+#: fixing search did not stop the alternation, because the 10 minute auto
+#: reindex sweep walks every registered project and therefore touches every
+#: model group whether or not anything needs indexing.
+#:
+#: Measured on a real run, at a cap of 1:
+#:
+#:   15:34:31 [server.lang_router] ModelCache: evicting
+#:            Salesforce/SFR-Embedding-Code-400M_R to stay within 1 resident
+#:
+#: That eviction landed in the middle of a C# index run, so the run reloaded a
+#: 400M model to continue. SFR costs 135s to reload. Observed throughput was
+#: 6 files per 30 minutes, and two projects stayed stuck at __incomplete__
+#: across many sweeps because a resumed run spent its time reloading rather
+#: than embedding.
+#:
+#: Measured resident: CodeRankEmbed 1069 MB, SFR-Embedding-Code-400M_R 2161 MB.
+#: Holding both is 3.2 GB, and embedding roughly doubles the active one at the
+#: peak, so budget about 5.4 GB. That is real, and it is the price of the
+#: indexes finishing at all. MIN_FREE_RAM_MB below is the other half of the same
+#: budget, sized from the same measured model cost, and it was left at the number
+#: a cap of 1 implied when this went to 2. Change one, read the other.
+#:
+#: Drop it to 1 only for a batch job that processes one model group at a time
+#: and runs with the sweep off, which is the case ModelCache documents.
+MAX_RESIDENT_MODELS = max(
+    1, int(os.environ.get("CLEAN_RAG_MAX_RESIDENT_MODELS", "") or 2)
+)
+
+#: Measured resident cost of the largest routable embedder,
+#: Salesforce/SFR-Embedding-Code-400M_R. CodeRankEmbed is 1069 MB. Both numbers
+#: come from the measurements recorded on ModelCache.DEFAULT_MAX_RESIDENT in
+#: lang_router.py, and a budget has to assume the larger one.
+LARGEST_MODEL_RESIDENT_MB = 2161.0
+
+
+def _default_min_free_ram_mb() -> float:
+    """Free RAM a background reindex needs before it may start or continue.
+
+    Derived from the model budget rather than picked on its own. The flat
+    3072 MB this replaces was set while MAX_RESIDENT_MODELS was 1; raising the
+    cap to 2 without touching it left the gate below the growth a single project
+    can still add after passing it, which is the
+    "DefaultCPUAllocator: not enough memory" failure in state/server.log.
+
+    The number covers growth after the check, not the whole 5.4 GB steady state:
+    psutil's available RAM already excludes whatever models are resident when the
+    sample is taken. Between two checks a sweep can load one model
+    (LARGEST_MODEL_RESIDENT_MB) and then peak while embedding with it, and
+    embedding roughly doubles the active model, so twice the largest model is the
+    worst case. Checks happen between projects and, via PressureCheckpoint,
+    between files during a project; nothing can interrupt a single file's embed,
+    which is why the gate has to leave room for a whole peak rather than react to
+    one.
+
+    It does not scale with MAX_RESIDENT_MODELS, on purpose. Models already
+    resident are already missing from the available reading, and at most one
+    project starts between two checks, so a third slot would not add a third
+    load to cover here. What the cap changes is how much of the machine is gone
+    before the sample is even taken, which this gate then sees directly.
+
+    Higher is not automatically safer. A gate the machine cannot clear skips the
+    sweep instead, and an index that never runs never finishes, which is the
+    failure the cap of 2 exists to fix. This is the smallest number that covers
+    the measured peak.
+    """
+    return LARGEST_MODEL_RESIDENT_MB * 2
+
+
 # Minimum free RAM, in MB, before a background reindex is allowed to start or
 # continue. A sweep observed here grew to a 43 GB virtual commit and drove the
 # machine to 0.2 GB free with 16.8 GB paged out, which is worse than the CPU
 # problem: CPU contention makes the machine slow, memory exhaustion makes it
 # stop. Checked on the same schedule as the CPU ceiling.
-MIN_FREE_RAM_MB = float(os.environ.get("CLEAN_RAG_MIN_FREE_RAM_MB", "3072"))
+MIN_FREE_RAM_MB = float(
+    os.environ.get("CLEAN_RAG_MIN_FREE_RAM_MB", "") or _default_min_free_ram_mb()
+)
 
 
 def _default_torch_threads() -> int:

@@ -41,13 +41,108 @@ def _serialize_f32(vector: list[float]) -> bytes:
     return struct.pack(f"{len(vector)}f", *vector)
 
 
+@dataclass
+class _CachedConnection:
+    """One shared sqlite handle plus the state a deferred close needs.
+
+    Shaped after SQLAlchemy's pool record (lib/sqlalchemy/pool/base.py):
+    invalidating a record only marks it, the record itself stays in the pool, and
+    the underlying DBAPI connection is closed at check in once the last holder
+    gives it back (``_ConnectionRecord.checkin`` and ``invalidate``). Closing it
+    while a holder is still using it is not survivable here: a reader mid
+    execute() when the handle closes takes the whole process down with an access
+    violation on Windows, and a writer between statements dies with "Cannot
+    operate on a closed database".
+
+    The record staying in the cache while its close is deferred is the load
+    bearing half, not a detail. Popping it and deferring the close let the next
+    ChromaStore for the same path build a SECOND record, so one db file had two
+    open handles and, worse, two different write_locks. Two writers then each
+    held their own lock and raced _ensure_vec_table's check then create, and the
+    loser's whole add_chunks call failed with "table vec_codebase already
+    exists". So: one record, one connection and one write_lock per db path, and
+    the record is dropped from the cache only in the same critical section that
+    actually closes its handle.
+
+    holders counts live ChromaStore instances rather than individual calls,
+    because index_project keeps one store for a run that lasts hours and uses it
+    between statements the whole time.
+    """
+
+    conn: sqlite3.Connection
+    #: Serializes writes on this handle so last_insert_rowid() cannot return
+    #: another thread's rowid, and so _ensure_vec_table cannot race between
+    #: checking for its table and creating it. It lives in the same record as
+    #: the connection it guards, which is what stops the lock and the handle
+    #: from ever being paired with two different underlying connections.
+    write_lock: threading.Lock
+    #: Live ChromaStore instances still holding this handle.
+    holders: int = 0
+    #: An eviction has asked for this handle. The last holder out closes it.
+    close_when_idle: bool = False
+    #: True once the close has actually run, so it can never run twice.
+    closed: bool = False
+
+
 # Process-wide connection cache keyed by canonical db file path.
-_conn_cache: dict[str, sqlite3.Connection] = {}
-_conn_cache_lock = threading.Lock()
-# Per-database write lock: serializes all write operations on a shared
-# connection so that last_insert_rowid() cannot return another thread's
-# rowid and _ensure_vec_table cannot race on check-then-create.
-_write_lock_cache: dict[str, threading.Lock] = {}
+#
+# Reentrant, not a plain Lock: a store that a caller never closed checks itself
+# in from ChromaStore.__del__, and the cyclic collector can run that destructor
+# at any allocation point, including inside one of the sections below on this
+# same thread. A plain Lock deadlocks the server there. Every section under this
+# lock is a short bookkeeping update that stays correct if a check in interleaves
+# with it, since the only shared state is a counter and a pair of flags.
+_conn_cache: dict[str, _CachedConnection] = {}
+_conn_cache_lock = threading.RLock()
+
+
+def _forget(db_path: str, entry: _CachedConnection) -> None:
+    """Drop a closed record from the cache.
+
+    Call with ``_conn_cache_lock`` held. Identity checked, so a record that was
+    already replaced by a newer one for the same path is left alone.
+    """
+    if _conn_cache.get(db_path) is entry:
+        del _conn_cache[db_path]
+
+
+def _mark_for_close(db_path: str, entry: _CachedConnection) -> sqlite3.Connection | None:
+    """Mark an evicted record, returning its handle only if it is idle now.
+
+    Call with ``_conn_cache_lock`` held. None means a live holder still has the
+    handle, in which case the record stays cached, so any later ChromaStore for
+    this path is handed this same connection and this same write lock instead of
+    opening a second one, and that holder's :meth:`ChromaStore.close` performs
+    the close.
+    """
+    entry.close_when_idle = True
+    if entry.closed:
+        _forget(db_path, entry)
+        return None
+    if entry.holders > 0:
+        return None
+    entry.closed = True
+    _forget(db_path, entry)
+    return entry.conn
+
+
+def _close_quietly(conn: sqlite3.Connection, db_path: str) -> None:
+    """Close a handle no one holds. Failing to close must not abort a sweep.
+
+    Called with ``_conn_cache_lock`` released, the same way SQLAlchemy's pool
+    closes outside its own mutex, because the last connection out of a WAL
+    database checkpoints on close and that is not a wait to impose on every other
+    database's opens. What that costs is a moment where this handle is closing
+    while a store for the same path opens a fresh one. Harmless: by the time a
+    handle reaches here it has been unlinked from the cache and marked closed
+    under the lock, so it has no holders and nothing can reach it to write
+    through it. The invariant that matters, one usable connection and one write
+    lock per path, holds throughout.
+    """
+    try:
+        conn.close()
+    except Exception as e:
+        logger.debug("Connection close for %s (non-fatal): %s", db_path, e)
 
 
 def _open_connection(db_path: str) -> sqlite3.Connection:
@@ -93,48 +188,133 @@ class ChromaStore:
 
     @staticmethod
     def evict_cache(persist_dir: str) -> None:
-        """Remove cached connection for a persist directory."""
+        """Stop serving this directory's connection, and close it once idle.
+
+        The close waits for the last live holder to call :meth:`close`, because a
+        sweep evicting a project while an index run or a search still held that
+        handle used to close the database underneath it. With no holder it closes
+        here and now, which is the sweep's normal case.
+
+        A deferred close leaves the record cached, marked. That is what keeps the
+        eviction from producing a second connection to the same file: the next
+        ChromaStore for this path joins the marked record rather than opening its
+        own, and the close still happens the moment the last holder leaves.
+        """
         db_path = str((Path(persist_dir).resolve() / "vectors.db"))
         with _conn_cache_lock:
-            conn = _conn_cache.pop(db_path, None)
-            _write_lock_cache.pop(db_path, None)
+            entry = _conn_cache.get(db_path)
+            conn = _mark_for_close(db_path, entry) if entry is not None else None
+            holders = entry.holders if entry is not None else 0
         if conn is not None:
-            try:
-                conn.close()
-            except Exception as e:
-                logger.debug("Connection close during evict (non-fatal): %s", e)
+            _close_quietly(conn, db_path)
+        elif entry is not None:
+            logger.info(
+                "Close of %s deferred, %d holder(s) still using it", db_path, holders,
+            )
 
     @staticmethod
     def clear_cache() -> None:
-        """Close all cached connections. Called during graceful shutdown."""
+        """Evict every cached connection. Called during graceful shutdown.
+
+        Deferred the same way as :meth:`evict_cache`, and for the same two
+        reasons. Shutdown is not a reason to close a handle a worker thread is
+        still writing through, and the process exit that follows releases the
+        file anyway. A record whose close is deferred stays cached, so nothing
+        that opens a store during shutdown gets a second handle on a file another
+        thread is still writing.
+        """
         with _conn_cache_lock:
-            for key, conn in list(_conn_cache.items()):
-                try:
-                    conn.close()
-                except Exception as e:
-                    logger.debug("Connection close for %s (non-fatal): %s", key, e)
-            _conn_cache.clear()
-            _write_lock_cache.clear()
+            marked = [
+                (key, _mark_for_close(key, entry))
+                for key, entry in list(_conn_cache.items())
+            ]
+        for key, conn in marked:
+            if conn is not None:
+                _close_quietly(conn, key)
+            else:
+                logger.info("Close of %s deferred at shutdown, still in use", key)
 
     def __init__(self, persist_dir: str):
+        # Set before anything that can raise, so the __del__ backstop below has
+        # something defined to look at if the open fails.
+        self._entry: _CachedConnection | None = None
         self._persist_dir = Path(persist_dir).resolve()
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = str(self._persist_dir / "vectors.db")
 
         with _conn_cache_lock:
-            if self._db_path not in _conn_cache:
-                _conn_cache[self._db_path] = _open_connection(self._db_path)
+            # Any cached record is reused, including one an eviction has already
+            # marked: a marked record still has a live, working handle, and
+            # opening a second one beside it is the thing that breaks the write
+            # lock. The mark is deliberately not cleared here, so the eviction
+            # still takes effect at the next moment nothing holds the handle.
+            entry = _conn_cache.get(self._db_path)
+            if entry is None:
+                entry = _CachedConnection(
+                    conn=_open_connection(self._db_path),
+                    write_lock=threading.Lock(),
+                )
+                _conn_cache[self._db_path] = entry
                 logger.info("sqlite-vec store opened at %s", self._db_path)
             else:
                 logger.debug("sqlite-vec connection reused for %s", self._db_path)
-            self._conn = _conn_cache[self._db_path]
-            if self._db_path not in _write_lock_cache:
-                _write_lock_cache[self._db_path] = threading.Lock()
-            self._write_lock = _write_lock_cache[self._db_path]
+            entry.holders += 1
+            self._entry = entry
+            self._conn = entry.conn
+            self._write_lock = entry.write_lock
 
     def close(self) -> None:
-        """Drop this store's reference to the shared connection."""
-        self._conn = None
+        """Give the shared connection back.
+
+        Drops this store's reference, and closes the underlying handle only when
+        this was the last holder of a handle an eviction already asked for.
+        Running that deferred close here is what keeps deferring one from
+        turning into a leak: the memory the sweep evicts for is released as soon
+        as the last user is done with it. Safe to call more than once.
+        """
+        entry, self._entry, self._conn = self._entry, None, None
+        if entry is None:
+            return
+        with _conn_cache_lock:
+            entry.holders -= 1
+            close_now = (
+                entry.close_when_idle and entry.holders <= 0 and not entry.closed
+            )
+            if close_now:
+                entry.closed = True
+                # Dropped from the cache in the same critical section that owns
+                # the close, so nothing can be handed a record whose handle is
+                # about to stop working.
+                _forget(self._db_path, entry)
+        if close_now:
+            _close_quietly(entry.conn, self._db_path)
+
+    def __enter__(self) -> "ChromaStore":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Backstop only. Every caller in server/ opens its store in a `with`,
+        # and new ones should too, because a
+        # destructor is not a release mechanism you can rely on: an exception
+        # raised while a store was a local in the frame keeps that frame, and so
+        # the store, alive for as long as anything holds the traceback, and a
+        # connection an eviction asked to close then stays open indefinitely.
+        # __exit__ runs on the way out of the block whether the block returned
+        # or raised, which is what makes the check in deterministic. SQLAlchemy
+        # keeps the same shape: a weakref finalizer behind an explicit close, not
+        # instead of one.
+        #
+        # Caught because a destructor cannot usefully raise: an exception here
+        # would only be printed and ignored, and the two ways this can fail are
+        # an __init__ that raised before _entry existed (whose real error the
+        # caller already has) and interpreter shutdown.
+        try:
+            self.close()
+        except Exception:
+            logger.debug("Connection check in from __del__ failed", exc_info=True)
 
     def vacuum(self) -> None:
         """Reclaim free pages and truncate the WAL file.

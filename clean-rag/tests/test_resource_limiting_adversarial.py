@@ -1,5 +1,4 @@
-"""Adversarial tests for the resource limiting batch layered on the
-embedding warmup/provenance fix (already verified separately):
+"""Tests for the resource limits the background reindex runs under:
 
   server/config.py       CPU_MAX_PERCENT, MIN_FREE_RAM_MB, TORCH_THREADS,
                           SWEEP_INTERVAL_S, CPU_BACKOFF_S, CPU_BACKOFF_MAX_WAIT_S
@@ -10,7 +9,8 @@ embedding warmup/provenance fix (already verified separately):
   cli/server_ctl.py      STOP_MARKER_NAME, _mark_stopped_by_user(),
                           _clear_stopped_by_user()
 
-Written by bad-cop. Never fixes anything, only proves what breaks.
+Each test states the failure it is there to catch, so a later change that
+reintroduces one fails here rather than in production.
 """
 import asyncio
 import importlib.util
@@ -745,6 +745,13 @@ def test_release_project_resources_evicts_the_real_connection(tmp_path, monkeypa
     from server.store import _conn_cache
     assert db_path in _conn_cache, "connection was never cached in the first place"
 
+    # Checked in first, so this is the sweep's normal case: nothing holds the
+    # handle, so the eviction closes and drops the record on the spot. A record
+    # still held is deferred instead and deliberately stays cached, which would
+    # make the assertion below pass or fail for a reason that has nothing to do
+    # with the path this builds.
+    store.close()
+
     import server.config as config_mod
     monkeypatch.setattr(config_mod, "DATABASES_DIR", fake_databases_dir)
 
@@ -775,6 +782,11 @@ def test_mutant_missing_chroma_suffix_is_a_noop(tmp_path, monkeypatch):
     from server.store import _conn_cache
     assert db_path in _conn_cache
 
+    # Checked in first, so a hit on the right path would drop the record here and
+    # now. Left held, the record stays cached either way and the assertion below
+    # could no longer tell a miss from a hit.
+    store.close()
+
     # The mutant: omit "/chroma".
     wrong_path = fake_databases_dir / "_projects" / pid
     ChromaStore.evict_cache(str(wrong_path))
@@ -782,6 +794,276 @@ def test_mutant_missing_chroma_suffix_is_a_noop(tmp_path, monkeypatch):
     assert db_path in _conn_cache, "mutant test setup is wrong: eviction should have missed"
     # cleanup
     ChromaStore.evict_cache(str(chroma_dir))
+
+
+# ---------------------------------------------------------------------------
+# _sweep_project's bool return and the release that is gated on it in
+# auto_reindex_loop: this is the actual production incident (a running
+# /index-project killed by "Cannot operate on a closed database" because the
+# sweep released a project's connection unconditionally, even when it had
+# never touched that project this pass).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_release_is_skipped_when_the_index_lock_was_busy(auto_reindex, monkeypatch, tmp_path):
+    """The exact production incident: _sweep_project bails with the index
+    lock held by another job (a real /index-project already running), and
+    the sweep loop must NOT evict that project's connection out from under
+    the job that is still using it.
+
+    This is the mutant-1 kill test: revert the caller to an unconditional
+    `_release_project_resources(project.pid)` and this fails, because the
+    release would then run even though _sweep_project returned False for
+    exactly the reason (lock busy) the original bug hit.
+    """
+    # _read_registry is stubbed directly rather than pointing STATE_DIR at
+    # tmp_path: auto_reindex._read_registry is bound at import time to
+    # reindex_unit.read_registry, which reads reindex_unit's own STATE_DIR
+    # global, not auto_reindex's. Patching auto_reindex.STATE_DIR (the
+    # pattern several tests in this file use) has no effect on what the loop
+    # actually reads; it silently falls through to this machine's real
+    # state/projects.json instead of the fixture below. Confirmed directly:
+    # patching only STATE_DIR here made the loop sweep this machine's real
+    # registered projects, not the single "p1" fixture project.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    # Real _sweep_project, not a stub: force it down the "lock busy" branch.
+    monkeypatch.setattr(auto_reindex, "find_changed_files",
+                        lambda p: (["f1.py"], []))
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: False)
+
+    released = []
+    monkeypatch.setattr(auto_reindex, "_release_project_resources",
+                        lambda pid: released.append(pid))
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    # Both the outer gate that runs before the loop (wait_for_cpu_headroom, an
+    # alias) and the per project gate (wait_for_system_headroom, called
+    # directly inside the for loop) must be stubbed. Leaving the real one in
+    # place means its own internal `await asyncio.sleep(0.1)` shares the call
+    # counter below with the outer `await asyncio.sleep(INTERVAL_S)` and
+    # fires the CancelledError before _sweep_project is ever reached, which
+    # would make this test pass for the wrong reason, never getting there at
+    # all.
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with pytest.raises(asyncio.CancelledError):
+        await auto_reindex.auto_reindex_loop(lambda: object())
+
+    assert released == [], (
+        f"_release_project_resources was called for {released} even though "
+        f"_sweep_project bailed on a busy index lock -- this is the exact "
+        f"incident that closed a shared connection under a running index job"
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_runs_when_the_sweep_actually_did_work(auto_reindex, monkeypatch, tmp_path):
+    """The other half: gating the release on a busy lock must not silently
+    turn into never releasing at all, which would leak one open sqlite
+    handle per project for the life of the process (the exact cost the
+    comment above _release_project_resources's call site describes)."""
+    # See the comment in the sibling test above: _read_registry has to be
+    # stubbed directly, not reached via STATE_DIR.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    monkeypatch.setattr(auto_reindex, "find_changed_files", lambda p: ([], []))
+
+    async def fake_sweep_project(pid, entry, model_cache, checkpoint=None):
+        return True  # actually did work and released the lock itself
+
+    monkeypatch.setattr(auto_reindex, "_sweep_project", fake_sweep_project)
+
+    released = []
+    monkeypatch.setattr(auto_reindex, "_release_project_resources",
+                        lambda pid: released.append(pid))
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    # See the comment in the sibling test above: both names have to be
+    # stubbed or the real wait_for_system_headroom eats the fake sleep's
+    # call budget before _sweep_project is ever reached.
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with pytest.raises(asyncio.CancelledError):
+        await auto_reindex.auto_reindex_loop(lambda: object())
+
+    assert released == ["p1"], (
+        "a sweep that actually proceeded must still release its handles, or "
+        "every registered project leaks one open sqlite connection forever"
+    )
+
+
+def test_sweep_project_returns_false_specifically_for_a_busy_lock(auto_reindex, monkeypatch, tmp_path):
+    """Mutant-2 kill test: invert `if not acquire_index_lock():` to
+    `if acquire_index_lock():` in _sweep_project. Under that mutant, a busy
+    lock (acquire returns False) makes the condition False, so the body
+    that assumes the lock was acquired runs anyway -- corrupting a project
+    another job holds the lock for -- and this test's return-value
+    assertion fails because the busy-lock path would then fall through to
+    `return True` instead of `return False`.
+    """
+    import asyncio as real_asyncio
+
+    monkeypatch.setattr(auto_reindex, "find_changed_files", lambda p: (["f1.py"], []))
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: False)
+
+    result = real_asyncio.run(
+        auto_reindex._sweep_project("p1", {"project_path": str(tmp_path)}, object())
+    )
+    assert result is False, (
+        "_sweep_project must return False when the index lock is busy, not "
+        "True -- a True here tells the caller it is safe to evict the "
+        "connection a still-running job is using"
+    )
+
+
+def test_release_index_lock_only_clears_its_own_pid(tmp_path, monkeypatch):
+    """Mutant-3 kill test: drop the `lock_data.get('pid') == os.getpid()`
+    check in release_index_lock(). Under that mutant this test fails,
+    because release_index_lock() would delete a lock file recorded under a
+    DIFFERENT live PID -- letting this process's finally-block cleanup tear
+    down another process's in-flight index lock and letting a second sweep
+    or a manual /index-project start concurrently with the first.
+    """
+    from server import indexing
+
+    monkeypatch.setattr(indexing, "_INDEX_LOCK_PATH", tmp_path / "index-lock.json")
+    other_pid = indexing.os.getpid() + 1  # guaranteed different from ours
+    indexing._INDEX_LOCK_PATH.write_text(json.dumps({
+        "pid": other_pid, "operation": "index", "started": "2026-01-01T00:00:00Z",
+    }), encoding="utf-8")
+
+    indexing.release_index_lock()
+
+    assert indexing._INDEX_LOCK_PATH.exists(), (
+        "release_index_lock() deleted a lock file recorded under a "
+        "different, still-running PID -- this would let two indexing "
+        "operations run concurrently against the same sqlite connection"
+    )
+
+
+def test_lock_is_still_released_on_the_new_full_reindex_return_true_path(
+    tmp_path, monkeypatch, auto_reindex,
+):
+    """The added `return True` in the full-reindex branch sits inside the
+    same `try:` the `finally: release_index_lock()` already covered. Confirm
+    that path still actually releases the lock -- a `return` inside a `try`
+    always runs the `finally` in real Python, but this is exactly the kind
+    of control-flow change (SIR: statement removal / reordering) that a
+    careless refactor gets wrong, so it is asserted here against the real
+    function rather than trusted from reading it.
+    """
+    monkeypatch.setattr(auto_reindex, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(auto_reindex, "find_changed_files",
+                        lambda p: ([f"f{i}.py" for i in range(60)], []))  # >= FULL_REINDEX_THRESHOLD
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(auto_reindex, "index_is_incomplete", lambda p: False)
+    monkeypatch.setattr(
+        auto_reindex, "index_project",
+        lambda *a, **kw: {"files_indexed": 60, "chunks_created": 60, "files_failed": 0},
+    )
+
+    released = {"n": 0}
+    monkeypatch.setattr(auto_reindex, "release_index_lock",
+                        lambda: released.__setitem__("n", released["n"] + 1))
+
+    import asyncio as real_asyncio
+    result = real_asyncio.run(
+        auto_reindex._sweep_project("p1", {"project_path": str(tmp_path)}, object())
+    )
+
+    assert result is True
+    assert released["n"] == 1, (
+        "the full-reindex branch's new `return True` skipped the `finally` "
+        "and never released the index lock -- every subsequent sweep or "
+        "manual /index-project would see the lock as permanently busy"
+    )
+
+
+@pytest.mark.asyncio
+async def test_swept_counter_excludes_projects_that_never_actually_swept(
+    auto_reindex, monkeypatch, tmp_path, caplog,
+):
+    """The "Reindex sweep done: %d project(s)" line must count projects this
+    pass really touched.
+
+    `swept += 1` used to run regardless of `proceeded`, so a pass where every
+    project bailed on a busy index lock still reported one project per registered
+    project. Nothing downstream branches on the number, so this is log accuracy
+    only, and log accuracy is the whole reason to read that line: it is the one
+    place lock contention shows up.
+    """
+    # _read_registry is stubbed directly rather than pointing STATE_DIR at
+    # tmp_path: it is bound at import time to reindex_unit.read_registry, which
+    # reads reindex_unit's own STATE_DIR global. Patching auto_reindex.STATE_DIR
+    # does not reach it, and the loop then falls through to this machine's real
+    # state/projects.json instead of the fixture below.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    async def fake_sweep_project(pid, entry, model_cache, checkpoint=None):
+        return False  # bailed on a busy lock, touched nothing
+
+    monkeypatch.setattr(auto_reindex, "_sweep_project", fake_sweep_project)
+    monkeypatch.setattr(auto_reindex, "_release_project_resources", lambda pid: None)
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with caplog.at_level("INFO", logger="server.auto_reindex"):
+        with pytest.raises(asyncio.CancelledError):
+            await auto_reindex.auto_reindex_loop(lambda: object())
+
+    done_lines = [r.message for r in caplog.records if "Reindex sweep done" in r.message]
+    assert done_lines, "the sweep-done summary line was never logged"
+    assert "0 project(s)" in done_lines[-1], (
+        f"a pass where every project bailed on a busy index lock reported real "
+        f"work: {done_lines[-1]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

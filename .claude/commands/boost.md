@@ -280,7 +280,7 @@ ollama pull qwen3:4b
 
 **Force re-index after any fix** (ensures RAG sees the latest agents and knowledge):
 ```bash
-curl -s -X POST http://127.0.0.1:8612/index -H "Content-Type: application/json" -d "{\"force\": true}"
+curl -s -X POST http://127.0.0.1:8613/index-project -H "Content-Type: application/json" -d "{\"force\": true}"
 ```
 
 ### Step 7 — Post-fix summary

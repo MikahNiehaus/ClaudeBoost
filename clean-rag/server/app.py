@@ -20,6 +20,7 @@ from .config import (
     CLEAN_RAG_HOME,
     DEFAULT_MIN_SCORE,
     DEFAULT_SEARCH_LIMIT,
+    MAX_RESIDENT_MODELS,
     STANDALONE_PORT,
     STATE_DIR,
     CODE_EMBEDDING_MODEL,
@@ -1228,7 +1229,7 @@ def create_app() -> web.Application:
     _start_time = time.time()
 
     # Model cache with language-based routing (loads models lazily on first use)
-    _model_cache = ModelCache()
+    _model_cache = ModelCache(max_resident=MAX_RESIDENT_MODELS)
     # General prose embedder for docs: sources (statutes, regulations, etc),
     # a separate model from the code search tuned one above. Also loaded
     # lazily, on first docs: search or ingest, not at startup: the code

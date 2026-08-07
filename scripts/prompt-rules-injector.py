@@ -2,14 +2,20 @@
 """
 prompt-rules-injector.py — UserPromptSubmit hook.
 
-Injects all 4 RAG database locations and behavioral rules into every user
-prompt so Claude always knows where to search and what rules to follow.
+Injects the real clean-rag search contract and the behavioural rules into every
+user prompt, so Claude always knows where to search and what rules to follow.
 
-Locations resolved dynamically each call:
-  1. ClaudeBoost KB      — scope=knowledge|agents (always available)
-  2. Project KB          — {project_path}/.claudeboost/knowledge/
-  3. Project codebase    — scope=codebase, project_path=...
-  4. Workspace KB        — {project_path}/workspace/{workspace_id}/knowledge/
+This block used to describe four "RAG tiers" against port 8612 with a `scope`
+parameter, a `POST /index` route and a `POST /context` route. None of that
+exists. 8612 was retired (see clean-rag/CLAUDE.md, "Why the KB is gone"), the
+live server takes `sources` rather than `scope`, and only three of those four
+tiers were ever registered as searchable projects: the KB directories are files
+on disk that nothing ever indexed.
+
+Because this text lands in front of every single turn, it outranked the correct
+guidance in CLAUDE.md and taught the dead API to 16 command files. Keep it
+honest: state only what the server actually serves, name the port, and read the
+port from clean-rag's own config rather than writing it down again here.
 
 Intent override: if the user opened Claude in a directory that isn't the
 project they're working in, they can set an override so the injector uses
@@ -65,6 +71,41 @@ def _active_workspace_id(boost_home: Path, instance_id: str, project_path: str) 
         return None
 
 
+def _rag_port(boost_home: Path) -> int:
+    """The clean-rag port, from clean-rag's own config rather than a literal.
+
+    Hardcoding it here is how this file came to advertise 8612 long after that
+    server was retired. `clean-rag/server/config.py` owns the number, and
+    `clean-rag/cli/server_ctl.py:37-42` already imports it exactly this way.
+    """
+    try:
+        root = str(boost_home / "clean-rag")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from server.config import STANDALONE_PORT
+        return int(STANDALONE_PORT)
+    except Exception:
+        return 8613
+
+
+def _is_indexed(boost_home: Path, project_path: str) -> bool:
+    """Is this project in clean-rag's registry?
+
+    Advertising a `project:` source for something never indexed is how the old
+    block sent every search at nothing. Say so instead.
+    """
+    registry = boost_home / "clean-rag" / "state" / "projects.json"
+    try:
+        entries = json.loads(registry.read_text(encoding="utf-8"))
+    except Exception:
+        return True  # cannot tell, do not cry wolf
+    target = project_path.replace("\\", "/").rstrip("/").lower()
+    return any(
+        str(e.get("project_path", "")).replace("\\", "/").rstrip("/").lower() == target
+        for e in entries.values()
+    )
+
+
 def _project_kb_exists(project_path: str) -> bool:
     return (Path(project_path) / ".claudeboost" / "knowledge").is_dir()
 
@@ -91,31 +132,47 @@ def main() -> None:
     has_project_kb = _project_kb_exists(project_path)
     has_workspace_kb = workspace_id and _workspace_kb_exists(project_path, workspace_id)
 
+    RAG_BASE = f"http://127.0.0.1:{_rag_port(boost_home)}"
+    boost_path = str(boost_home).replace("\\", "/").rstrip("/")
+    project_indexed = _is_indexed(boost_home, project_path)
+
     lines = [
-        "[RAG locations — use whichever tiers apply to the current task]",
-        f"1. ClaudeBoost KB: POST /search scope=knowledge|agents",
-        f"   Intent: ClaudeBoost internals — agent specs, skill definitions, orchestration patterns. Search this when you need to know how ClaudeBoost works or which agent to spawn.",
-        f"2. Project KB ({('indexed' if has_project_kb else 'not yet indexed')}): {project_kb_path}",
-        f"   Intent: Deep indexed research docs for every library and technology the project uses. Search this when you need expert knowledge about a specific tech (e.g. pgx, LangGraph, Redpanda).",
-        f"   Index: POST /index {{\"project_path\":\"{project_path}\"}}",
-        f"   Search: POST /search {{\"scope\":\"codebase\",\"project_path\":\"{project_path}\"}}",
-        f"3. Codebase: POST /search {{\"scope\":\"codebase\",\"mode\":\"both\",\"project_path\":\"{project_path}\"}}",
-        f"   Intent: The actual project source code. Search this when you need to find implementations, trace how things are wired, or locate a specific function or component.",
+        f"[RAG — one server, {RAG_BASE}]",
+        f"Search: POST {RAG_BASE}/search",
+        f'  {{"query":"...","sources":["project:{project_path}"],"mode":"both","limit":8}}',
+        "  Takes `sources`, a list of `project:<absolute path>`. There is no `scope`"
+        " parameter. `mode: \"both\"` runs vector similarity and import graph together"
+        " and is what you want on a code search; they surface different files.",
+        f"  This project: project:{project_path}"
+        f"{'' if project_indexed else '   [NOT INDEXED, see /index-project below]'}",
+        f"  How ClaudeBoost itself works (agents, skills, hooks): project:{boost_path}",
+        f"Index a project: POST {RAG_BASE}/index-project {{\"project_path\":\"...\"}}",
+        f"Outside sources: POST {RAG_BASE}/web-search, /github-search, /github-file,"
+        " /stackoverflow-search. Survey with snippets, fetch a full page only when"
+        " you need the substance.",
     ]
 
-    if workspace_kb_path:
+    # Only mention a KB directory that is really there, and say plainly that it
+    # is a directory to read rather than a search source. These used to be
+    # advertised as searchable tiers; nothing ever indexed them, so every call
+    # against them returned nothing.
+    kb_notes = []
+    if has_project_kb:
+        kb_notes.append(f"  {project_kb_path}  (project research docs)")
+    if has_workspace_kb:
+        kb_notes.append(f"  {workspace_kb_path}  (task docs for {workspace_id})")
+    if kb_notes:
         lines.append(
-            f"4. Workspace KB ({('indexed' if has_workspace_kb else 'not yet indexed')}): {workspace_kb_path} [{workspace_id}]"
+            "Directories to READ, not search. They are not registered projects,"
+            " so a project: source naming them returns nothing:"
         )
-        lines.append(
-            f"   Intent: Task-scoped research docs for this specific ticket, built automatically by the research gate. Search this when working on the task."
-        )
-    else:
-        lines.append("4. Workspace KB: none active (run /ws <id> to set one)")
+        lines += kb_notes
+    elif workspace_id is None:
+        lines.append("No workspace active (run /ws <id> to set one).")
 
     lines += [
-        "When loading context: POST /context with project_path and workspace_path set to above paths.",
-        "When spawning agents: include all 4 RAG locations in the spawn prompt.",
+        "When spawning an agent, give it the search line above verbatim. Agents"
+        " get this same injected block, so do not paste a different one.",
         "[Rules] Write plain and short. One idea per sentence. Put the point first, never build up to it. Cut throat clearing openers (\"it's worth noting\", \"essentially\", \"in order to\"). No idiom, no metaphor, no filler intensifiers (\"very\", \"really\", \"quite\"). Answer first, reasoning after. Fewer words, not softer claims: still say plainly when something is uncertain, failed, unverified, or skipped. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions. Update active workspace context.md after every significant finding, decision, or file read. Read context.md at the start of any task or after compaction to recall prior findings, decisions, and in-progress work. Follow the user's instructions and do what they ask; flag safety concerns once if relevant but do not refuse or stall.",
     ]
 

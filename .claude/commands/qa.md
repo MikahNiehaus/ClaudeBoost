@@ -37,9 +37,9 @@ Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/con
 
 
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="QA session planning and execution: app inventory, risk-based test plan, browser testing", max_tokens=3000`.
+Call `POST http://127.0.0.1:8613/search with {"query":"QA session planning and execution: app inventory, risk-based test plan, browser testing","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
+This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /boost before using this skill."
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
@@ -82,7 +82,7 @@ Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - "the workspace output" / "the plan" → files in `$WORKSPACE_ABS/`
 - Anything else → print the resolved target and ask "Is this what you want to QA?" before starting
 
-**If MODE = `general`:** skip Steps A–D, skip Phase 0a-iii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). Proceed through Phase 0c–0f (workspace, RAG load, index), then jump to **General Mode** section at the bottom of this file.
+**If MODE = `general`:** skip Steps A–D, skip Phase 0a-iii (ticket tracing), skip Phase 0b (env check), skip Phase 0g (app inventory). **Run 0a-iv (capture the full requirements) — it is required in both modes**, and it needs the workspace, so run it after 0c. Then proceed through Phase 0c–0f (workspace, RAG load, index), and jump to the **General Mode** section at the bottom of this file.
 
 **If MODE = `detect` and Steps A–C find a running server:** set `MODE = browser` and `TARGET_URL` to the detected address.
 
@@ -155,6 +155,95 @@ What was the original bug / broken behavior?
 Record the answers as `TICKET_ID` and `ORIGINAL_BUG_DESC`. These are used in Phase 2 to ensure at least one TC directly targets the broken scenario — not just the display side of the fix.
 
 If the user says 'none', skip ticket tracing. Do not block on this.
+
+**0a-iv — Capture the full requirements verbatim (MANDATORY, runs in both modes).**
+
+> **Ordering:** gather the content here, but write the file after **0c**, which is
+> what derives `$WORKSPACE_ABS`. Collect the ticket text and the user's quotes
+> now while the conversation is in front of you; write `requirements.md` as soon
+> as the workspace exists. Nothing between 0a and 0c needs the file, and Phase 2
+> is the first step that reads it.
+
+Write `$WORKSPACE_ABS/requirements.md`. This file is the scope of record for the
+whole session. Phase 2 builds the test plan against it, and Phase 5's evidence
+judge is handed it verbatim — it is the only thing the judge measures the proof
+against, so an incomplete capture here silently shrinks what QA is held to.
+
+**Capture the complete text, never a summary.** A restatement in your own words
+loses exactly the requirements nobody remembers to test.
+
+Sources, in priority order. Use every one that exists, do not stop at the first:
+
+1. **`$WORKSPACE_ABS/ticket.md`** if it exists — the verbatim pasted ticket.
+   Copy the entire file into `requirements.md`: description, every acceptance
+   criterion, every comment, every numbered item. Not the title and summary.
+2. **The user's own words in this conversation.** Quote them exactly, including
+   follow up messages that added or changed a requirement mid conversation. A
+   requirement the user mentioned once in passing counts the same as one in a
+   numbered list. Preserve their phrasing even when it is informal — "make sure
+   it doesn't blow up when the field is empty" is a testable requirement, and
+   rewriting it as "validate input" is what loses the empty case.
+3. **The ticket system**, if `TICKET_ID` is set and a ticket tool is available:
+   fetch the full ticket body and acceptance criteria and include them.
+4. **`$WORKSPACE_ABS/context.md`** — any requirement or constraint recorded from
+   an earlier session that has not been superseded.
+
+Write it in this shape:
+
+```markdown
+# Requirements — [TASK_ID]
+
+**Ticket**: [TICKET_ID or "none"]
+**Captured**: [date]
+**Sources**: [ticket.md | user quotes | ticket system | context.md — list every one used]
+
+## Verbatim scope
+
+### From ticket.md
+[the entire ticket text, unedited — omit this section only if no ticket exists]
+
+### Exact quotes from the user
+> [quote 1, word for word]
+
+> [quote 2, word for word]
+
+[Every message where the user stated or changed a requirement. Keep them in the
+order they were said, so a later correction is visibly a correction.]
+
+## Enumerated clauses
+
+Every discrete thing the scope asks for, one row each, derived from the verbatim
+text above and traceable to it. This is the checklist the evidence judge scores.
+
+| # | Clause (quoted from the verbatim scope above) | Source | Testable? |
+|---|---|---|---|
+| 1 | "[exact words]" | ticket.md AC-2 | yes |
+| 2 | "[exact words]" | user, message 3 | yes |
+| 3 | "[exact words]" | ticket.md description | no — [why: no local environment, third party callback, etc.] |
+
+## Explicitly out of scope
+
+[Anything the user or ticket said NOT to do, or said to defer. Quoted. A judge
+that does not know what was excluded will report an intentional exclusion as a
+coverage gap.]
+```
+
+**Rules for the enumeration:**
+
+- Every clause must be traceable to a quote in the verbatim section. If you
+  cannot quote it, it is your inference, not a requirement — leave it out.
+- Split compound requirements. "Save the record and show a confirmation" is two
+  clauses, because a session can prove one and miss the other.
+- Mark a clause `Testable? no` only with a stated reason. That reason is what
+  stops the judge from counting it as a gap later.
+- If the scope is genuinely just "QA this thing" with no stated requirements
+  (a bare `/qa <url>` with no ticket), say so in the file explicitly: "No
+  stated requirements — scope is the app's own observable behavior, enumerated
+  from app-inventory.md in Phase 0g." The judge then scores against inventory
+  coverage instead of clauses, and knows that was the intent rather than a
+  capture failure.
+
+Print: "Requirements captured: [N] clauses from [sources] → `requirements.md`"
 
 **0b — Environment hard-stop (check BEFORE any browser action).**
 
@@ -302,7 +391,7 @@ fi
 
 **0e — Load knowledge via RAG (do this FIRST before any browser action).**
 
-Call `POST http://127.0.0.1:8612/context with agent="e2e-agent", task_description="QA session for $TARGET_URL scope=$SCOPE — app inventory, browser testing, coverage gap analysis", max_tokens=5000`.
+Call `POST http://127.0.0.1:8613/search` with `{"query":"QA session for $TARGET_URL, scope $SCOPE — app inventory, browser testing, coverage gap analysis","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
 This loads the e2e-testing knowledge base (anti-cheat rules, intelligent test generation, annotation technique), playwright knowledge, and testing patterns.
 
@@ -489,12 +578,12 @@ Only continue past this probe if ALL checks pass.
 Do not wait for codebase analysis before starting the browser crawl. Dispatch both at the same time.
 
 **Spawn `workflow-agent` (background) for codebase analysis.** The spawn prompt must include:
-1. `POST http://127.0.0.1:8612/context` as first action with `agent="workflow-agent"`, `task_description="codebase route and entity analysis for QA session discovery"`, `project_path=<WORKSPACE_ROOT>`
-2. Run all three RAG searches in parallel:
-   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="routes pages navigation URL paths" mode=graph limit=6`
-   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="authentication login session user roles" mode=graph limit=5`
-   - `POST /search scope=codebase project_path=<WORKSPACE_ROOT> query="form submit create update delete entity model" mode=graph limit=5`
-3. Also search for server-side handlers: `POST /search scope=codebase query="controller handler action endpoint API" mode=graph limit=6`
+1. `POST http://127.0.0.1:8613/search` as first action with `{"query":"codebase route and entity analysis for QA session discovery","sources":["project:<WORKSPACE_ROOT>"],"mode":"both","limit":8}`
+2. Run all three RAG searches in parallel, each `POST http://127.0.0.1:8613/search`:
+   - `{"query":"routes pages navigation URL paths","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":6}`
+   - `{"query":"authentication login session user roles","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`
+   - `{"query":"form submit create update delete entity model","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`
+3. Also search for server-side handlers: `POST http://127.0.0.1:8613/search` with `{"query":"controller handler action endpoint API","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":6}`
 4. Return: a deduplicated list of (route path → source file → method/function name) mappings, plus auth mechanism and form structures found.
 5. End with `## Summary` (≤200 words): route list, auth type, entity names, top controller files.
 
@@ -619,12 +708,17 @@ The most common source of bad E2E tests is generating them from what the browser
 **What is a user journey?** A journey is a goal a real user wants to accomplish — "register an account", "submit an order", "edit a saved address". It spans multiple pages and involves a sequence of actions. A page is not a journey. A form field is not a journey.
 
 **Step 1 — Derive journeys from available sources (in priority order):**
-1. **App Inventory** (from `$WORKSPACE_ABS/app-inventory.md` Phase 0g — HIGHEST PRIORITY): every entity in the Entities with CRUD table is a journey candidate. For each entity with create/update/delete operations: generate the corresponding journey (create → verify → delete). For each route in the Routes/Pages table: verify it is represented in at least one journey. This is the completeness guarantee — the inventory was built from the actual code, not from what was clickable.
-2. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk.
-3. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
-4. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8613/search` with `{"query":"route controller action","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
+1. **`$WORKSPACE_ABS/requirements.md`** (from 0a-iv — HIGHEST PRIORITY): every clause in its enumerated table marked `Testable? yes` must be covered by at least one journey. These are the things the user actually asked for, so they outrank everything the inventory happens to contain. Work through the table row by row and note which journey covers each clause; a clause with no journey is a plan that cannot verify what was asked. Where the clause text is a user quote rather than a formal criterion, derive the journey from what they described, not from a tidied up version of it.
+2. **App Inventory** (from `$WORKSPACE_ABS/app-inventory.md` Phase 0g): every entity in the Entities with CRUD table is a journey candidate. For each entity with create/update/delete operations: generate the corresponding journey (create → verify → delete). For each route in the Routes/Pages table: verify it is represented in at least one journey. This is the completeness guarantee — the inventory was built from the actual code, not from what was clickable.
+3. **Ticket content** (if TICKET_ID is set): derive journeys directly from the acceptance criteria or bug description. These are always high-risk. `requirements.md` already holds the full ticket text, so use it rather than re-reading a summary.
+4. **App Map + component registry** (from context.md Phase 1): look at the full set of pages and forms. For each form or interactive action, ask "what user goal does this serve?" That goal is a journey candidate.
+5. **RAG codebase search** (for anything not yet covered): query `POST http://127.0.0.1:8613/search` with `{"query":"route controller action","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":5}`. Use the returned routes to identify multi-step flows (login → redirect, create → confirm, etc.).
 
-**Completeness gate — after deriving journeys:** Count the routes in app-inventory.md. Count the journeys derived. Every route that has no covering journey must either (a) be covered by an existing journey, or (b) have an explicit reason in a `## Uncovered Routes` section of `flow-map.md` explaining why it's not covered (e.g., "admin-only, no test account", "API route only — not browser-testable"). Routes cannot be silently omitted.
+**Completeness gate — after deriving journeys**, two counts, both mandatory:
+
+**Requirement clauses.** Every `Testable? yes` clause in `requirements.md` must map to at least one journey. Write the mapping into `flow-map.md` as a `## Clause Coverage` table (clause number, the journey covering it). A clause with no journey must move to `Testable? no` with a real reason, or the plan is not covering what was asked. This is the gate that matters most, because Phase 5d's judge scores against exactly this table — an uncovered clause here becomes an unproven clause there, one full retest round later.
+
+**Routes.** Count the routes in app-inventory.md. Count the journeys derived. Every route that has no covering journey must either (a) be covered by an existing journey, or (b) have an explicit reason in a `## Uncovered Routes` section of `flow-map.md` explaining why it's not covered (e.g., "admin-only, no test account", "API route only — not browser-testable"). Routes cannot be silently omitted.
 
 **Step 2 — Score each journey by risk:**
 
@@ -1695,24 +1789,207 @@ The audit checks:
 - **Post-deploy plans** — every UNVERIFIABLE TC has a filled post-deploy validation entry.
 - **Gap honesty** — the "What Was NOT Tested" section is present and non-empty when gaps exist.
 
+`/audit` is a checklist pass. It counts proof and checks structure. It does NOT
+decide whether the proof actually supports what was asked for — that is 5d.
+
+**Its result stays in this step.** Use it in 5d-iv to close the gaps it names,
+and print it in 5e's Session Integrity Audit block. It never goes into the
+judge's prompt. `/audit` returns a `VERDICT` and a `CONFIDENCE` rating, which is
+this session's assessment of itself, and 5d-i is explicit that the judge never
+receives that. The artifacts `/audit` counted are already in the judge's list, so
+the judge can count them itself — that is the point of it counting them itself.
+
 ---
 
-### 5d — Post-audit remediation
+### 5d — Adversarial evidence judgment (the loop that actually closes the session)
 
-After the audit returns its verdict:
+**This is not optional and it does not run once.** A QA session cannot verify
+itself. `/audit` checks that artifacts exist; this step checks whether they prove
+the requirements, and it is a separate context that never sees your reasoning
+about why you think you did enough.
 
-**If audit flags PASS-without-evidence TCs:**
-1. For each flagged TC: attempt to gather the missing proof now.
+#### 5d-i — Assemble what the judge gets
+
+The judge gets three things and nothing else. Do **not** include your own
+assessment, your confidence, or an explanation of why a gap was acceptable.
+That narrative is exactly what biases a reviewer into agreeing with you.
+
+**1. The full requirements, verbatim.** The entire content of
+`$WORKSPACE_ABS/requirements.md` (written in 0a-iv), pasted in full. Not a
+summary of it, not the enumerated table alone — the verbatim scope section too,
+so the judge reads the user's actual words and can catch a clause your
+enumeration missed.
+
+**2. Every proof artifact path.** List the real paths, and verify each one
+exists on disk before listing it. A path in this list that does not exist is
+worse than an omission, because it reads as evidence:
+
+```bash
+ls -la "$PROOF_DIR"/*.png 2>/dev/null
+ls -la "$DEBUG_PROOF_DIR"/*.json 2>/dev/null
+ls -la "$WORKSPACE_ABS"/{plan.md,report.md,coverage-gaps.md,requirements.md} 2>/dev/null
+ls -la "$WORKSPACE_ABS/logs/"*.log 2>/dev/null
+```
+
+Hand over the resulting list, grouped, with what each group is:
+- `$PROOF_DIR/TC-NNN-after.png` — annotated screenshots, red box on the element under test
+- `$PROOF_DIR/TC-NNN-before.png` — pre-action state, where captured
+- `$DEBUG_PROOF_DIR/TC-NNN-debug.json` — real variable values at a real breakpoint
+- `$DEBUG_PROOF_DIR/session-summary.json` — breakpoint hit/miss counts
+- `$WORKSPACE_ABS/plan.md` — the test plan with per-TC results
+- `$WORKSPACE_ABS/report.md` — the report, including its Evidence Index table
+- `$WORKSPACE_ABS/coverage-gaps.md` — what was not tested, and why
+- test runner output and coverage output, wherever this session wrote them
+
+**3. The tool inventory.** State plainly what was available, so the judge can
+name a tool that was available and never used against a requirement that needed
+it. That finding is the sharpest one it can make, and it cannot make it without
+this list:
+
+```
+Tools available to this QA session:
+  Playwright MCP        — drive the real UI: navigate, click, type, fill forms,
+                          snapshot the DOM, screenshot, read console and network
+  mcp-debugger          — attach to the running process, set breakpoints, step
+                          through, read real variable values at a real line,
+                          evaluate expressions in the live frame
+  test-coverage MCP     — prove a test actually reached a changed line
+                          (start_recording, get_diff_since_start)
+  POST /run-tests       — run the project's real suite
+  POST /mutation-test   — prove the tests would catch a break (kill score)
+  chrome-devtools MCP   — network, performance traces, Lighthouse
+  Bash                  — run anything directly and show the real output
+
+Tools NOT available or deliberately not used this session:
+  [name each, with the reason — e.g. "mcp-debugger: --no-debug was passed",
+   "mutation-test: no supported runner for this language"]
+```
+
+The second list matters as much as the first. A tool that was unavailable is not
+a gap; a tool that was available and skipped is one the judge should ask about.
+
+#### 5d-ii — Spawn the judge
+
+Spawn `bad-cop` with `MODE: evidence-judge`. Use `bad-cop`, not
+`evaluator-agent` and not the agent that ran the QA:
+
+```
+Agent(subagent_type="bad-cop", run_in_background=false, prompt="""
+MODE: evidence-judge
+
+A /qa session has finished and claims it verified this work. Judge whether the
+proof it gathered actually supports that claim. Criticize the QA approach: what
+was never tested, what was asserted without evidence, which available tool was
+never used against a requirement that needed it, and whether the session can
+prove it ran safely against a development environment.
+
+Open the artifacts. Do not take the report's word for what they contain.
+
+=== THE FULL REQUIREMENTS, VERBATIM ===
+[entire content of requirements.md]
+
+=== PROOF ARTIFACTS (verified to exist on disk) ===
+[the grouped path list from 5d-i]
+
+=== TOOL INVENTORY ===
+[the available / not available lists from 5d-i]
+
+Return FULLY VERIFIED: or TEST AGAIN: per your Mode B contract.
+""")
+```
+
+Those three blocks are the whole prompt. Do not add a fourth. In particular, do
+not pass the `/audit` result from 5c: it carries a `VERDICT` and a `CONFIDENCE`
+rating, which is this session's judgment of itself, and a judge that reads it
+inherits this session's blind spot instead of checking the artifacts. Same for
+your reasoning, your confidence, and any explanation of why a gap is acceptable.
+If a gap is genuinely unverifiable, that belongs in `requirements.md` as a
+`Testable? no` row with its reason, which the judge already has, not as an
+argument in the prompt.
+
+#### 5d-iii — Act on the verdict
+
+**`FULLY VERIFIED:`** — the session is verified. Record the judge's stamp and
+the round number in report.md, then proceed to 5e.
+
+**`TEST AGAIN:`** — you retest. For each gap the judge named:
+
+1. Read its `Retest:` line. That is the instruction, and it names the specific
+   tool to use. Follow it rather than substituting a cheaper check: if it says
+   read the persisted value with mcp-debugger, a screenshot of a success toast
+   does not close that gap, and the next judge will say so.
+2. Run it. Capture the evidence to the same proof directories, using the same
+   naming so the artifact list stays coherent.
+3. Update `plan.md` and report.md's Evidence Index with the new artifacts.
+4. If a gap genuinely cannot be closed, do not fake it and do not argue it away.
+   Add it to `requirements.md` as a `Testable? no` row with the real reason, and
+   add it to `coverage-gaps.md`. An honest unverifiable is a real outcome.
+
+Then **spawn a fresh judge**. This is mandatory and it is the whole point:
+
+- A **new** `bad-cop` in a **new** context. Never continue the previous judge
+  via `SendMessage`, and never reuse its agent id. A judge that already argued a
+  position is the worst possible reviewer of whether that position was addressed.
+- Hand it the same three things, refreshed: the same verbatim `requirements.md`,
+  the **updated** artifact path list including everything new, and the same tool
+  inventory. Add one line naming which round this is and which gaps the previous
+  round raised, so it can check those specifically. Do not include the previous
+  judge's reasoning about why they mattered, and do not include your account of
+  how you addressed them — the new artifacts are the answer, and if they do not
+  speak for themselves the gap is not closed.
+- Increment `JUDGE_ROUND`.
+
+**The loop ends when, and only when, a judge stamps `FULLY VERIFIED:`.** It does
+not end because you addressed everything on the list, it does not end because a
+round produced fewer gaps than the last, and it does not end because the same
+gap came back and you disagree with it. You retested and a fresh judge looked
+again: that is one round, and the next round is a fresh judge, every time.
+
+**Print each round to the user as it completes.** Never let a round happen
+silently — the user should be able to read what the judge said without asking:
+
+```
+── Evidence Judgment: Round [JUDGE_ROUND] ───────────────────
+Verdict : [FULLY VERIFIED | TEST AGAIN — N gaps]
+[If TEST AGAIN, list each gap: severity, the requirement clause quoted, what
+ was missing, and the retest instruction you are about to run]
+[If FULLY VERIFIED, the clause count it confirmed and the artifact dirs it read]
+```
+
+**Two honest exits, so the loop cannot become a stall.** There is no round cap:
+the judge is the terminal condition, by design. But two situations end a round
+without pretending:
+
+- **The same gap, same retest instruction, third round running.** The
+  instruction is not landing. Stop repeating the attempt. Print what was tried
+  each round and what actually happened, record the gap in `coverage-gaps.md`
+  as unresolved, and tell the user plainly: "Round [N]: the same gap has come
+  back three times. Here is what I tried and what happened. This needs a
+  decision from you." Then stop and wait. Do not stamp anything yourself.
+- **A gap that requires something unavailable** (a production only integration,
+  a third party callback nobody can trigger locally, credentials that do not
+  exist). Record it as `Testable? no` with the reason in `requirements.md` and
+  as a post-deploy validation item, and say so. The next judge will see the
+  reason and stop counting it.
+
+Neither exit is you declaring the session verified. Only a judge's
+`FULLY VERIFIED:` does that. These exits hand an honest unresolved state back to
+the user, which is a correct outcome and a very different thing from a pass.
+
+#### 5d-iv — Legacy remediation checks (still run, inside each round)
+
+While closing the judge's gaps, also clear these:
+
+**PASS-without-evidence TCs:**
+1. For each: attempt to gather the missing proof now.
    - Missing debug json: re-run Step 4b for that TC (re-trigger the action, set the breakpoint, capture variables).
    - Missing screenshot (browser mode only): re-run Step 4 for that TC (navigate back, re-execute the final action, take the annotated screenshot).
 2. Update plan.md and the evidence index in report.md with any newly gathered proof.
 3. If proof still cannot be gathered (page state not reproducible, no server process): downgrade the TC from `[x] PASS` to `[F] FAIL | evidence not collectible post-session — re-run needed`.
 
-**If audit flags unfilled post-deploy entries:**
-Fill them now before printing the final output.
-
-**If audit flags a PASS verdict on the overall session (`VERIFIED` or `LEGIT`):**
-No remediation needed. Proceed to 5e.
+**Unfilled post-deploy entries:** fill them now, before the next judge spawns.
+An unfilled entry is a gap the judge will raise, and filling it after it is
+raised costs a whole extra round.
 
 ---
 
@@ -1742,10 +2019,22 @@ Date      : [date]
   Screenshots        : [N] / [PASS count] TCs  [or "N/A — general mode"]
   TCs with no proof  : [N]  (should be 0 after Phase 5d)
 
-── Session Integrity Audit ──────────────────────────────────
+── Session Integrity Audit (5c checklist) ───────────────────
   Verdict    : [VERIFIED / PARTIALLY VERIFIED / UNVERIFIED]
   Confidence : [HIGH / MEDIUM / LOW]
   Gaps found : [N]  (resolved: [N], unresolvable: [N])
+
+── Adversarial Evidence Judgment (5d) ───────────────────────
+  Rounds run       : [JUDGE_ROUND]
+  Final verdict    : [FULLY VERIFIED / UNRESOLVED — awaiting your decision]
+  Clauses proven   : [N] / [total clauses in requirements.md]
+  Clauses unproven : [N]  (each listed under Not Tested below)
+  Unverifiable     : [N]  (recorded as post-deploy validation items)
+  Gaps per round   : [round 1: N, round 2: N, ...]  (should trend to 0)
+
+If the final verdict is not `FULLY VERIFIED`, say so first and plainly, before
+anything else in this output. A session that ended on an unresolved gap is not a
+passed session, and the round count is not a substitute for a verdict.
 
 ── Failures ─────────────────────────────────────────────────
 [List each FAIL with: TC-ID — what was expected — what was observed]
@@ -2210,14 +2499,16 @@ Charter: Explore [target] With [tools] To discover [problem classes]
 
 **G5b — Proceed to Phase 5.**
 
-Do NOT print the final output yet. General mode sessions also run Phase 5 (Session Integrity Audit + Skipped Test Remediation) before printing the final report to the user.
+Do NOT print the final output yet. General mode runs Phases 5, 6, and 7 exactly like browser mode. The adversarial evidence judgment loop is not browser specific — a code QA session asserts things about behavior just as a browser session does, and it needs the same independent check that the proof supports them.
 
 Jump to **Phase 5** now. Use `MODE = general` context:
 - Phase 5a: Check debug proof (no screenshots expected — `MODE = general`)
 - Phase 5b: Retry any BLOCKED items
-- Phase 5c: Run audit on report.md + debug-proof/session-summary.json
-- Phase 5d: Remediate gaps
+- Phase 5c: Run the `/audit` checklist on report.md + debug-proof/session-summary.json
+- Phase 5d: **The adversarial evidence judgment loop.** Same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Loop until a fresh judge stamps `FULLY VERIFIED`
 - Phase 5e: Print the final output to the user (same format as browser mode, screenshot line shows "N/A — general mode")
+
+Then Phase 6 (log cleanup) and Phase 7 (proof deck). The deck's test case slides carry the debugger's real variable values and test output in place of screenshots — the code proof is the evidence in general mode, so it is what the slides show. Skip the red box guidance in 7d entirely: with no screenshots there is nothing to annotate.
 
 ---
 
@@ -2272,17 +2563,188 @@ Log cleanup complete:
 
 ---
 
+## Phase 7: Proof Deck (MANDATORY — the final stage)
+
+**This is the last thing the session does.** Build a PowerPoint of all the proof,
+where every slide explains what it proves, then open it.
+
+The deck is not a summary of the report. It is the evidence itself, laid out so a
+person can page through it and see what was actually verified without reading
+four markdown files. The report says "TC-004 passed"; the deck shows the
+screenshot with the red box on the element, the real variable value from the
+debugger next to it, and the requirement clause it satisfies.
+
+**Entry gate:** Phase 5d must have completed. If the final judge verdict was
+`TEST AGAIN` and the loop exited on an unresolved gap, still build the deck —
+and mark those gaps on their own slides, clearly, as unproven. A deck that hides
+an unresolved gap is worse than no deck.
+
+### 7a — Call the `powerpoint` skill, do not rebuild it
+
+`Skill(skill="powerpoint")`. It already carries everything structural: workspace
+resolution, a dependency doctor check, the render-every-slide-and-look-at-it
+verification loop, and opening the file at the end. Follow its process. Do not
+write your own deck builder, and do not reimplement its helpers.
+
+The helper CLI it exposes, all confirmed subcommands of
+`~/.claude/skills/powerpoint/scripts/pptx_env.py`:
+
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" workspace
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" topdf "<deck.pptx>"
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" pdftoppm
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "<deck.pptx>"
+```
+
+Write the deck to `$WORKSPACE_ABS/qa-proof-[TASK_ID].pptx`.
+
+### 7b — The slide manifest is report.md's Evidence Index
+
+Do not invent a new manifest. `report.md` already has an Evidence Index table
+mapping TC-ID to screenshot to debug proof. Walk it. `requirements.md`'s
+enumerated clause table gives you the requirement each TC maps to.
+
+Slide order:
+
+1. **Title.** Target, task id, date, and the headline numbers: N passed, N
+   failed, N blocked, N unverifiable. Plus the Phase 5d verdict and round count.
+   If the verdict was not `FULLY VERIFIED`, say that on the title slide.
+2. **Requirements coverage.** The clause table from `requirements.md`, each row
+   marked proven or unproven, with the TC that proves it. This is the slide
+   someone reads to know whether what they asked for actually got verified.
+3. **One slide per test case**, in plan.md order. See 7c.
+4. **Failures**, one slide each, if any. Expected, observed, and the screenshot
+   showing the failure. A failure slide is proof too.
+5. **Not tested.** `coverage-gaps.md`'s "What Was Not Tested" section, verbatim.
+   Do not soften it and do not re-derive it.
+6. **Unresolved gaps**, if the judge loop exited without `FULLY VERIFIED`. One
+   slide per gap: the requirement clause quoted, what was missing, what was
+   tried each round, and what it needs to close.
+7. **Post-deploy validation**, if any UNVERIFIABLE items exist: what to validate,
+   where, and who.
+
+### 7c — Each test case slide explains itself
+
+The self-explaining requirement means the slide stands alone. Someone opening
+the deck cold, with no access to this conversation, understands what they are
+looking at and what it proves.
+
+Per TC slide:
+
+- **Title**: `TC-NNN — [the TC description from plan.md]`
+- **The requirement it proves**, quoted from `requirements.md`. If a TC maps to
+  no clause, say `Exploratory — no stated requirement` rather than leaving it
+  blank.
+- **Expected** and **Observed**, taken from `plan.md`. This text already exists.
+  Use it. Do not write new prose describing what you think happened.
+- **The screenshot**: `$PROOF_DIR/TC-NNN-after.png`, placed with `add_picture`
+  at explicit `Inches()` coordinates.
+- **The code proof**: the real values from `$DEBUG_PROOF_DIR/TC-NNN-debug.json`,
+  rendered as a small table or code block — the variable names and their actual
+  values at the actual breakpoint. This is what separates "the UI said it worked"
+  from "the value that got persisted was correct." If the json says the
+  breakpoint was not hit, show that, do not omit it.
+- **Speaker notes**: the same explanation in full sentences, via
+  `notes_slide.notes_text_frame.text`. The notes are where the reasoning goes,
+  so the slide itself stays readable.
+
+### 7d — Red squares on the points of interest
+
+**Most screenshots already have them.** Phase 3 Step 4 injects a red bordered
+overlay onto the element under test via `browser_evaluate` before capturing, and
+gates the capture on that overlay having a non-zero bounding box. So every
+`TC-NNN-after.png` already has the red box baked into its pixels, on the right
+element, verified at capture time.
+
+**Place those as-is.** Do not draw a second box over them in python-pptx. You do
+not know the element's position on the slide-scaled image well enough to land it
+correctly, and a misplaced red box pointing at the wrong element is worse
+evidence than no box.
+
+**Only add a box post-hoc for screenshots that never got one**: `before-*.png`
+pre-action states, `discovery-*.png` from Phase 1, or any image where the point
+of interest is a region nothing annotated at capture time. For those, use
+python-pptx's shape API with a transparent fill and a red outline:
+
+```python
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+
+# pic is the shape returned by slide.shapes.add_picture(...)
+# rect_frac is the region of interest as fractions of the image: (x, y, w, h)
+def add_red_box(slide, pic, rect_frac):
+    fx, fy, fw, fh = rect_frac
+    box = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        pic.left + int(pic.width * fx),
+        pic.top + int(pic.height * fy),
+        int(pic.width * fw),
+        int(pic.height * fh),
+    )
+    box.fill.background()          # transparent, so the screenshot shows through
+    box.line.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    box.line.width = Pt(2.5)
+    box.shadow.inherit = False
+    return box
+```
+
+Scale off the placed picture's own `left/top/width/height`, never off the raw
+pixel dimensions — the image is resized when it lands on the slide, and using
+pixel coordinates puts the box in the wrong place by exactly that ratio.
+
+If you do not know the region for an unannotated screenshot, add a caption
+naming what to look at instead. A caption that says "the total field, upper
+right" is honest. A red box guessed at a location is a false claim about where
+the evidence is.
+
+### 7e — Render every slide and actually look at it
+
+The `powerpoint` skill requires this and it is not skippable here. QA screenshots
+vary wildly in aspect ratio, so an image overflowing its area or covering its own
+caption is a real and likely outcome.
+
+1. `topdf` the deck via LibreOffice headless.
+2. `pdftoppm -jpeg` the PDF to per-slide images.
+3. `Glob` the rendered JPEGs and `Read` **every one**. Not a sample.
+4. Check each: does the screenshot fit its area, is the caption readable and not
+   overlapped, is the red box visible against the page behind it, is any text
+   clipped, is the debug-proof table legible at slide size.
+5. Fix what you find and re-render. Repeat until every slide is clean.
+
+A deck you did not look at is not verified, and the whole point of this phase is
+that the proof is inspectable.
+
+### 7f — Open it
+
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-proof-[TASK_ID].pptx"
+```
+
+Print:
+```
+Proof deck built and opened:
+  Slides            : [N]  ([N] test cases, [N] failures, [N] gap slides)
+  Screenshots        : [N] placed  ([N] pre-annotated, [N] captioned only)
+  Debug proof shown  : [N] test cases with real variable values
+  Rendered & checked : [N] / [N] slides read
+  Deck               → $WORKSPACE_ABS/qa-proof-[TASK_ID].pptx
+```
+
+---
+
 ## What's Next After /qa
 
-The session integrity audit (Phase 5) and log cleanup (Phase 6) already ran before you saw this output. It checked proof coverage, retried blocked items, and confirmed the verdict.
+The checklist audit (5c), the adversarial evidence judgment loop (5d), log cleanup (Phase 6), and the proof deck (Phase 7) all ran before you saw this output. 5d is the one that decided whether the session is verified: it retested every gap a fresh judge named and looped until a judge stamped `FULLY VERIFIED` on the artifacts.
 
-| If Phase 5 verdict was... | Do this |
+| If the Phase 5d verdict was... | Do this |
 |---------------------------|---------|
-| VERIFIED — all PASS, proof complete | `/done` — run the pre-push checklist and push |
-| PARTIALLY VERIFIED — some gaps remain | Fix the flagged gaps, then re-run `/qa quick` to verify |
-| UNVERIFIED — missing proof or open items | Read the audit findings and address each one before shipping |
-| Failures in the session | Fix them, re-run `/qa quick`, re-run Phase 5 automatically |
+| FULLY VERIFIED — every clause proven by a real artifact | `/done` — run the pre-push checklist and push |
+| UNRESOLVED — the loop exited on a gap that would not close | Read the unresolved gap slides in the deck. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
+| FULLY VERIFIED but with UNVERIFIABLE items | Ship if the post-deploy validation plan is real and owned. Those clauses are not verified, only scheduled |
+| Failures in the session | Fix them, re-run `/qa quick`. Phase 5d runs again automatically with a fresh judge |
 | Coverage gaps noted | Review `coverage-gaps.md` — decide which to backlog vs. address now |
 | Security concern visible (auth, input, tokens) | `/security-review` — OWASP-focused review of pending changes |
 
-**Never self-verify.** The evaluator-agent checks annotation presence, annotation placement, and post-action state. These are three distinct checks that the orchestrator cannot objectively answer about its own screenshots — it produced them.
+**Never self-verify.** Two separate agents exist for this and neither is the orchestrator. `evaluator-agent` (Phase 3 Close) checks annotation presence, annotation placement, and post-action state on each screenshot. `bad-cop` in evidence-judge mode (Phase 5d) checks whether the proof supports the requirements at all, and it is the only thing that can end the session. The orchestrator produced the evidence, so it cannot objectively answer either question about its own work — and a judge that says `TEST AGAIN` is not overruled by the orchestrator disagreeing.

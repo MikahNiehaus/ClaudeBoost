@@ -49,7 +49,15 @@ Wait for the user's answer before proceeding.
 
 If `WORKSPACE_PATH` is empty after the check: print `[xray] No active workspace — Pass 8 and 9 running without ticket spec` and continue.
 
-Call `POST http://127.0.0.1:8612/context` with `agent="reviewer-agent"`, `task_description="code xray $ARGUMENTS"`, `project_path="<PROJECT_PATH>"`, `workspace_path="<WORKSPACE_PATH>"`, `max_tokens=4000`.
+Call `POST http://127.0.0.1:8613/search` with:
+```json
+{
+  "query": "code xray $ARGUMENTS",
+  "sources": ["project:<PROJECT_PATH>"],
+  "mode": "both",
+  "limit": 8
+}
+```
 
 If it fails: stop — "RAG is not connected. Run `/rag` first."
 
@@ -429,27 +437,21 @@ You have four RAG sources. You MUST call all of them before you look at a single
 Skipping any source means you are reviewing blind. Incomplete RAG = incomplete findings = bad review.
 This is not optional. Do not skip any step for any reason.
 
-Step 1 — Context load (always first):
-  POST http://127.0.0.1:8612/context
-    agent="reviewer-agent"
-    task_description="<pass name> review pass"
-    project_path="<PROJECT_PATH>"
-    workspace_path="<WORKSPACE_PATH>"
+Step 1 — ClaudeBoost itself (orchestration patterns, agent specs, skill conventions):
+  POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":5}
 
-Step 2 — ClaudeBoost KB (orchestration patterns, agent specs, skill conventions):
-  POST http://127.0.0.1:8612/search  scope="knowledge"  query="<targeted query>"  limit=5
-
-Step 3 — Codebase vector search (semantically similar implementations):
+Step 2 — Codebase vector search (semantically similar implementations):
   POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:<PROJECT_PATH>"],"mode":"vector","limit":5}
 
-Step 4 — Codebase graph search (callers, imports, structural neighbors):
+Step 3 — Codebase graph search (callers, imports, structural neighbors):
   POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":5}
 
-Step 5 — Workspace KB (task-scoped research for this ticket, if workspace_path is set):
-  POST http://127.0.0.1:8612/search  scope="codebase"  project_path="<WORKSPACE_PATH>/knowledge"
-    query="<targeted query>"  mode="vector"  limit=5
+Step 4 — Workspace KB (task-scoped research for this ticket, if workspace_path is set):
+  POST http://127.0.0.1:8613/search  {"query":"<targeted query>","sources":["project:<WORKSPACE_PATH>/knowledge"],"mode":"vector","limit":5}
+    Only works if that directory was registered with /index-project. It usually
+    is not, in which case skip this step rather than reporting a false gap.
 
-Vector and graph return different files. Running only one will miss findings. All five steps
+Vector and graph return different files. Running only one will miss findings. All four steps
 are required every time. There are no exceptions.
 
 == END RAG PRIMING — NOW YOU MAY REVIEW THE DIFF ==
@@ -637,7 +639,7 @@ Spawn one Opus evaluator after ALL batches and Phase 3b complete. Do NOT proceed
 
 ```
 Your FIRST two actions:
-1. Call POST http://127.0.0.1:8612/context with agent="evaluator-agent", task_description="evaluator pass — classify review findings", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>"
+1. Call POST http://127.0.0.1:8613/search with {"query":"evaluator pass — classify review findings","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 2. For each unique BLOCKER in FINDINGS_CITATIONS: call POST http://127.0.0.1:8613/search {"query":"<symbol from finding>","sources":["project:<PROJECT_PATH>"],"mode":"graph","limit":3} to verify it exists and isn't already handled elsewhere.
 
 You are the Evaluator. You do NOT re-review the code — you review the FINDINGS and TEST RESULTS.

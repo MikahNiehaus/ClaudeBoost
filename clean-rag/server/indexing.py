@@ -519,326 +519,330 @@ def index_project(
         ChromaStore.evict_cache(str(chroma_dir))
         _gc_cleanup("force-pre-evict")
 
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    collection = "codebase"
+    # `with`, not a bare constructor: this run holds the shared sqlite handle for
+    # hours, the sweep can ask for that handle to be closed while it does, and the
+    # close waits for this holder to check in. See ChromaStore.__del__ for why the
+    # check in cannot be left to garbage collection.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        collection = "codebase"
 
-    if force and store.collection_exists(collection):
-        deleted = store.delete_collection(collection)
-        if not deleted:
-            raise RuntimeError(
-                f"Force-rebuild of {project_path!r}: could not delete existing "
-                f"collection after 3 attempts — aborting to prevent double-indexing. "
-                f"Restart the RAG server and retry."
-            )
+        if force and store.collection_exists(collection):
+            deleted = store.delete_collection(collection)
+            if not deleted:
+                raise RuntimeError(
+                    f"Force-rebuild of {project_path!r}: could not delete existing "
+                    f"collection after 3 attempts — aborting to prevent double-indexing. "
+                    f"Restart the RAG server and retry."
+                )
 
-    store.create_collection(collection)
+        store.create_collection(collection)
 
-    file_paths = scan_project(project_path)
+        file_paths = scan_project(project_path)
 
-    # Initialize the graph store for structural edges
-    graph = _init_graph_store(index_dir, force=force)
+        # Initialize the graph store for structural edges
+        graph = _init_graph_store(index_dir, force=force)
 
-    # Pre-build file map for symbol resolution and track current files
-    file_map: dict[str, str] = {}
-    current_files: set[str] = set()
+        # Pre-build file map for symbol resolution and track current files
+        file_map: dict[str, str] = {}
+        current_files: set[str] = set()
 
-    for fp in file_paths:
-        try:
-            rp = str(Path(fp).relative_to(project_root)).replace("\\", "/")
-        except ValueError:
-            rp = fp.replace("\\", "/")
-        current_files.add(rp)
-        _register_file_variants(rp, file_map)
-
-    # _EXT_TO_LANG is always available (code_chunker depends on edge_extraction
-    # at the top level, so if it were missing indexing.py wouldn't load at all).
-    from .edge_extraction import _EXT_TO_LANG
-
-    # extract_edges and get_language are only needed for graph building.
-    try:
-        from .edge_extraction import extract_edges, get_language
-        has_edge_extraction = True
-    except ImportError:
-        logger.warning("edge_extraction not available, skipping graph build")
-        has_edge_extraction = False
-
-    # Detect dominant language and pick the right embedding model.
-    # If model_cache is a ModelCache, use lang routing; otherwise it's a plain
-    # embedder passed directly (backward compat with auto_reindex).
-    from .lang_router import ModelCache
-    if isinstance(model_cache, ModelCache):
-        lang_counts: dict[str, int] = {}
         for fp in file_paths:
-            ext = Path(fp).suffix.lower()
-            lang = _EXT_TO_LANG.get(ext, "unknown")
-            lang_counts[lang] = lang_counts.get(lang, 0) + 1
-        model_id = get_model_for_project(lang_counts)
-        code_embedder = model_cache.get(model_id)
-        # Record the model that actually produced the vectors, not the one we
-        # asked for. ModelCache.get falls back to CODE_EMBEDDING_MODEL when the
-        # routed model cannot load (bigcode/starencoder, the router's own
-        # fallback entry, currently fails this way), and writing the requested
-        # id would make the manifest claim an embedding space the vectors are
-        # not in. Search compares this id against the live embedder, so a wrong
-        # value here marks a freshly indexed project permanently stale.
-        actual_model_id = getattr(code_embedder, "model_name", None)
-        if actual_model_id and actual_model_id != model_id:
-            logger.info(
-                "Model %s unavailable, vectors produced by %s -- recording the latter",
-                model_id, actual_model_id,
-            )
-            model_id = actual_model_id
-    else:
-        # Plain embedder passed directly (backward compat)
-        code_embedder = model_cache
-        model_id = stored_model_id or ""
+            try:
+                rp = str(Path(fp).relative_to(project_root)).replace("\\", "/")
+            except ValueError:
+                rp = fp.replace("\\", "/")
+            current_files.add(rp)
+            _register_file_variants(rp, file_map)
 
-    files_indexed = 0
-    chunks_created = 0
-    files_unchanged = 0
-    files_failed = 0
-    edges_extracted = 0
-    stopped_early: str | None = None
-    start_time = time.time()
+        # _EXT_TO_LANG is always available (code_chunker depends on edge_extraction
+        # at the top level, so if it were missing indexing.py wouldn't load at all).
+        from .edge_extraction import _EXT_TO_LANG
 
-    # Next wall clock moment the manifest gets flushed. Monotonic, so a system
-    # clock change part way through a multi hour run cannot stall the
-    # checkpointing or fire it every iteration.
-    next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
+        # extract_edges and get_language are only needed for graph building.
+        try:
+            from .edge_extraction import extract_edges, get_language
+            has_edge_extraction = True
+        except ImportError:
+            logger.warning("edge_extraction not available, skipping graph build")
+            has_edge_extraction = False
 
-    for file_path in file_paths:
-        # Cooperative abort point: between files, never part way through one.
-        # A file only enters the manifest once its chunks are actually in the
-        # store, so stopping here always leaves the manifest and the store
-        # agreeing about what is indexed.
-        if should_abort is not None:
-            reason = should_abort()
-            if reason:
-                stopped_early = reason
-                logger.warning(
-                    "Giving the machine back part way through %s: %s "
-                    "(%d of %d files done, resuming next sweep)",
-                    project_path, reason, files_indexed, len(file_paths),
+        # Detect dominant language and pick the right embedding model.
+        # If model_cache is a ModelCache, use lang routing; otherwise it's a plain
+        # embedder passed directly (backward compat with auto_reindex).
+        from .lang_router import ModelCache
+        if isinstance(model_cache, ModelCache):
+            lang_counts: dict[str, int] = {}
+            for fp in file_paths:
+                ext = Path(fp).suffix.lower()
+                lang = _EXT_TO_LANG.get(ext, "unknown")
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
+            model_id = get_model_for_project(lang_counts)
+            code_embedder = model_cache.get(model_id)
+            # Record the model that actually produced the vectors, not the one we
+            # asked for. ModelCache.get falls back to CODE_EMBEDDING_MODEL when the
+            # routed model cannot load (bigcode/starencoder, the router's own
+            # fallback entry, currently fails this way), and writing the requested
+            # id would make the manifest claim an embedding space the vectors are
+            # not in. Search compares this id against the live embedder, so a wrong
+            # value here marks a freshly indexed project permanently stale.
+            actual_model_id = getattr(code_embedder, "model_name", None)
+            if actual_model_id and actual_model_id != model_id:
+                logger.info(
+                    "Model %s unavailable, vectors produced by %s -- recording the latter",
+                    model_id, actual_model_id,
                 )
-                break
-
-        try:
-            rel_path = str(Path(file_path).relative_to(project_root)).replace("\\", "/")
-        except ValueError:
-            rel_path = file_path.replace("\\", "/")
-
-        suffix = Path(rel_path).suffix.lower()
-        is_doc = suffix in {".md", ".mdx", ".rst", ".txt"}
-
-        try:
-            content = Path(file_path).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            # Record the failure instead of just counting it.
-            #
-            # Leaving no manifest entry meant find_changed_files (which reads
-            # with errors="replace" and so always succeeds) saw a file it had
-            # no hash for, called it changed, and handed it back here to fail
-            # identically. Forever: one real file logged the same
-            # UnicodeDecodeError on 98 consecutive passes and was never
-            # indexed. The sentinel is what lets the two agree the file is
-            # known and unreadable rather than perpetually new.
-            #
-            # UNREADABLE_SENTINEL cannot collide with a real entry because
-            # file_hash() returns exactly 16 lowercase hex characters.
-            logger.warning("Failed to read %s: %s", rel_path, e)
-            manifest[rel_path] = UNREADABLE_SENTINEL
-            files_failed += 1
-            continue
-
-        current_hash = file_hash(content)
-        if not force and manifest.get(rel_path) == current_hash:
-            files_unchanged += 1
-            continue
-
-        store.delete_by_source(collection, rel_path)
-
-        # Route to the right chunker
-        if is_doc:
-            raw_chunks = chunk_markdown(
-                content, rel_path,
-                max_tokens=MAX_CHUNK_TOKENS,
-                min_tokens=MIN_CHUNK_TOKENS,
-                chunk_overlap=CHUNK_OVERLAP_TOKENS,
-            )
+                model_id = actual_model_id
         else:
-            raw_chunks = chunk_code(
-                content, rel_path,
-                max_tokens=MAX_CHUNK_TOKENS,
-                min_tokens=MIN_CHUNK_TOKENS,
-                chunk_overlap=CHUNK_OVERLAP_TOKENS,
-            )
+            # Plain embedder passed directly (backward compat)
+            code_embedder = model_cache
+            model_id = stored_model_id or ""
 
-        # Extract graph edges for code files
-        if has_edge_extraction and not is_doc:
-            lang = get_language(file_path)
-            if lang:
-                try:
-                    edges = extract_edges(content, lang, rel_path)
-                    if edges:
-                        graph.delete_edges_for_file(rel_path)
-                        graph.add_edges(edges)
-                        edges_extracted += len(edges)
-                except Exception as e:
-                    logger.warning("Edge extraction failed for %s: %s", rel_path, e)
+        files_indexed = 0
+        chunks_created = 0
+        files_unchanged = 0
+        files_failed = 0
+        edges_extracted = 0
+        stopped_early: str | None = None
+        start_time = time.time()
 
-        if not raw_chunks:
-            files_unchanged += 1
-            continue
+        # Next wall clock moment the manifest gets flushed. Monotonic, so a system
+        # clock change part way through a multi hour run cannot stall the
+        # checkpointing or fire it every iteration.
+        next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
 
-        try:
-            texts = [c.content for c in raw_chunks]
-            embeddings = code_embedder.embed(texts)
+        for file_path in file_paths:
+            # Cooperative abort point: between files, never part way through one.
+            # A file only enters the manifest once its chunks are actually in the
+            # store, so stopping here always leaves the manifest and the store
+            # agreeing about what is indexed.
+            if should_abort is not None:
+                reason = should_abort()
+                if reason:
+                    stopped_early = reason
+                    logger.warning(
+                        "Giving the machine back part way through %s: %s "
+                        "(%d of %d files done, resuming next sweep)",
+                        project_path, reason, files_indexed, len(file_paths),
+                    )
+                    break
 
-            store_chunks = []
-            for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
-                if raw.token_count_approx < DEGENERATE_CHUNK_MIN_TOKENS:
-                    continue
-                cid = chunk_id(rel_path, i)
-                metadata = build_metadata(
-                    source_file=rel_path,
-                    scope="project",
-                    section=raw.section,
-                    line_start=raw.line_start,
-                    line_end=raw.line_end,
-                    content_hash=current_hash,
-                    chunk_index=i,
-                    token_count=raw.token_count_approx,
-                )
-                store_chunks.append(Chunk(
-                    id=cid,
-                    content=raw.content,
-                    embedding=embedding,
-                    metadata=metadata,
-                ))
-
-            added = store.add_chunks(collection, store_chunks)
-            chunks_created += added
-            files_indexed += 1
-            manifest[rel_path] = current_hash
-            del texts, embeddings, store_chunks
-        except Exception as e:
-            logger.error("Failed to embed/store %s: %s", rel_path, e)
-            files_failed += 1
-
-        # Flush what has actually been indexed so far.
-        #
-        # Placed here, after add_chunks has already committed (store.py wraps
-        # its inserts in `with self._conn:`), never before. The manifest is a
-        # claim that a file's chunks are in the store, so writing it ahead of
-        # the chunks would survive a crash as a permanent lie: neither
-        # find_changed_files nor the unchanged hash skip above compares against
-        # store contents, so nothing would ever notice the file was missing and
-        # nothing would reindex it. Late is recoverable, early is not.
-        #
-        # incomplete=True on every intermediate write, explicitly. Passing None
-        # would let _save_project_manifest carry over whatever __incomplete__ is
-        # already on disk, so a project whose previous run finished cleanly
-        # would keep claiming it was complete all the way through this one, and
-        # index_is_incomplete() would tell the next sweep to rebuild instead of
-        # resume. The end of run save below is what clears it back to False.
-        #
-        # Outside the try above on purpose. A failed manifest write has nothing
-        # to do with embedding, and letting it land in that except would count a
-        # file whose chunks are safely stored as a failure. It is also not worth
-        # killing an hours long run over: the dict is still intact in memory, so
-        # the next checkpoint or the final save picks it up.
-        if time.monotonic() >= next_checkpoint_at:
             try:
-                _save_project_manifest(
-                    manifest_path, manifest, str(project_root),
-                    pipeline_version=PIPELINE_VERSION,
-                    model_id=model_id or None,
-                    incomplete=True,
-                )
-            except OSError as e:
-                logger.warning("Manifest checkpoint failed for %s: %s", project_path, e)
-            next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
+                rel_path = str(Path(file_path).relative_to(project_root)).replace("\\", "/")
+            except ValueError:
+                rel_path = file_path.replace("\\", "/")
 
-    # GC before graph post-processing
-    _gc_cleanup(f"project:{project_path}")
+            suffix = Path(rel_path).suffix.lower()
+            is_doc = suffix in {".md", ".mdx", ".rst", ".txt"}
 
-    # Post-processing: resolve graph targets and clean up ghost edges
-    graph_stats = {}
-    if has_edge_extraction:
-        try:
-            resolved_count = graph.resolve_target_files(file_map)
-            ghost_count = graph.delete_ghost_edges(current_files)
-            graph_stats = {
-                "edges_total": graph.count_edges(),
-                "edges_resolved": graph.count_resolved_edges(),
-                "edges_unresolved": graph.count_unresolved_edges(),
-                "edges_extracted_this_run": edges_extracted,
-                "targets_resolved": resolved_count,
-                "ghosts_cleaned": ghost_count,
-            }
-            logger.info(
-                "Graph built for %s: %d edges (%d resolved, %d unresolved, %d ghosts cleaned)",
-                pid, graph_stats["edges_total"], graph_stats["edges_resolved"],
-                graph_stats["edges_unresolved"], ghost_count,
-            )
-            # PageRank: used as a tiebreaker when pruning deep graph
-            # traversals in get_neighbours() (search.py mode=graph). Cheap
-            # relative to the embedding work already done above, so compute
-            # it on every index rather than making it opt-in.
             try:
-                from .graph_store import compute_pagerank
-                pr_scores = compute_pagerank(graph)
-                graph.save_pagerank(pr_scores)
-                graph_stats["pagerank_nodes"] = len(pr_scores)
+                content = Path(file_path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                # Record the failure instead of just counting it.
+                #
+                # Leaving no manifest entry meant find_changed_files (which reads
+                # with errors="replace" and so always succeeds) saw a file it had
+                # no hash for, called it changed, and handed it back here to fail
+                # identically. Forever: one real file logged the same
+                # UnicodeDecodeError on 98 consecutive passes and was never
+                # indexed. The sentinel is what lets the two agree the file is
+                # known and unreadable rather than perpetually new.
+                #
+                # UNREADABLE_SENTINEL cannot collide with a real entry because
+                # file_hash() returns exactly 16 lowercase hex characters.
+                logger.warning("Failed to read %s: %s", rel_path, e)
+                manifest[rel_path] = UNREADABLE_SENTINEL
+                files_failed += 1
+                continue
+
+            current_hash = file_hash(content)
+            if not force and manifest.get(rel_path) == current_hash:
+                files_unchanged += 1
+                continue
+
+            store.delete_by_source(collection, rel_path)
+
+            # Route to the right chunker
+            if is_doc:
+                raw_chunks = chunk_markdown(
+                    content, rel_path,
+                    max_tokens=MAX_CHUNK_TOKENS,
+                    min_tokens=MIN_CHUNK_TOKENS,
+                    chunk_overlap=CHUNK_OVERLAP_TOKENS,
+                )
+            else:
+                raw_chunks = chunk_code(
+                    content, rel_path,
+                    max_tokens=MAX_CHUNK_TOKENS,
+                    min_tokens=MIN_CHUNK_TOKENS,
+                    chunk_overlap=CHUNK_OVERLAP_TOKENS,
+                )
+
+            # Extract graph edges for code files
+            if has_edge_extraction and not is_doc:
+                lang = get_language(file_path)
+                if lang:
+                    try:
+                        edges = extract_edges(content, lang, rel_path)
+                        if edges:
+                            graph.delete_edges_for_file(rel_path)
+                            graph.add_edges(edges)
+                            edges_extracted += len(edges)
+                    except Exception as e:
+                        logger.warning("Edge extraction failed for %s: %s", rel_path, e)
+
+            if not raw_chunks:
+                files_unchanged += 1
+                continue
+
+            try:
+                texts = [c.content for c in raw_chunks]
+                embeddings = code_embedder.embed(texts)
+
+                store_chunks = []
+                for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                    if raw.token_count_approx < DEGENERATE_CHUNK_MIN_TOKENS:
+                        continue
+                    cid = chunk_id(rel_path, i)
+                    metadata = build_metadata(
+                        source_file=rel_path,
+                        scope="project",
+                        section=raw.section,
+                        line_start=raw.line_start,
+                        line_end=raw.line_end,
+                        content_hash=current_hash,
+                        chunk_index=i,
+                        token_count=raw.token_count_approx,
+                    )
+                    store_chunks.append(Chunk(
+                        id=cid,
+                        content=raw.content,
+                        embedding=embedding,
+                        metadata=metadata,
+                    ))
+
+                added = store.add_chunks(collection, store_chunks)
+                chunks_created += added
+                files_indexed += 1
+                manifest[rel_path] = current_hash
+                del texts, embeddings, store_chunks
             except Exception as e:
-                logger.warning("PageRank computation failed for %s: %s", pid, e)
-        except Exception as e:
-            logger.error("Graph post-processing failed: %s", e)
-            graph_stats = {"error": str(e)}
+                logger.error("Failed to embed/store %s: %s", rel_path, e)
+                files_failed += 1
 
-    # Save manifest with pipeline version and model info. The dimension is
-    # recorded alongside the model id because a same width model swap (both
-    # CodeRankEmbed and st-codesearch-distilroberta-base are 768) passes every
-    # width check there is while still returning results from a different
-    # embedding space, so width alone cannot detect it.
-    embedding_dim: int | None = None
-    try:
-        embedding_dim = store.sample_dimension(collection)
-    except Exception:
-        logger.debug("Could not sample embedding dimension for %s", pid, exc_info=True)
+            # Flush what has actually been indexed so far.
+            #
+            # Placed here, after add_chunks has already committed (store.py wraps
+            # its inserts in `with self._conn:`), never before. The manifest is a
+            # claim that a file's chunks are in the store, so writing it ahead of
+            # the chunks would survive a crash as a permanent lie: neither
+            # find_changed_files nor the unchanged hash skip above compares against
+            # store contents, so nothing would ever notice the file was missing and
+            # nothing would reindex it. Late is recoverable, early is not.
+            #
+            # incomplete=True on every intermediate write, explicitly. Passing None
+            # would let _save_project_manifest carry over whatever __incomplete__ is
+            # already on disk, so a project whose previous run finished cleanly
+            # would keep claiming it was complete all the way through this one, and
+            # index_is_incomplete() would tell the next sweep to rebuild instead of
+            # resume. The end of run save below is what clears it back to False.
+            #
+            # Outside the try above on purpose. A failed manifest write has nothing
+            # to do with embedding, and letting it land in that except would count a
+            # file whose chunks are safely stored as a failure. It is also not worth
+            # killing an hours long run over: the dict is still intact in memory, so
+            # the next checkpoint or the final save picks it up.
+            if time.monotonic() >= next_checkpoint_at:
+                try:
+                    _save_project_manifest(
+                        manifest_path, manifest, str(project_root),
+                        pipeline_version=PIPELINE_VERSION,
+                        model_id=model_id or None,
+                        incomplete=True,
+                    )
+                except OSError as e:
+                    logger.warning("Manifest checkpoint failed for %s: %s", project_path, e)
+                next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
 
-    # A run that stopped early still saves, and that is the deliberate choice
-    # over leaving the previous manifest untouched. The manifest is the record
-    # of what is actually in the store, and after the break above it holds
-    # exactly the files this run embedded (plus, when force is off, the ones
-    # already there and untouched). The files never reached are simply absent,
-    # so the next sweep sees them as changed and finishes the job.
-    #
-    # Not saving would be worse, specifically on a force rebuild: the
-    # collection is emptied at the top of this function, so keeping the old
-    # manifest would claim files are indexed whose chunks no longer exist, and
-    # nothing would ever notice or reindex them. __incomplete__ is what stops
-    # the resume from being a restart, see index_is_incomplete().
-    _save_project_manifest(
-        manifest_path, manifest, str(project_root),
-        pipeline_version=PIPELINE_VERSION,
-        incomplete=stopped_early is not None,
-        # The backward compat branch above sets model_id to "" when a plain
-        # embedder was passed instead of a ModelCache. Empty is "unknown", not
-        # a real model id, so normalize it to None and let the carry over keep
-        # any genuine value already on disk.
-        model_id=model_id or None,
-        embedding_dim=embedding_dim,
-    )
+        # GC before graph post-processing
+        _gc_cleanup(f"project:{project_path}")
 
-    # Update project registry
-    _update_project_registry(
-        pid, str(project_root), files_indexed, chunks_created,
-        graph_stats=graph_stats,
-    )
+        # Post-processing: resolve graph targets and clean up ghost edges
+        graph_stats = {}
+        if has_edge_extraction:
+            try:
+                resolved_count = graph.resolve_target_files(file_map)
+                ghost_count = graph.delete_ghost_edges(current_files)
+                graph_stats = {
+                    "edges_total": graph.count_edges(),
+                    "edges_resolved": graph.count_resolved_edges(),
+                    "edges_unresolved": graph.count_unresolved_edges(),
+                    "edges_extracted_this_run": edges_extracted,
+                    "targets_resolved": resolved_count,
+                    "ghosts_cleaned": ghost_count,
+                }
+                logger.info(
+                    "Graph built for %s: %d edges (%d resolved, %d unresolved, %d ghosts cleaned)",
+                    pid, graph_stats["edges_total"], graph_stats["edges_resolved"],
+                    graph_stats["edges_unresolved"], ghost_count,
+                )
+                # PageRank: used as a tiebreaker when pruning deep graph
+                # traversals in get_neighbours() (search.py mode=graph). Cheap
+                # relative to the embedding work already done above, so compute
+                # it on every index rather than making it opt-in.
+                try:
+                    from .graph_store import compute_pagerank
+                    pr_scores = compute_pagerank(graph)
+                    graph.save_pagerank(pr_scores)
+                    graph_stats["pagerank_nodes"] = len(pr_scores)
+                except Exception as e:
+                    logger.warning("PageRank computation failed for %s: %s", pid, e)
+            except Exception as e:
+                logger.error("Graph post-processing failed: %s", e)
+                graph_stats = {"error": str(e)}
 
-    # Reclaim any free pages after the bulk delete+insert cycle.
-    store.vacuum()
+        # Save manifest with pipeline version and model info. The dimension is
+        # recorded alongside the model id because a same width model swap (both
+        # CodeRankEmbed and st-codesearch-distilroberta-base are 768) passes every
+        # width check there is while still returning results from a different
+        # embedding space, so width alone cannot detect it.
+        embedding_dim: int | None = None
+        try:
+            embedding_dim = store.sample_dimension(collection)
+        except Exception:
+            logger.debug("Could not sample embedding dimension for %s", pid, exc_info=True)
+
+        # A run that stopped early still saves, and that is the deliberate choice
+        # over leaving the previous manifest untouched. The manifest is the record
+        # of what is actually in the store, and after the break above it holds
+        # exactly the files this run embedded (plus, when force is off, the ones
+        # already there and untouched). The files never reached are simply absent,
+        # so the next sweep sees them as changed and finishes the job.
+        #
+        # Not saving would be worse, specifically on a force rebuild: the
+        # collection is emptied at the top of this function, so keeping the old
+        # manifest would claim files are indexed whose chunks no longer exist, and
+        # nothing would ever notice or reindex them. __incomplete__ is what stops
+        # the resume from being a restart, see index_is_incomplete().
+        _save_project_manifest(
+            manifest_path, manifest, str(project_root),
+            pipeline_version=PIPELINE_VERSION,
+            incomplete=stopped_early is not None,
+            # The backward compat branch above sets model_id to "" when a plain
+            # embedder was passed instead of a ModelCache. Empty is "unknown", not
+            # a real model id, so normalize it to None and let the carry over keep
+            # any genuine value already on disk.
+            model_id=model_id or None,
+            embedding_dim=embedding_dim,
+        )
+
+        # Update project registry
+        _update_project_registry(
+            pid, str(project_root), files_indexed, chunks_created,
+            graph_stats=graph_stats,
+        )
+
+        # Reclaim any free pages after the bulk delete+insert cycle.
+        store.vacuum()
 
     _gc_cleanup(f"project-final:{pid}")
 
@@ -916,55 +920,57 @@ def reindex_file(
         # delete_edges_for_file are both plain SQL deletes keyed on the stored
         # rel_path, with no filesystem check, so they work on a vanished file
         # exactly as they do on a live one. The bail was the only obstacle.
-        store = ChromaStore(persist_dir=str(chroma_dir))
-        if not store.collection_exists("codebase"):
-            return {"error": "Project collection does not exist. Run index-project first."}
+        # `with`: the shared handle has to be checked back in on the raising path too,
+        # see ChromaStore.__del__.
+        with ChromaStore(persist_dir=str(chroma_dir)) as store:
+            if not store.collection_exists("codebase"):
+                return {"error": "Project collection does not exist. Run index-project first."}
 
-        removed = store.delete_by_source("codebase", rel_path)
+            removed = store.delete_by_source("codebase", rel_path)
 
-        # Unconditional, unlike the update path below which skips docs. Skipping
-        # here would rely on the extension to decide whether edges can exist,
-        # and if that guess is ever wrong the edges are orphaned permanently
-        # with the file gone and nothing left to reindex. Deleting zero rows
-        # costs nothing, so ask the question rather than predict the answer.
-        #
-        # Both directions, unlike the update path below. That one re-extracts
-        # the file and adds its outgoing edges straight back, so it must keep
-        # the inbound ones it cannot re-derive. Here the file is gone: nothing
-        # will ever reindex it, so an edge from a surviving file INTO this path
-        # would leak permanently and keep mode=graph search returning a file
-        # that no longer exists. delete_ghost_edges is the bulk form of the
-        # same rule, but it only runs inside a full index_project and takes the
-        # whole current_files set, which this path does not have.
-        graph_db_path = index_dir / "graph.db"
-        if graph_db_path.exists():
-            try:
-                from .graph_store import SQLiteGraphStore
-                edges_removed = SQLiteGraphStore(
-                    str(graph_db_path)
-                ).delete_edges_referencing_file(rel_path)
-                logger.debug(
-                    "Removed %d graph edge(s) referencing deleted %s",
-                    edges_removed, rel_path,
-                )
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.warning("Graph edge cleanup failed for deleted %s: %s", rel_path, e)
+            # Unconditional, unlike the update path below which skips docs. Skipping
+            # here would rely on the extension to decide whether edges can exist,
+            # and if that guess is ever wrong the edges are orphaned permanently
+            # with the file gone and nothing left to reindex. Deleting zero rows
+            # costs nothing, so ask the question rather than predict the answer.
+            #
+            # Both directions, unlike the update path below. That one re-extracts
+            # the file and adds its outgoing edges straight back, so it must keep
+            # the inbound ones it cannot re-derive. Here the file is gone: nothing
+            # will ever reindex it, so an edge from a surviving file INTO this path
+            # would leak permanently and keep mode=graph search returning a file
+            # that no longer exists. delete_ghost_edges is the bulk form of the
+            # same rule, but it only runs inside a full index_project and takes the
+            # whole current_files set, which this path does not have.
+            graph_db_path = index_dir / "graph.db"
+            if graph_db_path.exists():
+                try:
+                    from .graph_store import SQLiteGraphStore
+                    edges_removed = SQLiteGraphStore(
+                        str(graph_db_path)
+                    ).delete_edges_referencing_file(rel_path)
+                    logger.debug(
+                        "Removed %d graph edge(s) referencing deleted %s",
+                        edges_removed, rel_path,
+                    )
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Graph edge cleanup failed for deleted %s: %s", rel_path, e)
 
-        # Dropping the entry, not blanking it. A leftover entry would keep
-        # claiming chunks that are gone, and find_changed_files only reports a
-        # path as deleted while the manifest still lists it, so leaving it would
-        # hand this same file back on every sweep from now on.
-        manifest.pop(rel_path, None)
-        _save_project_manifest(manifest_path, manifest, str(project_root))
+            # Dropping the entry, not blanking it. A leftover entry would keep
+            # claiming chunks that are gone, and find_changed_files only reports a
+            # path as deleted while the manifest still lists it, so leaving it would
+            # hand this same file back on every sweep from now on.
+            manifest.pop(rel_path, None)
+            _save_project_manifest(manifest_path, manifest, str(project_root))
 
-        # Deletes are what grow the freelist, so this is the path that most
-        # wants the reclaim. Threshold guarded, so it is a no-op until it isn't.
-        store.vacuum_if_needed()
+            # Deletes are what grow the freelist, so this is the path that most
+            # wants the reclaim. Threshold guarded, so it is a no-op until it isn't.
+            store.vacuum_if_needed()
 
-        logger.info("Removed deleted file from index: %s", rel_path)
-        return {"file": rel_path, "deleted": True, "chunks_removed": removed}
+            logger.info("Removed deleted file from index: %s", rel_path)
+            return {"file": rel_path, "deleted": True, "chunks_removed": removed}
 
     # Resolve the embedder: use the project's stored model from ModelCache,
     # or fall back to the passed object if it's a plain embedder.
@@ -998,101 +1004,103 @@ def reindex_file(
         return {"unchanged": True, "file": rel_path}
 
     # File changed: re-embed it
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    collection = "codebase"
+    # `with`: the shared handle has to be checked back in on the raising path too,
+    # see ChromaStore.__del__.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        collection = "codebase"
 
-    if not store.collection_exists(collection):
-        return {"error": "Project collection does not exist. Run index-project first."}
+        if not store.collection_exists(collection):
+            return {"error": "Project collection does not exist. Run index-project first."}
 
-    is_doc = suffix in {".md", ".mdx", ".rst", ".txt"}
+        is_doc = suffix in {".md", ".mdx", ".rst", ".txt"}
 
-    store.delete_by_source(collection, rel_path)
+        store.delete_by_source(collection, rel_path)
 
-    if is_doc:
-        raw_chunks = chunk_markdown(
-            content, rel_path,
-            max_tokens=MAX_CHUNK_TOKENS,
-            min_tokens=MIN_CHUNK_TOKENS,
-            chunk_overlap=CHUNK_OVERLAP_TOKENS,
-        )
-    else:
-        raw_chunks = chunk_code(
-            content, rel_path,
-            max_tokens=MAX_CHUNK_TOKENS,
-            min_tokens=MIN_CHUNK_TOKENS,
-            chunk_overlap=CHUNK_OVERLAP_TOKENS,
-        )
-
-    if not raw_chunks:
-        manifest[rel_path] = current_hash
-        _save_project_manifest(manifest_path, manifest, str(project_root))
-        return {"file": rel_path, "chunks_created": 0, "reason": "no indexable content"}
-
-    start_time = time.time()
-    try:
-        texts = [c.content for c in raw_chunks]
-        embeddings = code_embedder.embed(texts)
-
-        store_chunks = []
-        for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
-            if raw.token_count_approx < DEGENERATE_CHUNK_MIN_TOKENS:
-                continue
-            cid = chunk_id(rel_path, i)
-            metadata = build_metadata(
-                source_file=rel_path,
-                scope="project",
-                section=raw.section,
-                line_start=raw.line_start,
-                line_end=raw.line_end,
-                content_hash=current_hash,
-                chunk_index=i,
-                token_count=raw.token_count_approx,
+        if is_doc:
+            raw_chunks = chunk_markdown(
+                content, rel_path,
+                max_tokens=MAX_CHUNK_TOKENS,
+                min_tokens=MIN_CHUNK_TOKENS,
+                chunk_overlap=CHUNK_OVERLAP_TOKENS,
             )
-            store_chunks.append(Chunk(
-                id=cid,
-                content=raw.content,
-                embedding=embedding,
-                metadata=metadata,
-            ))
+        else:
+            raw_chunks = chunk_code(
+                content, rel_path,
+                max_tokens=MAX_CHUNK_TOKENS,
+                min_tokens=MIN_CHUNK_TOKENS,
+                chunk_overlap=CHUNK_OVERLAP_TOKENS,
+            )
 
-        added = store.add_chunks(collection, store_chunks)
-    except Exception as e:
-        logger.error("Failed to reindex %s: %s", rel_path, e)
-        return {"error": f"Embedding failed for {rel_path}: {e}"}
+        if not raw_chunks:
+            manifest[rel_path] = current_hash
+            _save_project_manifest(manifest_path, manifest, str(project_root))
+            return {"file": rel_path, "chunks_created": 0, "reason": "no indexable content"}
 
-    # Update graph edges for this file
-    graph_updated = False
-    if not is_doc:
-        graph_db_path = index_dir / "graph.db"
-        if graph_db_path.exists():
-            try:
-                from .graph_store import SQLiteGraphStore
-                from .edge_extraction import extract_edges, get_language
+        start_time = time.time()
+        try:
+            texts = [c.content for c in raw_chunks]
+            embeddings = code_embedder.embed(texts)
 
-                graph = SQLiteGraphStore(str(graph_db_path))
-                graph.delete_edges_for_file(rel_path)
+            store_chunks = []
+            for i, (raw, embedding) in enumerate(zip(raw_chunks, embeddings)):
+                if raw.token_count_approx < DEGENERATE_CHUNK_MIN_TOKENS:
+                    continue
+                cid = chunk_id(rel_path, i)
+                metadata = build_metadata(
+                    source_file=rel_path,
+                    scope="project",
+                    section=raw.section,
+                    line_start=raw.line_start,
+                    line_end=raw.line_end,
+                    content_hash=current_hash,
+                    chunk_index=i,
+                    token_count=raw.token_count_approx,
+                )
+                store_chunks.append(Chunk(
+                    id=cid,
+                    content=raw.content,
+                    embedding=embedding,
+                    metadata=metadata,
+                ))
 
-                lang = get_language(file_path)
-                if lang:
-                    edges = extract_edges(content, lang, rel_path)
-                    if edges:
-                        graph.add_edges(edges)
+            added = store.add_chunks(collection, store_chunks)
+        except Exception as e:
+            logger.error("Failed to reindex %s: %s", rel_path, e)
+            return {"error": f"Embedding failed for {rel_path}: {e}"}
 
-                        # Re-register this file's variants and re-resolve
-                        file_map: dict[str, str] = {}
-                        _register_file_variants(rel_path, file_map)
-                        graph.resolve_target_files(file_map)
+        # Update graph edges for this file
+        graph_updated = False
+        if not is_doc:
+            graph_db_path = index_dir / "graph.db"
+            if graph_db_path.exists():
+                try:
+                    from .graph_store import SQLiteGraphStore
+                    from .edge_extraction import extract_edges, get_language
 
-                    graph_updated = True
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.warning("Graph update failed for %s: %s", rel_path, e)
+                    graph = SQLiteGraphStore(str(graph_db_path))
+                    graph.delete_edges_for_file(rel_path)
 
-    # Reclaim dead pages if the freelist has grown past the threshold.
-    # Full VACUUM runs after index_project(); this catches the incremental
-    # accumulation from repeated per-file delete+insert cycles.
-    store.vacuum_if_needed()
+                    lang = get_language(file_path)
+                    if lang:
+                        edges = extract_edges(content, lang, rel_path)
+                        if edges:
+                            graph.add_edges(edges)
+
+                            # Re-register this file's variants and re-resolve
+                            file_map: dict[str, str] = {}
+                            _register_file_variants(rel_path, file_map)
+                            graph.resolve_target_files(file_map)
+
+                        graph_updated = True
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Graph update failed for %s: %s", rel_path, e)
+
+        # Reclaim dead pages if the freelist has grown past the threshold.
+        # Full VACUUM runs after index_project(); this catches the incremental
+        # accumulation from repeated per-file delete+insert cycles.
+        store.vacuum_if_needed()
 
     manifest[rel_path] = current_hash
     _save_project_manifest(manifest_path, manifest, str(project_root))

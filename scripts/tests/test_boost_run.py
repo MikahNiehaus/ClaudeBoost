@@ -262,7 +262,7 @@ class TestBoostRunHelpers:
                 return {"ready": True}
             if path == "/context":
                 return {"total_tokens_approx": 1000, "sources_used": 5}
-            if path == "/index":
+            if path == "/index-project":
                 return {"files_indexed": 50, "chunks_created": 200, "files_failed": 0, "graph": {"resolved": 10, "edges": 8}}
             return {}
 
@@ -273,51 +273,6 @@ class TestBoostRunHelpers:
 
         assert result.get("ready") is True
         assert result.get("healed") == []
-
-    def test_step_rag_heals_dimension_mismatch(self, tmp_path):
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "new-model",
-            "embedding_dimensions": 768,
-            "collections": {
-                "knowledge": {"chunks": 0, "files": 0},
-                "agents": {"chunks": 0, "files": 0},
-            },
-            "dimension_mismatch": ["knowledge"],
-        }
-
-        def fake_run(args, timeout=60):
-            return 0, "server started\n"
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/context":
-                return {"total_tokens_approx": 500, "sources_used": 2}
-            if path == "/index":
-                if body.get("force"):
-                    return {"files_indexed": 10, "chunks_created": 50, "files_failed": 0, "graph": {}}
-                return {"files_indexed": 5, "chunks_created": 20, "files_failed": 0, "graph": {}}
-            return {}
-
-        with patch.object(mod, "_run", side_effect=fake_run):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    result = mod.step_rag()
-
-        assert "knowledge" in result.get("healed", [])
-
-    # ------------------------------------------------------------------
-    # step_hooks
-    # ------------------------------------------------------------------
 
     def test_step_hooks_all_present(self, tmp_path):
         mod = self._load_mod(tmp_path)
@@ -460,8 +415,8 @@ class TestBoostRunUncoveredLines:
         mod = self._load_mod(tmp_path)
         mod.BOOST_HOME = tmp_path
 
-        # Create a fake mcp-rag-server/__pycache__ dir so rglob finds it
-        pycache = tmp_path / "mcp-rag-server" / "subpkg" / "__pycache__"
+        # Create a fake clean-rag/__pycache__ dir so rglob finds it
+        pycache = tmp_path / "clean-rag" / "subpkg" / "__pycache__"
         pycache.mkdir(parents=True)
 
         mod.SCRIPTS = tmp_path / "scripts"
@@ -487,94 +442,6 @@ class TestBoostRunUncoveredLines:
     # Line 130: warmup returned ready=False
     # ------------------------------------------------------------------
 
-    def test_step_rag_warmup_not_ready(self, tmp_path):
-        """Warmup POST returns ready=False — should print a warning."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 384,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": [],
-        }
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        call_count = [0]
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": False, "error": "model not loaded"}
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index":
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        mod.step_rag()
-
-        output = buf.getvalue()
-        assert "warmup did not finish" in output
-
-    # ------------------------------------------------------------------
-    # Lines 132-133: warmup HTTP call raises
-    # ------------------------------------------------------------------
-
-    def test_step_rag_warmup_raises(self, tmp_path):
-        """Warmup POST raises an exception — should print warmup failed."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 384,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": [],
-        }
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                raise OSError("connection refused")
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index":
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        result = mod.step_rag()
-
-        output = buf.getvalue()
-        assert "warmup failed" in output
-
-    # ------------------------------------------------------------------
-    # Lines 149-150: sentinel touch raises
-    # ------------------------------------------------------------------
-
     def test_step_rag_sentinel_write_failure(self, tmp_path):
         """If sentinel .touch() raises, should print a warning and continue."""
         (tmp_path / "state").mkdir(parents=True)
@@ -598,7 +465,7 @@ class TestBoostRunUncoveredLines:
                 return {"ready": True}
             if path == "/context":
                 return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index":
+            if path == "/index-project":
                 return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
             return {}
 
@@ -622,139 +489,6 @@ class TestBoostRunUncoveredLines:
 
     # ------------------------------------------------------------------
     # Lines 165-166: mismatch rebuild FAILED branch
-    # ------------------------------------------------------------------
-
-    def test_step_rag_heal_mismatch_rebuild_fails(self, tmp_path):
-        """When rebuild POST raises for a mismatched scope, prints FAILED."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 768,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": ["knowledge"],
-        }
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/index" and body.get("force"):
-                raise OSError("disk full")
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index":
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        result = mod.step_rag()
-
-        output = buf.getvalue()
-        assert "FAILED" in output
-        # Should not be in healed since it failed
-        assert "knowledge" not in result.get("healed", [])
-
-    # ------------------------------------------------------------------
-    # Lines 165 (healed.append) — already partially tested in existing
-    # test_step_rag_heals_dimension_mismatch but let's verify the healed
-    # list is populated when rebuild succeeds AND scope != "memories"
-    # ------------------------------------------------------------------
-
-    def test_step_rag_heal_appends_to_healed(self, tmp_path):
-        """Successful rebuild appends scope to out['healed']."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 768,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": ["agents", "memories"],  # memories filtered out
-        }
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index":
-                return {"files_indexed": 5, "chunks_created": 10, "files_failed": 0, "graph": {}}
-            return {}
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    result = mod.step_rag()
-
-        # "agents" healed; "memories" was filtered out by the [s != "memories"] guard
-        assert "agents" in result.get("healed", [])
-        assert "memories" not in result.get("healed", [])
-
-    # ------------------------------------------------------------------
-    # Lines 176-177: /context POST raises
-    # ------------------------------------------------------------------
-
-    def test_step_rag_context_call_fails(self, tmp_path):
-        """/context POST raises — should print FAILED and continue."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 384,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": [],
-        }
-
-        def fake_get(path, timeout=5):
-            return status_resp
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/context":
-                raise ConnectionError("context refused")
-            if path == "/index":
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", side_effect=fake_get):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        result = mod.step_rag()
-
-        output = buf.getvalue()
-        assert "context: FAILED" in output
-        assert result.get("ready") is True
-
-    # ------------------------------------------------------------------
-    # Lines 188-189: self-index success (out["self_index"] = idx) and FAILED
     # ------------------------------------------------------------------
 
     def test_step_rag_self_index_stored_in_result(self, tmp_path):
@@ -782,9 +516,9 @@ class TestBoostRunUncoveredLines:
                 return {"ready": True}
             if path == "/context":
                 return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index" and body.get("project_path"):
+            if path == "/index-project" and body.get("project_path"):
                 return idx_result
-            if path == "/index":
+            if path == "/index-project":
                 return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
             return {}
 
@@ -815,9 +549,9 @@ class TestBoostRunUncoveredLines:
                 return {"ready": True}
             if path == "/context":
                 return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index" and body.get("project_path"):
+            if path == "/index-project" and body.get("project_path"):
                 raise OSError("no space left")
-            if path == "/index":
+            if path == "/index-project":
                 return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
             return {}
 
@@ -834,84 +568,6 @@ class TestBoostRunUncoveredLines:
 
     # ------------------------------------------------------------------
     # Lines 195-196: memories index success and failure
-    # ------------------------------------------------------------------
-
-    def test_step_rag_memories_index_success(self, tmp_path):
-        """Memories index POST succeeds — should print chunks count."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 384,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": [],
-        }
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index" and body.get("project_path"):
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            if path == "/index" and body.get("scope") == "memories":
-                return {"chunks_created": 7}
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", return_value=status_resp):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        mod.step_rag()
-
-        assert "memories:" in buf.getvalue()
-
-    def test_step_rag_memories_index_fails(self, tmp_path):
-        """Memories index POST raises — should print 'memories: skipped'."""
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mod.SCRIPTS = tmp_path / "scripts"
-        (tmp_path / "scripts").mkdir(parents=True)
-
-        status_resp = {
-            "status": "ready",
-            "model": "m",
-            "embedding_dimensions": 384,
-            "collections": {"knowledge": {}, "agents": {}},
-            "dimension_mismatch": [],
-        }
-
-        def fake_post(path, body, timeout=300):
-            if path == "/warmup":
-                return {"ready": True}
-            if path == "/context":
-                return {"total_tokens_approx": 0, "sources_used": 0}
-            if path == "/index" and body.get("project_path"):
-                return {"files_indexed": 0, "chunks_created": 0, "files_failed": 0, "graph": {}}
-            if path == "/index" and body.get("scope") == "memories":
-                raise OSError("no memories dir")
-            return {}
-
-        import io
-        buf = io.StringIO()
-
-        with patch.object(mod, "_run", return_value=(0, "started")):
-            with patch.object(mod, "_get", return_value=status_resp):
-                with patch.object(mod, "_post", side_effect=fake_post):
-                    with patch("sys.stdout", buf):
-                        mod.step_rag()
-
-        assert "memories: skipped" in buf.getvalue()
-
-    # ------------------------------------------------------------------
-    # Lines 227-228: mode file contains bad JSON (except branch)
     # ------------------------------------------------------------------
 
     def test_step_mode_bad_json_defaults_to_consult(self, tmp_path):

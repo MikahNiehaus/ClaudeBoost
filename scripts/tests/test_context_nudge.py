@@ -149,12 +149,42 @@ def test_http_rag_bash_resets_reads_counter(boost_home):
 
     result = run_hook(
         "context-nudge.py",
-        posttooluse("Bash", {"command": "curl -s http://127.0.0.1:8612/status"}),
+        posttooluse("Bash", {"command": "curl -s http://127.0.0.1:8613/status"}),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
     updated = json.loads(tracker.read_text(encoding="utf-8"))
     assert updated.get("reads_since_rag", 999) == 0
+
+
+def test_retired_port_does_not_count_as_a_rag_call(boost_home):
+    """8612 is a dead server. Hitting it must not reset the counter.
+
+    This test used to assert the opposite, which is how the detection came to
+    silently stop working: the port moved, the literal did not, and every real
+    search stopped counting while the dead one still would have.
+    """
+    tracker = boost_home / "state" / "behavior-tracker.json"
+    tracker.write_text(json.dumps({
+        "reads_since_rag": 6,
+        "tasks_since_evaluator": 0,
+        "reads_since_context_update": 0,
+    }), encoding="utf-8")
+
+    (boost_home / "state" / "compaction-tracker.json").write_text(
+        json.dumps({"edit_count": 2}), encoding="utf-8"
+    )
+
+    result = run_hook(
+        "context-nudge.py",
+        posttooluse("Bash", {"command": "curl -s http://127.0.0.1:8612/status"}),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    updated = json.loads(tracker.read_text(encoding="utf-8"))
+    assert updated.get("reads_since_rag") != 0, (
+        "a call to the retired server was counted as a RAG search"
+    )
 
 
 # ---------------------------------------------------------------------------

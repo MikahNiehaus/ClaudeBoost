@@ -179,6 +179,37 @@ def _is_external_symbol(
     return True
 
 
+def _project_namespaces(file_map: dict[str, str]) -> set[str]:
+    """Every name that belongs to this project rather than to a dependency.
+
+    Used by resolve_target_files to decide whether an import it could not
+    resolve is a third party package or just a project module it has no file
+    for. Membership means "ours", so anything missing here gets called
+    external, and a false negative is the expensive direction.
+
+    Two sources. Every path segment of every file_map key, which covers the
+    plain "Billing/" folder case. Then, for directory segments only, the dotted
+    pieces of the segment: a .NET folder normally carries the dotted namespace
+    it holds, so "ViveryAscend.API/" is namespace ViveryAscend.API, and
+    "ViveryAscend" is as much a project namespace as the folder is. Without
+    that, "using ViveryAscend.API.Services;" reduces to a first segment of
+    "ViveryAscend", which matches no folder, and the project's own code gets
+    filed under _external_. Measured on 300 real .cs files, that was 507 of the
+    514 symbols the fallback marked external.
+
+    File names are deliberately not split, because "OrderService.cs" would
+    register "cs" as a project namespace.
+    """
+    namespaces: set[str] = set()
+    for key in file_map:
+        parts = key.replace("\\", "/").split("/")
+        namespaces.update(parts)
+        for directory in parts[:-1]:
+            if "." in directory:
+                namespaces.update(seg for seg in directory.split(".") if seg)
+    return namespaces
+
+
 # ---------------------------------------------------------------------------
 # Symbol resolution
 # ---------------------------------------------------------------------------
@@ -601,18 +632,14 @@ class SQLiteGraphStore:
         """
         with self._connect() as conn:
             unresolved = conn.execute(
-                "SELECT id, target_symbol, source_file FROM edges WHERE target_file = ''"
+                "SELECT id, target_symbol, source_file, edge_type FROM edges "
+                "WHERE target_file = ''"
             ).fetchall()
 
         if not unresolved:
             return 0
 
-        # Build set of project namespace segments for fallback detection
-        project_namespaces: set[str] = set()
-        for k in file_map:
-            parts = k.replace("\\", "/").split("/")
-            for part in parts:
-                project_namespaces.add(part)
+        project_namespaces = _project_namespaces(file_map)
 
         updates: list[tuple[str, int]] = []
         external_count = 0
@@ -631,6 +658,38 @@ class SQLiteGraphStore:
                 if " as " in symbol:
                     symbol = symbol.split(" as ")[0].strip()
                 first_seg = symbol.split(".")[0]
+                if first_seg and first_seg not in project_namespaces:
+                    updates.append((_EXTERNAL_SENTINEL, row["id"]))
+                    external_count += 1
+            elif (
+                row["edge_type"] == "imports"
+                and row["source_file"].endswith((".cs", ".cshtml"))
+            ):
+                # C# fallback, imports only. _is_external_symbol above knows
+                # only the hardcoded _CS_EXTERNAL_PREFIXES list, so a using
+                # directive for a third party namespace outside that list
+                # matched nothing and stayed empty forever.
+                #
+                # The imports gate is what keeps _external_ meaning "third party
+                # or stdlib". A using directive names a namespace, so comparing
+                # its first segment against the project's namespaces answers a
+                # real question. Every other C# edge type carries a bare type or
+                # method name instead: "calls" carries a call qualifier,
+                # "inherits" and "implements" carry a base type. Those never
+                # look like a namespace, so the same comparison would only ever
+                # report "not a project folder", which is true of almost every
+                # identifier in the language. Measured on 300 real indexed .cs
+                # files: letting every edge type through put _external_ on 953
+                # distinct symbols, among them loop counters and mock fields,
+                # against 96 with this gate, every one of those a real BCL or
+                # NuGet namespace.
+                #
+                # .cshtml is here to stay level with _is_external_symbol's own
+                # suffix tuple, which already carries it. Razor files are
+                # indexed as chunks but ext_to_lang returns None for them, so
+                # nothing extracts edges from one today; dropping the suffix
+                # from one of the two places would only make them disagree.
+                first_seg = row["target_symbol"].split(".")[0]
                 if first_seg and first_seg not in project_namespaces:
                     updates.append((_EXTERNAL_SENTINEL, row["id"]))
                     external_count += 1

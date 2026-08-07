@@ -132,6 +132,32 @@ def _first_identifier(node) -> str:
     return ""
 
 
+def _looks_like_csharp_type_name(name: str) -> bool:
+    """True when a C# identifier could name a type, namespace or method.
+
+    The .NET runtime coding style, which dotnet/docs states as the convention
+    for the language, splits the two cases cleanly:
+
+        "By convention, C# programs use PascalCase for type names, namespaces,
+        and all public members."
+        "Use camelCase for method arguments, local variables, and private and
+        internal non-constant fields."
+        "Private and internal non-constant instance fields start with an
+        underscore (_)." "Static fields start with s_."
+        (dotnet/docs, docs/csharp/fundamentals/coding-style/identifier-names.md)
+
+    A call qualifier that is camelCase, _camelCase or s_camelCase is therefore a
+    local, a parameter or a field, and a field is never the name of a file. Only
+    a PascalCase qualifier can be the type that a C# file is named for, which is
+    the only thing _resolve_symbol's stem key can land on.
+
+    Measured on 300 real indexed .cs files: this drops 806 of 1492 distinct call
+    targets and halves the raw edges written (7893 to 3973), while keeping every
+    one of the 44 targets that actually resolve to a project file.
+    """
+    return bool(name) and name[0].isupper()
+
+
 def get_language(filepath: str) -> str | None:
     """Get the tree-sitter language key for a file path. Returns None if unsupported.
 
@@ -417,6 +443,42 @@ def _walk_for_edges(
                             target_file="", target_symbol=base_name,
                             edge_type="implements" if is_iface else "inherits",
                             confidence="EXTRACTED",
+                        ))
+        elif node_type == "invocation_expression":
+            # Calls edges for C#, deliberately NOT routed through the
+            # import_aliases gated block below. That block needs a local name
+            # bound by an import (Python's `import os` reappearing as `os.f()`).
+            # A C# `using` is namespace level and binds no local alias, so
+            # import_aliases is always empty for a .cs file and the gate can
+            # never fire, whatever languages are listed on it.
+            #
+            # The qualifier is emitted raw instead. _resolve_symbol's stem key
+            # already maps a bare type name to its file, which is exactly how
+            # the inherits and implements edges above resolve today, because C#
+            # convention is one public type per file named for the type.
+            fn = node.child_by_field_name("function")
+            if fn is not None:
+                if fn.type == "member_access_expression":
+                    # C# names this field "expression". JS calls the equivalent
+                    # field "object", so this is not copyable from that branch.
+                    qualifier = fn.child_by_field_name("expression")
+                    # Only a bare identifier is worth emitting. this_expression,
+                    # literals and nested calls cannot resolve to a file.
+                    if qualifier is not None and qualifier.type == "identifier":
+                        name = _node_text(qualifier)
+                        if _looks_like_csharp_type_name(name):
+                            edges.append(GraphEdge(
+                                source_file=filepath, source_symbol="<call>",
+                                target_file="", target_symbol=name,
+                                edge_type="calls", confidence="INFERRED",
+                            ))
+                elif fn.type == "identifier":
+                    name = _node_text(fn)
+                    if _looks_like_csharp_type_name(name):
+                        edges.append(GraphEdge(
+                            source_file=filepath, source_symbol="<call>",
+                            target_file="", target_symbol=name,
+                            edge_type="calls", confidence="INFERRED",
                         ))
 
     elif language == "ruby":

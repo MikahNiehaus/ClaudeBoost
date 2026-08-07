@@ -143,8 +143,8 @@ Before writing the final files, spawn an agent to verify every factual claim in 
 
 The agent spawn prompt MUST include:
 ```
-POST http://127.0.0.1:8612/context with JSON body:
-{"workspace_path": "<WORKSPACE_PATH>", "project_path": "<PROJECT_PATH>"}
+POST http://127.0.0.1:8613/search
+{"query": "<the claim you are checking>", "sources": ["project:<PROJECT_PATH>"], "mode": "both", "limit": 8}
 ```
 
 Fix any FAIL items in the draft before continuing to step 5.

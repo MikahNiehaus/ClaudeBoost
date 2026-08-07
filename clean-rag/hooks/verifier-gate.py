@@ -83,6 +83,11 @@ BLOCK_DIR = STATE_DIR / "verifier-gate"
 MAX_BLOCKS_PER_SESSION = 6
 RAG_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
 
+# Where the bad-cop → good-cop → bad-cop loop stands, from the newest stamp.
+STAGE_NO_VERIFIER = "no-verifier-yet"
+STAGE_BUGS_FOUND = "bad-cop-found-bugs"
+STAGE_FIX_STAMPED = "good-cop-stamped-fix"
+
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
     ".java", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala",
@@ -183,10 +188,7 @@ def _reset_block_count(session_id: str) -> None:
 def _last_verifier_agent(session_id: str):
     """Return (agent, covers) for the most recent verifier stamp, or ('', []) if none.
 
-    Drives the three-way block message routing:
-      - ('', [])            → no verifier ran yet → spawn bad-cop
-      - ('bad-cop', [])     → bad-cop found real bugs → spawn good-cop
-      - ('good-cop', [...]) → good-cop stamped a fix → spawn bad-cop for re-check
+    loop_stage() turns that pair into the three-way block message routing.
 
     Using the most recent stamp (not any stamp) avoids stale matches from earlier
     rounds: an old empty-covers bad-cop stamp no longer redirects to good-cop once
@@ -204,6 +206,20 @@ def _last_verifier_agent(session_id: str):
         return "", []
     last = stamps[-1]
     return last.get("agent", ""), last.get("covers") or []
+
+
+def loop_stage(session_id: str) -> str:
+    """Which round of the bad-cop → good-cop → bad-cop loop this session is in.
+
+    One place decides it, so the block message and the block-count reset cannot
+    disagree, and a test can assert the routing without restating the condition.
+    """
+    agent, covers = _last_verifier_agent(session_id)
+    if agent == "bad-cop" and not covers:
+        return STAGE_BUGS_FOUND
+    if agent == "good-cop" and covers:
+        return STAGE_FIX_STAMPED
+    return STAGE_NO_VERIFIER
 
 
 def _tests_failing(root: str) -> bool:
@@ -320,7 +336,7 @@ def main() -> int:
         surface = "code this turn; a passing test is not proof the test catches the bug"
         evidence = ""
 
-    last_agent, last_covers = _last_verifier_agent(session_id)
+    stage = loop_stage(session_id)
 
     # When good-cop just completed a fix cycle and stamped VERIFIED, reset the
     # consecutive-block cap before spawning bad-cop for the re-check. The cap
@@ -328,7 +344,7 @@ def main() -> int:
     # not against a healthy loop making real progress each round. Resetting here
     # keeps the cap scoped to consecutive failures within one round rather than
     # accumulated across rounds of a healthy bad-cop → good-cop → bad-cop cycle.
-    if last_agent == "good-cop" and last_covers:
+    if stage == STAGE_FIX_STAMPED:
         _reset_block_count(session_id)
 
     if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
@@ -343,7 +359,7 @@ def main() -> int:
 
     _bump_block_count(session_id)
 
-    if last_agent == "bad-cop" and not last_covers:
+    if stage == STAGE_BUGS_FOUND:
         print(
             "[verifier-gate] BLOCKED: bad-cop ran and found real bugs — "
             f"these files still have no valid verifier stamp: {files}\n\n"
@@ -365,7 +381,7 @@ def main() -> int:
             "VERIFIED: itself — that is the only terminal condition.",
             file=sys.stderr,
         )
-    elif last_agent == "good-cop" and last_covers:
+    elif stage == STAGE_FIX_STAMPED:
         print(
             "[verifier-gate] BLOCKED: good-cop stamped VERIFIED: but "
             f"these files still have no valid verifier stamp: {files}\n\n"

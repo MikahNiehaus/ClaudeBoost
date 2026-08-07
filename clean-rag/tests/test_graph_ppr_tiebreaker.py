@@ -37,10 +37,22 @@ class FakeChunk:
 
 
 class FakeStore:
-    """Stands in for ChromaStore: fixed seed hits, one chunk per file."""
+    """Stands in for ChromaStore: fixed seed hits, one chunk per file.
+
+    A context manager, like the real one: search.py opens its store in a `with`
+    so the shared sqlite handle is checked back in on the raising path too, and a
+    double that cannot be entered would only be testing a different function
+    than the one that runs.
+    """
 
     def __init__(self, seed_hits):
         self._seed_hits = seed_hits
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return None
 
     def collection_exists(self, name):
         return True
@@ -86,7 +98,8 @@ def graph_search(monkeypatch, tmp_path, edges, seed_file, seed_score=0.9, depth=
     return [r["file"] for r in results]
 
 
-#: bad-cop's exact construction: one weak direct neighbour and one distant hub.
+#: The inversion case: one weak direct neighbour against one distant, very
+#: central hub, which is where centrality used to outrank hop distance.
 HOP_INVERSION_EDGES = [
     ("seed.py", "leaf.py", "calls"),
     ("seed.py", "hub_gateway.py", "calls"),

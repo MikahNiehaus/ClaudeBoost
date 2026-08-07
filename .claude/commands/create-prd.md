@@ -15,7 +15,7 @@ Two-phase command: generate a Product Requirements Document, then break it into 
 
 Set `PROJECT_PATH` to the detected value.
 
-Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="create PRD for $ARGUMENTS", project_path="<PROJECT_PATH>", max_tokens=4000` as your FIRST action. This loads organization, architecture, and workflow knowledge.
+Call `POST http://127.0.0.1:8613/search with {"query":"create PRD for $ARGUMENTS","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}` as your FIRST action. This loads organization, architecture, and workflow knowledge.
 
 Feature or task: **$ARGUMENTS**
 

@@ -250,11 +250,22 @@ def find_changed_files(project_path: str) -> tuple[list[str], list[str]]:
 
 async def _sweep_project(
     pid: str, entry: dict, model_cache, checkpoint: PressureCheckpoint | None = None
-) -> None:
+) -> bool:
+    """Sweep one project. Returns True only if this call actually held the index
+    lock and did the work, False if it bailed without touching the project's
+    databases.
+
+    The return value is what tells the caller whether releasing this project's
+    cached database handles is safe. It is not cosmetic. Returning None here and
+    releasing unconditionally is what closed the shared sqlite connection out
+    from under a running /index-project, which then died with
+    "Cannot operate on a closed database" and left large projects permanently
+    __incomplete__ because they take longer than one sweep interval to index.
+    """
     project_path = entry.get("project_path")
     if not project_path or not Path(project_path).exists():
         logger.warning("Project %s no longer exists on disk: %s", pid, project_path)
-        return
+        return False
 
     # One project can take hours on its own, so the headroom gate has to reach
     # inside it. The same checkpoint covers both branches below: index_project
@@ -270,7 +281,7 @@ async def _sweep_project(
 
     if not changed and not deleted:
         logger.debug("No changes in %s", project_path)
-        return
+        return False
 
     logger.info(
         "Changes in %s: %d changed, %d deleted", project_path, len(changed), len(deleted)
@@ -281,7 +292,7 @@ async def _sweep_project(
     # from now. Waiting would just pile up sweeps behind a slow index.
     if not acquire_index_lock():
         logger.info("Index lock held by another job, skipping %s this pass", project_path)
-        return
+        return False
 
     try:
         # Deletions first, one file at a time, never by rebuilding.
@@ -359,7 +370,7 @@ async def _sweep_project(
                 f" (stopped early: {result['stopped_early']})"
                 if result.get("stopped_early") else "",
             )
-            return
+            return True
 
         done = 0
         for abs_path in changed:
@@ -380,6 +391,7 @@ async def _sweep_project(
                 logger.error("Failed to reindex %s: %s: %s", abs_path, type(e).__name__, e)
 
         logger.info("Reindexed %d of %d changed files in %s", done, len(changed), project_path)
+        return True
 
     finally:
         release_index_lock()
@@ -468,14 +480,25 @@ async def auto_reindex_loop(get_model_cache) -> None:
 
                 entry = registry.get(project.pid) or {"project_path": project.path}
                 try:
-                    await _sweep_project(project.pid, entry, model_cache)
+                    proceeded = await _sweep_project(project.pid, entry, model_cache)
                     # Drop this project's database handles before moving on.
                     # ChromaStore caches a connection per database forever, so
                     # a sweep across every registered project otherwise ends
                     # holding one open handle per project for the life of the
                     # process, and each carries its own page cache.
-                    _release_project_resources(project.pid)
-                    swept += 1
+                    #
+                    # Only when this pass actually held the lock and did the
+                    # work. ChromaStore.evict_cache asks for the shared
+                    # connection to be closed, and a manual /index-project holds
+                    # the lock for its whole run, so releasing after a skipped
+                    # pass targets a database a live index job is still writing
+                    # through. The count is gated the same way: a pass that
+                    # skipped every project on a busy lock reported one project
+                    # per registered project, which made lock contention read as
+                    # a healthy sweep in the log below.
+                    if proceeded:
+                        _release_project_resources(project.pid)
+                        swept += 1
                 except Exception as e:
                     # One bad project must not kill the loop for the others, or
                     # a single unreadable repo silently stops all reindexing

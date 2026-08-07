@@ -20,6 +20,7 @@ Messages are combined into a single additionalContext output.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -49,7 +50,26 @@ CONTEXT_PCT_WARN = 0.75         # warn when >75% of the window is used (< 25% re
 AUTO_SAVE_TOOLS = {"Edit", "Write"}
 STALE_NUDGE_SECONDS = 300  # 5 minutes — nudge if context.md older than this after an edit
 
-RAG_TOOLS: set = set()  # RAG is HTTP-only now; detection uses _is_http_rag (Bash to 127.0.0.1:8612)
+RAG_TOOLS: set = set()  # RAG is HTTP-only now; detection uses _is_http_rag below
+
+
+@functools.lru_cache(maxsize=1)
+def _rag_port() -> int:
+    """The port clean-rag actually listens on, from clean-rag's own config.
+
+    Written down here once before, as 8612, and left behind when that server was
+    retired. `clean-rag/server/config.py` owns the number and
+    `clean-rag/cli/server_ctl.py:37-42` already imports it exactly this way.
+    """
+    try:
+        boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
+        root = str(boost_home / "clean-rag")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from server.config import STANDALONE_PORT
+        return int(STANDALONE_PORT)
+    except Exception:
+        return 8613
 FILE_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 
@@ -249,10 +269,16 @@ def main() -> int:
     )
 
     # Update RAG/file counters
-    # An HTTP call to the RAG REST API (port 8612) counts the same as an MCP RAG tool call.
+    # An HTTP call to the RAG REST API counts the same as an MCP RAG tool call.
+    #
+    # This used to match the literal "8612" only. That server was retired, so the
+    # check silently stopped ever firing: every real RAG search looked like no
+    # search at all, reads_since_rag climbed forever, and the nudges fired against
+    # sessions that were using RAG correctly. Match whichever port clean-rag is
+    # actually on, read from its own config.
     _bash_cmd = str(tool_input.get("command", "")) if tool_name == "Bash" else ""
-    _is_http_rag = bool(_bash_cmd) and (
-        "127.0.0.1:8612" in _bash_cmd or "localhost:8612" in _bash_cmd
+    _is_http_rag = bool(_bash_cmd) and any(
+        f"{host}:{_rag_port()}" in _bash_cmd for host in ("127.0.0.1", "localhost")
     )
 
     if tool_name in RAG_TOOLS or _is_http_rag:
@@ -347,7 +373,8 @@ def main() -> int:
         nudges.append(
             f"RAG REMINDER ({reads} file searches since last RAG call): "
             "STOP reading files. Search RAG FIRST — "
-            "POST http://127.0.0.1:8612/search. "
+            f"POST http://127.0.0.1:{_rag_port()}/search with "
+            '{"sources":["project:<abs path>"],"mode":"both"}. '
             "Only read files after RAG confirms which ones are relevant."
         )
     elif tasks >= EVALUATOR_THRESHOLD and tasks % EVALUATOR_THRESHOLD == 0 and not audit_active:
@@ -388,11 +415,12 @@ def main() -> int:
     elif total > 0 and total % COMPREHENSIVE_INTERVAL == 0:
         nudges.append(
             "BEHAVIOR CHECKPOINT — five rules you tend to skip: "
-            "(1) STUCK? -> POST http://127.0.0.1:8612/search before more file reads. "
+            f"(1) STUCK? -> POST http://127.0.0.1:{_rag_port()}/search before more file reads. "
             "(2) FINDING? -> cite file:line, then spawn evaluator-agent. "
             "(3) NEW endpoint/table/dependency? -> CONSULT mode, spawn architect-agent. "
             "(4) COMPLEX task? -> workspace/[task-id]/context.md. "
-            "(5) SPAWNING AGENT? -> call curl http://127.0.0.1:8612/context as FIRST step."
+            f"(5) SPAWNING AGENT? -> give it a POST http://127.0.0.1:{_rag_port()}/search "
+            "against the relevant project: source as its first step."
         )
 
     # --- CHANNEL B: Workspace checkpoint (independent — fires even when Channel A fired) ---

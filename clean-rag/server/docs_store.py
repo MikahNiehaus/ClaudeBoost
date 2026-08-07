@@ -87,70 +87,72 @@ def ingest_source(
         return {"source_id": source_id, "chunks_created": 0, "skipped_unchanged": True}
 
     chroma_dir = _topic_dir(topic) / "chroma"
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    store.create_collection("docs")
+    # `with`: the shared handle has to be checked back in on the raising path
+    # too, see ChromaStore.__del__.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        store.create_collection("docs")
 
-    if prior:
-        # Re ingesting a changed source: drop its old chunks first so a
-        # shrunk or renumbered source doesn't leave stale citations behind.
-        store.delete_by_source("docs", source_id)
+        if prior:
+            # Re ingesting a changed source: drop its old chunks first so a
+            # shrunk or renumbered source doesn't leave stale citations behind.
+            store.delete_by_source("docs", source_id)
 
-    # Measure chunk size with the embedder's real subword tokenizer and cap it
-    # at the model's real max sequence length, so no chunk silently overflows
-    # and gets truncated at embed time (the 4-chars-per-token estimate
-    # under-counts dense legal text).
-    raw_chunks = chunk_by_heading(
-        text,
-        heading_pattern=heading_pattern,
-        max_tokens=doc_embedder.max_tokens,
-        token_counter=doc_embedder.count_tokens,
-    )
+        # Measure chunk size with the embedder's real subword tokenizer and cap it
+        # at the model's real max sequence length, so no chunk silently overflows
+        # and gets truncated at embed time (the 4-chars-per-token estimate
+        # under-counts dense legal text).
+        raw_chunks = chunk_by_heading(
+            text,
+            heading_pattern=heading_pattern,
+            max_tokens=doc_embedder.max_tokens,
+            token_counter=doc_embedder.count_tokens,
+        )
 
-    dropped_no_citation = 0
-    docs_chunks: list[Chunk] = []
-    embed_texts: list[str] = []
-    metas: list[dict] = []
-    for c in raw_chunks:
-        citation = extract_citation(c.heading, citation_prefix)
-        if not citation.strip():
-            dropped_no_citation += 1
-            continue
-        embed_texts.append(c.content)
-        # Chroma metadata values must be flat scalars, not lists, so related
-        # citations (additive enrichment, see docs_citation's module
-        # docstring for why they're never the primary citation) are joined
-        # into one string rather than stored as a list.
-        related = extract_related_citations(c.content)
-        metas.append({
-            "source_file": source_id,
-            "topic": topic,
-            "jurisdiction": jurisdiction,
-            "citation": citation,
-            "related_citations": "; ".join(related),
-            "heading": c.heading,
-            "source_url": source_url,
-            "line_start": c.line_start,
-            "line_end": c.line_end,
-            "retrieved_at": manifest["sources"].get(source_id, {}).get(
-                "first_retrieved_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            ),
-        })
+        dropped_no_citation = 0
+        docs_chunks: list[Chunk] = []
+        embed_texts: list[str] = []
+        metas: list[dict] = []
+        for c in raw_chunks:
+            citation = extract_citation(c.heading, citation_prefix)
+            if not citation.strip():
+                dropped_no_citation += 1
+                continue
+            embed_texts.append(c.content)
+            # Chroma metadata values must be flat scalars, not lists, so related
+            # citations (additive enrichment, see docs_citation's module
+            # docstring for why they're never the primary citation) are joined
+            # into one string rather than stored as a list.
+            related = extract_related_citations(c.content)
+            metas.append({
+                "source_file": source_id,
+                "topic": topic,
+                "jurisdiction": jurisdiction,
+                "citation": citation,
+                "related_citations": "; ".join(related),
+                "heading": c.heading,
+                "source_url": source_url,
+                "line_start": c.line_start,
+                "line_end": c.line_end,
+                "retrieved_at": manifest["sources"].get(source_id, {}).get(
+                    "first_retrieved_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                ),
+            })
 
-    if embed_texts:
-        # embed_texts, metas, and embeddings are all built in the same
-        # kept-chunk order (a dropped no-citation chunk skips all three
-        # together), so they stay positionally aligned. Zipping against the
-        # unfiltered raw_chunks instead would pair every chunk after the first
-        # drop with the wrong content and silently truncate the tail.
-        embeddings = doc_embedder.embed(embed_texts)
-        for meta, embedding, content in zip(metas, embeddings, embed_texts):
-            docs_chunks.append(Chunk(
-                id=uuid.uuid4().hex,
-                content=content,
-                embedding=embedding,
-                metadata=meta,
-            ))
-        store.add_chunks("docs", docs_chunks)
+        if embed_texts:
+            # embed_texts, metas, and embeddings are all built in the same
+            # kept-chunk order (a dropped no-citation chunk skips all three
+            # together), so they stay positionally aligned. Zipping against the
+            # unfiltered raw_chunks instead would pair every chunk after the first
+            # drop with the wrong content and silently truncate the tail.
+            embeddings = doc_embedder.embed(embed_texts)
+            for meta, embedding, content in zip(metas, embeddings, embed_texts):
+                docs_chunks.append(Chunk(
+                    id=uuid.uuid4().hex,
+                    content=content,
+                    embedding=embedding,
+                    metadata=meta,
+                ))
+            store.add_chunks("docs", docs_chunks)
 
     manifest["sources"][source_id] = {
         "content_hash": content_hash,
@@ -178,9 +180,9 @@ def topic_status(topic: str) -> dict:
     chroma_dir = _topic_dir(topic) / "chroma"
     total_chunks = 0
     if chroma_dir.exists():
-        store = ChromaStore(persist_dir=str(chroma_dir))
-        if store.collection_exists("docs"):
-            total_chunks = store.count("docs")
+        with ChromaStore(persist_dir=str(chroma_dir)) as store:
+            if store.collection_exists("docs"):
+                total_chunks = store.count("docs")
     return {
         "topic": topic,
         "sources": manifest.get("sources", {}),
@@ -196,25 +198,25 @@ def search_topic(query: str, topic: str, doc_embedder, limit: int = DEFAULT_SEAR
         logger.warning("Docs topic not found: %s", topic)
         return []
 
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    if not store.collection_exists("docs"):
-        return []
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        if not store.collection_exists("docs"):
+            return []
 
-    query_embedding = doc_embedder.embed_query(query)
-    results = store.search("docs", query_embedding, limit=limit, min_score=min_score)
+        query_embedding = doc_embedder.embed_query(query)
+        results = store.search("docs", query_embedding, limit=limit, min_score=min_score)
 
-    return [
-        {
-            "content": r.content,
-            "score": r.score,
-            "source_type": "docs",
-            "topic": r.metadata.get("topic", topic),
-            "jurisdiction": r.metadata.get("jurisdiction", ""),
-            "citation": r.metadata.get("citation", ""),
-            "related_citations": r.metadata.get("related_citations", ""),
-            "heading": r.metadata.get("heading", ""),
-            "source_url": r.metadata.get("source_url", ""),
-            "retrieved_at": r.metadata.get("retrieved_at", ""),
-        }
-        for r in results
-    ]
+        return [
+            {
+                "content": r.content,
+                "score": r.score,
+                "source_type": "docs",
+                "topic": r.metadata.get("topic", topic),
+                "jurisdiction": r.metadata.get("jurisdiction", ""),
+                "citation": r.metadata.get("citation", ""),
+                "related_citations": r.metadata.get("related_citations", ""),
+                "heading": r.metadata.get("heading", ""),
+                "source_url": r.metadata.get("source_url", ""),
+                "retrieved_at": r.metadata.get("retrieved_at", ""),
+            }
+            for r in results
+        ]
