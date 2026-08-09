@@ -180,31 +180,51 @@ def _is_external_symbol(
 
 
 def _project_namespaces(file_map: dict[str, str]) -> set[str]:
-    """Every name that belongs to this project rather than to a dependency.
+    """Every path segment of every indexed file, for any language.
 
     Used by resolve_target_files to decide whether an import it could not
     resolve is a third party package or just a project module it has no file
     for. Membership means "ours", so anything missing here gets called
     external, and a false negative is the expensive direction.
 
-    Two sources. Every path segment of every file_map key, which covers the
-    plain "Billing/" folder case. Then, for directory segments only, the dotted
-    pieces of the segment: a .NET folder normally carries the dotted namespace
-    it holds, so "ViveryAscend.API/" is namespace ViveryAscend.API, and
-    "ViveryAscend" is as much a project namespace as the folder is. Without
-    that, "using ViveryAscend.API.Services;" reduces to a first segment of
-    "ViveryAscend", which matches no folder, and the project's own code gets
-    filed under _external_. Measured on 300 real .cs files, that was 507 of the
-    514 symbols the fallback marked external.
+    A segment is taken exactly as it appears on disk, never split further. A
+    directory named "google.api" contributes "google.api" and nothing else,
+    so a Python `from google.cloud import storage` in the same project is
+    still recognised as the third party package it is. C# needs a wider set
+    than this one; that widening lives in _csharp_namespaces so it cannot
+    reach any other language's answer.
+    """
+    namespaces: set[str] = set()
+    for key in file_map:
+        namespaces.update(key.replace("\\", "/").split("/"))
+    return namespaces
+
+
+def _csharp_namespaces(file_map: dict[str, str]) -> set[str]:
+    """The project namespace set as C# sees it: path segments plus the dotted
+    pieces of any directory name.
+
+    A .NET folder normally carries the dotted namespace it holds, so
+    "ViveryAscend.API/" is namespace ViveryAscend.API, and "ViveryAscend" is
+    as much a project namespace as the folder is. Without that, "using
+    ViveryAscend.API.Services;" reduces to a first segment of "ViveryAscend",
+    which matches no folder, and the project's own code gets filed under
+    _external_. Measured on 300 real .cs files, that was 507 of the 514
+    symbols the fallback marked external.
+
+    This is deliberately separate from _project_namespaces rather than folded
+    into it. The split is a fact about C# project layout, not about paths in
+    general, and one shared set let a dotted directory belonging to another
+    language (a vendored "protos/google.api/" tree, say) decide that the real
+    google-cloud-storage package was project code.
 
     File names are deliberately not split, because "OrderService.cs" would
     register "cs" as a project namespace.
     """
-    namespaces: set[str] = set()
+    namespaces = _project_namespaces(file_map)
     for key in file_map:
-        parts = key.replace("\\", "/").split("/")
-        namespaces.update(parts)
-        for directory in parts[:-1]:
+        directories = key.replace("\\", "/").split("/")[:-1]
+        for directory in directories:
             if "." in directory:
                 namespaces.update(seg for seg in directory.split(".") if seg)
     return namespaces
@@ -640,6 +660,9 @@ class SQLiteGraphStore:
             return 0
 
         project_namespaces = _project_namespaces(file_map)
+        # Built on first use, so a project with no C# in it never sees the
+        # dotted folder widening at all.
+        csharp_namespaces: set[str] | None = None
 
         updates: list[tuple[str, int]] = []
         external_count = 0
@@ -689,8 +712,16 @@ class SQLiteGraphStore:
                 # indexed as chunks but ext_to_lang returns None for them, so
                 # nothing extracts edges from one today; dropping the suffix
                 # from one of the two places would only make them disagree.
+                #
+                # _csharp_namespaces, not project_namespaces: the dotted folder
+                # widening it adds is true of .NET project layout only, and
+                # letting it reach the Python branch above made a vendored
+                # "protos/google.api/" tree claim the real google-cloud-storage
+                # package as project code.
+                if csharp_namespaces is None:
+                    csharp_namespaces = _csharp_namespaces(file_map)
                 first_seg = row["target_symbol"].split(".")[0]
-                if first_seg and first_seg not in project_namespaces:
+                if first_seg and first_seg not in csharp_namespaces:
                     updates.append((_EXTERNAL_SENTINEL, row["id"]))
                     external_count += 1
 

@@ -152,8 +152,16 @@ def _looks_like_csharp_type_name(name: str) -> bool:
     the only thing _resolve_symbol's stem key can land on.
 
     Measured on 300 real indexed .cs files: this drops 806 of 1492 distinct call
-    targets and halves the raw edges written (7893 to 3973), while keeping every
-    one of the 44 targets that actually resolve to a project file.
+    targets and halves the raw edges written (7893 to 3973), while keeping all
+    44 of the targets that resolved to a project file in that sample.
+
+    Known loss, accepted on purpose. C# does allow a lowercase type name, so a
+    file "Controllers/response.cs" with a call "response.Parse();" emits no
+    edge, even though the stem key would have resolved it. Extraction has no
+    file map to check against, so at this point "response" and "key" are the
+    same shape and admitting one admits the other. The 806 dropped targets are
+    loop counters and mock fields; letting them back in to recover a rare
+    unconventional type name is the worse trade.
     """
     return bool(name) and name[0].isupper()
 

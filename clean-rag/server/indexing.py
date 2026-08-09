@@ -691,6 +691,25 @@ def index_project(
                         logger.warning("Edge extraction failed for %s: %s", rel_path, e)
 
             if not raw_chunks:
+                # Record it anyway. Same reasoning as UNREADABLE_SENTINEL above,
+                # for the sibling case: a file the chunker had nothing to say
+                # about still has to be a file the manifest KNOWS about, or
+                # find_changed_files sees a path it holds no hash for, calls it
+                # changed, and hands it back here to produce nothing again.
+                # Forever. Measured: 67 such files on one project drove a
+                # complete 1818 file index to be wiped and rebuilt every 10
+                # hours, because 67 crosses FULL_REINDEX_THRESHOLD every sweep.
+                #
+                # A real hash, not a sentinel. Unlike the unreadable case there
+                # is no strict versus permissive read disagreement to paper
+                # over: both functions read this file fine and compute the same
+                # hash, so ordinary hash comparison already reprocesses it the
+                # moment its content changes.
+                #
+                # reindex_file already does this at the identical branch. The
+                # two entry points into this pipeline disagreed, and this one
+                # was wrong.
+                manifest[rel_path] = current_hash
                 files_unchanged += 1
                 continue
 

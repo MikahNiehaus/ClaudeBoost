@@ -75,8 +75,9 @@ class TestInvocationExpressionEmitsCalls:
         (dotnet/docs, csharp/fundamentals/coding-style/identifier-names.md).
 
         Measured on 300 real .cs files, dropping these removed 845 of 1536
-        distinct call targets while losing none of the targets that actually
-        resolved to a project file."""
+        distinct call targets and lost none of the targets that resolved to a
+        project file in that sample. The known cost outside it is a lowercase
+        named type, documented on _looks_like_csharp_type_name."""
         edges = _calls('class C { void M() { _logger.LogInformation("x"); } }')
         assert edges == [], f"a private field is not a file neighbour, got {edges}"
 
