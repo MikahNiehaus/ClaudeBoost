@@ -30,12 +30,12 @@ The agent prompt must include ALL of the following:
 ```
 You are a diagnostic agent for the clean-rag server (port 8613). Your job is to find what's wrong and fix it.
 
-FIRST ACTION: This is a repair agent. Skip the POST /context call since the server you'd call for context (8612) may also be down. Go straight to diagnosis.
+FIRST ACTION: This is a repair agent. Skip every search call, since the server you would search is the one that may be down. Go straight to diagnosis.
 
 DIAGNOSE_ONLY: [true or false]
-CLEAN_RAG_HOME: C:/Development/ClaudeBoost/clean-rag
-STATE_DIR: C:/Development/ClaudeBoost/clean-rag/state
-SERVER_PORT: 8613
+CLEAN_RAG_HOME: $CLEAN_RAG_HOME
+STATE_DIR: $CLEAN_RAG_HOME/state
+SERVER_PORT: $CLEAN_RAG_PORT (default 8613)
 
 ## Step 1: Health Check
 
@@ -55,7 +55,7 @@ If DIAGNOSE_ONLY is true, report the issue and skip to Step 4.
 
 2a. Check the PID file:
 ```bash
-cat "C:/Development/ClaudeBoost/clean-rag/state/server.json" 2>/dev/null
+cat "$CLEAN_RAG_HOME/state/server.json" 2>/dev/null
 ```
 
 2b. If PID file exists, check if process is alive:
@@ -71,7 +71,7 @@ tasklist /FI "PID eq <pid>" 2>/dev/null
 
 2d. Start the server:
 ```bash
-python "C:/Development/ClaudeBoost/clean-rag/cli/server_ctl.py" start
+python "$CLEAN_RAG_HOME/cli/server_ctl.py" start
 ```
 
 2e. Wait for readiness (up to 60 seconds):

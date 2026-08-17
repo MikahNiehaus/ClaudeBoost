@@ -28,6 +28,34 @@ from helpers import SCRIPTS_DIR, run_hook, pretooluse
 # clean-rag's other hooks.
 CLEAN_RAG_HOOKS_DIR = SCRIPTS_DIR.parent / "clean-rag" / "hooks"
 
+# On this branch agent-spawn-gate.py is a deliberate placeholder that exits 0.
+# Its own docstring says so: it exists only so a branch switch cannot leave the
+# globally registered hook pointing at a missing script, which python answers
+# with exit 2 and Claude Code reads as "block every tool call". This branch
+# gates code edits (hooks/research-gate.py) rather than agent spawns.
+#
+# Every test below asserts the real main-branch hook: exit 2 on a missing RAG
+# context call, evaluator routing, the NEEDS_VERIFICATION flag. None of that can
+# hold against a stub, and they also speak the port 8612 /context protocol that
+# was deleted along with the second server.
+#
+# Skipped, not deleted. Detection reads the file rather than naming a branch, so
+# checking out a branch where the real hook exists runs them again with no edit.
+_GATE = CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py"
+_IS_PLACEHOLDER = (
+    not _GATE.is_file()
+    or "PLACEHOLDER" in _GATE.read_text(encoding="utf-8")[:400]
+)
+
+pytestmark = pytest.mark.skipif(
+    _IS_PLACEHOLDER,
+    reason=(
+        "clean-rag/hooks/agent-spawn-gate.py is a placeholder on this branch "
+        "(exits 0 by design). These tests assert the real hook's blocking "
+        "behaviour and the removed port 8612 /context protocol."
+    ),
+)
+
 # A minimal prompt that satisfies all base checks (no active workspace assumed)
 _BASE_PROMPT = (
     "curl -s -X POST http://127.0.0.1:8612/context "

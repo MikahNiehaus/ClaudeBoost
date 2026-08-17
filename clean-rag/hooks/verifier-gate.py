@@ -1,65 +1,59 @@
 #!/usr/bin/env python
-"""Stop hook: force bad-cop, and good-cop when bad-cop finds something, to run
-for code-changing turns, loop safe.
+"""Stop hook: nudge toward bad-cop, and good-cop when bad-cop finds something,
+on code-changing turns. It never refuses a stop.
 
-The test run (auto-test-gate) proves tests pass. It does not prove the tests
-catch the bug. Verification is mandatory: after every code change, bad-cop
-must run adversarial QA on the files first (new tests, logging, provable
-failures). If it finds nothing real, it stamps VERIFIED itself, no separate
-good-cop run needed to re-confirm a clean pass. If it finds something, good-cop
-must fix what it found, check logging quality, test coverage, and code
-correctness, then stamp the files with VERIFIED: lines. The only exception is
-/ps (quick mode), which opts out of both research and verification.
+Nothing here forces anything, by decision. Research and verification are
+process steps, and the measured tradeoff (arxiv 2604.11088) is that a hard
+boundary earns its friction for something irreversible, not for ceremony. This
+repo has also run the blocking version twice and reverted it twice: the research
+gate's per-turn block was removed as too disruptive, and verify-gate-cmd.py
+records a forced-response hook that stalled batch work. The ordering still
+matters and is still stated: bad-cop first, good-cop only when bad-cop found
+something real, then bad-cop again on the fix. That is advice now, not a refusal.
 
-This blocks the stop (exit 2) rather than only emitting a JSON nudge. Both
-mechanisms are documented for Stop (code.claude.com/docs/en/hooks confirms
-hookSpecificOutput.additionalContext works here too), but exit 2 is the one
-proven all session in this exact repo: research-gate.py uses the identical
-PreToolUse exit-2-plus-stderr pattern, and every research-agent spawn this
-session happened because Claude read that stderr and acted on it unprompted.
-One battle-tested mechanism beats two parallel ones for the same problem.
+The test run (auto-test-gate) proves the tests pass. It does not prove the tests
+catch the bug, which is the whole reason a reviewer is worth spawning at all.
+So the advice this hook gives, after a code change: send bad-cop at the changed
+files first, with adversarial tests and real execution output. If bad-cop finds
+nothing real it stamps VERIFIED: itself and the pass is done, no separate
+good-cop run to re-confirm a clean pass. If it finds something, good-cop fixes
+what was found, checks logging quality, test coverage and correctness, then
+stamps the files it covered, and bad-cop re-checks the fix. The loop ends when
+bad-cop stamps VERIFIED: on a clean pass. A /ps turn skips all of it, the same
+way it skips research.
 
-The block message tells Claude to spawn bad-cop then good-cop itself, in the
-foreground, right now, no user confirmation needed. Hooks can't spawn agents
-directly, they're not part of the conversation loop, so "automatic" here means
-an instruction forceful enough that Claude acts on it immediately without
-asking first, the same way it already does for research-gate.
+The nudge goes to stderr, which the model reads. Hooks cannot spawn agents
+directly, so the message names who to spawn and what to hand them.
 
 good-cop's completion, or bad-cop's when it found nothing, fires a PostToolUse
 hook (verifier-record.py) that writes a stamp (verifier_state.record_verifier)
-naming the files it covered.
-check_file_verified() on the next check will find that stamp and let the stop
-proceed. If a file is edited again after being reviewed, its stamp is
-invalidated and verification must run again.
+naming the files it covered. check_file_verified() finds that stamp on the next
+Stop and those files go quiet. If a file is edited again after being reviewed,
+its stamp is invalidated and the file reads as unverified again.
 
 high_stakes.scan_diff labels the change (auth, money, SQL, subprocess, concurrency)
-so the block message can point at the sharpest risk. It is not the trigger: a
-change with no high stakes surface still needs a stamp, because "green tests"
-and "correct" are different questions everywhere, not only on those surfaces.
+so the nudge can point at the sharpest risk. It is not the trigger: a change with
+no high stakes surface is still worth a reviewer, because "green tests" and
+"correct" are different questions everywhere, not only on those surfaces.
 
-The block cap exists because Claude Code re-fires Stop after a block, and the
-only loop guard, stop_hook_active, has a documented, reproducible bug where it
-comes back false on a retry it should be true for (anthropics/claude-code#54360).
-An uncapped block risks a real infinite loop if good-cop ever fails to
-produce a parseable stamp. MAX_BLOCKS_PER_SESSION is a bounded last-resort
-escape under a real check, the identical pattern auto-test-gate.py already
-uses for the same reason. This differs from research-gate.py's edit gate on
-purpose: that one is PreToolUse on a discretionary edit Claude can simply
-choose not to attempt, so blocking it forever is safe. Stop is different,
-Claude Code itself re-fires it, so an uncapped block here is a real risk.
+MAX_BLOCKS_PER_SESSION keeps its old name and no longer caps a block, since
+there is none to cap. It caps how many times the nudge repeats in one session. A
+reminder that prints on every Stop stops being read, so one ignored that many
+times has already failed and goes quiet instead of adding noise.
 
-Safety rules, in order:
+Rules, in order:
 
-  - stop_hook_active true means we are already inside a block we raised. Exit 0.
+  - stop_hook_active true means this Stop is a re-fire after a previous Stop
+    hook ran. Exit 0 immediately and say nothing.
   - A /ps turn opts out entirely. Exit 0.
-  - No code changed this turn means nothing to review. Allow.
-  - If the tests are currently FAILING, allow: auto-test-gate owns that, and a
-    reviewer on broken code is wasted. Verify only once the code runs.
-  - Unverified files found: block (exit 2) up to MAX_BLOCKS_PER_SESSION times,
-    telling Claude to spawn bad-cop then good-cop itself, right now, foreground.
-  - Any error exits 0 (fail open). A broken gate must never trap the session.
+  - No code changed this turn means nothing to review. Exit 0.
+  - If the tests are currently FAILING, exit 0: auto-test-gate owns that, and a
+    reviewer on broken code is wasted. Review once the code runs.
+  - Unverified files found: name them on stderr, up to MAX_BLOCKS_PER_SESSION
+    times, saying who to spawn and what to hand them. Exit 0.
+  - Any error exits 0 (fail open). A broken hook must never trap the session.
 
-Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
+Exit codes: 0 always. Nothing here blocks.
 """
 
 import json
@@ -170,13 +164,13 @@ def _bump_block_count(session_id: str) -> None:
 def _reset_block_count(session_id: str) -> None:
     """Clear the cap once verification actually succeeds.
 
-    Without this, the cap disables verification for the rest of the session
-    the first time two blocks happen in a row, even if good-cop runs
-    correctly on every file after that. The cap exists to stop a stuck loop
-    (a good-cop that never produces a parseable stamp), not to silently
-    give up on verification forever the moment two blocks occur anywhere in a
-    long session. Resetting on a clean pass keeps the loop guard scoped to
-    actual consecutive failures, never a permanent session wide disable.
+    Without this, the cap silences the nudge for the rest of the session the
+    first time two of them land in a row, even if good-cop runs correctly on
+    every file after that. The cap exists to stop a stuck loop (a good-cop
+    that never produces a parseable stamp), not to give up on asking for the
+    rest of a long session the moment two nudges occur anywhere in it.
+    Resetting on a clean pass keeps the loop guard scoped to actual
+    consecutive failures, never a permanent session wide silence.
     """
     f = BLOCK_DIR / f"{session_id or 'nosession'}.count"
     try:
@@ -188,7 +182,7 @@ def _reset_block_count(session_id: str) -> None:
 def _last_verifier_agent(session_id: str):
     """Return (agent, covers) for the most recent verifier stamp, or ('', []) if none.
 
-    loop_stage() turns that pair into the three-way block message routing.
+    loop_stage() turns that pair into the three-way nudge message routing.
 
     Using the most recent stamp (not any stamp) avoids stale matches from earlier
     rounds: an old empty-covers bad-cop stamp no longer redirects to good-cop once
@@ -211,7 +205,7 @@ def _last_verifier_agent(session_id: str):
 def loop_stage(session_id: str) -> str:
     """Which round of the bad-cop → good-cop → bad-cop loop this session is in.
 
-    One place decides it, so the block message and the block-count reset cannot
+    One place decides it, so the nudge message and the counter reset cannot
     disagree, and a test can assert the routing without restating the condition.
     """
     agent, covers = _last_verifier_agent(session_id)
@@ -290,7 +284,7 @@ def main() -> int:
             return 0
 
     # scan_diff no longer decides whether to review, it only labels the sharpest
-    # risk so the block message can point at it. Any real code change needs a stamp.
+    # risk so the nudge can point at it. Any real code change is worth a reviewer.
     hits = high_stakes.scan_diff(added, paths)
 
     # Opt-in: run security scanners on high stakes files for extra evidence.
@@ -309,9 +303,10 @@ def main() -> int:
     if _tests_failing(diff_root):
         return 0
 
-    # The real check: has a good-cop stamp actually covered each changed
-    # file, and not been invalidated by a later edit? Unlike the old counter,
-    # this reflects whether verification happened, not how many times we asked.
+    # The real check: has a verifier stamp actually covered each changed file
+    # (good-cop's fix, or bad-cop finding nothing to fix), and not been
+    # invalidated by a later edit? Unlike the counter, this reflects whether
+    # verification happened, not how many times we asked for it.
     # diff_root, not root: the fallback resolves paths against the repo the
     # edited files actually live in, which can differ from cwd's repo.
     unverified = []
@@ -339,7 +334,7 @@ def main() -> int:
     stage = loop_stage(session_id)
 
     # When good-cop just completed a fix cycle and stamped VERIFIED, reset the
-    # consecutive-block cap before spawning bad-cop for the re-check. The cap
+    # consecutive-nudge cap before bad-cop is asked for the re-check. The cap
     # guards against a stuck loop (an agent that never produces a parseable stamp),
     # not against a healthy loop making real progress each round. Resetting here
     # keeps the cap scoped to consecutive failures within one round rather than
@@ -347,12 +342,17 @@ def main() -> int:
     if stage == STAGE_FIX_STAMPED:
         _reset_block_count(session_id)
 
+    # The counter no longer caps a block, since nothing here blocks. It caps how
+    # often the nudge repeats. A reminder printed on every Stop of a long session
+    # stops being read (the alert fatigue result: most alerts go uninvestigated
+    # once they are constant), so a nudge that has been ignored this many times
+    # has already failed and should get out of the way.
     if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:
         print(
             "[verifier-gate] Code change still unverified after "
-            f"{MAX_BLOCKS_PER_SESSION} blocks this session. Not blocking again "
-            "(anti loop, stop_hook_active is not fully reliable: "
-            "anthropics/claude-code#54360). Fix this before you rely on it.",
+            f"{MAX_BLOCKS_PER_SESSION} nudges this session. Staying quiet from "
+            "here so the reminder does not become noise. Verification is still "
+            "the thing that catches what green tests do not.",
             file=sys.stderr,
         )
         return 0
@@ -361,7 +361,7 @@ def main() -> int:
 
     if stage == STAGE_BUGS_FOUND:
         print(
-            "[verifier-gate] BLOCKED: bad-cop ran and found real bugs — "
+            "[verifier-gate] NUDGE: bad-cop ran and found real bugs — "
             f"these files still have no valid verifier stamp: {files}\n\n"
             "Spawn good-cop NOW (Opus model, fresh context, foreground, "
             "run_in_background: false — never backgrounded). "
@@ -383,7 +383,7 @@ def main() -> int:
         )
     elif stage == STAGE_FIX_STAMPED:
         print(
-            "[verifier-gate] BLOCKED: good-cop stamped VERIFIED: but "
+            "[verifier-gate] NUDGE: good-cop stamped VERIFIED: but "
             f"these files still have no valid verifier stamp: {files}\n\n"
             "Spawn bad-cop again (Sonnet model, fresh context, foreground, "
             "run_in_background: false) for a re-check on good-cop's fix. "
@@ -398,7 +398,7 @@ def main() -> int:
         )
     else:
         print(
-            "[verifier-gate] BLOCKED: these changed files have no valid verifier "
+            "[verifier-gate] NUDGE: these changed files have no valid verifier "
             f"stamp: {files}\n\n"
             f"This touches {surface}.\n"
             f"{evidence}\n\n"
@@ -422,13 +422,14 @@ def main() -> int:
             "bad-cop again for a final re-check. The loop (bad-cop → good-cop "
             "→ bad-cop) continues until bad-cop stamps VERIFIED: itself — "
             "that is the only terminal condition, not good-cop claiming done.\n\n"
-            "That final bad-cop VERIFIED: line is what clears this gate. "
             "Fix any Critical or High bad-cop returns, then finish.\n\n"
-            "If this really was trivial and needed no reviewer, that was a /ps "
-            "turn's call to make up front, not this one's.",
+            "For a quick check that you did what you said you did, rather than "
+            "a full adversarial pass, dispatch quick-cop instead. It is not a "
+            "verifier, it stamps nothing, and it never satisfies this nudge.",
             file=sys.stderr,
         )
-    return 2
+    # Nudge, not block: name the unverified files and let the turn end.
+    return 0
 
 
 if __name__ == "__main__":

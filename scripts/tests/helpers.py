@@ -22,11 +22,19 @@ def run_hook(
     fixture: dict,
     env_overrides: dict | None = None,
     base_dir: Path | None = None,
+    cwd: Path | str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a hook script with a JSON fixture on stdin, return the result.
 
     base_dir overrides SCRIPTS_DIR for hooks that live elsewhere (e.g.
     clean-rag/hooks/) — defaults to SCRIPTS_DIR for every other hook.
+
+    cwd sets the subprocess working directory. Pass a temp dir for any hook that
+    shells out to git: without it the hook inherits pytest's cwd, which is this
+    repo, and reads whatever happens to be uncommitted right now. tdd-guard.py
+    did exactly that, so its strict-mode test passed on a clean tree and failed
+    on a dirty one. A test whose result depends on your working tree is not
+    testing the hook.
     """
     script = (base_dir or SCRIPTS_DIR) / script_name
     env = {**os.environ, **(env_overrides or {})}
@@ -37,6 +45,7 @@ def run_hook(
         input=json.dumps(fixture).encode(),
         capture_output=True,
         env=env,
+        cwd=str(cwd) if cwd else None,
     )
 
 

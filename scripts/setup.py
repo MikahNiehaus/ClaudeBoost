@@ -1598,6 +1598,60 @@ def install_edge_tts() -> None:
             _warn(out)
 
 
+def install_mermaid_cli() -> None:
+    """Install @mermaid-js/mermaid-cli globally so `mmdc` can render diagrams.
+
+    Gives /visualize and any diagram work a real renderer instead of handing the
+    user raw mermaid source. Non-fatal: npm missing or the install failing leaves
+    everything else working, so this warns and moves on rather than aborting
+    setup.
+
+    The install pulls a bundled Chromium (~180MB, about a minute), so it is
+    skipped when `mmdc` already resolves.
+
+    Both probes go through shutil.which first, and that is load bearing on
+    Windows, not defensive noise. npm installs `mmdc` as `mmdc.CMD`, and
+    subprocess without a shell cannot launch a .CMD by bare name: it raises
+    WinError 2, run_cmd turns that into 127, and the already-installed branch
+    never fires. The visible symptom is setup redownloading a bundled Chromium
+    on every single run. shutil.which honours PATHEXT and returns the real
+    mmdc.CMD path, which subprocess can execute.
+    """
+    _info("\nVerifying mermaid-cli (mmdc)...")
+    mmdc = shutil.which("mmdc")
+    if mmdc:
+        rc, out = run_cmd([mmdc, "--version"])
+        if rc == 0 and out.strip():
+            _ok(f"mermaid-cli already installed (mmdc {out.strip().splitlines()[0]})")
+            return
+
+    if not shutil.which("npm"):
+        _warn("npm not found - skipping mermaid-cli. Diagram rendering will be "
+              "unavailable until you install Node.js and run: "
+              "npm install -g @mermaid-js/mermaid-cli")
+        return
+
+    _info("Installing mermaid-cli (downloads a bundled Chromium, ~1 min)...")
+    npm = shutil.which("npm") or "npm"
+    rc, out = run_cmd([npm, "install", "-g", "@mermaid-js/mermaid-cli"])
+    if rc != 0:
+        _warn("mermaid-cli install failed - diagram rendering will not work "
+              "until you run: npm install -g @mermaid-js/mermaid-cli")
+        if out:
+            _warn(out[-800:])
+        return
+
+    # npm exiting 0 is not proof the binary resolves: a global bin dir missing
+    # from PATH is the common Windows case, and it fails silently at use time.
+    mmdc = shutil.which("mmdc")
+    rc, out = run_cmd([mmdc, "--version"]) if mmdc else (127, "")
+    if rc == 0 and out.strip():
+        _ok(f"mermaid-cli installed (mmdc {out.strip().splitlines()[0]})")
+    else:
+        _warn("mermaid-cli installed but `mmdc` is not on PATH. Add npm's global "
+              "bin directory to PATH (`npm bin -g`) and restart your terminal.")
+
+
 # ---------------------------------------------------------------------------
 # netcoredbg: download from Samsung GitHub releases so mcp-debugger can step
 # through .NET/C# code. Skipped when dotnet SDK is not installed.
@@ -1771,6 +1825,7 @@ def main() -> int:
     install_rag_server()
     register_mcp_servers()
     install_edge_tts()
+    install_mermaid_cli()
     install_netcoredbg()
     install_clean_rag()
 

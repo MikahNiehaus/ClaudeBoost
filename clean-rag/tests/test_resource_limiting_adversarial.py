@@ -22,7 +22,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-CLEAN_RAG = Path("C:/Development/ClaudeBoost/clean-rag")
+CLEAN_RAG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_RAG))
 sys.path.insert(0, str(CLEAN_RAG / "hooks"))
 sys.path.insert(0, str(CLEAN_RAG / "cli"))
@@ -578,6 +578,246 @@ def test_aborted_index_resumes_instead_of_starting_over(isolated_indexing, tmp_p
     assert _manifest_files(indexing, project) == {f"module_{i:02d}.py" for i in range(6)}
     assert done_first < _manifest_files(indexing, project)
     assert indexing.index_is_incomplete(str(project)) is False
+
+
+def test_manual_retry_resumes_without_going_through_the_sweep_at_all(
+    isolated_indexing, tmp_path,
+):
+    """.claude/commands/index-project.md's step 5 / lock section claims 'only
+    the sweep's full rebuild branch ever resumes' an incomplete index, and
+    that a project needs 50+ changed files in one sweep pass to get there.
+
+    This calls index_project(force=False) directly, the exact call
+    handle_index_project makes for a plain manual retry (server/app.py:546-548
+    passes force=body.get('force', False)), with no auto_reindex module, no
+    FULL_REINDEX_THRESHOLD, and no 'resuming' flag anywhere in the call path.
+    If this resumes and clears __incomplete__, the doc's claim is false: a
+    human does not need 50 changed files or the sweep at all, a second call to
+    the same manual endpoint the doc itself documents in step 3 is sufficient.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=6)
+
+    seen = {"n": 0}
+
+    def abort_after_two():
+        seen["n"] += 1
+        return "free RAM 500 MB (need 4322 MB)" if seen["n"] > 2 else None
+
+    first = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=abort_after_two
+    )
+    assert first["files_indexed"] == 2
+    assert indexing.index_is_incomplete(str(project)) is True
+
+    # The plain manual retry from step 3 of the doc: same function, force off,
+    # no should_abort, nothing from auto_reindex.py involved.
+    second = indexing.index_project(str(project), StubEmbedder(), force=False)
+
+    assert second["files_indexed"] == 4, "the manual retry did not finish the project"
+    assert indexing.index_is_incomplete(str(project)) is False, (
+        "a plain manual /index-project retry (force off, no sweep, no 50-file "
+        "threshold) cleared __incomplete__ on its own -- the doc's claim that "
+        "'only the sweep's full rebuild branch ever resumes one' is "
+        "contradicted by the real index_project() behaviour, which is the "
+        "same behaviour the doc's own step 3 describes two sections earlier"
+    )
+
+
+def test_zero_files_indexed_stopped_early_registry_row_matches_the_docs_own_dead_row_test(
+    isolated_indexing, tmp_path,
+):
+    """.claude/commands/index-project.md's new step 0 says a registry row is
+    'dead' -- and should be deleted -- when files_indexed is 0 AND
+    chunks_created is 0. _update_project_registry (indexing.py:1138-1168)
+    writes exactly that shape for a run that stopped_early on the very first
+    file, with indexed_at set to the current time (never null), because
+    index_project calls _update_project_registry unconditionally regardless of
+    stopped_early.
+
+    So the same diff that adds the pressure guard makes the guard's own most
+    aggressive outcome -- abort before file 1 on a busy machine -- produce a
+    registry row indistinguishable, by the doc's own stated test, from a dead
+    row that should be deleted. Deleting it does not touch the manifest or the
+    chroma store, but it does drop the project from state/projects.json, which
+    is what the sweep and rag-enforce's _has_real_index both read.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=6)
+
+    def abort_immediately():
+        return "free RAM 100 MB (need 4322 MB)"
+
+    result = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=abort_immediately,
+    )
+
+    assert result["files_indexed"] == 0
+    assert result["chunks_created"] == 0
+    assert result["stopped_early"] == "free RAM 100 MB (need 4322 MB)"
+    # Genuinely resumable: the manifest and the guard agree this project is
+    # incomplete, not empty.
+    assert indexing.index_is_incomplete(str(project)) is True
+
+    registry_path = indexing.STATE_DIR / "projects.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    entry = registry[result["project_id"]]
+
+    # This is exactly the doc's own step-0 dead-row test:
+    # "indexed_at is null" OR "files_indexed is 0 and chunks_created is 0".
+    is_dead_by_the_docs_own_rule = (
+        entry.get("indexed_at") is None
+        or (entry.get("files_indexed") == 0 and entry.get("chunks_created") == 0)
+    )
+    assert entry.get("indexed_at") is not None, (
+        "sanity check on the doc's first dead-row clause: indexed_at is "
+        "always set by _update_project_registry, so the doc's own "
+        "'indexed_at is null' test can never actually fire for this state"
+    )
+    assert is_dead_by_the_docs_own_rule, (
+        "a genuinely incomplete-but-resumable project (files_indexed=0, "
+        "chunks_created=0, __incomplete__=True) reads as a dead row under the "
+        "doc's own step-0 rule, which instructs a human to delete it"
+    )
+
+
+def test_response_reports_zero_progress_on_a_project_already_mostly_indexed(
+    isolated_indexing, tmp_path,
+):
+    """index-project.md step 5 tells the reader to read files_indexed,
+    files_unchanged and chunks_created as an honest account of the run. Attack:
+    a project that is already fully indexed from a prior run, then hit with a
+    pressure abort on the very first should_abort check of a later (non-force)
+    run, before a single file's hash is even compared.
+
+    files_unchanged only increments inside the per-file loop, after the abort
+    check, so a run that aborts on file 0 reports files_unchanged=0 -- even
+    though every file in the project is, in fact, unchanged and already
+    indexed from the earlier run. A caller reading files_indexed=0,
+    files_unchanged=0, chunks_created=0 for this response has no way to tell
+    'nothing in this project is indexed' apart from 'this project is fully
+    indexed and this run simply never got to check', and the two states are
+    completely different actions for a human to take.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=10)
+
+    baseline = indexing.index_project(str(project), StubEmbedder(), force=True)
+    assert baseline["files_indexed"] == 10
+    assert indexing.index_is_incomplete(str(project)) is False
+
+    def abort_immediately():
+        return "free RAM 100 MB (need 4322 MB)"
+
+    second = indexing.index_project(
+        str(project), StubEmbedder(), force=False, should_abort=abort_immediately,
+    )
+
+    assert second["files_indexed"] == 0
+    assert second["files_unchanged"] == 0, (
+        "files_unchanged is 0 for a run against a project where all 10 files "
+        "are, in fact, unchanged since the last index -- the field cannot "
+        "distinguish 'this project has no data' from 'this project is fully "
+        "indexed, this call just never got to look', which is exactly the "
+        "ambiguity index-project.md tells a human to resolve by reading this "
+        "field"
+    )
+    assert second["chunks_created"] == 0
+    # The project's real, already-indexed state is untouched -- this is about
+    # what the RESPONSE says, not about any actual data loss.
+    assert indexing.index_is_incomplete(str(project)) is True, (
+        "a should_abort that fires before any file is even hashed marks a "
+        "previously-COMPLETE project __incomplete__ again, purely because "
+        "_save_project_manifest(incomplete=stopped_early is not None) cannot "
+        "tell 'aborted with real work outstanding' from 'aborted having "
+        "confirmed nothing needs doing'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# handle_index_project builds PressureCheckpoint() with no overrides
+# (server/app.py: `should_abort=PressureCheckpoint().pressure`), so these run
+# with the real production defaults (INDEX_PRESSURE_CHECK_S=15,
+# MIN_FREE_RAM_MB=4322) rather than the interval_s=0 the rest of this file
+# uses for speed. They prove the manual endpoint's actual, deployed guard
+# behaviour, not a test-only stand-in for it.
+# ---------------------------------------------------------------------------
+
+def test_production_default_checkpoint_gives_zero_protection_to_a_run_under_15s(
+    isolated_indexing, tmp_path,
+):
+    """The exact scenario in the ticket: free RAM already critically low
+    (0.1 GB observed) when a manual /index-project starts.
+
+    server/app.py constructs PressureCheckpoint() with no arguments, so the
+    real interval is INDEX_PRESSURE_CHECK_S=15s, and PressureCheckpoint.pressure()
+    is a no-op (returns None without touching psutil) until 15 wall-clock
+    seconds have passed since construction -- see resource_guard.py's own
+    comment: "First real sample is one interval away". A run that finishes in
+    under 15s therefore gets checked exactly zero times, however starved the
+    machine is for the whole run.
+
+    This is not a hypothetical: StubEmbedder makes indexing fast enough that a
+    real project finishes well inside that window, so this test proves it
+    against the real index_project() call with the real, unmodified
+    PressureCheckpoint class and its production default interval -- not a
+    speeded-up test double.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=25)
+
+    # Available RAM pinned far below MIN_FREE_RAM_MB (4322 MB) for the entire
+    # run -- as low as the 100 MB the ticket's own 0.1 GB incident describes.
+    starved = FakePsutil(cpu_sequence=[0.0] * 200, available_mb=100)
+
+    from server.resource_guard import PressureCheckpoint
+
+    with patch.dict(sys.modules, {"psutil": starved}):
+        checkpoint = PressureCheckpoint()  # no overrides: production defaults
+        result = indexing.index_project(
+            str(project), StubEmbedder(), force=True, should_abort=checkpoint.pressure,
+        )
+
+    assert result["files_indexed"] == 25, (
+        f"only {result['files_indexed']} of 25 files were indexed -- if this "
+        f"assertion ever fails because the run legitimately got slow enough to "
+        f"cross the 15s interval, that is fine; today, with StubEmbedder, the "
+        f"whole project finishes with zero pressure samples taken, which is "
+        f"the gap this test exists to demonstrate"
+    )
+    assert "stopped_early" not in result, (
+        "the guard never fired even once during a run that ran the entire "
+        "time at 100 MB free (far under the 4322 MB floor) -- the production "
+        "default PressureCheckpoint() gives a fast-finishing manual index run "
+        "no protection at all, contradicting the requirement that a manual "
+        "run must stop rather than take the machine down when free memory is "
+        "already below the floor"
+    )
+
+
+def test_production_default_checkpoint_is_silent_immediately_after_construction():
+    """Narrower version of the same gap, isolated from index_project entirely:
+    the very first call to a freshly constructed, default-interval
+    PressureCheckpoint always returns None, even when psutil reports RAM at
+    the exact 0.1 GB level named in the ticket's own incident. This is the
+    mechanism the test above's result rests on, shown directly."""
+    from server.resource_guard import PressureCheckpoint
+
+    critically_low = FakePsutil(cpu_sequence=[0.0, 0.0, 0.0], available_mb=100)  # 0.1 GB
+    with patch.dict(sys.modules, {"psutil": critically_low}):
+        checkpoint = PressureCheckpoint()  # production defaults, no overrides
+        first = checkpoint.pressure()
+        second = checkpoint.pressure()
+
+    assert first is None, (
+        "PressureCheckpoint() with production defaults reported no pressure on "
+        "its very first call despite 100 MB free RAM (well under the 4322 MB "
+        "floor) -- the 15s interval means a manual /index-project started on "
+        "an already-starved machine is not checked at all until 15 real "
+        "seconds have elapsed, during which model loading and file embedding "
+        "proceed completely unguarded"
+    )
+    assert second is None, "same call again, still inside the 15s window"
 
 
 # ---------------------------------------------------------------------------

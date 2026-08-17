@@ -23,6 +23,11 @@ mayor/
 crew/
 /workspace
 
+# Scratch diff dumps. diff_out.txt was committed once, 728 lines of raw
+# `git diff` output that nothing reads.
+diff_out.txt
+*.diff.txt
+
 # Coverage artifacts
 .coverage
 .coverage.*

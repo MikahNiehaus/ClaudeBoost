@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # Add the clean-rag directory to the path so we can import the server modules
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag")))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 # === Finding 1: _run_mutatest computes common parent of ALL Python files ===
@@ -173,11 +173,11 @@ class TestDocReindexInterval:
 
     #: Every file that states the interval in prose.
     DOCS = (
-        "C:/Development/ClaudeBoost/CLAUDE.md",
-        "C:/Development/ClaudeBoost/clean-rag/CLAUDE.md",
-        "C:/Development/ClaudeBoost/clean-rag/portable/CLAUDE.md",
-        "C:/Development/ClaudeBoost/clean-rag/PORTABLE_SETUP.md",
-        "C:/Development/ClaudeBoost/.claude/commands/index-project.md",
+        str(Path(__file__).resolve().parents[2] / "CLAUDE.md"),
+        str(Path(__file__).resolve().parents[1] / "CLAUDE.md"),
+        str(Path(__file__).resolve().parents[1] / "portable" / "CLAUDE.md"),
+        str(Path(__file__).resolve().parents[1] / "PORTABLE_SETUP.md"),
+        str(Path(__file__).resolve().parents[2] / ".claude" / "commands" / "index-project.md"),
     )
 
     def test_code_interval_is_600(self):

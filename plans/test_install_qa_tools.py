@@ -21,9 +21,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-INSTALL_PY = Path("C:/Development/ClaudeBoost/clean-rag/install.py")
-PORTABLE_AGENTS = Path("C:/Development/ClaudeBoost/clean-rag/portable/agents")
-REQUIREMENTS_TXT = Path("C:/Development/ClaudeBoost/clean-rag/requirements.txt")
+CLEAN_RAG = Path(__file__).resolve().parents[1] / "clean-rag"
+INSTALL_PY = CLEAN_RAG / "install.py"
+PORTABLE_AGENTS = CLEAN_RAG / "portable" / "agents"
+REQUIREMENTS_TXT = CLEAN_RAG / "requirements.txt"
 
 
 def _load_install():

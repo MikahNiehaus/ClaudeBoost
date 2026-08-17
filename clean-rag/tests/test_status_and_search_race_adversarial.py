@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag")))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server.app as app_mod
 from server.lang_router import ModelCache

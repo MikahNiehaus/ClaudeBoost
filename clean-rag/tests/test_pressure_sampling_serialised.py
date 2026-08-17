@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 import pytest
 
-CLEAN_RAG = Path("C:/Development/ClaudeBoost/clean-rag")
+CLEAN_RAG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_RAG))
 
 from server import resource_guard  # noqa: E402

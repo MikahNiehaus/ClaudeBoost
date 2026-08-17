@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag")))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server.metrics as metrics_mod
 from server.metrics import (
@@ -141,7 +141,7 @@ def test_python_looking_non_python_file_is_not_analysed(make_file, suffix, conte
 def test_unreadable_file_still_reports_error():
     """P2's escape hatch: a genuinely unreadable file is the one case where an
     'error' key is correct, so the fix must not swallow that too."""
-    result = _compute_metrics("C:/Development/ClaudeBoost/clean-rag/no-such-file.py")
+    result = _compute_metrics(str(Path(__file__).resolve().parents[1] / "no-such-file.py"))
 
     assert "error" in result
     assert result["file"].endswith("no-such-file.py")

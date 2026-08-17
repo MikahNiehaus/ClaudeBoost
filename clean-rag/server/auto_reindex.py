@@ -457,6 +457,12 @@ async def auto_reindex_loop(get_model_cache) -> None:
             # driver uses, so the two cannot disagree about ordering.
             planned = plan_sweep(registry)
             last_model: str | None = None
+            #: Did ANY project in the current model group actually do work? Not
+            #: the last one alone. plan_sweep groups several projects under one
+            #: model, and the eviction below fires once per group boundary, so a
+            #: group whose earlier members worked and whose last member skipped
+            #: would read as idle if this were a single project flag.
+            group_did_work = False
             for project in planned:
                 # Re-check between projects, not just once up front. A sweep
                 # runs for hours, and the user can sit down at the machine at
@@ -471,11 +477,26 @@ async def auto_reindex_loop(get_model_cache) -> None:
                 # holding it for the rest of the sweep. This process cannot exit
                 # to reclaim memory the way the batch driver can, so evicting
                 # what it demonstrably no longer needs is the only lever it has.
-                if last_model is not None and project.model != last_model:
+                #
+                # Only when the group actually did work. evict_all throws away
+                # every resident model, including one a concurrently running
+                # /index-project is embedding with right now, and reloading SFR
+                # costs 135s. A sweep that skipped every project on a busy lock
+                # has nothing to release and no reason to charge the running job
+                # for it. Measured before this gate: 4 evictions in 104 minutes
+                # during one reindex, about 8.6 percent of its wall clock.
+                #
+                # Safe to skip, never unbounded: ModelCache._enforce_max_resident
+                # caps residency at DEFAULT_MAX_RESIDENT on every load, and
+                # evict_all's own docstring says bounding is the caller's job.
+                # This is a release sooner optimisation, not the safety net.
+                if last_model is not None and project.model != last_model and group_did_work:
                     try:
                         model_cache.evict_all()
                     except AttributeError:
                         pass  # a plain embedder was passed, nothing to evict
+                if last_model is not None and project.model != last_model:
+                    group_did_work = False
                 last_model = project.model
 
                 entry = registry.get(project.pid) or {"project_path": project.path}
@@ -499,6 +520,9 @@ async def auto_reindex_loop(get_model_cache) -> None:
                     if proceeded:
                         _release_project_resources(project.pid)
                         swept += 1
+                    # Accumulated across the whole model group, never reset per
+                    # project, so the eviction above sees the group's real state.
+                    group_did_work = group_did_work or proceeded
                 except Exception as e:
                     # One bad project must not kill the loop for the others, or
                     # a single unreadable repo silently stops all reindexing

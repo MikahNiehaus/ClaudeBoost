@@ -12,13 +12,13 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag/hooks")))
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag")))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _load_rag_enforce():
     import importlib.util
-    path = "C:/Development/ClaudeBoost/clean-rag/hooks/rag-enforce.py"
+    path = str(Path(__file__).resolve().parents[1] / "hooks" / "rag-enforce.py")
     spec = importlib.util.spec_from_file_location("rag_enforce_under_test", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -88,7 +88,7 @@ class TestAutoReindexModelCacheGuard:
         current source (the behavioral test above is what actually matters,
         this just pins the exact line so a regression back to truthiness is
         obvious from the diff, not just a failing behavioral assertion)."""
-        src = Path("C:/Development/ClaudeBoost/clean-rag/server/auto_reindex.py").read_text(encoding="utf-8")
+        src = (Path(__file__).resolve().parents[1] / "server" / "auto_reindex.py").read_text(encoding="utf-8")
         assert "if model_cache is None:" in src
         assert "if not model_cache:" not in src
 

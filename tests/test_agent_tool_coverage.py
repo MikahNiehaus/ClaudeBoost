@@ -5,17 +5,20 @@ tools: line.
 
 Also checks:
 - cross-file alignment of the new sections
-- .NET 10 warning language vs. the authoritative source (debug-agent.xml line 68)
+- .NET 10 warning language carries the key facts (version, TargetFramework check)
 - close_debug_session appears in the lifecycle (session must be closed)
 - good-cop .NET fallback does not contradict good-cop's fix mandate
 """
 
 import re
 import sys
+from pathlib import Path
 
-BAD_COP  = r"C:\Development\ClaudeBoost\clean-rag\portable\agents\bad-cop.md"
-GOOD_COP = r"C:\Development\ClaudeBoost\clean-rag\portable\agents\good-cop.md"
-DEBUG_XML = r"C:\Development\ClaudeBoost\agents\debug-agent.xml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PORTABLE_AGENTS = REPO_ROOT / "clean-rag" / "portable" / "agents"
+
+BAD_COP  = str(PORTABLE_AGENTS / "bad-cop.md")
+GOOD_COP = str(PORTABLE_AGENTS / "good-cop.md")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -73,7 +76,12 @@ def check(label, condition, detail=""):
 
 bad_text  = read(BAD_COP)
 good_text = read(GOOD_COP)
-xml_text  = read(DEBUG_XML)
+
+# agents/debug-agent.xml was read here and never used: the .NET 10 checks below
+# compare bad-cop and good-cop against literal facts, not against the XML. The
+# file was deleted in 754a2d4 ("remove deprecated things"), which turned a
+# read nothing consulted into a FileNotFoundError that killed the whole module.
+# Dropping the read loses no coverage, because there was none to lose.
 
 bad_tools  = parse_frontmatter_tools(bad_text)
 good_tools = parse_frontmatter_tools(good_text)

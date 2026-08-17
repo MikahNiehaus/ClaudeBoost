@@ -1,12 +1,12 @@
 @echo off
-REM fix boat bug.bat
+REM fix-boat-bug.bat
 REM Stops the RAG server, removes bloated ChromaDB databases, restarts the server.
 REM Runs with --force by default (no prompts). Safe: only deletes index data inside
 REM this ClaudeBoost directory — never touches your actual project files.
 REM
 REM Usage:
-REM   clean-rag\fix boat bug.bat              :: full cleanup, no prompts (default)
-REM   clean-rag\fix boat bug.bat --dry-run    :: report only, no deletions
+REM   clean-rag\fix-boat-bug.bat              :: full cleanup, no prompts (default)
+REM   clean-rag\fix-boat-bug.bat --dry-run    :: report only, no deletions
 
 setlocal
 
@@ -27,8 +27,11 @@ echo [1/3] Stopping RAG server...
 
 python "%SCRIPT_DIR%\cli\server_ctl.py" stop >nul 2>&1
 
-REM Kill any process still holding port 8613 (works on any machine)
-python -c "import subprocess,sys; r=subprocess.run(['netstat','-ano'],capture_output=True,text=True); pids=[l.strip().split()[-1] for l in r.stdout.splitlines() if ':8613' in l and 'LISTENING' in l]; [subprocess.run(['taskkill','/PID',p,'/F'],capture_output=True) or print(f'  Killed PID {p}') for p in pids] if pids else print('  No process on port 8613')"
+REM Kill any process still holding the server port. Honours CLEAN_RAG_PORT so a
+REM machine running the server on a non default port still gets cleaned up;
+REM hardcoding 8613 left the real process alive and the next start silently reused it.
+if "%CLEAN_RAG_PORT%"=="" set "CLEAN_RAG_PORT=8613"
+python -c "import os,subprocess; port=os.environ.get('CLEAN_RAG_PORT','8613'); r=subprocess.run(['netstat','-ano'],capture_output=True,text=True); pids=[l.strip().split()[-1] for l in r.stdout.splitlines() if (':'+port) in l and 'LISTENING' in l]; [subprocess.run(['taskkill','/PID',p,'/F'],capture_output=True) or print('  Killed PID '+p) for p in pids] if pids else print('  No process on port '+port)"
 
 timeout /t 2 /nobreak >nul
 echo   Done.

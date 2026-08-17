@@ -49,6 +49,31 @@ _KEYWORDS = {
         "balance", "payment", "charge(", "refund", "transfer(", "transaction",
         "invoice", "wallet", "stripe", "paypal",
     ),
+    # Not a surface like the others: a tampering signal. The rest of this table
+    # answers "where would a passing test fail to prove the property". This one
+    # answers "was the test made to pass instead of the code". It belongs here
+    # because the consumer is the same (the verifier nudge names the category, so
+    # bad-cop is pointed at it) and because a silenced check is the one defect
+    # that makes every other category's evidence worthless: the suite goes green
+    # either way.
+    #
+    # Needles are deliberately specific. "skip(" and "except exception:" were
+    # both considered and rejected: the first hits ordinary parser and pagination
+    # code, the second hits hundreds of legitimate lines in this repo alone. A
+    # category that fires on every diff gets the whole gate ignored, which is the
+    # over trigger failure named at the top of this file.
+    # The TypeScript escape hatches carry their trailing punctuation on purpose.
+    # A bare "as any" needle matches ordinary prose ("such as anything", "as any
+    # of the callers"), and because this category deliberately bypasses the
+    # comment only skip below, a comment containing that phrase would flag. The
+    # cast shapes are what the defect actually looks like.
+    "test-weakening": (
+        "mark.skip", "mark.xfail", "xfail", "unittest.skip", "@skip",
+        "type: ignore", "# noqa", "eslint-disable", "@ts-ignore",
+        "@ts-expect-error", "pylint: disable", "suppresswarnings",
+        "assert true", "@ignore", "#[ignore]", "skip_reason",
+        "as any;", "as any)", "as any,", "as any]", "as unknown as", "<any>",
+    ),
 }
 
 # A path whose name matches one of these is treated as touching that category even
@@ -76,14 +101,21 @@ def scan_diff(added_lines, changed_paths):
 
     for raw in added_lines or []:
         stripped = raw.strip()
-        # Skip a comment only line. A comment that merely names a surface ("money,
-        # SQL, subprocess") is not high stakes code, and matching it is the over
-        # trigger that gets a gate ignored. Code with a trailing comment still
-        # matches, since the line does not start with a comment marker.
-        if stripped.startswith(("#", "//", "*", '"""', "'''", "/*")):
-            continue
+        # A comment that merely names a surface ("money, SQL, subprocess") is not
+        # high stakes code, and matching it is the over trigger that gets a gate
+        # ignored. Code with a trailing comment still matches, since the line does
+        # not start with a comment marker.
+        #
+        # test-weakening is exempt from that skip: for this one category the
+        # comment IS the defect, not a mention of it. `# type: ignore`,
+        # `# pylint: disable=...` and `// eslint-disable-next-line` are the
+        # silencing mechanism itself, and they are frequently the whole line.
+        # Skipping comment only lines here would miss the most common shape.
+        is_comment_only = stripped.startswith(("#", "//", "*", '"""', "'''", "/*"))
         low = raw.lower()
         for cat, needles in _KEYWORDS.items():
+            if is_comment_only and cat != "test-weakening":
+                continue
             if any(n in low for n in needles):
                 bucket = hits.setdefault(cat, [])
                 ev = raw.strip()[:200]
@@ -138,5 +170,36 @@ if __name__ == "__main__":
     # But real code with a trailing comment still trips.
     h = scan_diff(["    subprocess.run(cmd, shell=True)  # run it"], ["src/run.py"])
     assert "subprocess" in h, h
+
+    # A silenced test is a tampering signal, not a surface.
+    h = scan_diff(["@pytest.mark.skip(reason='flaky')"], ["tests/test_pay.py"])
+    assert "test-weakening" in h, h
+
+    # A type checker silenced on a trailing comment.
+    h = scan_diff(["    total = a + b  # type: ignore"], ["src/calc.py"])
+    assert "test-weakening" in h, h
+
+    # A lint disable that IS the whole line must trip, even though the general
+    # comment only skip would otherwise drop it. This is the case the exemption
+    # exists for.
+    h = scan_diff(["# pylint: disable=broad-except"], ["src/util.py"])
+    assert "test-weakening" in h, h
+    h = scan_diff(["// eslint-disable-next-line no-unused-vars"], ["src/a.ts"])
+    assert "test-weakening" in h, h
+
+    # A neutered assertion.
+    h = scan_diff(["    assert True  # was: assert balance >= 0"], ["tests/t.py"])
+    assert "test-weakening" in h, h
+
+    # Ordinary code must NOT trip test-weakening. These were the rejected
+    # needles: a pagination skip and a broad except are both normal.
+    h = scan_diff(["    rows = q.skip(offset).limit(size)"], ["src/repo.py"])
+    assert "test-weakening" not in h, h
+    h = scan_diff(["    except Exception as exc:"], ["src/util.py"])
+    assert "test-weakening" not in h, h
+
+    # A comment merely discussing the concept must not trip either.
+    h = scan_diff(["# never weaken a failing test to get green"], ["docs/x.py"])
+    assert h == {}, h
 
     print("HIGH_STAKES OK")
