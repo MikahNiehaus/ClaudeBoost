@@ -30,6 +30,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from research_state import extract_covered_files, file_in_scope  # noqa: E402
 
 VERIFIER_MARKER = "VERIFIED:"
+HANDOFF_MARKER = "HANDOFF:"
+
+# bad-cop runs in two modes. Mode A reviews a code diff and stamps VERIFIED: or
+# HANDOFF:, which is what this gate is built on. Mode B judges a finished /qa
+# session's evidence and stamps FULLY VERIFIED: or TEST AGAIN:, neither of which
+# names a file and neither of which says anything about a diff.
+JUDGE_MODE_MARKER = "MODE: evidence-judge"
+JUDGE_STAMPS = ("FULLY VERIFIED:", "TEST AGAIN:")
+
+
+def _stamp_lines(text: str):
+    """Candidate stamp lines, normalized the way extract_covered_files does, so a
+    stamp still reads as one when an agent bolds it or makes it a heading."""
+    for line in (text or "").splitlines():
+        yield line.strip().lstrip("*# ").strip().upper()
+
+
+def is_evidence_judge_pass(spawn_prompt: str, report: str) -> bool:
+    """Was this completion bad-cop in Mode B (QA evidence judge) rather than
+    Mode A (diff review)?
+
+    A Mode B pass never reviewed a diff, so recording it as a verifier stamp
+    tells verifier-gate.py that bad-cop ran and found real bugs, which sends the
+    session off to spawn good-cop over a diff nobody looked at. Mode B is
+    therefore not recorded at all, and Mode A behaves exactly as it did before
+    Mode B existed.
+
+    Two independent signals, because one of them is enough on its own and
+    neither is available in every payload:
+
+      - the spawn prompt carries the routing marker bad-cop itself dispatches on
+      - the report carries a Mode B stamp, which no Mode A pass emits
+
+    A report carrying a real Mode A stamp wins over both. That keeps a Mode A
+    report that merely quotes Mode B's vocabulary (a report about this loop, for
+    instance) from having its own stamp thrown away.
+    """
+    lines = list(_stamp_lines(report))
+    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER)) for line in lines):
+        return False
+    if JUDGE_MODE_MARKER.upper() in (spawn_prompt or "").upper():
+        return True
+    return any(line.startswith(JUDGE_STAMPS) for line in lines)
 
 
 def _clean_rag_home() -> Path:

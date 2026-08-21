@@ -66,17 +66,17 @@ After Phase 0.5 completes:
 
 **Step 1 — Health check (REQUIRED, runs first):**
 
-Call `GET http://127.0.0.1:8612/status` before loading any context.
+Call `GET http://127.0.0.1:8613/status` before loading any context.
 
-**If `GET http://127.0.0.1:8612/status` returns an error OR the tool is not available:**
+**If `GET http://127.0.0.1:8613/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/workspace $ARGUMENTS`."
 
 **Step 2 — Load context (only if Step 1 passes):**
 
-Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="workspace planning: $ARGUMENTS", max_tokens=5000`.
+Call `POST http://127.0.0.1:8613/search with {"query":"workspace planning: $ARGUMENTS","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-**If `POST http://127.0.0.1:8612/context` returns an "error" key:**
+**If `POST http://127.0.0.1:8613/search` returns an "error" key:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG context load failed: [error message]. Run `/rag` to start the server."
 
@@ -406,8 +406,8 @@ Search for the right tools. Do NOT skip — this is the core of the plan.
 ### 3a — RAG searches
 
 ```
-POST http://127.0.0.1:8612/search with scope="agents", query="[primary work type] [key goal words]", limit=5
-POST http://127.0.0.1:8612/search with scope="knowledge", query="[primary work type] workflow best practices", limit=5
+POST http://127.0.0.1:8613/search {"query":"[primary work type] [key goal words]","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":5}
+POST http://127.0.0.1:8613/search {"query":"[primary work type] workflow best practices","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":5}
 ```
 
 If multiple work types: run a second search for the secondary type.
@@ -498,7 +498,7 @@ For each work type, select:
 - **Primary agents** (core work) — with model
 - **Supporting agents** (validation, evaluation) — always include `evaluator-agent` for findings
 - **Skills to invoke** (exact commands)
-- **Knowledge bases** (which to load via `POST http://127.0.0.1:8612/context`)
+- **Knowledge bases** (which to load via `POST http://127.0.0.1:8613/search`)
 
 Prune ruthlessly — only include what the work genuinely needs.
 
@@ -799,7 +799,7 @@ Read the ticket/goal. Write a detailed analysis to `$WORKSPACE_ABS/ticket-analys
 ### 7b — Full codebase context (no gaps)
 
 Use RAG and file reads to build complete understanding:
-1. `POST /search scope=codebase mode=both` seeded from ticket entities
+1. `POST http://127.0.0.1:8613/search` with `{"query":"<ticket entities>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`
 2. Read every file in the scope graph until there are no unknowns
 3. Trace imports, callers, and dependents for every file that will change
 4. Write findings to `context.md` as "Codebase Understanding" section
@@ -832,7 +832,7 @@ Before implementing, answer these 5 questions in `$WORKSPACE_ABS/brainstorm.md`.
    List every file, endpoint, or user flow that depends on the code being changed. This is the blast radius.
 
 5. **Who or what depends on the code I'm changing?**
-   Run `POST /search scope=codebase mode=both` seeded from every file in the spec. List callers, importers, and inheritors.
+   Run `POST http://127.0.0.1:8613/search` with `{"query":"<file or symbol from the spec>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}` for every file in the spec. List callers, importers, and inheritors.
 
 If any answer reveals a flaw in the spec (wrong assumption, missed dependency, simpler approach available), update spec.md before proceeding to 7d.
 

@@ -20,7 +20,12 @@ from pathlib import Path
 import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import open_turn, set_session_quick, is_session_quick  # noqa: E402
+from research_state import (  # noqa: E402
+    clear_session_quick,
+    is_session_quick,
+    open_turn,
+    set_session_quick,
+)
 
 # Windows consoles default to cp1252, which cannot encode emoji. Reconfigure
 # stdout to UTF-8 with a safe fallback so print() never crashes the hook.
@@ -66,9 +71,327 @@ def _find_git_root(start_path: str = ".") -> str | None:
     return None
 
 
-def _git_project_context(port: str) -> str:
-    """If cwd is inside a git repo, report whether it's indexed in clean-rag
-    and queue indexing if not.
+# A solution or package manifest marks a project root. Deliberately no *.csproj
+# and no *.vbproj: a .NET solution holds many of those, one per assembly, and
+# matching them would split one project into a dozen separate indexes. A .sln
+# sits at the level a human calls the project.
+_PROJECT_MARKERS = (".ragroot", "*.sln", "package.json", "pyproject.toml",
+                    "Cargo.toml", "go.mod")
+
+
+def _registered_projects() -> list[str]:
+    """Every project path in clean-rag's registry, absolute.
+
+    Read off disk rather than through /status, because the resolver has to work
+    when the server is down. That is exactly when a wrong project root does the
+    most damage, since nothing later in this hook can correct it.
+    """
+    reg_path = _clean_rag_home() / "state" / "projects.json"
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # No registry yet is the first run, not a fault. server/app.py's
+        # _list_projects() returns {} for the same state. Logging it at ERROR
+        # made a clean first prompt indistinguishable from a broken server in
+        # state/rag-enforce.log, which is the one place someone greps when the
+        # server is misbehaving. _read_self_heal_stamp() one function over
+        # already draws the line here for the same reason.
+        logger.info("No project registry at %s yet.", reg_path)
+        return []
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error(f"Project registry unreadable: {type(e).__name__}: {e}")
+        return []
+    if not isinstance(reg, dict):
+        logger.error("Project registry is %s, not an object.", type(reg).__name__)
+        return []
+    found = []
+    for entry in reg.values():
+        path = _str_field(entry, "project_path")
+        if path:
+            found.append(path)
+    return found
+
+
+def _norm_path(path: str) -> str:
+    """One spelling of a path, so two of them can be compared as strings.
+
+    os.path.normpath collapses `..`, `.` and doubled separators and drops a
+    trailing one, all lexically, with no filesystem call. The lowercase
+    forward slash form on top of it is the same normal form the rest of this
+    codebase already compares paths in (server/app.py's registry key,
+    research_state._normalize, graph-context-inject._canonicalize), so a path
+    normalized here matches one normalized there.
+
+    It folds every spelling a string can fold: case, separator direction, a
+    trailing separator, `.` and `..` segments. It cannot fold the spellings only
+    the filesystem knows about, so it is never the whole comparison. That is
+    what _same_dir_key() and _resolved_or_self() below are for.
+
+    Path.resolve() is the tempting alternative and it is the wrong tool for a
+    comparison over the whole registry: it queries the filesystem for every
+    path it touches, which is a syscall per registered project on a hook that
+    fires on every prompt. Measured at 2000 registered projects: 161 to 193 ms
+    for resolve(), 0.9 ms for this.
+    """
+    if not path:
+        return ""
+    return os.path.normpath(path).replace("\\", "/").rstrip("/").lower()
+
+
+def _same_dir_key(path: str) -> tuple[int, int] | None:
+    """A key that is equal for any two spellings of one real directory.
+
+    Windows has spellings the filesystem folds together and no string
+    normalizer can see: a junction or a symlink, an 8.3 short name, and a
+    component whose trailing dot or space Win32 silently strips. os.stat
+    follows all of them, and (st_dev, st_ino) is the same pair os.path.samefile
+    compares, so two spellings of one directory yield one key.
+
+    This exists because the two sides of the comparison were canonicalized
+    differently. The walked path goes through Path.resolve(), which always asks
+    the filesystem; the registry holds whatever spelling the caller of
+    /index-project used, because server/app.py only strips whitespace before
+    storing it. Comparing those two lexically made a registered project
+    invisible, which let a directory holding one be auto indexed.
+
+    stat, not resolve, because the cost lands on a per prompt hook. Measured at
+    2000 paths: 10 to 13 ms for these keys against 161 to 193 ms to resolve the
+    same paths.
+
+    None when the filesystem cannot answer for the path, and None on the
+    volumes that report st_ino 0 (some network shares, FAT), where every path
+    would share one key and unrelated projects would read as the same one.
+
+    The isinstance guard is not decoration. os.stat takes an open file
+    descriptor when handed an int, so a non string reaching here would return
+    the identity of whatever handle that number happens to be rather than
+    raising, and a project could match on it.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    if not st.st_ino:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _resolved_or_self(path: str) -> str:
+    """*path* spelled the way the filesystem spells it, or *path* unchanged.
+
+    Returns the argument untouched when the filesystem cannot answer, so a
+    caller never has to handle None and never loses a path it was given.
+    """
+    if not path:
+        return path
+    try:
+        return str(Path(path).resolve())
+    except (OSError, ValueError) as e:
+        logger.error("Cannot resolve %r: %s: %s", path, type(e).__name__, e)
+        return path
+
+
+def _registered_projects_under(root: str) -> list[str]:
+    """Registered projects strictly inside root. Root itself is not included.
+
+    A non empty answer means root is a container of projects rather than a
+    project, which is the one case auto indexing must refuse.
+
+    Both sides are resolved before the comparison, not just normalized. A
+    project registered under a junction, a symlink, an 8.3 short name or a
+    trailing dot spelling shares no lexical prefix with the container it
+    actually sits in, so the lexical test alone reported the container as
+    holding nothing and auto indexed it: 10,361 files under a path nothing
+    searches, holding the one global index lock. This function runs only when a
+    root is unindexed and about to be handed to the indexer, so a filesystem
+    call per registered project is affordable here in a way it is not on the
+    per prompt path. Measured at 2000 entries: 161 to 193 ms, once, against an
+    index run of minutes to hours.
+
+    The prefix test is on the resolved form plus a separator, which is what
+    keeps a sibling out: "c:/developmentother/proj" does not start with
+    "c:/development/", while a bare startswith on the root would have taken it.
+    Root itself is excluded by the same separator, however it was spelled.
+    """
+    root_norm = _norm_path(_resolved_or_self(root))
+    if not root_norm:
+        return []
+    prefix = root_norm + "/"
+    inside = []
+    for path in _registered_projects():
+        # The resolved form is both what the comparison needs and what the user
+        # is shown, so it is computed once. A path that cannot be resolved is
+        # still compared and reported under its registered spelling rather than
+        # dropped: dropping it would let the container be auto indexed after
+        # all, which is the failure this whole function exists to prevent.
+        real = _resolved_or_self(path)
+        if _norm_path(real).startswith(prefix):
+            inside.append(real)
+    return inside
+
+
+def _registered_identity_keys(registered_paths: list[str]) -> set[tuple[int, int]]:
+    """Filesystem identity of every registered project that has one.
+
+    One stat per registered project, so the caller builds this only on the
+    branch where the free string comparison has already missed.
+    """
+    keys = {_same_dir_key(p) for p in registered_paths}
+    keys.discard(None)
+    return keys
+
+
+def _has_project_marker(node: Path) -> bool:
+    """Does *node* hold a file that declares it a project root?
+
+    A glob that cannot be read is treated as no match rather than raised: the
+    caller walks every level up to the drive root, and one unreadable directory
+    on the way must not decide the whole answer. ValueError is caught alongside
+    OSError because a path holding a NUL byte reaches os.scandir through the
+    glob and raises that instead.
+    """
+    for marker in _PROJECT_MARKERS:
+        try:
+            if next(node.glob(marker), None) is not None:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _project_root(start_path: str = ".") -> str | None:
+    """The project this cwd belongs to.
+
+    Ordered so the answer is never larger than what was asked for. Closest
+    match wins, so a nested project beats the repo that contains it:
+
+    1. A registered project at or above cwd. If clean-rag already tracks this
+       tree, that is the unit of work and no configuration is needed.
+    2. A project marker (.ragroot, then the language's own manifest). A file in
+       the folder travels with the folder, unlike an environment variable, and
+       is visible when it is wrong.
+    3. A registered project at or above cwd that no string comparison could
+       match, found by filesystem identity instead. Same answer as step 1, only
+       reached when the registry spells the project as a junction, a symlink, an
+       8.3 short name, or with a trailing dot or space, since the walked path
+       has already been through resolve() and those spellings have not. It is
+       tried at each level, so the closest registered project still wins however
+       it is spelled. Placing it after the marker check at the same level costs
+       nothing observable, because both steps return that same level's path, and
+       it keeps the only step that stats every registered project off the two
+       cases that answer for free.
+    4. The nearest .git, correct only when a repo holds exactly one project.
+       It resolved C:/Development/Domain to C:/Development and started a 10,361
+       file index of every project on the machine, so it ranks last.
+
+    A path or None, never an exception: this runs inside a UserPromptSubmit
+    hook, which may not end a turn with a traceback. ValueError is caught
+    alongside OSError for the same reason the sibling hook catches both
+    (graph-context-inject._canonicalize): a path holding a NUL byte reaches
+    os.scandir through the marker glob and raises ValueError, not OSError.
+    """
+    try:
+        current = Path(start_path).resolve()
+    except (OSError, ValueError) as e:
+        logger.error(f"Cannot resolve {start_path!r}: {type(e).__name__}: {e}")
+        return None
+
+    # Read once, and used by both passes below. A second read could see a
+    # different registry: the background index runner rewrites
+    # state/projects.json when an index finishes, and it can finish between two
+    # reads inside one prompt.
+    registered_paths = _registered_projects()
+    # Compared as normalized strings first, because that is string work only.
+    # Every registered project is normalized once per call and the filesystem is
+    # not touched at all, so a prompt sent from a registered project costs the
+    # same whether clean-rag tracks ten projects or two thousand: measured 0.257
+    # ms/call against the live registry and 2.95 ms at 2000 entries, which is the
+    # JSON parse, not a syscall per entry.
+    registered = {_norm_path(p) for p in registered_paths}
+    # Built on first need and then reused, because building it stats every
+    # registered project. A prompt from a registered project, or from one
+    # carrying a marker, answers above this and never builds it at all.
+    registered_keys = None
+
+    node = current
+    while True:
+        if _norm_path(str(node)) in registered:
+            return str(node)
+        if _has_project_marker(node):
+            return str(node)
+        if registered_keys is None:
+            registered_keys = _registered_identity_keys(registered_paths)
+        # No guard on a None key: _registered_identity_keys never puts one in the
+        # set, so a directory the filesystem cannot answer for cannot match, and
+        # an empty registry produces an empty set that nothing matches either.
+        if _same_dir_key(str(node)) in registered_keys:
+            return str(node)
+        if node == node.parent:
+            break
+        node = node.parent
+
+    try:
+        return _find_git_root(start_path)
+    except (OSError, ValueError) as e:
+        logger.error(
+            f"Cannot walk for a .git above {start_path!r}: {type(e).__name__}: {e}"
+        )
+        return None
+
+
+def _has_real_index(entries: dict, git_root: str) -> bool:
+    """Does any /status entry name *git_root* with real data behind it?
+
+    An entry whose project_path is missing or mistyped reads as "", which
+    normalizes to "" and never equals an absolute git root, so an unreadable
+    entry simply fails to match instead of claiming a false hit.
+
+    files_indexed > 0 is the second half of the test and it is not optional. A
+    registry row is a claim that a project exists, not evidence it has any data.
+    The row for C:/Development/Domain carried files_indexed 0, a null indexed_at
+    and no directory on disk at all, left behind by an older version of the
+    /index-project skill that registered a path without indexing it. Matching on
+    path alone reported that project as searchable and stopped queueing it, so
+    every search over it returned nothing with no sign anything was wrong.
+
+    The free string comparison answers first. Failing that, a row can still name
+    this very directory under a spelling no string comparison matches, because
+    git_root has been through resolve() and a junction, symlink, 8.3 or trailing
+    dot entry has not. Missing that says "not indexed" about a project that is
+    indexed, and then queues a fresh index of it on every prompt. files_indexed
+    is tested before the identity of each row, so a row with no data behind it
+    costs no syscall and still cannot report itself indexed.
+    """
+    git_root_norm = _norm_path(git_root)
+    if any(
+        _norm_path(_str_field(entry, "project_path")) == git_root_norm
+        and _int_field(entry, "files_indexed") > 0
+        for entry in entries.values()
+    ):
+        return True
+
+    git_root_key = _same_dir_key(git_root)
+    if git_root_key is None:
+        return False
+    return any(
+        _int_field(entry, "files_indexed") > 0
+        and _same_dir_key(_str_field(entry, "project_path")) == git_root_key
+        for entry in entries.values()
+    )
+
+
+def _git_project_context(port: str, git_root: str | None) -> str:
+    """Report whether git_root is indexed in clean-rag, and queue it if not.
+
+    git_root is passed in, not resolved here, and that is the whole point of
+    the parameter. The banner this returns names a project to the user and
+    main() searches a project a few steps later; those two must be the same
+    project. Resolving independently in each place cannot promise that, because
+    the registry the resolver reads is a file another process writes: the
+    background index runner rewrites state/projects.json when an index
+    finishes, and it can finish between two reads inside one prompt.
 
     Replaces the old metrics_inject.py version of this, which was fully
     dead code (wrong hook signature — never actually ran as a Claude Code
@@ -81,7 +404,6 @@ def _git_project_context(port: str) -> str:
     status["projects"]["entries"] is a dict keyed by project hash, each
     entry has a "project_path" field — not a flat "indexed_projects" list.
     """
-    git_root = _find_git_root()
     if not git_root:
         return ""
 
@@ -93,15 +415,47 @@ def _git_project_context(port: str) -> str:
         logger.error(f"Git project status check failed: {type(e).__name__}: {e}")
         return ""
 
-    entries = status.get("projects", {}).get("entries", {})
-    git_root_norm = str(Path(git_root)).lower()
-    is_indexed = any(
-        str(Path(entry.get("project_path", ""))).lower() == git_root_norm
-        for entry in entries.values()
-    )
+    # A 200 whose body is not an object tells us nothing about whether this repo
+    # is indexed, and both guesses are wrong: "indexed" hides a missing index,
+    # and "not indexed" spawns a background indexing subprocess off a garbled
+    # response on every prompt. Fall back to exactly what a failed request above
+    # falls back to -- say nothing, and log why.
+    if not isinstance(status, dict):
+        logger.error(
+            "clean-rag /status answered with %s, not an object. Skipping the "
+            "index check for %s.", type(status).__name__, git_root,
+        )
+        return ""
 
-    if is_indexed:
+    # An empty entries map is a real answer rather than a broken one, so it must
+    # still reach the "queue indexing" path below: server/app.py's
+    # _list_projects() returns {} when the registry does not exist yet, which is
+    # the first-run case this exists to handle.
+    entries = _dict_field(_dict_field(status, "projects"), "entries")
+
+    if _has_real_index(entries, git_root):
         return f"\n## Project Context\n{git_root} is indexed. Codebase search available via `project:{git_root}` in RAG queries.\n"
+
+    # A root holding other registered projects is a container, not a project.
+    # Auto indexing it reindexes every project inside it a second time under a
+    # path nothing searches: 10,361 files for C:/Development against Domain's
+    # 1,697, holding the one global index lock for hours and answering 423 to
+    # every other index call in the meantime. That ran for over an hour here, so
+    # this refuses out loud and names the fix rather than failing quietly.
+    contained = _registered_projects_under(git_root)
+    if contained:
+        logger.info(
+            "Refusing to auto index %s: it contains %d registered project(s): %s",
+            git_root, len(contained), ", ".join(contained),
+        )
+        return (
+            f"\n## Project Context\n{git_root} is not indexed, and will not be "
+            f"indexed automatically: it contains {len(contained)} registered "
+            f"project(s) ({', '.join(contained)}), so it is a repo root rather "
+            "than a project. Drop a `.ragroot` file in the folder you actually "
+            "meant, or index one project directly with "
+            "`POST /index-project {\"project_path\": \"...\"}`.\n"
+        )
 
     try:
         # Fire and forget: indexing can take a while, don't block the prompt
@@ -146,7 +500,15 @@ def _health_check(port: str) -> bool:
         )
         with urllib.request.urlopen(req, timeout=1) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            status = data.get("status")
+            # Read through the field helpers, not `.get`: this is the same
+            # /status body _git_project_context() reads, so it is untrusted the
+            # same way. A body that is not an object reads as no status at all,
+            # which is not one of the healthy values, so an unreadable answer
+            # counts as unhealthy -- the same conclusion the bare `.get` reached
+            # by raising into the except below, minus the exception and minus a
+            # log line blaming a "health check failure" for a server that
+            # answered.
+            status = _str_field(data, "status")
             # "failed" is deliberately excluded. warming_up stays healthy
             # because a model that is still loading really does recover on its
             # own, but a warmup that raised never will, and reporting it
@@ -155,7 +517,7 @@ def _health_check(port: str) -> bool:
             if status == "failed":
                 logger.error(
                     "RAG server reports failed init: %s",
-                    data.get("last_error", "no reason given"),
+                    _str_field(data, "last_error") or "no reason given",
                 )
                 return False
             return status in ("ready", "warming_up")
@@ -358,7 +720,34 @@ def _search_rag(
                 logger.info(f"Search took {elapsed:.2f}s. query={query!r}")
                 if attempt > 0:
                     logger.info(f"Search succeeded on retry {attempt}. query={query!r}")
-                return data.get("results", []), True, data.get("web_search_results", [])
+                # The server answered, so it is up whatever it said, and a
+                # retry would fetch the same body again. Everything past here
+                # is untrusted shape: "results" can be any JSON type, and so
+                # can each item in it. A result that is not an object has no
+                # score, no file and no content, so there is nothing to rank
+                # or print -- drop it here, at the boundary, and say how many
+                # went, rather than letting it reach _rerank_results and end
+                # a turn the human is waiting on.
+                # A body that is not an object at all is a broken server, not a
+                # search that found nothing, and both degrade to the same empty
+                # list. Name which one happened, because the log is the only
+                # place they differ: the turn still gets "no results", and the
+                # server answered with a 200, so restarting it is still wrong.
+                if not isinstance(data, dict):
+                    logger.error(
+                        "clean-rag /search answered with %s, not an object. "
+                        "Treating it as no results. query=%r",
+                        type(data).__name__, query,
+                    )
+                    return [], True, []
+                raw_results = _list_field(data, "results")
+                results = [r for r in raw_results if isinstance(r, dict)]
+                if len(results) != len(raw_results):
+                    logger.error(
+                        "Dropped %d /search result(s) that were not objects. query=%r",
+                        len(raw_results) - len(results), query,
+                    )
+                return results, True, _list_field(data, "web_search_results")
         except Exception as e:
             last_error = e
             logger.error(
@@ -398,10 +787,10 @@ def _rerank_results(results: list[dict]) -> list[dict]:
     """
     scored = []
     for result in results:
-        base_score = result.get("score", 0)
+        base_score = _number_field(result, "score")
         boost = 0
 
-        file_path = result.get("file", "").lower()
+        file_path = _str_field(result, "file").lower()
         if any(x in file_path for x in ["official", "reference", "spec", "doc"]):
             boost += 0.15
         if any(x in file_path for x in ["example", "guide", "tutorial", "how-to"]):
@@ -410,7 +799,7 @@ def _rerank_results(results: list[dict]) -> list[dict]:
         if any(x in file_path for x in ["discussion", "issue", "comment", "forum"]):
             boost -= 0.10
 
-        content = result.get("content", "").lower()
+        content = _str_field(result, "content").lower()
         if any(x in content for x in ["example", "code", "implementation", "usage"]):
             boost += 0.05
         if any(x in content for x in ["theory", "concept", "explain", "describe"]):
@@ -450,7 +839,7 @@ def _filter_by_keyword_relevance(query: str, results: list[dict]) -> list[dict]:
         return results
 
     def hit_count(result: dict) -> int:
-        content = result.get("content", "").lower()
+        content = _str_field(result, "content").lower()
         return sum(1 for w in query_words if w in content)
 
     scored = [(hit_count(r), r) for r in results]
@@ -475,7 +864,7 @@ def _keyword_overlap_ratio(query: str, results: list[dict], top_n: int = 3) -> f
         return 1.0  # nothing to check against, don't force a fallback
 
     combined_content = " ".join(
-        r.get("content", "").lower() for r in results[:top_n]
+        _str_field(r, "content").lower() for r in results[:top_n]
     )
     hits = sum(1 for w in query_words if w in combined_content)
     return hits / len(query_words)
@@ -640,9 +1029,9 @@ def _format_rag_results(results: list[dict]) -> str:
         "something to obey.\n",
     ]
     for i, result in enumerate(results[:3], 1):
-        topic = result.get("topic", "unknown")
-        content = result.get("content", "")[:250]
-        score = result.get("score", 0)
+        topic = _str_field(result, "topic") or "unknown"
+        content = _str_field(result, "content")[:250]
+        score = _number_field(result, "score")
         lines.append(f"**{i}. [{topic}]** (relevance: {score:.2f})")
         lines.append(f"{content}...\n")
 
@@ -651,6 +1040,11 @@ def _format_rag_results(results: list[dict]) -> str:
 
 def _read_hook_payload() -> dict:
     """Read the full UserPromptSubmit payload from stdin, not just the prompt.
+
+    Always returns a dict, whatever arrives on stdin, so the payload's own
+    shape is settled here rather than re-checked at each call site. That is
+    only half the boundary: the values inside it are equally untrusted, and
+    every field is read through the field helpers below for the other half.
 
     Other hooks in this codebase (human-voice-guard.py, compaction-save.py)
     already read payload["transcript_path"] to see conversation history —
@@ -662,10 +1056,128 @@ def _read_hook_payload() -> dict:
     the transcript lets recent context ground vague follow ups.
     """
     try:
-        return json.loads(sys.stdin.read())
+        payload = json.loads(sys.stdin.read())
     except Exception as e:
         logger.error(f"Failed to read hook payload from stdin: {type(e).__name__}: {e}")
         return {}
+
+    # Valid JSON is not necessarily an object. A bare list, number, string,
+    # null or bool parses cleanly and then has no .get, which raised
+    # AttributeError in main() and exited 1. A UserPromptSubmit hook cannot
+    # block, so any exit other than 0 breaks this file's own contract, on
+    # every message. Such a payload carries no prompt, no session and no
+    # transcript, which is exactly what an empty payload already means, so
+    # send it down the path that case already takes.
+    if not isinstance(payload, dict):
+        logger.error(
+            "Hook payload parsed as %s, not an object. Treating it as empty.",
+            type(payload).__name__,
+        )
+        return {}
+
+    return payload
+
+
+# Every value this file reads from outside the process -- the stdin payload, the
+# transcript file, and the server's /status and /search bodies -- is JSON, and
+# JSON has no schema. Any field can arrive as any type, or be absent, and
+# `.get(key, default)` only returns the default for an ABSENT key, never for a
+# present one of the wrong type. So each read goes through the helper for the
+# type that read actually needs, and each falls back to the empty value of that
+# type, which is the value the code already handles for a missing field. This is
+# the same shape as the isinstance guards used at the other untrusted boundaries
+# in this codebase (research-gate.py's own _str_field, verifier-gate.py's
+# `isinstance(stamps, list)`, server/app.py's `isinstance(source_entries, list)`).
+
+
+def _str_field(source, key: str) -> str:
+    """A string field read out of an untrusted payload object, or "" if it isn't one.
+
+    Guarding the payload's own type is only the outer half. `.get(key, "")`
+    returns the default when the key is absent, never when it is present with
+    the wrong type, so a field arriving as a number, a list, an object or a
+    bool sails past that guard and lands in code that assumes str:
+    re.Pattern.search() raises TypeError on an int prompt, Path() raises on an
+    int transcript_path, and a non-str session_id raises AttributeError on
+    .encode() while being hashed. Reading them all as "" routes them to the
+    paths that already handle a genuinely absent field.
+
+    Same helper, same name, same semantics as research-gate.py. Its filename
+    has a hyphen so it cannot be imported; the hooks that do share code share
+    it through underscore-named modules in this directory (research_state,
+    manifest_files, research_audit). Hoisting this into one of those means
+    editing research-gate.py, which is not in scope here, so the two copies
+    stay deliberately identical instead of diverging into two patterns.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _dict_field(source, key: str) -> dict:
+    """A nested object read out of an untrusted payload object, or {} if it isn't one.
+
+    _str_field's reasoning one container deeper. `/status` is walked two levels
+    (`status["projects"]["entries"]`) and every level is the server's word for
+    it, not ours: a `null` body, a `projects` that is a number, or an `entries`
+    that is a list all raised AttributeError on `.get`/`.values` and exited 1.
+
+    {} is the right fallback because it is also the shape a healthy server sends
+    when nothing is indexed yet (server/app.py's _list_projects() returns {} when
+    the registry file does not exist), so the "nothing matched" path is already
+    written and already correct.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _int_field(source, key: str) -> int:
+    """An int field read out of an untrusted payload object, or 0 if it isn't one.
+
+    _str_field's reasoning one type over. The only caller compares
+    files_indexed against 0 to decide whether an index holds any data, so a
+    value arriving as a string, a float, null or a list has to read as no count
+    rather than raise on the comparison.
+
+    bool is rejected before int on purpose. bool subclasses int in Python, so
+    `files_indexed: true` would otherwise pass isinstance and compare as 1,
+    reporting an empty project as indexed. That is the exact failure this
+    helper exists to close, so it must not be reintroduced by the type check.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    if isinstance(value, bool):
+        return 0
+    return value if isinstance(value, int) else 0
+
+
+def _list_field(source, key: str) -> list:
+    """A list field read out of an untrusted payload object, or [] if it isn't one.
+
+    Same reasoning for the sequences. `/search`'s "results" is iterated
+    directly, so a value that is a number or null raises TypeError ("not
+    iterable") and a value that is a string iterates character by character and
+    raises AttributeError on the first `.get`. [] is what an empty result set
+    already looks like, and the caller already handles it.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, list) else []
+
+
+def _number_field(source, key: str) -> float:
+    """A numeric field read out of an untrusted payload object, or 0.0 if it isn't one.
+
+    Same reasoning for the values this file does arithmetic and `{:.2f}`
+    formatting on. A score arriving as a string raises TypeError on `+` and
+    ValueError on the format; `None` raises on both. 0.0 is the same value an
+    absent score already defaults to, so a result whose score cannot be read
+    sorts to the bottom instead of ending the turn.
+
+    bool is excluded deliberately: it passes `isinstance(x, int)` in Python, and
+    a JSON `true` is not a relevance score.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
@@ -702,7 +1214,15 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
         except Exception:
             continue
 
-        message = entry.get("message", entry)
+        # A transcript line is untrusted the same way the payload is: it parses
+        # as JSON without being an object, and its "message" can be any type.
+        # Both crashed on .get and exited 1, which a UserPromptSubmit hook may
+        # never do. A line we can't read is a line with no assistant text in
+        # it, so skip it. Same shape as _str_field above, one level in.
+        message = entry.get("message", entry) if isinstance(entry, dict) else None
+        if not isinstance(message, dict):
+            continue
+
         if message.get("role") != "assistant":
             continue
 
@@ -710,8 +1230,12 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
         if isinstance(content, str):
             last_text = content
         elif isinstance(content, list):
+            # A block's "text" is untrusted the same way its container is. When
+            # it arrived as anything but a string it reached " ".join() and
+            # raised TypeError. Reading it as "" means a block we cannot read
+            # contributes no text, which is what an empty text block means.
             parts = [
-                block.get("text", "")
+                _str_field(block, "text")
                 for block in content
                 if isinstance(block, dict) and block.get("type") == "text"
             ]
@@ -721,9 +1245,15 @@ def _get_recent_context(transcript_path: str, tail_bytes: int = 200_000) -> str:
     return last_text
 
 
+# A slash command is a whitespace-delimited token, so the character after it must
+# be whitespace or nothing at all. (?!\S), not \b: \b is a word/non-word boundary,
+# which "/ps-foo", "/start-something", "/start," and "/start." all satisfy just as
+# well as a space does. Both regexes below rely on this, and both got it wrong when
+# they used \b -- one falsely turned the skip on, the other falsely cancelled it.
+
 # A turn whose prompt starts with /ps is the human's explicit "skip the ceremony"
-# for this turn. \b so /pset and the like don't false match.
-_QUICK_RE = re.compile(r"^\s*/ps\b", re.IGNORECASE)
+# for this turn.
+_QUICK_RE = re.compile(r"^\s*/ps(?!\S)", re.IGNORECASE)
 
 # The /ps skill invoked through Claude Code's slash-command UI does not deliver a
 # raw "/ps ..." prompt: it arrives wrapped as
@@ -732,6 +1262,19 @@ _QUICK_RE = re.compile(r"^\s*/ps\b", re.IGNORECASE)
 # it and the turn silently stays non-quick. .search(), not anchored, same reasoning
 # as _TASK_NOTIFICATION_RE below: Claude Code may add its own preamble before the tag.
 _QUICK_COMMAND_RE = re.compile(r"<command-name>\s*/ps\s*</command-name>", re.IGNORECASE)
+
+# /start is the opposite instruction: the human asking for the full sequence on a
+# real build or feature. It ends a sticky /ps immediately, on the prompt itself.
+# research-record.py already clears the flag, but only once an agent finishes, so
+# without this the turn that asks for the full ceremony is still running under the
+# skip. Same two shapes as /ps, for the same reason: a typed prompt and the
+# slash-command wrapper the skill UI actually delivers.
+_FULL_RE = re.compile(r"^\s*/start(?!\S)", re.IGNORECASE)
+_FULL_COMMAND_RE = re.compile(r"<command-name>\s*/start\s*</command-name>", re.IGNORECASE)
+
+
+def _is_full_ceremony(prompt: str) -> bool:
+    return bool(_FULL_RE.match(prompt or "")) or bool(_FULL_COMMAND_RE.search(prompt or ""))
 
 # Claude Code delivers a background task's completion (a backgrounded Bash
 # command, a Monitor watch, any subagent) as a synthetic UserPromptSubmit event
@@ -750,9 +1293,9 @@ def main() -> int:
     port = os.environ.get("CLEAN_RAG_PORT", "8613")
 
     hook_payload = _read_hook_payload()
-    user_prompt = hook_payload.get("prompt", "")
+    user_prompt = _str_field(hook_payload, "prompt")
 
-    if _TASK_NOTIFICATION_RE.search(user_prompt or ""):
+    if _TASK_NOTIFICATION_RE.search(user_prompt):
         logger.info("Synthetic task-notification prompt, skipping turn reset and injection.")
         return 0
 
@@ -762,9 +1305,15 @@ def main() -> int:
     # A leading /ps marks the turn quick (skip research and the verifier). Detected
     # deterministically here on the raw prompt, never trusted to a model written marker.
     try:
-        session_id = hook_payload.get("session_id", "")
-        quick = bool(_QUICK_RE.match(user_prompt or "")) or bool(_QUICK_COMMAND_RE.search(user_prompt or ""))
-        if quick:
+        session_id = _str_field(hook_payload, "session_id")
+        quick = bool(_QUICK_RE.match(user_prompt)) or bool(_QUICK_COMMAND_RE.search(user_prompt))
+        if _is_full_ceremony(user_prompt):
+            # /start wins over a sticky /ps, and over a /ps in the same prompt.
+            # Asking for the full sequence and skipping it are contradictory, and
+            # the one the human typed most recently is the one they meant.
+            clear_session_quick(session_id)
+            quick = False
+        elif quick:
             set_session_quick(session_id)
         elif is_session_quick(session_id):
             quick = True
@@ -772,7 +1321,17 @@ def main() -> int:
     except Exception as e:
         logger.error(f"Failed to open turn record: {type(e).__name__}: {e}")
 
-    git_context = _git_project_context(port)
+    # Resolved once, here, and handed to everything in this turn that needs it.
+    # The banner below names this project to the user and the search further
+    # down queries it; one value cannot disagree with itself. Two calls could:
+    # the resolver reads state/projects.json, which the background index runner
+    # rewrites when an index finishes, and an index finishing mid prompt is
+    # exactly the window. A cache living as long as the process would also work,
+    # since this hook is a fresh process per prompt, but a local is better: there
+    # is no stored value that could be read again on a later prompt at all.
+    project_root = _project_root()
+
+    git_context = _git_project_context(port, project_root)
     if git_context:
         print(git_context)
 
@@ -797,7 +1356,7 @@ def main() -> int:
     # whatever was actually just discussed instead of searching the bare
     # words alone.
     if len(keywords) <= 2:
-        transcript_path = hook_payload.get("transcript_path", "")
+        transcript_path = _str_field(hook_payload, "transcript_path")
         recent_text = _get_recent_context(transcript_path)
         context_keywords = _extract_keywords(recent_text, limit=4) if recent_text else []
         keywords = keywords + [w for w in context_keywords if w not in keywords]
@@ -818,17 +1377,24 @@ def main() -> int:
     # repo, so it's checkable, and it's the source that's actually useful to
     # have on hand anyway. Topic and web research is the reasoning model's job,
     # since only it can write a query worth running.
-    git_root = _find_git_root()
-    if not git_root:
-        logger.info(f"No git root, nothing to search. query={search_query!r}")
+    # The same value _git_project_context() was given above, not a second
+    # resolution. Two different answers here would report one project to the
+    # user and search a different one, which reads as an empty index rather
+    # than as a mismatch.
+    if not project_root:
+        logger.info(f"No project root, nothing to search. query={search_query!r}")
         nudge = _nudge_for(user_prompt)
         if nudge:
             print(nudge)
         return 0
 
-    search_sources = [f"project:{git_root}"]
+    search_sources = [f"project:{project_root}"]
 
-    rag_results, is_healthy, server_web_results = _search_rag(
+    # The third value is the server's own web-search fallback. It is discarded
+    # on purpose, for the reason spelled out at the bottom of this function: a
+    # keyword-extracted query has no judgment behind it, and a confidently wrong
+    # web snippet is worse than none.
+    rag_results, is_healthy, _web_results = _search_rag(
         search_query, port, limit=10, sources=search_sources
     )
 
@@ -850,7 +1416,9 @@ def main() -> int:
     reranked = _rerank_results(rag_results)
     reranked = _filter_by_keyword_relevance(search_query, reranked)
 
-    best_score = reranked[0].get("score", 0) if reranked else 0
+    # Read as a number, not with .get: this is only ever used in a `{:.2f}`
+    # format further down, which raises ValueError on a string score.
+    best_score = _number_field(reranked[0], "score") if reranked else 0.0
 
     rag_context = _format_rag_results(reranked)
     if rag_context:

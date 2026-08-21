@@ -155,11 +155,11 @@ Save to `$WORKSPACE_ABS/ticket.md`:
 
 ## Phase 0.5: RAG Health Check
 
-**Call `GET http://127.0.0.1:8612/status` now — before spawning any agents or calling POST http://127.0.0.1:8612/context.**
+**Call `GET http://127.0.0.1:8613/status` now — before spawning any agents or calling POST http://127.0.0.1:8613/search
 
 This is a fast probe. `GET /status` does not use the embedding model, so it responds in under 1 second if the server is up.
 
-**If `GET http://127.0.0.1:8612/status` returns an error OR the tool is not available:**
+**If `GET http://127.0.0.1:8613/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
 > Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/explore $ARGUMENTS`."
 
@@ -191,8 +191,8 @@ Spawn `ticket-analyst-agent` (Sonnet) with this prompt:
 ```
 You are analyzing a ticket for task $TASK_ID.
 
-FIRST ACTION: call POST http://127.0.0.1:8612/context with agent="ticket-analyst-agent", task_description="analyze ticket $TASK_ID and produce analysis + definition of done", max_tokens=4000
-If POST http://127.0.0.1:8612/context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
+FIRST ACTION: call POST http://127.0.0.1:8613/search with {"query":"analyze ticket $TASK_ID and produce analysis + definition of done","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
+If POST http://127.0.0.1:8613/search
 
 Then:
 
@@ -287,8 +287,8 @@ Spawn `explore-agent` (Sonnet) with this prompt:
 ```
 You are exploring a codebase to understand what code is relevant to ticket $TASK_ID.
 
-FIRST ACTION: call POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="find code relevant to $TASK_ID in project at $PROJECT_PATH", max_tokens=4000
-If POST http://127.0.0.1:8612/context returns an "error" key, STOP immediately and return: "RAG ERROR: [error message]. Run /rag to start the server."
+FIRST ACTION: call POST http://127.0.0.1:8613/search with {"query":"find code relevant to $TASK_ID in project at $PROJECT_PATH","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
+If POST http://127.0.0.1:8613/search
 
 Context:
 - Project path: $PROJECT_PATH
@@ -365,7 +365,7 @@ Print the agent's summary when it returns.
 
 **4a — Load ClaudeBoost RAG context.**
 
-Call `POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="implementation plan for ticket $TASK_ID", max_tokens=5000`.
+Call `POST http://127.0.0.1:8613/search with {"query":"implementation plan for ticket $TASK_ID","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
 **If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/rag` to start the server, then retry."**
 
@@ -376,8 +376,8 @@ This loads architecture, workflow, testing, and security knowledge to validate t
 Run these RAG searches to inform the plan:
 
 ```
-POST http://127.0.0.1:8612/search with scope="knowledge", query="implementation planning workflow decomposition", limit=3
-POST http://127.0.0.1:8612/search with scope="knowledge", query="testing strategy coverage acceptance criteria", limit=3
+POST http://127.0.0.1:8613/search {"query":"implementation planning workflow decomposition","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":3}
+POST http://127.0.0.1:8613/search {"query":"testing strategy coverage acceptance criteria","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":3}
 ```
 
 If `PROJECT_PATH` is not none:

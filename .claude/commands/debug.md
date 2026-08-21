@@ -16,7 +16,7 @@ One command for the full debugging loop. Give it an error message, a file:line, 
 
 **0a — Health check:**
 
-Call `GET http://127.0.0.1:8612/status`. If it fails: stop and tell the user "RAG is not connected. Run `/rag` first."
+Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run `/rag` first."
 
 **0b — Detect project path:**
 
@@ -24,17 +24,19 @@ Run `"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.p
 
 **0c — Load context:**
 
-Call `POST http://127.0.0.1:8612/context` with:
+Call `POST http://127.0.0.1:8613/search` with:
 ```json
 {
-  "agent": "debug-agent",
-  "task_description": "debug session: $ARGUMENTS",
-  "project_path": "<PROJECT_PATH>",
-  "workspace_path": "<active workspace path if one exists>"
+  "query": "debug session: $ARGUMENTS",
+  "sources": ["project:<PROJECT_PATH>"],
+  "mode": "both",
+  "limit": 8
 }
 ```
 
-If the context call returns an `"error"` key: stop and tell the user to run `/rag`.
+If the response has an `"error"` key: stop and tell the user to run `/rag`.
+An empty `results` array is not an error — it means nothing in the index matched,
+so carry on with the file reads instead.
 
 ---
 

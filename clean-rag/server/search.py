@@ -501,26 +501,33 @@ def _search_project(
         logger.warning("Project index not found for: %s (pid=%s)", project_path, pid)
         return []
 
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    if not store.collection_exists("codebase"):
-        return []
+    # `with`, not a bare constructor. The store shares one process wide sqlite
+    # handle, a background sweep can ask for that handle to be closed while this
+    # call still holds it, and the close then waits for this holder to check in.
+    # See ChromaStore.__del__ for why that check in cannot be left to garbage
+    # collection.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        if not store.collection_exists("codebase"):
+            return []
 
-    query_embedding = code_embedder.embed_query(query)
-    results = store.search("codebase", query_embedding, limit=limit, min_score=min_score)
+        query_embedding = code_embedder.embed_query(query)
+        results = store.search(
+            "codebase", query_embedding, limit=limit, min_score=min_score,
+        )
 
-    return [
-        {
-            "content": r.content,
-            "score": r.score,
-            "source_type": "project",
-            "file": r.metadata.get("source_file", ""),
-            "tree_path": r.metadata.get("tree_path", ""),
-            "section": r.metadata.get("section", ""),
-            "line_start": r.metadata.get("line_start", 0),
-            "line_end": r.metadata.get("line_end", 0),
-        }
-        for r in results
-    ]
+        return [
+            {
+                "content": r.content,
+                "score": r.score,
+                "source_type": "project",
+                "file": r.metadata.get("source_file", ""),
+                "tree_path": r.metadata.get("tree_path", ""),
+                "section": r.metadata.get("section", ""),
+                "line_start": r.metadata.get("line_start", 0),
+                "line_end": r.metadata.get("line_end", 0),
+            }
+            for r in results
+        ]
 
 
 def _search_project_graph(
@@ -579,222 +586,223 @@ def _search_project_graph(
         logger.warning("graph_store not available, falling back to vector")
         return _search_project(query, project_path, code_embedder, limit, min_score)
 
-    store = ChromaStore(persist_dir=str(chroma_dir))
-    if not store.collection_exists("codebase"):
-        return []
+    # `with` for the same reason as _search_project above.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        if not store.collection_exists("codebase"):
+            return []
 
-    graph = SQLiteGraphStore(str(graph_db_path))
-    if not graph.has_graph():
-        logger.info("Graph is empty for project %s, falling back to vector", pid)
-        return _search_project(query, project_path, code_embedder, limit, min_score)
+        graph = SQLiteGraphStore(str(graph_db_path))
+        if not graph.has_graph():
+            logger.info("Graph is empty for project %s, falling back to vector", pid)
+            return _search_project(query, project_path, code_embedder, limit, min_score)
 
-    # Step 1: small vector search for seed files
-    query_embedding = code_embedder.embed_query(query)
-    seed_results = store.search("codebase", query_embedding, limit=3, min_score=0.1)
+        # Step 1: small vector search for seed files
+        query_embedding = code_embedder.embed_query(query)
+        seed_results = store.search("codebase", query_embedding, limit=3, min_score=0.1)
 
-    if not seed_results:
-        return []
+        if not seed_results:
+            return []
 
-    # Collect unique seed files
-    seed_files: list[str] = []
-    seed_scores: dict[str, float] = {}
-    for r in seed_results:
-        f = r.metadata.get("source_file", "")
-        if f and f not in seed_scores:
-            seed_files.append(f)
-            seed_scores[f] = r.score
+        # Collect unique seed files
+        seed_files: list[str] = []
+        seed_scores: dict[str, float] = {}
+        for r in seed_results:
+            f = r.metadata.get("source_file", "")
+            if f and f not in seed_scores:
+                seed_files.append(f)
+                seed_scores[f] = r.score
 
-    # Step 2: traverse graph from each seed
-    neighbor_files: dict[str, dict] = {}  # file -> {edge_type, seed, depth, is_caller}
-    for seed_file in seed_files:
-        hop_of: dict[str, int] = {}
-        try:
-            neighbors = graph.get_neighbours(
-                seed_file, depth=depth, direction=direction, depths_out=hop_of,
-            )
-        except Exception as e:
-            logger.warning("Graph traversal failed for %s: %s", seed_file, e)
-            continue
-
-        for edge in neighbors:
-            # get_neighbours() does an undirected lookup (file may be either
-            # source_file or target_file of the edge, graph_store.py:346-350),
-            # so the neighbor is whichever side isn't the seed -- not always
-            # target_file. For depth-2 edges that touch neither side of the
-            # seed directly (a neighbor-of-neighbor edge), fall back to
-            # target_file, matching this function's original (buggy but at
-            # least non-crashing) intent for that case.
-            #
-            # Direction relative to the seed: GraphEdge is source -> target
-            # (graph_store.py:26-37), so edge.target_file == seed_file means
-            # the OTHER side (edge.source_file) has an edge pointing INTO the
-            # seed -- i.e. that neighbor depends on / calls / imports the
-            # seed, making it a caller of the seed (the blast-radius
-            # direction). edge.source_file == seed_file means the seed
-            # points at the neighbor, i.e. the neighbor is a dependency.
-            if edge.source_file == seed_file:
-                neighbor = edge.target_file
-                is_caller = False
-            elif edge.target_file == seed_file:
-                neighbor = edge.source_file
-                is_caller = True
-            else:
-                neighbor = edge.target_file
-                is_caller = False
-
-            if not neighbor or neighbor == _EXTERNAL_SENTINEL:
+        # Step 2: traverse graph from each seed
+        neighbor_files: dict[str, dict] = {}  # file -> {edge_type, seed, depth, is_caller}
+        for seed_file in seed_files:
+            hop_of: dict[str, int] = {}
+            try:
+                neighbors = graph.get_neighbours(
+                    seed_file, depth=depth, direction=direction, depths_out=hop_of,
+                )
+            except Exception as e:
+                logger.warning("Graph traversal failed for %s: %s", seed_file, e)
                 continue
-            if neighbor in seed_scores:
-                continue  # skip files already found by vector
-            if neighbor not in neighbor_files:
-                neighbor_files[neighbor] = {
-                    "edge_type": edge.edge_type,
-                    "seed": seed_file,
-                    "seed_score": seed_scores[seed_file],
-                    "is_caller": is_caller,
-                    # 1 if the traversal never reported a hop for this file,
-                    # which keeps the decay a no-op rather than a KeyError.
-                    "depth": hop_of.get(neighbor, 1),
+
+            for edge in neighbors:
+                # get_neighbours() does an undirected lookup (file may be either
+                # source_file or target_file of the edge, graph_store.py:346-350),
+                # so the neighbor is whichever side isn't the seed -- not always
+                # target_file. For depth-2 edges that touch neither side of the
+                # seed directly (a neighbor-of-neighbor edge), fall back to
+                # target_file, matching this function's original (buggy but at
+                # least non-crashing) intent for that case.
+                #
+                # Direction relative to the seed: GraphEdge is source -> target
+                # (graph_store.py:26-37), so edge.target_file == seed_file means
+                # the OTHER side (edge.source_file) has an edge pointing INTO the
+                # seed -- i.e. that neighbor depends on / calls / imports the
+                # seed, making it a caller of the seed (the blast-radius
+                # direction). edge.source_file == seed_file means the seed
+                # points at the neighbor, i.e. the neighbor is a dependency.
+                if edge.source_file == seed_file:
+                    neighbor = edge.target_file
+                    is_caller = False
+                elif edge.target_file == seed_file:
+                    neighbor = edge.source_file
+                    is_caller = True
+                else:
+                    neighbor = edge.target_file
+                    is_caller = False
+
+                if not neighbor or neighbor == _EXTERNAL_SENTINEL:
+                    continue
+                if neighbor in seed_scores:
+                    continue  # skip files already found by vector
+                if neighbor not in neighbor_files:
+                    neighbor_files[neighbor] = {
+                        "edge_type": edge.edge_type,
+                        "seed": seed_file,
+                        "seed_score": seed_scores[seed_file],
+                        "is_caller": is_caller,
+                        # 1 if the traversal never reported a hop for this file,
+                        # which keeps the decay a no-op rather than a KeyError.
+                        "depth": hop_of.get(neighbor, 1),
+                    }
+
+        if meta_out is not None:
+            meta_out["graph_hit_count"] = len(neighbor_files)
+            meta_out["caller_count"] = sum(1 for v in neighbor_files.values() if v["is_caller"])
+            meta_out["graph_status"] = "hit" if neighbor_files else "empty"
+
+        if not neighbor_files:
+            # No graph neighbors found, return vector seeds as results
+            return [
+                {
+                    "content": r.content,
+                    "score": r.score,
+                    "source_type": "project",
+                    "file": r.metadata.get("source_file", ""),
+                    "tree_path": r.metadata.get("tree_path", ""),
+                    "section": r.metadata.get("section", ""),
+                    "line_start": r.metadata.get("line_start", 0),
+                    "line_end": r.metadata.get("line_end", 0),
                 }
+                for r in seed_results
+                if r.score >= min_score
+            ]
 
-    if meta_out is not None:
-        meta_out["graph_hit_count"] = len(neighbor_files)
-        meta_out["caller_count"] = sum(1 for v in neighbor_files.values() if v["is_caller"])
-        meta_out["graph_status"] = "hit" if neighbor_files else "empty"
+        # Two orderings, fused by rank.
+        #
+        # Structural: edge type times hop decay times how good the seed was. This
+        # is the evidence, and on its own it is what this function always used.
+        #
+        # Centrality: personalized PageRank, which answers "important relative to
+        # THESE seeds" rather than the global "utils.py is central to the repo",
+        # which is equally true for every query and therefore worthless for
+        # ranking.
+        #
+        # They are fused rather than multiplied together. Multiplying was the
+        # original attempt and it was the exact mistake reciprocal_rank_fusion
+        # exists to prevent, stated in its own docstring twenty lines up: a
+        # PageRank value and an edge weight product share no scale, so combining
+        # them by arithmetic means whichever happens to produce bigger floats wins.
+        # That was not theoretical. It put a 2 hop hub at 0.8505 above a direct
+        # neighbour at 0.7902. Capping the multiplier below the smallest structural
+        # gap did fix the inversion, but it took a bespoke derivation to prove a
+        # bound that RRF gets for free by never touching the raw numbers at all.
+        #
+        # Consequence worth naming: RRF is rank based, so centrality can now break
+        # a tie between two files that differ structurally but land adjacent in the
+        # ordering, not only between exactly equal scores. That is a slightly
+        # stronger tiebreak than the capped multiplier allowed, and it is the
+        # intended trade for deleting the derivation.
+        for nfile, info in neighbor_files.items():
+            weight = EDGE_WEIGHTS.get(info["edge_type"], DEFAULT_EDGE_WEIGHT)
+            decay = DEPTH_DECAY ** (max(info["depth"], 1) - 1)
+            info["graph_score"] = round(info["seed_score"] * weight * decay, 4)
 
-    if not neighbor_files:
-        # No graph neighbors found, return vector seeds as results
-        return [
-            {
-                "content": r.content,
-                "score": r.score,
-                "source_type": "project",
-                "file": r.metadata.get("source_file", ""),
-                "tree_path": r.metadata.get("tree_path", ""),
-                "section": r.metadata.get("section", ""),
-                "line_start": r.metadata.get("line_start", 0),
-                "line_end": r.metadata.get("line_end", 0),
-            }
-            for r in seed_results
-            if r.score >= min_score
+        by_structure = sorted(
+            neighbor_files, key=lambda f: neighbor_files[f]["graph_score"], reverse=True,
+        )
+        ppr = _personalized_ranks(graph, seed_files)
+        by_centrality = (
+            sorted(neighbor_files, key=lambda f: ppr.get(f, 0.0), reverse=True)
+            if ppr else []
+        )
+
+        # Same fusion the vector and graph lists get in search(), so there is one
+        # answer to "these scores are not comparable" in this file rather than two.
+        #
+        # Weighted, because these two lists are not equally authoritative.
+        # Structure is the evidence: this file really is one import hop from
+        # something the query matched. Centrality is a hint about the shape of the
+        # neighbourhood. Unweighted, the hint outvoted the evidence outright, and a
+        # file ranked LAST on structure but first on centrality came back first.
+        fused_order = [
+            r["file"] for r in reciprocal_rank_fusion(
+                [{"file": f} for f in by_structure],
+                [{"file": f} for f in by_centrality],
+                key=lambda r: r["file"],
+                weights=(1.0, CENTRALITY_WEIGHT),
+            )
         ]
 
-    # Two orderings, fused by rank.
-    #
-    # Structural: edge type times hop decay times how good the seed was. This
-    # is the evidence, and on its own it is what this function always used.
-    #
-    # Centrality: personalized PageRank, which answers "important relative to
-    # THESE seeds" rather than the global "utils.py is central to the repo",
-    # which is equally true for every query and therefore worthless for
-    # ranking.
-    #
-    # They are fused rather than multiplied together. Multiplying was the
-    # original attempt and it was the exact mistake reciprocal_rank_fusion
-    # exists to prevent, stated in its own docstring twenty lines up: a
-    # PageRank value and an edge weight product share no scale, so combining
-    # them by arithmetic means whichever happens to produce bigger floats wins.
-    # That was not theoretical. It put a 2 hop hub at 0.8505 above a direct
-    # neighbour at 0.7902. Capping the multiplier below the smallest structural
-    # gap did fix the inversion, but it took a bespoke derivation to prove a
-    # bound that RRF gets for free by never touching the raw numbers at all.
-    #
-    # Consequence worth naming: RRF is rank based, so centrality can now break
-    # a tie between two files that differ structurally but land adjacent in the
-    # ordering, not only between exactly equal scores. That is a slightly
-    # stronger tiebreak than the capped multiplier allowed, and it is the
-    # intended trade for deleting the derivation.
-    for nfile, info in neighbor_files.items():
-        weight = EDGE_WEIGHTS.get(info["edge_type"], DEFAULT_EDGE_WEIGHT)
-        decay = DEPTH_DECAY ** (max(info["depth"], 1) - 1)
-        info["graph_score"] = round(info["seed_score"] * weight * decay, 4)
+        # Prune before the chunk-fetch loop (each fetch is a ChromaDB call) --
+        # depth up to 5 with a 200-node frontier budget per hop can still surface
+        # far more neighbors than any caller wants results for.
+        ranked_neighbors = [
+            (f, neighbor_files[f]) for f in fused_order[: max(limit * 3, 15)]
+        ]
 
-    by_structure = sorted(
-        neighbor_files, key=lambda f: neighbor_files[f]["graph_score"], reverse=True,
-    )
-    ppr = _personalized_ranks(graph, seed_files)
-    by_centrality = (
-        sorted(neighbor_files, key=lambda f: ppr.get(f, 0.0), reverse=True)
-        if ppr else []
-    )
+        # Step 3: fetch chunks for neighbor files from ChromaDB
+        results: list[dict] = []
 
-    # Same fusion the vector and graph lists get in search(), so there is one
-    # answer to "these scores are not comparable" in this file rather than two.
-    #
-    # Weighted, because these two lists are not equally authoritative.
-    # Structure is the evidence: this file really is one import hop from
-    # something the query matched. Centrality is a hint about the shape of the
-    # neighbourhood. Unweighted, the hint outvoted the evidence outright, and a
-    # file ranked LAST on structure but first on centrality came back first.
-    fused_order = [
-        r["file"] for r in reciprocal_rank_fusion(
-            [{"file": f} for f in by_structure],
-            [{"file": f} for f in by_centrality],
-            key=lambda r: r["file"],
-            weights=(1.0, CENTRALITY_WEIGHT),
-        )
-    ]
+        for nfile, info in ranked_neighbors:
+            # Get chunks for this file from ChromaDB
+            try:
+                file_chunks = store.get_by_source("codebase", nfile)
+            except Exception as e:
+                logger.warning(
+                    "graph search: failed to fetch chunks for %s: %s: %s",
+                    nfile, type(e).__name__, e,
+                )
+                continue
 
-    # Prune before the chunk-fetch loop (each fetch is a ChromaDB call) --
-    # depth up to 5 with a 200-node frontier budget per hop can still surface
-    # far more neighbors than any caller wants results for.
-    ranked_neighbors = [
-        (f, neighbor_files[f]) for f in fused_order[: max(limit * 3, 15)]
-    ]
+            if not file_chunks:
+                continue
 
-    # Step 3: fetch chunks for neighbor files from ChromaDB
-    results: list[dict] = []
+            graph_score = info["graph_score"]
 
-    for nfile, info in ranked_neighbors:
-        # Get chunks for this file from ChromaDB
-        try:
-            file_chunks = store.get_by_source("codebase", nfile)
-        except Exception as e:
-            logger.warning(
-                "graph search: failed to fetch chunks for %s: %s: %s",
-                nfile, type(e).__name__, e,
-            )
-            continue
+            if graph_score < min_score:
+                continue
 
-        if not file_chunks:
-            continue
-
-        graph_score = info["graph_score"]
-
-        if graph_score < min_score:
-            continue
-
-        # Take the first chunk as representative (usually the imports/header)
-        chunk = file_chunks[0]
-        results.append({
-            "content": chunk.content,
-            "score": graph_score,
-            "source_type": "project",
-            "search_mode": "graph",
-            "file": nfile,
-            "tree_path": "/".join(nfile.replace("\\", "/").split("/")[:-1]),
-            "section": "",
-            "line_start": 0,
-            "line_end": 0,
-            "relation": info["edge_type"],
-            "seed_file": info["seed"],
-            "is_caller": info["is_caller"],
-        })
-
-    # Also include vector seeds in the output
-    for r in seed_results:
-        if r.score >= min_score:
+            # Take the first chunk as representative (usually the imports/header)
+            chunk = file_chunks[0]
             results.append({
-                "content": r.content,
-                "score": r.score,
+                "content": chunk.content,
+                "score": graph_score,
                 "source_type": "project",
-                "search_mode": "vector_seed",
-                "file": r.metadata.get("source_file", ""),
-                "tree_path": r.metadata.get("tree_path", ""),
-                "section": r.metadata.get("section", ""),
-                "line_start": r.metadata.get("line_start", 0),
-                "line_end": r.metadata.get("line_end", 0),
+                "search_mode": "graph",
+                "file": nfile,
+                "tree_path": "/".join(nfile.replace("\\", "/").split("/")[:-1]),
+                "section": "",
+                "line_start": 0,
+                "line_end": 0,
+                "relation": info["edge_type"],
+                "seed_file": info["seed"],
+                "is_caller": info["is_caller"],
             })
 
-    results.sort(key=lambda r: r["score"], reverse=True)
-    return results[:limit]
+        # Also include vector seeds in the output
+        for r in seed_results:
+            if r.score >= min_score:
+                results.append({
+                    "content": r.content,
+                    "score": r.score,
+                    "source_type": "project",
+                    "search_mode": "vector_seed",
+                    "file": r.metadata.get("source_file", ""),
+                    "tree_path": r.metadata.get("tree_path", ""),
+                    "section": r.metadata.get("section", ""),
+                    "line_start": r.metadata.get("line_start", 0),
+                    "line_end": r.metadata.get("line_end", 0),
+                })
+
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return results[:limit]

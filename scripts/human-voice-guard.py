@@ -83,6 +83,37 @@ BANNED_PHRASES: list[str] = [
     "consequently,",
 ]
 
+# Hedges that stand in for a run that did not happen. Kept separate from
+# BANNED_PHRASES because the fix is different: a banned phrase gets cut, a hedge
+# gets replaced by one of two specific forms (see HEDGE_FIX below).
+#
+# Regex, not substrings, and every pattern requires a subject that refers to the
+# work ("that should work") or an explicit after-the-fact marker ("should work
+# now"). A bare substring would block "we should fix it in a follow up", which
+# is a plan, not a claim about code that ran. Requiring the subject or the
+# "now" marker is what separates the two.
+HEDGE_PATTERNS: list[str] = [
+    r"\b(?:that|this|it|which|everything) should (?:now )?"
+    r"(?:work|fix|resolve|pass|be fine|be correct|be working|do it)\b",
+    r"\bshould (?:work|pass|be fine|be correct|be working|do it|fix it)\s+now\b",
+    r"\bshould (?:now )?be (?:working|fixed|resolved|correct)\b",
+    r"\blikely (?:resolves|fixes|works|passes)\b",
+    r"\bought to (?:now\b|work\b|pass\b)",
+    r"\bappears? (?:to be )?correct\b",
+    r"\bseems? to (?:work|be correct|be fixed)\b",
+    r"\bshould be good now\b",
+]
+
+HEDGE_FIX = (
+    "  - Unverified-claim hedges: a hedge reads as a verified result while doing\n"
+    "    the work of neither verifying nor admitting it. Replace with exactly one\n"
+    "    of two forms:\n"
+    "        Verified: <command> -> <result line>\n"
+    "        UNVERIFIED - to confirm, run: <command>\n"
+    "    The second is an honest and acceptable outcome. Run the command if you\n"
+    "    can; say it is unverified if you cannot. Do not hedge."
+)
+
 EM_DASH = "\u2014"  # —
 
 
@@ -160,6 +191,16 @@ def check_violations(text: str) -> list[str]:
     if found_phrases:
         violations.append(f"Banned phrases used: {', '.join(found_phrases)}")
 
+    # Unverified-claim hedges (regex, case-insensitive on the already-lowered text)
+    hedges: list[str] = []
+    for pat in HEDGE_PATTERNS:
+        for m in re.finditer(pat, lower):
+            hedge = m.group(0)
+            if hedge not in hedges:
+                hedges.append(hedge)
+    if hedges:
+        violations.append(f"Unverified-claim hedges used: {', '.join(hedges)}")
+
     # Em-dash check removed — preference is zero em-dashes but no hard block
 
     return violations
@@ -221,6 +262,7 @@ def main() -> int:
         "Fix rules:\n"
         "  - Banned words: replace with plain English (see knowledge/human-voice.xml)\n"
         "  - Banned phrases: cut entirely, start with the substance\n"
+        f"{HEDGE_FIX}\n"
         "  - Em-dashes: rewrite as separate sentences\n"
         "Quoted examples and code blocks are excluded from this check."
     )

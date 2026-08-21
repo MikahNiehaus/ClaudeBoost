@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-BAD_COP = Path('C:/Development/ClaudeBoost/clean-rag/portable/agents/bad-cop.md')
+BAD_COP = Path(__file__).resolve().parents[1] / 'clean-rag' / 'portable' / 'agents' / 'bad-cop.md'
 text = BAD_COP.read_text(encoding='utf-8')
 
 # Parse frontmatter tools

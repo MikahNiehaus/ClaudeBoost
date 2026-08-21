@@ -17,7 +17,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-CLEAN_RAG = Path("C:/Development/ClaudeBoost/clean-rag")
+CLEAN_RAG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_RAG))
 
 

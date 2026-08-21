@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path("C:/Development/ClaudeBoost/clean-rag")))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server.indexing as indexing
 from server.indexing import _save_project_manifest, read_project_provenance

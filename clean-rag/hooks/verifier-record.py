@@ -7,6 +7,11 @@ Mirrors research-record.py exactly, including its tool_response flattening (the
 same list-of-content-blocks shape applies to any Task/Agent completion), pointed
 at verifier_state instead of research_state. Never blocks; its only job is to
 write down what happened.
+
+One completion it deliberately does not write down: bad-cop in Mode B, the /qa
+evidence judge. That pass reads a finished QA session's artifacts and never looks
+at a diff, so a stamp for it would tell verifier-gate.py that bad-cop reviewed
+the code and found real bugs. See is_evidence_judge_pass in verifier_state.
 """
 
 import json
@@ -14,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from verifier_state import record_verifier  # noqa: E402
+from verifier_state import is_evidence_judge_pass, record_verifier  # noqa: E402
 
 VERIFIER_AGENTS = {"good-cop", "bad-cop"}
 
@@ -27,6 +32,11 @@ def _agent_type(payload: dict) -> str:
         or tool_input.get("agent")
         or ""
     )
+
+
+def _spawn_prompt(payload: dict) -> str:
+    """The prompt the agent was spawned with, which is where the mode marker is."""
+    return payload.get("tool_input", {}).get("prompt") or ""
 
 
 def _report(payload: dict) -> str:
@@ -70,8 +80,11 @@ def main() -> int:
     if agent_type not in VERIFIER_AGENTS:
         return 0
 
-    session_id = payload.get("session_id", "")
     report = _report(payload)
+    if is_evidence_judge_pass(_spawn_prompt(payload), report):
+        return 0
+
+    session_id = payload.get("session_id", "")
     record_verifier(session_id=session_id, report=report, agent_type=agent_type)
     return 0
 

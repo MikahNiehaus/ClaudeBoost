@@ -25,9 +25,9 @@ Flexible — any combination:
    - If `agents` is present (and not `knowledge`) → `scope="agents"`
    - If both or neither → `scope="all"`
 
-2. **Health check** — call `GET http://127.0.0.1:8612/status` via Bash:
+2. **Health check** — call `GET http://127.0.0.1:8613/status` via Bash:
    ```bash
-   curl -s --max-time 5 http://127.0.0.1:8612/status
+   curl -s --max-time 5 http://127.0.0.1:8613/status
    ```
    If it fails, stop and tell the user: "RAG not connected — run `/rag` to start the server, then retry."
 
@@ -35,14 +35,14 @@ Flexible — any combination:
    - knowledge: N chunks, N files
    - agents: N chunks, N files
 
-3. **Index** — call `POST http://127.0.0.1:8612/index` via Bash (substitute the
+3. **Index** — call `POST http://127.0.0.1:8613/index-project` via Bash (substitute the
    parsed `<scope>` string and `<force>` boolean into the JSON):
    ```bash
-   curl -s --max-time 120 -X POST http://127.0.0.1:8612/index -H "Content-Type: application/json" -d '{"scope":"<scope>","force":<force>}'
+   curl -s --max-time 120 -X POST http://127.0.0.1:8613/index-project -H "Content-Type: application/json" -d '{"scope":"<scope>","force":<force>}'
    ```
 
 4. **Report results**:
-   - Call `GET http://127.0.0.1:8612/status` again to get updated counts
+   - Call `GET http://127.0.0.1:8613/status` again to get updated counts
    - Show a before/after table:
      ```
      Collection   Before              After

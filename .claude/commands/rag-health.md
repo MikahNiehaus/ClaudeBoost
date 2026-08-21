@@ -77,19 +77,16 @@ When `effective == 0` (either `files_unchanged` is absent from the registry or b
 
 Do NOT fail solely because `files_indexed == 0`. That is normal when all files are already current.
 
-**3c. Partial index ratio**
-Scan the project to get total file count:
-```bash
-curl -s -X POST http://127.0.0.1:8613/scan \
-  -H "Content-Type: application/json" \
-  -d '{"project_path": "<path>"}'
-```
-Let `effective = files_indexed + files_unchanged`. When `files_unchanged` is absent, use manifest entry count as `effective` (count keys in `manifest.json` excluding `__schema_version__` and `__embedding_model__`).
+**3c. Partial index**
+The server decides this one itself. An indexing run that stopped before it
+reached every file, or an index built by a different embedding model, is
+reported back on every search as `stale_projects`. There is no endpoint that
+returns a total file count to divide by, so read the server's own verdict from
+the 3h response (run 3h first if not yet done).
 
-Compare `effective` to `files_to_index` (from scan):
-- ✅ PASS if effective >= 90% of files_to_index
-- ⚠️ WARN if 50–89% → "Index may have timed out mid-run — run /index-project force"
-- ❌ FAIL if < 50% → "Index is severely incomplete (N/M files). Run /index-project force."
+- ✅ PASS if 3h returned no `stale_projects` key
+- ⚠️ WARN if `stale_projects` names this project with `"served": true` — a partial index. Print its `reason` → "Run /index-project with force to complete it."
+- ❌ FAIL if `stale_projects` names this project with `"served": false` — the index was refused outright. Print its `reason` → "Run /index-project with force to rebuild."
 
 **3d. Manifest integrity**
 Check `<project>/workspace/.rag-index/manifest.json` exists and is non-empty (use Read tool):
@@ -107,8 +104,9 @@ curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
   -d '{"query": "service class method", "sources": ["project:<path>"], "mode": "graph", "limit": 3}'
 ```
-- ✅ PASS if `graph_augmented: true` — report `graph_resolved/graph_edges` from registry
-- ⚠️ WARN if `graph_augmented: false` AND `graph_active: true` in registry
+Graph hits carry a `relation` (`imports`, `inherits`, `implements`, `calls`) and the `seed_file` they were reached from. Vector hits carry neither.
+- ✅ PASS if at least one result carries `relation` — report `graph_resolved/graph_edges` from registry
+- ⚠️ WARN if results came back but none carry `relation` AND `graph_active: true` in registry — the graph is built but added nothing for this query
 - ❌ FAIL if `graph_active: false` in registry → "No graph edges — run /index-project force"
 
 **3g. Relevance quality**
@@ -129,15 +127,17 @@ Evaluate top result score:
 - ⚠️ WARN if 0.62–0.68
 - ❌ FAIL if < 0.62 — show top 3 results with scores
 
-**3h. Context pipeline**
+**3h. Search pipeline end to end**
 ```bash
-curl -s -X POST http://127.0.0.1:8612/context \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"agent": "explore-agent", "task_description": "main entry point", "max_tokens": 3000, "project_path": "<path>"}'
+  -d '{"query": "main entry point", "sources": ["project:<path>"], "mode": "both", "limit": 5}'
 ```
-- ✅ PASS if `tier_summary.codebase > 0` and no `tier_errors`
-- ⚠️ WARN if `tier_summary.codebase == 0`
-- ❌ FAIL if `tier_errors` key present — show the errors
+The response carries `results`, `search_id`, `fallback_triggered`, and
+`stale_projects` (the last only when a project's index has a known gap).
+- ✅ PASS if `results` is non-empty and there is no `stale_projects` key
+- ⚠️ WARN if `results` is non-empty but `stale_projects` names this project — print its `reason`; the index is partial or was refused, so a missing hit proves nothing
+- ❌ FAIL if an `error` key is present, or `results` is empty — show the error
 
 **3i. Coverage check**
 Glob for unsupported file types in project path (excluding node_modules, obj, bin):
@@ -175,9 +175,9 @@ Check `collections.knowledge.dim_ok` from status:
 
 **3m. Relevance quality**
 ```bash
-curl -s -X POST http://127.0.0.1:8612/search \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "code review security error handling", "scope": "knowledge", "limit": 3}'
+  -d '{"query": "code review security error handling", "sources": ["project:'"$CLAUDEBOOST_HOME"'"], "mode": "both", "limit": 3}'
 ```
 - ✅ PASS if top score ≥ 0.55 (prose embeddings score lower than code)
 - ⚠️ WARN if top score < 0.55
@@ -201,7 +201,7 @@ else:
 Run with: `"${CLAUDEBOOST_PYTHON}" "${TEMP}/cb_community_health.py"`
 - ✅ PASS if all communities have summaries
 - SKIP → report as ✅ PASS (not yet indexed)
-- ❌ FAIL if any missing → "Run POST /index scope=all to regenerate"
+- ❌ FAIL if any missing → "Run `POST /index-project` with `{\"project_path\":\"<abs path>\",\"force\":true}` to regenerate"
 
 ---
 
@@ -220,9 +220,9 @@ Check `collections.agents.dim_ok`:
 
 **3q. Relevance quality**
 ```bash
-curl -s -X POST http://127.0.0.1:8612/search \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "agent explore codebase task", "scope": "agents", "limit": 3}'
+  -d '{"query": "agent explore codebase task", "sources": ["project:'"$CLAUDEBOOST_HOME"'"], "mode": "both", "limit": 3}'
 ```
 - ✅ PASS if top score ≥ 0.50
 - ⚠️ WARN if top score < 0.50
@@ -252,12 +252,12 @@ Check `collections.memories.dim_ok`:
 
 **3u. Research collection**
 ```bash
-curl -s -X POST http://127.0.0.1:8612/search \
+curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "research task documentation", "scope": "research", "workspace_path": "<path>", "limit": 3}'
+  -d '{"query": "research task documentation", "sources": ["project:<workspace_path>"], "mode": "vector", "limit": 3}'
 ```
 - ✅ PASS if results returned with score > 0
-- ⚠️ WARN if no results → "No research indexed for this workspace yet — the research gate populates it on code edits"
+- ⚠️ WARN if no results → a workspace directory is only searchable once it has been registered with /index-project. Most never are, so treat this as informational rather than a fault.
 
 ---
 
@@ -276,12 +276,12 @@ server       Dimension mismatch       ✅ PASS  none
 ─────────────────────────────────────────────────────────────
 project      Registration             ✅ PASS  indexed 2026-06-15
 project      Files indexed count      ❌ FAIL  32 files (< 100)
-project      Partial index ratio      ❌ FAIL  32/1636 (2%)
+project      Partial index            ⚠️ WARN  stale_projects: run stopped early
 project      Manifest integrity       ✅ PASS
 project      Dimension consistency    ✅ PASS
 project      Graph liveness           ✅ PASS  150088/150532 edges
 project      Relevance quality        ✅ PASS  0.74
-project      Context pipeline         ⚠️ WARN  codebase tier = 0
+project      Search pipeline          ✅ PASS  5 results
 project      Coverage                 ⚠️ WARN  287 .cshtml not in scan
 project      .ragignore compliance    ✅ PASS
 ─────────────────────────────────────────────────────────────
@@ -290,10 +290,10 @@ knowledge    Dimension consistency    ✅ PASS
 knowledge    Relevance quality        ✅ PASS  0.61
 knowledge    Community summaries      ✅ PASS  4/4
 ─────────────────────────────────────────────────────────────
-Overall: ❌ FAIL — 2 failures, 2 warnings
+Overall: ❌ FAIL — 1 failure, 2 warnings
 ─────────────────────────────────────────────────────────────
 Actions needed:
-  • Run /index-project force — project index is severely incomplete (32/1636 files)
+  • Run /index-project with force — only 32 files indexed and the server reports the run stopped early
 ```
 
 Rules:

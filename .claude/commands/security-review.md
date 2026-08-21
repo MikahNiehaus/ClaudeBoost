@@ -43,7 +43,7 @@ Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/con
 
 Set `PROJECT_PATH` to the detected value.
 
-Call `POST http://127.0.0.1:8612/context with agent="security-agent", task_description="security review $ARGUMENTS", project_path="<PROJECT_PATH>", workspace_path="<WORKSPACE_PATH>", max_tokens=5000` as your FIRST action.
+Call `POST http://127.0.0.1:8613/search with {"query":"security review $ARGUMENTS","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}` as your FIRST action.
 
 **0b — Verify project is indexed** (required for codebase search to work):
 

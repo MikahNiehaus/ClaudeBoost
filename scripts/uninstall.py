@@ -18,6 +18,8 @@ Default scope (no --purge) removes only ClaudeBoost's own footprint:
     hook-run.py launcher, the research and triage agents, and the research skills
   - the rag-server MCP registration (legacy)
   - stops the running RAG HTTP daemon and clears its temp sentinel
+  - the "ClaudeBoost Session Restore" at logon scheduled task (and its Startup
+    folder fallback), the only thing setup registers outside ~/.claude
 
 --purge additionally:
   - pip uninstalls the rag-server package
@@ -488,6 +490,53 @@ def stop_rag_server() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 4b, remove the session restore at logon trigger.
+#
+# This is the one thing setup.py registers outside ~/.claude, so it is the one
+# thing the rest of this uninstaller would miss. Left behind it would fire at
+# every logon pointing at a script that may no longer exist.
+# ---------------------------------------------------------------------------
+def remove_session_restore_task() -> None:
+    _info("\n[4b/5] Removing the session restore logon trigger...")
+
+    if not IS_WINDOWS:
+        _skip("session restore logon trigger is Windows only")
+        return
+
+    script = BOOST_HOME / "scripts" / "session-restore.py"
+    if not script.exists():
+        # The script is gone but the task may not be. Delete by name directly so
+        # a partially deleted repo still gets cleaned up.
+        task_name = "ClaudeBoost Session Restore"
+        if DRY_RUN:
+            _plan(f"delete scheduled task {task_name!r} by name (session-restore.py is missing)")
+            return
+        rc, out = _run(["schtasks", "/Delete", "/TN", task_name, "/F"])
+        if rc == 0:
+            _ok(f"scheduled task removed: {task_name}")
+        else:
+            _skip(f"no scheduled task named {task_name!r}")
+        return
+
+    args = [sys.executable, str(script), "--remove-task"]
+    if DRY_RUN:
+        args.append("--dry-run")
+    rc, out = _run(args)
+    for line in (out or "").splitlines():
+        if line.strip():
+            print(f"  {line.rstrip()}")
+    if rc != 0:
+        _warn("could not remove the logon trigger, check Task Scheduler for "
+              "'ClaudeBoost Session Restore'")
+
+    # The ledger itself lives in the gitignored state/ dir and is left in place,
+    # so reinstalling picks the same session list back up.
+    ledger = BOOST_HOME / "state" / "session-restore.json"
+    if ledger.exists():
+        _skip(f"ledger kept at {ledger} (delete it by hand if you want it gone)")
+
+
+# ---------------------------------------------------------------------------
 # Step 5, --purge extras: pip package, index dir, ~/.profile PATH line.
 # ---------------------------------------------------------------------------
 def purge_extras() -> None:
@@ -546,7 +595,8 @@ def purge_extras() -> None:
 def _confirm() -> bool:
     scope = "FULL PURGE" if PURGE else "ClaudeBoost footprint"
     _warn(f"\nAbout to uninstall ClaudeBoost ({scope}). This edits ~/.claude/settings.json,")
-    _warn("removes the ~/.claude symlinks/helpers, deregisters rag-server, and stops the RAG server.")
+    _warn("removes the ~/.claude symlinks/helpers, deregisters rag-server, stops the RAG server,")
+    _warn("and removes the session restore logon task.")
     if PURGE:
         _warn("PURGE also pip-uninstalls rag-server, deletes the RAG index, removes the PATH edit,")
         _warn("and deregisters mcp-debugger + playwright.")
@@ -590,6 +640,7 @@ def main() -> int:
     remove_claude_files()
     deregister_mcp()
     stop_rag_server()
+    remove_session_restore_task()
     purge_extras()
 
     if DRY_RUN:

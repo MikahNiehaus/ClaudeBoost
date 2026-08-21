@@ -35,7 +35,7 @@ Poll main RAG server until ready (up to 60s):
 
 ```bash
 for attempt in $(seq 1 20); do
-  STATUS=$(curl -s --max-time 3 http://127.0.0.1:8612/status)
+  STATUS=$(curl -s --max-time 3 http://127.0.0.1:8613/status)
   echo "$STATUS" | grep -q '"status": *"ready"' && break
   echo "waiting for main RAG server... (attempt $attempt)"
   sleep 3
@@ -83,16 +83,22 @@ touch "${TEMP}/claudeboost_rag_ok"
 
 ## Step 4: Prime the session
 
-Call the context endpoint to load knowledge into the conversation:
+Run one real search so the embedding model is loaded and the index is proven
+readable:
 
 ```bash
-curl -s --max-time 15 -X POST http://127.0.0.1:8612/context -H "Content-Type: application/json" -d '{"agent":"debug-agent","task_description":"session start","max_tokens":2000}'
+curl -s --max-time 15 -X POST http://127.0.0.1:8613/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"project structure and conventions","sources":["project:'"$CLAUDEBOOST_HOME"'"],"mode":"both","limit":5}'
 ```
 
-Read the JSON response: a `token_count` field means RAG is primed; an `error`
+Read the JSON response: a `results` array means RAG is primed; an `error`
 field means it failed (note it in the report).
 
-If it returns a token_count, RAG is fully live. If it errors but `/status` was healthy, the model may still be warming up — note this in the report and the user can re-run `/rag` in 30s.
+If `results` came back, RAG is fully live. An empty `results` array still counts as
+live — the call was served, nothing scored above the threshold. If it errors but
+`/status` was healthy, the model may still be warming up — note this in the report
+and the user can re-run `/rag` in 30s.
 
 ---
 
@@ -103,7 +109,7 @@ If it returns a token_count, RAG is fully live. If it errors but `/status` was h
 RAG live — main: port 8612 | knowledge: Xc/Yf agents: Xc/Yf | clean-rag: port 8613 | supervisor: auto restart active | session primed
 ```
 
-**Model still loading (status was ready but /context timed out):**
+**Model still loading (status was ready but /search timed out):**
 ```
 RAG starting — model loading (~60s). Run /rag again when ready. Status line shows RAG indicator when live.
 ```

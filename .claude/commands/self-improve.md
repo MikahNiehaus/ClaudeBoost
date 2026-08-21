@@ -67,14 +67,19 @@ Second token (or first token if no target was given) → `FOCUS`. Valid values p
 
 Announce: `Starting self-improve — MODE: [SELF|WORKSPACE|PROJECT], Target: [target or "ClaudeBoost"], Focus: [FOCUS]`
 
-**0b — Call POST http://127.0.0.1:8612/context.**
+**0b — Load context for the audit target.**
+
+`<TARGET_PATH>` is `$CLAUDEBOOST_HOME` in SELF mode, `$WORKSPACE_ABS` in
+WORKSPACE mode, and `$PROJECT_PATH` in PROJECT mode.
 
 ```
-POST http://127.0.0.1:8612/context with 
-  agent="reviewer-agent",
-  task_description="self-improvement audit in [MODE] mode on [target], focus: [FOCUS]",
-  max_tokens=5000
-)
+POST http://127.0.0.1:8613/search
+{
+  "query": "self-improvement audit in [MODE] mode on [target], focus: [FOCUS]",
+  "sources": ["project:<TARGET_PATH>"],
+  "mode": "both",
+  "limit": 8
+}
 ```
 
 **0c — Read round state (find N).**
@@ -90,10 +95,9 @@ Announce: `Round R[N+1]`
 ## Phase 1: Index
 
 **SELF mode:**
-1. `POST http://127.0.0.1:8612/index with force=true, scope=all)` — rebuilds ClaudeBoost RAG (agents + knowledge
-2. `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME","force":true}` — rebuilds project RAG (codebase
+1. `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME","force":true}` — rebuilds the ClaudeBoost codebase index (agents, knowledge, hooks and scripts all live in it).
 
-Report: "Indexed X files (ClaudeBoost RAG), Y files (project RAG)"
+Report: "Indexed X files (ClaudeBoost)"
 
 **WORKSPACE mode:**
 1. Read `$WORKSPACE_ABS/goal.md` and `$WORKSPACE_ABS/plan.md`.
@@ -160,7 +164,7 @@ Use findings as extra audit checklist items in Phase 2.
 ## Phase 2: Audit
 
 Every finding **MUST** cite `file:line` — no citation = drop the finding.
-Use POST http://127.0.0.1:8612/search to locate files before reading them. Never guess file paths.
+Use POST http://127.0.0.1:8613/search with `{"sources":["project:<PROJECT_PATH>"],"mode":"both"}` to locate files before reading them. Never guess file paths.
 
 ### SELF mode lenses
 
@@ -170,7 +174,7 @@ Use POST http://127.0.0.1:8612/search to locate files before reading them. Never
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
 | `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
 | `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
-| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8612/context` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
+| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8613/search` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
 | `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
 | `all` | All of the above |
@@ -187,7 +191,7 @@ First, determine the **workspace scope** (what files the workspace touched):
 | FOCUS | Lenses to run |
 |-------|--------------|
 | `code` | Does the implementation follow the plan steps? Are planned output artifacts present? Any obvious code quality issues (hardcoded values, missing error handling at system boundaries, duplicate logic)? Cite file:line for every flag. |
-| `security` | OWASP top 10 scan on files in workspace scope. Focus on new endpoints, data flows, and user input handling. Use knowledge/security.xml via POST http://127.0.0.1:8612/search. |
+| `security` | OWASP top 10 scan on files in workspace scope. Focus on new endpoints, data flows, and user input handling. The Security Standards in CLAUDE.md are the reference; `POST http://127.0.0.1:8613/security-scan` runs the real scanner. |
 | `tests` | Are tests present for new/changed code? For each output artifact that is a source file, check whether a corresponding test file exists. List gaps. |
 | `quality` | Consistency with project conventions: naming, error handling, logging (logger.error in catch blocks), no secrets in source. |
 | `docs` | Are new functions/APIs documented? Is `$WORKSPACE_ABS/context.md` Status field current? Is plan.md still accurate? |
@@ -220,14 +224,14 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 | ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
 | ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
 | ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |
-| ST-07 | `POST http://127.0.0.1:8612/search with "OWASP SQL injection", scope="knowledge"` | security.xml in top 3 |
-| ST-08 | `POST http://127.0.0.1:8612/search with "playwright browser testing", scope="agents"` | playwright.xml or e2e-testing.xml in top 3 |
+| ST-07 | `POST http://127.0.0.1:8613/search {"query":"OWASP SQL injection","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
+| ST-08 | `POST http://127.0.0.1:8613/search {"query":"playwright browser testing","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
 | ST-10 | `GET /status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `GET /status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via POST /index output instead |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
 | ST-13 | `POST http://127.0.0.1:8613/search` with `{"query":"rag search implementation","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
-| ST-14 | `POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="RAG pipeline health", max_tokens=3000, project_path=$CLAUDEBOOST_HOME` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
+| ST-14 | `POST http://127.0.0.1:8613/search with {"query":"RAG pipeline health","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":8}` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
 | ST-15 | Graph resolution quality: `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME"}` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved. External deps don't count as unresolved. |
 | ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8613/search` with `{"query":"build_context tier4 codebase","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`. Confirms graph edges connect semantically related files, not random ones. |
 | ST-17 | CodeSearchNet MRR benchmark: `python "$RAG_BENCHMARKS_PATH/codesearchnet_benchmark.py" --sample 100 --lang python --no-index` where `$RAG_BENCHMARKS_PATH` is your local clone of the rag-benchmarks repo. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. **Caveat**: benchmark uses `whole_func_string` (code+docstring) which is easier than the published CodeBERT task (code-only). Use for trend tracking only — not a direct comparison to Microsoft baselines. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |

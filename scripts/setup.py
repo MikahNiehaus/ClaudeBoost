@@ -852,6 +852,21 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("speak-tts.py")}],
     }, sentinel="speak-tts.py", label="TTS speak hook")
 
+    # --- Session restore ledger: records what is open so a reboot can reopen it ---
+    # SessionStart adds the session, SessionEnd removes it. A reboot never
+    # delivers SessionEnd, so whatever is still listed is what was open.
+    _install_hook(settings, "SessionStart", {
+        "matcher": "Always",
+        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
+                   "timeout": 3000,
+                   "statusMessage": "Recording session for restore..."}],
+    }, sentinel="session-restore-ledger.py", label="session restore ledger (start)")
+
+    _install_hook(settings, "SessionEnd", {
+        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
+                   "timeout": 3000}],
+    }, sentinel="session-restore-ledger.py", label="session restore ledger (end)")
+
 
 
 # ---------------------------------------------------------------------------
@@ -1095,17 +1110,25 @@ def _pip_install(args: list[str]) -> tuple[int, str]:
 # RAG server install + health check.
 # ---------------------------------------------------------------------------
 def install_rag_server() -> None:
+    """Install and start clean-rag, the only RAG server there is now.
+
+    This used to `pip install -e mcp-rag-server`, the port 8612 server. That
+    server and its package are removed; clean-rag on 8613 replaced it. It is
+    not a package, it runs from source, so this installs its requirements
+    rather than the tree itself.
+    """
     _info("\nVerifying RAG server...")
-    rag_dir = BOOST_HOME / "mcp-rag-server"
-    _info(f"Installing RAG server from {rag_dir} (editable mode)...")
-    rc, out = _pip_install(["-e", str(rag_dir)])
+    rag_dir = BOOST_HOME / "clean-rag"
+    req = rag_dir / "requirements.txt"
+    _info(f"Installing clean-rag dependencies from {req}...")
+    rc, out = _pip_install(["-r", str(req)])
     if rc != 0:
         _warn(f"pip install returned exit code {rc}")
         if out:
             _warn(out)
-        _warn(f"  Run manually: {' '.join(_pip_cmd())} install -e {rag_dir}")
+        _warn(f"  Run manually: {' '.join(_pip_cmd())} install -r {req}")
     else:
-        _ok("RAG server installed (editable mode)")
+        _ok("clean-rag dependencies installed")
 
     _info("Installing optional graph deps (graspologic + networkx)...")
     rc_graph, out_graph = _pip_install(["-e", f"{rag_dir}[graph]"])
@@ -1173,27 +1196,18 @@ def install_rag_server() -> None:
     else:
         _ok("HTTP server deps installed (starlette + uvicorn)")
 
-    health_script = BOOST_HOME / "scripts" / "check-rag-health.py"
-    rc, out = run_cmd([sys.executable, str(health_script)])
+    # Start it. clean-rag owns its own control CLI, so there is no separate
+    # launcher script to keep in sync any more.
+    _info("Starting clean-rag (port 8613)...")
+    start_script = rag_dir / "cli" / "server_ctl.py"
+    rc, out = run_cmd([sys.executable, str(start_script), "start"])
     if rc == 0:
-        _ok(f"RAG modules healthy: {out}")
-    else:
-        _warn(f"RAG health check failed (exit {rc})")
-        if out:
-            _warn(out)
-        _warn(f"  Run manually: {sys.executable} {BOOST_HOME / 'scripts' / 'reinstall-rag.py'}")
-
-    # Start the HTTP server as background daemon
-    _info("Starting RAG HTTP server (port 8612)...")
-    start_script = BOOST_HOME / "scripts" / "rag-server-start.py"
-    rc, out = run_cmd([sys.executable, str(start_script)])
-    if rc == 0:
-        _ok(f"RAG HTTP server running: {out.splitlines()[-1] if out else 'port 8612'}")
+        _ok(f"clean-rag running: {out.splitlines()[-1] if out else 'port 8613'}")
         _prime_rag_session()
         _seed_rag_index()
     else:
-        _warn("RAG HTTP server did not start — run it manually:")
-        _warn(f"  {sys.executable} \"{start_script}\"")
+        _warn("clean-rag did not start — run it manually:")
+        _warn(f"  {sys.executable} \"{start_script}\" start")
 
     # Clean up any stale MCP registration (idempotent)
     _cleanup_mcp_registration()
@@ -1217,25 +1231,31 @@ def _prime_rag_session() -> None:
         _warn(f"Could not write RAG sentinel ({e}) — run /rag after setup to prime the session")
         return
 
-    # Call /context to warm the session — failures are non-fatal (model may
-    # still be loading; the server is confirmed running at this point).
+    # Warm the embedder with a real search. This used to POST /context, an
+    # endpoint of the retired 8612 server; clean-rag has no equivalent and
+    # never did. A /search does the same job here, which is to force the model
+    # load now rather than on the user's first real query.
+    #
+    # Failures are not fatal: the model may still be downloading, and the
+    # server is confirmed running at this point.
     try:
         import json as _json
         body = _json.dumps({
-            "agent": "debug-agent",
-            "task_description": "session start",
-            "max_tokens": 500,
+            "query": "session start",
+            "sources": [f"project:{BOOST_HOME_POSIX}"],
+            "mode": "both",
+            "limit": 1,
         }).encode()
         req = urllib.request.Request(
-            "http://127.0.0.1:8612/context", data=body,
+            "http://127.0.0.1:8613/search", data=body,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             data = _json.loads(r.read())
-            sources = len(data.get("sources", []))
-            _ok(f"RAG session primed ({sources} sources)")
+            hits = len(data.get("results", []))
+            _ok(f"RAG session primed ({hits} results)")
     except Exception as e:
-        _warn(f"RAG context prime failed ({e}) — model may still be loading, run /rag if needed")
+        _warn(f"RAG prime failed ({e}) — model may still be loading, run /rag if needed")
 
 
 # ---------------------------------------------------------------------------
@@ -1255,7 +1275,7 @@ def _seed_rag_index() -> None:
             "force": False,
         }).encode()
         req = urllib.request.Request(
-            "http://127.0.0.1:8612/index", data=body,
+            "http://127.0.0.1:8613/index-project", data=body,
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=180) as r:
@@ -1593,6 +1613,60 @@ def install_edge_tts() -> None:
             _warn(out)
 
 
+def install_mermaid_cli() -> None:
+    """Install @mermaid-js/mermaid-cli globally so `mmdc` can render diagrams.
+
+    Gives /visualize and any diagram work a real renderer instead of handing the
+    user raw mermaid source. Non-fatal: npm missing or the install failing leaves
+    everything else working, so this warns and moves on rather than aborting
+    setup.
+
+    The install pulls a bundled Chromium (~180MB, about a minute), so it is
+    skipped when `mmdc` already resolves.
+
+    Both probes go through shutil.which first, and that is load bearing on
+    Windows, not defensive noise. npm installs `mmdc` as `mmdc.CMD`, and
+    subprocess without a shell cannot launch a .CMD by bare name: it raises
+    WinError 2, run_cmd turns that into 127, and the already-installed branch
+    never fires. The visible symptom is setup redownloading a bundled Chromium
+    on every single run. shutil.which honours PATHEXT and returns the real
+    mmdc.CMD path, which subprocess can execute.
+    """
+    _info("\nVerifying mermaid-cli (mmdc)...")
+    mmdc = shutil.which("mmdc")
+    if mmdc:
+        rc, out = run_cmd([mmdc, "--version"])
+        if rc == 0 and out.strip():
+            _ok(f"mermaid-cli already installed (mmdc {out.strip().splitlines()[0]})")
+            return
+
+    if not shutil.which("npm"):
+        _warn("npm not found - skipping mermaid-cli. Diagram rendering will be "
+              "unavailable until you install Node.js and run: "
+              "npm install -g @mermaid-js/mermaid-cli")
+        return
+
+    _info("Installing mermaid-cli (downloads a bundled Chromium, ~1 min)...")
+    npm = shutil.which("npm") or "npm"
+    rc, out = run_cmd([npm, "install", "-g", "@mermaid-js/mermaid-cli"])
+    if rc != 0:
+        _warn("mermaid-cli install failed - diagram rendering will not work "
+              "until you run: npm install -g @mermaid-js/mermaid-cli")
+        if out:
+            _warn(out[-800:])
+        return
+
+    # npm exiting 0 is not proof the binary resolves: a global bin dir missing
+    # from PATH is the common Windows case, and it fails silently at use time.
+    mmdc = shutil.which("mmdc")
+    rc, out = run_cmd([mmdc, "--version"]) if mmdc else (127, "")
+    if rc == 0 and out.strip():
+        _ok(f"mermaid-cli installed (mmdc {out.strip().splitlines()[0]})")
+    else:
+        _warn("mermaid-cli installed but `mmdc` is not on PATH. Add npm's global "
+              "bin directory to PATH (`npm bin -g`) and restart your terminal.")
+
+
 # ---------------------------------------------------------------------------
 # netcoredbg: download from Samsung GitHub releases so mcp-debugger can step
 # through .NET/C# code. Skipped when dotnet SDK is not installed.
@@ -1744,6 +1818,40 @@ def install_netcoredbg() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Session restore: the at logon trigger
+#
+# The only OS level autostart ClaudeBoost registers. Everything else self heals
+# from a hook inside an already running session, which cannot work here because
+# the whole point is that nothing is running yet after a reboot.
+#
+# Set CLAUDEBOOST_NO_SESSION_RESTORE_TASK=1 to skip it. uninstall.py removes it.
+# ---------------------------------------------------------------------------
+def install_session_restore_task() -> None:
+    _info("\nRegistering session restore at logon...")
+
+    if os.environ.get("CLAUDEBOOST_NO_SESSION_RESTORE_TASK"):
+        _skip("session restore task (CLAUDEBOOST_NO_SESSION_RESTORE_TASK is set)")
+        return
+
+    if not IS_WINDOWS:
+        _skip("session restore at logon is Windows only "
+              "(the ledger and manual restore still work everywhere)")
+        return
+
+    script = BOOST_HOME / "scripts" / "session-restore.py"
+    if not script.exists():
+        _warn(f"session-restore.py missing at {script}, skipping the logon task")
+        return
+
+    rc, out = run_cmd([sys.executable, str(script), "--install-task"])
+    for line in (out or "").splitlines():
+        if line.strip():
+            print(f"  {line.rstrip()}")
+    if rc != 0:
+        _warn("session restore task not registered, run /restore-sessions by hand after a reboot")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -1766,8 +1874,10 @@ def main() -> int:
     install_rag_server()
     register_mcp_servers()
     install_edge_tts()
+    install_mermaid_cli()
     install_netcoredbg()
     install_clean_rag()
+    install_session_restore_task()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")

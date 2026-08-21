@@ -49,6 +49,9 @@ ACTION_SKILLS = {
 # These are always allowed regardless of the flag.
 PASSTHROUGH_SKILLS = {
     "audit",
+    "grill-me",
+    "grilling",
+    "quick-cop",
     "xray",
     "security-review",
     "graph",

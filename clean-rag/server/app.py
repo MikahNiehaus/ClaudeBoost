@@ -20,6 +20,7 @@ from .config import (
     CLEAN_RAG_HOME,
     DEFAULT_MIN_SCORE,
     DEFAULT_SEARCH_LIMIT,
+    MAX_RESIDENT_MODELS,
     STANDALONE_PORT,
     STATE_DIR,
     CODE_EMBEDDING_MODEL,
@@ -30,10 +31,16 @@ from .config import (
 )
 from .embedding import SentenceTransformerEmbedding
 from .lang_router import ModelCache
-from .github_search import github_fetch_file, github_search
+from .github_search import (
+    DEFAULT_TIMEOUT as GITHUB_DEFAULT_TIMEOUT,
+    github_code_search,
+    github_fetch_file,
+    github_search,
+)
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
 from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
 from .mutation import run_mutation
+from .resource_guard import PressureCheckpoint
 from .security import run_security_scan
 from .search import search
 from .stackexchange import stackoverflow_search
@@ -516,8 +523,37 @@ async def handle_index_project(request: web.Request) -> web.Response:
 
     loop = asyncio.get_running_loop()
     try:
+        # should_abort is the same guard the sweep passes at auto_reindex.py:361,
+        # and it is not optional here. Without it this endpoint had no memory
+        # bound at all: one manual run over 1,697 files reached a 19.5 GB working
+        # set on a 31.5 GB machine, took free RAM to 0.1 GB, stalled, and killed
+        # the server. config.py:231-235 records the same failure happening to the
+        # sweep before the sweep got this guard.
+        #
+        # A fresh instance per request, exactly as the sweep builds its own. Two
+        # coexisting instances are the case resource_guard.py:24-34 was written
+        # for, which is why the psutil sampling lock there is process wide rather
+        # than per instance.
+        #
+        # check_ram_at_start because this instance lives for one request. The
+        # sweep reuses one checkpoint across every project it visits and gates on
+        # wait_for_system_headroom() before it starts, so it pays the interval's
+        # opening blind spot once, on a machine already checked. Here that blind
+        # spot would be the whole run for anything finishing inside 15s, and it
+        # would swallow exactly the incident above: RAM already at 0.1 GB when the
+        # request arrives.
+        #
+        # This bounds when a run gives up, not how much one file may allocate, so
+        # it prevents the crash and nothing more. A run that stops this way
+        # answers 200 with a stopped_early reason, files_pending for the files it
+        # never reached, and index_incomplete saying whether any of those files
+        # still need work. Retrying without force resumes from what it kept.
         result = await loop.run_in_executor(
-            None, partial(index_project, project_path, _model_cache, force=force)
+            None,
+            partial(
+                index_project, project_path, _model_cache, force=force,
+                should_abort=PressureCheckpoint(check_ram_at_start=True).pressure,
+            ),
         )
     finally:
         release_index_lock()
@@ -956,7 +992,9 @@ async def handle_github_search(request: web.Request) -> web.Response:
 
     max_results = min(int(body.get("max_results", 5)), 50)
     sort = body.get("sort", "stars")
-    timeout = min(float(body.get("timeout", 6.0)), 20.0)
+    # A successful unauthenticated search measures ~7s, so the old 6.0s default
+    # timed out on the happy path and reported an empty result set.
+    timeout = min(float(body.get("timeout", GITHUB_DEFAULT_TIMEOUT)), 45.0)
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
@@ -965,6 +1003,45 @@ async def handle_github_search(request: web.Request) -> web.Response:
 
     if result.get("error"):
         logger.error("GitHub search failed for %r: %s", query, result["error"])
+
+    return _json_response({"query": query, **result})
+
+
+async def handle_github_code_search(request: web.Request) -> web.Response:
+    """POST /github-code-search: search FILE CONTENTS across public GitHub.
+
+    Body: {"query", "max_results"?, "timeout"?}. This is the route that answers
+    "has anyone already written this", which /github-search cannot: repository
+    search only matches name, description, README and topics, so hunting for an
+    implementation there returns nothing however good the query.
+
+    Requires GITHUB_TOKEN. Without one it returns that as an error rather than an
+    empty list, because an empty list reads as "this does not exist anywhere".
+    Blocking, so run in an executor.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        return _json_response({"error": "query is required"}, 400)
+
+    max_results = min(int(body.get("max_results", 10)), 100)
+    timeout = min(float(body.get("timeout", GITHUB_DEFAULT_TIMEOUT)), 45.0)
+    language = (body.get("language") or "").strip() or None
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: github_code_search(query, max_results=max_results,
+                                        timeout=timeout, language=language)
+    )
+
+    if result.get("needs_user_action"):
+        logger.error("Code search needs user action for %r: %s", query, result["error"])
+    elif result.get("error"):
+        logger.error("Code search failed for %r: %s", query, result["error"])
 
     return _json_response({"query": query, **result})
 
@@ -1228,7 +1305,7 @@ def create_app() -> web.Application:
     _start_time = time.time()
 
     # Model cache with language-based routing (loads models lazily on first use)
-    _model_cache = ModelCache()
+    _model_cache = ModelCache(max_resident=MAX_RESIDENT_MODELS)
     # General prose embedder for docs: sources (statutes, regulations, etc),
     # a separate model from the code search tuned one above. Also loaded
     # lazily, on first docs: search or ingest, not at startup: the code
@@ -1287,6 +1364,7 @@ def create_app() -> web.Application:
     app.router.add_post("/search", handle_search)
     app.router.add_post("/web-search", handle_web_search)
     app.router.add_post("/github-search", handle_github_search)
+    app.router.add_post("/github-code-search", handle_github_code_search)
     app.router.add_post("/github-file", handle_github_file)
     app.router.add_post("/stackoverflow-search", handle_stackoverflow_search)
     app.router.add_post("/wikipedia-search", handle_wikipedia_search)

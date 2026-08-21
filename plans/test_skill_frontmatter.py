@@ -6,6 +6,7 @@ Run with: python plans/test_skill_frontmatter.py
 
 import sys
 import re
+from pathlib import Path
 
 passed = 0
 failed = 0
@@ -28,12 +29,14 @@ def assert_true(cond, msg):
         raise AssertionError(msg)
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 SKILL_PATHS = [
-    "C:/Development/ClaudeBoost/clean-rag/portable/skills/walkthrough/SKILL.md",
-    "C:/Users/mniehaus/.claude/skills/walkthrough/SKILL.md",
+    str(REPO_ROOT / "clean-rag" / "portable" / "skills" / "walkthrough" / "SKILL.md"),
+    str(Path.home() / ".claude" / "skills" / "walkthrough" / "SKILL.md"),
 ]
 
-COMMAND_PATH = "C:/Development/ClaudeBoost/.claude/commands/walkthrough.md"
+COMMAND_PATH = str(REPO_ROOT / ".claude" / "commands" / "walkthrough.md")
 
 
 def parse_frontmatter(path):

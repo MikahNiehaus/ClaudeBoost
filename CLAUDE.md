@@ -6,22 +6,30 @@ knowledge base. Works standalone or with Gas Town.
 
 ## The research gate (this is the operative rule)
 
-Every edit to a code file is checked against whether `research-agent` has run
-this turn and declared that it covered that file, and nudges toward research
-when it hasn't. The gate used to actually block the edit until it did; that
-per turn scoping (research reset by every single message, not just a real new
-task) turned out to be too disruptive in practice, so the block is gone and
-the nudge plus an honest audit trail replaced it. The nudge is a PreToolUse
-hook that keys off a real agent completion, not a claim of one, so the record
-it checks can't be satisfied by claiming you researched, even though it no
-longer refuses the edit either way.
+Every edit to a code file is checked against whether `researcher` or `swiper`
+has run this session and declared that it covered that file, and nudges toward
+research when neither has. Those two are the only agents the gate counts
+(`RESEARCH_AGENTS` in `clean-rag/hooks/research_state.py`); `research-agent`
+does not satisfy it. Coverage persists across follow-up messages and expires
+after one hour (`TURN_MAX_AGE_S = 3600`) or when new research lands on top.
+
+The gate used to block the edit. It doesn't now. `clean-rag/hooks/research-gate.py`
+exits 0 on every payload shape, by decision: an unresearched edit is
+recoverable, so it gets a nudge and an honest audit trail rather than a
+refusal. The first block attempt also predated the session scoping above, so
+coverage was wiped by every follow-up message and the gate fired on files
+swiper had just covered.
+
+What can't be faked is the record, not the refusal. Only Claude Code can start
+an agent, and a PostToolUse hook stamps the coverage after the agent finishes,
+so "I researched it" is never what gets written down.
 
 When the gate nudges toward research:
 
-1. **Spawn `research-agent`** (Sonnet). Tell it what you're changing, why, and the
-   code you intend to write. It covers depth and breadth, checks whether the thing
-   already exists, reads the project's import graph, and reports with sources and a
-   `COVERS:` line naming the files it covers. That scope is what the audit trail
+1. **Spawn `researcher` and/or `swiper`** (Sonnet). Tell them what you're
+   changing, why, and the code you intend to write. Both cover depth and breadth
+   and report with sources and a `COVERS:` line naming the files they covered.
+   That scope is what the audit trail
    checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
    Wait for it before editing anyway; that's still the point. Spawn it in the
    foreground (`run_in_background: false`), never backgrounded — a backgrounded
@@ -36,9 +44,9 @@ When the gate nudges toward research:
    allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
 2. There is no cheap triage tier anymore. The old one decided whether a change
    needed research WITHOUT reading the code, and that blind guess was wrong often
-   enough to remove. research-agent looks first, so its judgment is grounded. It
-   does real research every time it runs; do not build a triviality shortcut into
-   it or any other agent.
+   enough to remove. researcher and swiper look first, so their judgment is
+   grounded. They do real research every time they run; do not build a
+   triviality shortcut into them or any other agent.
 3. Genuinely trivial work that needs no research is the human's call, not a
    model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
    you already know the change is trivial.
@@ -95,19 +103,21 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   condition, not good-cop claiming done. Give both of them the
   requirements, the correctness properties, and the diff, never your reasoning
   for the change, since that reasoning is exactly what biases a reviewer into
-  agreeing. If research-agent grounded the build in a real GitHub reference (a
+  agreeing. If researcher or swiper grounded the build in a real GitHub reference (a
   `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted), pass that
   snippet forward into their correctness properties too, not just its
   description. Neither has web fetch access on purpose, only search, so this is
   the only way a real reference reaches their review; do not give either its own
   GitHub/web fetch access, that would duplicate the one injection-exposed agent
-  this codebase deliberately keeps to one. `hooks/verifier-gate.py`
-  (a Stop hook) requires a real stamp before the turn can end: bad-cop always
-  provides the terminal stamp — either directly on a clean initial pass, or
-  after a final re-check that finds nothing following good-cop's fix —
-  writing a `VERIFIED:` line naming the files it covered, checked
-  per file the same way the research gate checks `COVERS:`, invalidated if a
-  file is edited again after being reviewed. `high_stakes.py`
+  this codebase deliberately keeps to one. `clean-rag/hooks/verifier-gate.py`
+  (a Stop hook) asks for a real stamp but never refuses the stop: it exits 0
+  always and writes its nudge to stderr, naming the unverified files and who to
+  spawn. bad-cop provides the terminal stamp — either directly on a clean
+  initial pass, or after a final re-check that finds nothing following
+  good-cop's fix — writing a `VERIFIED:` line naming the files it covered,
+  checked per file the same way the research gate checks `COVERS:`, invalidated
+  if a file is edited again after being reviewed (an mtime comparison in
+  `clean-rag/hooks/verifier_state.py`). `clean-rag/hooks/high_stakes.py`
   labels which surface it touched so the review points at the sharpest risk. A
   `/ps` turn skips both, the same quick mode escape that skips the research gate.
 
@@ -115,13 +125,21 @@ Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
 confirms it.
 
-This verify step is now partly enforced. `hooks/auto-test-gate.py` (a Stop hook)
-runs the project's tests when code changed this turn, and if they really fail it
-blocks the stop once and hands you back the real failure output to fix from. It is
-loop safe: it honors `stop_hook_active`, caps blocks per session, and allows on
-anything ambiguous (no tests, a missing runner, an environment problem). So on a
-project with tests you will often get the actual assertion diff or stack trace
-pushed back at you automatically. Fix from that, do not self review.
+This verify step is partly enforced, and `clean-rag/hooks/auto-test-gate.py` is
+the one Stop hook in this family that genuinely blocks. It runs the project's
+tests when code changed this turn, and if they really fail it blocks the stop
+(exit 2) and hands you back the real failure output to fix from. It is loop
+safe: it honors `stop_hook_active`, caps at `MAX_BLOCKS_PER_SESSION = 2`, and
+allows on anything ambiguous (no tests, a missing runner, an environment
+problem). So on a project with tests you will often get the actual assertion
+diff or stack trace pushed back at you automatically. Fix from that, do not
+self review.
+
+Note the split, because it is deliberate and easy to misread. A test failure is
+objective and cheap to check, so it blocks. A review verdict is a judgment call,
+so it nudges and routes through fresh context subagents instead. Do not
+"upgrade" the research or verifier gate to a hard block; see the recorded
+decision at the end of this section.
 
 If the logic you changed has no test at all, writing one IS part of verifying it,
 not an optional extra. Do not skip verification because none exists, that is the
@@ -138,6 +156,43 @@ surviving mutant is a test that would pass on broken code, so tighten it. When t
 edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
 guessing which inputs to test, which is the weak version the research warned about.
+
+### Recorded decision: no blocking external model reviewer on Stop
+
+Considered and declined, 2026-08-18. The proposal was a Stop hook that shells a
+separate model (`claude -p`, `codex exec`, `gemini`) at `git diff HEAD` and
+blocks the turn on a FAIL verdict. Do not build it. The reasons, in order of
+weight:
+
+- A hard blocking reviewer was already built on this exact surface and reverted
+  twice. `clean-rag/hooks/verifier-gate.py` records both reverts in its own
+  docstring.
+- Anthropic's own `security-guidance` plugin does this, and it only works
+  because of three things a hand rolled version has none of: `asyncRewake`
+  instead of a synchronous block, a `MAX_STOP_HOOK_FIRINGS` cap, and a
+  continuation suffix so the model does not abandon the user's original request
+  after being blocked.
+- `abiswas97/gemini-plugin-cc` warns in its own README that this class of hook
+  "can create a long-running Claude/Gemini loop. Only enable it when actively
+  monitoring the session."
+- Claude Code re-runs every Stop hook on every Stop event. A new blocking hook
+  without a `stop_hook_active` guard loops against `auto-test-gate.py` and
+  `stop-context-guard.py`.
+- The review responsibility is already owned by bad-cop and good-cop, which are
+  fresh context subagents. A second reviewer on the same Stop event duplicates
+  or contradicts them.
+
+If the goal ever becomes security specific review, adopt the whole plugin
+(`/plugin install security-guidance@claude-plugins-official`, `SECURITY_REVIEW_MODEL`
+selects the reviewer) rather than writing a hook. If only a Stop hook loop guard
+is wanted for some other purpose, `hamelsmu/claude-review-loop`'s `stop-hook.sh`
+is the reference for the retry and fail open state machine, MIT licensed.
+
+Two corrections to the advice that prompted this, for anyone who reads it later:
+the Stop payload carries `transcript_path` but no changed files list, so a hook
+must derive that itself with `git status --porcelain`; and launching `claude -p`
+from inside a live session requires unsetting `CLAUDECODE` in the child env
+(`scripts/chat-watcher.py` does this).
 
 ## Debugging, testing and QA
 

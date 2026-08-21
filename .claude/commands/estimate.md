@@ -34,7 +34,7 @@ If `PROJECT_PATH` is empty: fall back to current working directory.
 
 **0b — RAG health check:**
 
-Call `GET http://127.0.0.1:8612/status`.
+Call `GET http://127.0.0.1:8613/status`.
 
 - If it returns an error: STOP. Tell the user: "RAG server not responding — run `/rag` to start the server, then retry `/estimate`."
 - If successful: note status and check `indexed_projects` for `PROJECT_PATH`.
@@ -49,7 +49,7 @@ Find `PROJECT_PATH` in `indexed_projects` from the status response.
 **0d — Load context:**
 
 ```
-POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="story point estimation for sprint planning", project_path="<PROJECT_PATH>", max_tokens=3000
+POST http://127.0.0.1:8613/search with {"query":"story point estimation for sprint planning","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 ```
 
 If the result contains an `"error"` key: STOP. Tell the user: "RAG context load failed. Run `/rag` to start the server."
@@ -146,7 +146,7 @@ When estimating multiple tickets, interleave agents across tickets to maximize p
 **EVERY agent prompt MUST include all of the following.** Copy this template and fill in the placeholders:
 
 ```
-Your FIRST action: call POST http://127.0.0.1:8612/context with agent="explore-agent", task_description="estimate dimension: <DIMENSION_NAME> for ticket <TICKET_ID>", project_path="<PROJECT_PATH>", max_tokens=2000
+Your FIRST action: call POST http://127.0.0.1:8613/search with {"query":"estimate dimension: <DIMENSION_NAME> for ticket <TICKET_ID>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 
 This is a read-only analysis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file. Spawn one first; it must emit a COVERS line naming the file. Markdown and other non-code files are exempt.
 
@@ -283,7 +283,7 @@ After ALL analysis agents complete, collect their JSON outputs as `ANALYSIS_RESU
 **3a — Spawn synthesis agent (use Opus model).**
 
 ```
-Your FIRST action: call POST http://127.0.0.1:8612/context with agent="architect-agent", task_description="synthesize story point estimates from analysis dimensions", project_path="<PROJECT_PATH>", max_tokens=3000
+Your FIRST action: call POST http://127.0.0.1:8613/search with {"query":"synthesize story point estimates from analysis dimensions","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 
 This is a read-only synthesis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file.
 

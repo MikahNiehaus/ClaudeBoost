@@ -73,6 +73,7 @@ def prime_cpu_sampling() -> None:
 def sample_pressure(
     max_percent: float = CPU_MAX_PERCENT,
     min_free_ram_mb: float = MIN_FREE_RAM_MB,
+    ram_only: bool = False,
 ) -> str | None:
     """Why the machine is under pressure right now, or None if it is not.
 
@@ -82,6 +83,13 @@ def sample_pressure(
 
     RAM is checked alongside CPU because they fail differently. Running hot on
     CPU makes the machine slow; running out of memory makes it stop.
+
+    ``ram_only`` skips the CPU half for a caller that has no usable CPU
+    baseline yet. ``cpu_percent(interval=None)`` is a delta against the
+    previous call, so reading it microseconds after the priming call measures a
+    sub-millisecond window and psutil documents the answer as unreliable below
+    0.1s. ``virtual_memory().available`` is an instantaneous level with no such
+    requirement, so it is the half that can be trusted the moment a run starts.
 
     Every caller reaches psutil through here, so this is where the sampling is
     serialised: see ``_SAMPLE_LOCK`` above for why the lock has to be process
@@ -99,7 +107,7 @@ def sample_pressure(
     # it as "CPU throttling off" and skip the sample rather than comparing
     # against a number nothing can reach. Skipping also drops psutil's cost on
     # the hot path, which is the whole point of turning it off.
-    cpu_check_on = max_percent < 100
+    cpu_check_on = max_percent < 100 and not ram_only
 
     with _SAMPLE_LOCK:
         cpu = psutil.cpu_percent(interval=None) if cpu_check_on else 0.0
@@ -140,26 +148,52 @@ class PressureCheckpoint:
         interval_s: float = INDEX_PRESSURE_CHECK_S,
         max_percent: float = CPU_MAX_PERCENT,
         min_free_ram_mb: float = MIN_FREE_RAM_MB,
+        check_ram_at_start: bool = False,
     ) -> None:
+        """
+        Args:
+            check_ram_at_start: Check free RAM on the very first
+                :meth:`pressure` call instead of waiting out ``interval_s``.
+                For a checkpoint that lives as long as one request, waiting is
+                the same as not guarding at all: a run that finishes inside the
+                interval is never sampled, however starved the machine is, and
+                "already below the floor before file 0" is the one case the
+                guard most has to catch. Off by default because a checkpoint
+                that spans many projects (the sweep, cli/reindex_batch.py)
+                already gated on headroom before it started and would only be
+                paying for the sample twice.
+        """
         self._interval_s = interval_s
         self._max_percent = max_percent
         self._min_free_ram_mb = min_free_ram_mb
         self._lock = threading.Lock()
-        # First real sample is one interval away: the work that just started
-        # has to run long enough to be worth interrupting, and the sample needs
-        # a baseline to diff against.
+        # Full samples start one interval in: the work that just started has to
+        # run long enough to be worth interrupting, and the CPU half of the
+        # sample needs a baseline to diff against.
         self._next_sample_at = time.monotonic() + interval_s
+        self._ram_check_pending = check_ram_at_start
         prime_cpu_sampling()
 
     def pressure(self) -> str | None:
         now = time.monotonic()
         with self._lock:
-            if now < self._next_sample_at:
+            if self._ram_check_pending:
+                # The start check. RAM only (sample_pressure explains why CPU is
+                # not readable yet), and it deliberately leaves _next_sample_at
+                # alone, so the first full sample still lands one interval after
+                # construction and the steady state cadence is untouched.
+                self._ram_check_pending = False
+                ram_only = True
+            elif now < self._next_sample_at:
                 return None
-            self._next_sample_at = now + self._interval_s
+            else:
+                self._next_sample_at = now + self._interval_s
+                ram_only = False
         # Released before sampling on purpose. Holding this one across the
         # psutil call would serialise nothing extra (a second checkpoint has a
         # different lock) while pinning this instance's interval bookkeeping
         # for the duration. The sampling takes the process wide _SAMPLE_LOCK
         # inside sample_pressure() instead.
-        return sample_pressure(self._max_percent, self._min_free_ram_mb)
+        return sample_pressure(
+            self._max_percent, self._min_free_ram_mb, ram_only=ram_only
+        )

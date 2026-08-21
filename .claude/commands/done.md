@@ -18,9 +18,9 @@ Arguments: $ARGUMENTS
 
 Set `PROJECT_PATH` to the detected value.
 
-Call `POST http://127.0.0.1:8612/context with agent="workflow-agent", task_description="final quality gate before pushing work", project_path="<PROJECT_PATH>", max_tokens=3000`.
+Call `POST http://127.0.0.1:8613/search with {"query":"final quality gate before pushing work","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-If `POST http://127.0.0.1:8612/context` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
 
 ---
 

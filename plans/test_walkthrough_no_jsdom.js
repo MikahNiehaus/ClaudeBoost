@@ -392,7 +392,7 @@ test('Script injection: onerror handler present and rejects Promise on CDN failu
 // =====================================================================
 test('DOC: HOW-IT-WORKS.md slash command counts are all 36', function() {
   var fs = require('fs');
-  var content = fs.readFileSync('C:/Development/ClaudeBoost/docs/HOW-IT-WORKS.md', 'utf8');
+  var content = fs.readFileSync(require('path').join(__dirname, '..', 'docs', 'HOW-IT-WORKS.md'), 'utf8');
   var lines = content.split('\n');
   // Line 4 (0-indexed 3): intro paragraph
   assert(lines[3].includes('36 slash'), 'Intro paragraph should say "36 slash", got: ' + lines[3].trim());
@@ -409,7 +409,7 @@ test('DOC: HOW-IT-WORKS.md slash command counts are all 36', function() {
 // =====================================================================
 test('DOC: USING-CLAUDEBOOST.md has no duplicate subsection numbers under Common task patterns', function() {
   var fs = require('fs');
-  var content = fs.readFileSync('C:/Development/ClaudeBoost/docs/USING-CLAUDEBOOST.md', 'utf8');
+  var content = fs.readFileSync(require('path').join(__dirname, '..', 'docs', 'USING-CLAUDEBOOST.md'), 'utf8');
   var lines = content.split('\n');
   var sectionNums = [];
   var inCommonPatterns = false;

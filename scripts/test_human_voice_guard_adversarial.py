@@ -1,6 +1,6 @@
 """
 Adversarial tests for human-voice-guard.py get_last_assistant_text fix.
-Run: python C:/Development/ClaudeBoost/scripts/test_human_voice_guard_adversarial.py
+Run: python scripts/test_human_voice_guard_adversarial.py
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-SCRIPT = Path("C:/Development/ClaudeBoost/scripts/human-voice-guard.py")
+SCRIPT = Path(__file__).resolve().parent / "human-voice-guard.py"
 
 # --- import the module directly so we can unit-test get_last_assistant_text ---
 spec = importlib.util.spec_from_file_location("hvg", SCRIPT)

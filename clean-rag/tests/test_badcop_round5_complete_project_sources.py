@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "C:/Development/ClaudeBoost/clean-rag")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server.app as app_mod
 from server.app import _complete_project_sources

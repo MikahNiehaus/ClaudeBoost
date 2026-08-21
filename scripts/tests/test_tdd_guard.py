@@ -134,10 +134,17 @@ class TestOffMode:
 class TestSoftMode:
     """Soft mode (default) issues a warning but exits 0."""
 
-    def test_soft_warns_on_source_without_test(self):
-        """Source file with no test changes: exit 0 but stderr warning."""
+    def test_soft_warns_on_source_without_test(self, tmp_path):
+        """Source file with no test changes: exit 0 but stderr warning.
+
+        cwd=tmp_path so _get_changed_files() sees an empty change set. Without
+        it the hook runs git in this repo, and _has_corresponding_test accepts
+        ANY changed test file for ANY source file, so one unrelated edited test
+        in the working tree silences the guard and the assertion never fires.
+        """
         r = run_hook("tdd-guard.py", _edit("/project/src/auth.py"),
-                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "soft"})
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "soft"},
+                     cwd=tmp_path)
         assert r.returncode == 0
         assert b"TDD Guard" in r.stderr
         assert b"Write the failing test FIRST" in r.stderr
@@ -159,10 +166,15 @@ class TestSoftMode:
 class TestStrictMode:
     """Strict mode hard blocks (exit 2) when no test found."""
 
-    def test_strict_blocks_source_without_test(self):
-        """Source file edit without test changes: exit 2."""
+    def test_strict_blocks_source_without_test(self, tmp_path):
+        """Source file edit without test changes: exit 2.
+
+        cwd=tmp_path for the same reason as the soft-mode case: the hook must
+        see no changed files, not this repo's working tree.
+        """
         r = run_hook("tdd-guard.py", _edit("/project/src/auth.py"),
-                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"})
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
         assert r.returncode == 2
         assert b"TDD Guard" in r.stderr
         assert b"Write the failing test FIRST" in r.stderr

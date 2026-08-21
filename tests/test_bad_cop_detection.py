@@ -1,274 +1,199 @@
+"""verifier-gate.py routes its nudge from which cop stamped last.
+
+Was written against `_bad_cop_ran_with_bugs()`, which no longer exists. That
+function scanned every stamp and answered "did bad-cop ever report bugs". It was
+replaced by `loop_stage()` over `_last_verifier_agent()`, which reads only the
+MOST RECENT stamp. The change is deliberate and documented in
+`_last_verifier_agent`: scanning any stamp meant an empty-covers bad-cop stamp
+from round one kept redirecting to good-cop long after good-cop had stamped and
+the loop had moved on.
+
+Rewritten against the current API, keeping every property the old file asserted
+and adding the last-stamp-wins rule the old one could not express. One property
+the old file recorded as a live BUG (stamps as a non-list raised TypeError
+instead of failing open) is now genuinely fixed, so it is asserted as passing
+rather than as a known defect.
+
+Three stages, and the whole point is that they are distinguishable:
+  bad-cop stamped with EMPTY covers  -> it found bugs   -> good-cop is next
+  good-cop stamped with covers       -> fix is stamped  -> bad-cop re-checks
+  anything else                      -> no verifier yet -> bad-cop is next
 """
-Adversarial tests for _bad_cop_ran_with_bugs() in verifier-gate.py.
+from __future__ import annotations
 
-Correctness properties under test:
-1. Returns True iff at least one stamp has agent=="bad-cop" AND covers is falsy.
-2. Returns False when no record file exists.
-3. Returns False when bad-cop ran clean (non-empty covers).
-4. Returns False when only good-cop stamps exist (even with empty covers).
-5. Returns False on any read/parse error (fail open).
-6. The block/allow decision is NOT changed, only the message changes.
-7. _bump_block_count() fires BEFORE the if/else branch.
-8. _record_path import from verifier_state works.
-
-Run: python tests/test_bad_cop_detection.py
-"""
-
+import hashlib
+import importlib
 import importlib.util
 import json
-import os
 import sys
-import tempfile
-import hashlib
 from pathlib import Path
+
+import pytest
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "clean-rag" / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
-# ── import the functions under test ──────────────────────────────────────────
 
-from verifier_state import _record_path  # property 8: must import cleanly
-
-# Load verifier-gate (hyphenated name requires importlib)
-spec = importlib.util.spec_from_file_location(
-    "verifier_gate", HOOKS_DIR / "verifier-gate.py"
-)
-vg = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(vg)
-
-_bad_cop_ran_with_bugs = vg._bad_cop_ran_with_bugs
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-PASS = []
-FAIL = []
-
-
-def check(label: str, got, expected):
-    if got == expected:
-        PASS.append(label)
-        print(f"  PASS  {label}")
-    else:
-        FAIL.append(label)
-        print(f"  FAIL  {label}")
-        print(f"         expected={expected!r}  got={got!r}")
-
-
-def _session_id_for(tmpdir: Path) -> str:
-    """Return a session_id whose _record_path() lands in tmpdir.
-
-    _record_path hashes the session_id, then stores under
-    _state_dir() which is hardwired to CLEAN_RAG_HOME/state/verifier/.
-    We patch CLEAN_RAG_HOME via environment variable so the path resolves
-    inside our tmpdir instead.
-    """
-    return "test-session-adversarial"
-
-
-def _write_record(tmpdir: Path, session_id: str, stamps: list) -> Path:
-    """Write a session record into tmpdir/state/verifier/ and return the path."""
-    state = tmpdir / "state" / "verifier"
+def _write_record(home: Path, session_id: str, stamps) -> Path:
+    """Write a session record where _record_path() will look for it."""
+    state = home / "state" / "verifier"
     state.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256((session_id or "no-session").encode()).hexdigest()[:16]
-    p = state / f"session-{key}.json"
-    p.write_text(json.dumps({"session_id": session_id, "stamps": stamps}), encoding="utf-8")
-    return p
+    key = hashlib.sha256((session_id or "no-session").encode("utf-8")).hexdigest()[:16]
+    path = state / f"session-{key}.json"
+    path.write_text(json.dumps({"session_id": session_id, "stamps": stamps}),
+                    encoding="utf-8")
+    return path
 
 
-# ── tests run with CLEAN_RAG_HOME pointed at tmpdir ─────────────────────────
+def _write_raw(home: Path, session_id: str, text: str) -> Path:
+    """Write arbitrary bytes to the record path, for the malformed-input cases."""
+    state = home / "state" / "verifier"
+    state.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256((session_id or "no-session").encode("utf-8")).hexdigest()[:16]
+    path = state / f"session-{key}.json"
+    path.write_text(text, encoding="utf-8")
+    return path
 
-with tempfile.TemporaryDirectory() as _tmp:
-    tmpdir = Path(_tmp)
-    os.environ["CLEAN_RAG_HOME"] = str(tmpdir)
-    # reload verifier_state so _state_dir() picks up the new env var
+
+SESSION = "test-session-adversarial"
+
+
+@pytest.fixture()
+def vg(tmp_path, monkeypatch):
+    """verifier-gate loaded with CLEAN_RAG_HOME pointed at a temp dir.
+
+    _state_dir() resolves CLEAN_RAG_HOME at call time through _clean_rag_home(),
+    so verifier_state has to be reloaded after the env var is set, and
+    verifier-gate.py loaded fresh so it closes over the reloaded _record_path.
+    """
+    monkeypatch.setenv("CLEAN_RAG_HOME", str(tmp_path))
     import verifier_state
     importlib.reload(verifier_state)
-    # also reload verifier_gate so it gets the reloaded _record_path
-    spec2 = importlib.util.spec_from_file_location(
-        "verifier_gate2", HOOKS_DIR / "verifier-gate.py"
-    )
-    vg2 = importlib.util.module_from_spec(spec2)
-    spec2.loader.exec_module(vg2)
-    _bad_cop_ran_with_bugs = vg2._bad_cop_ran_with_bugs
 
-    print("\n=== _bad_cop_ran_with_bugs() adversarial tests ===\n")
+    spec = importlib.util.spec_from_file_location(
+        "verifier_gate_under_test", HOOKS_DIR / "verifier-gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._test_home = tmp_path
+    return mod
 
-    SESSION = "test-session-adversarial"
 
-    # ── property 2: no record file → False ───────────────────────────────────
-    check("no record file → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
+class TestBadCopFoundBugs:
+    """bad-cop stamps EMPTY covers when it found something. That is the signal
+    good-cop is next, so every spelling of empty has to read the same."""
 
-    # ── property 1a: covers=[] (empty list) → True ───────────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": []}
+    @pytest.mark.parametrize("stamp,label", [
+        ({"agent": "bad-cop", "at": 1.0, "covers": []}, "covers=[]"),
+        ({"agent": "bad-cop", "at": 1.0}, "covers key missing"),
+        ({"agent": "bad-cop", "at": 1.0, "covers": None}, "covers=None"),
     ])
-    check("covers=[] → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
+    def test_empty_covers_means_bugs_found(self, vg, stamp, label):
+        _write_record(vg._test_home, SESSION, [stamp])
+        assert vg.loop_stage(SESSION) == vg.STAGE_BUGS_FOUND, label
 
-    # ── property 1b: covers key missing entirely → True ──────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0}
-    ])
-    check("covers key missing → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
-
-    # ── property 1c: covers=None → True ──────────────────────────────────────
-    # json.loads will give None; not s.get("covers") is True for None
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": None}
-    ])
-    check("covers=None → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
-
-    # ── property 3: bad-cop ran clean (non-empty covers) → False ─────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": ["some/file.py"]}
-    ])
-    check("bad-cop clean (non-empty covers) → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── property 4: only good-cop with empty covers → False ──────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "good-cop", "at": 1.0, "covers": []}
-    ])
-    check("good-cop with covers=[] → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── property 4b: agent key missing (not bad-cop) → False ─────────────────
-    _write_record(tmpdir, SESSION, [
-        {"at": 1.0, "covers": []}
-    ])
-    check("agent key missing (not bad-cop) → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── property 5a: malformed JSON → False (fail open) ──────────────────────
-    key = hashlib.sha256((SESSION or "no-session").encode()).hexdigest()[:16]
-    bad_json_path = tmpdir / "state" / "verifier" / f"session-{key}.json"
-    bad_json_path.write_text("{not valid json ][", encoding="utf-8")
-    check("malformed JSON → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── property 5b: stamps key missing → False ───────────────────────────────
-    bad_json_path.write_text(json.dumps({"session_id": SESSION}), encoding="utf-8")
-    check("stamps key missing → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── property 5c: stamps is not a list (integer) → False ──────────────────
-    # BUG: _bad_cop_ran_with_bugs() raises TypeError instead of returning False.
-    # record.get("stamps", []) returns 42, then `any(... for s in 42)` throws.
-    # The function contract says "fail open" but it propagates an exception.
-    # The only reason the gate still exits 0 is the outer __main__ except block.
-    bad_json_path.write_text(json.dumps({"session_id": SESSION, "stamps": 42}), encoding="utf-8")
-    try:
-        result = _bad_cop_ran_with_bugs(SESSION)
-        check("stamps is integer → False (FAIL: raised TypeError instead)",
-              result, False)
-    except TypeError as e:
-        FAIL.append("stamps is integer → TypeError instead of False")
-        print(f"  FAIL  stamps is integer: raised TypeError({e}) — function does not fail open")
-
-    # ── property 5d: empty stamps list → False ───────────────────────────────
-    _write_record(tmpdir, SESSION, [])
-    check("empty stamps list → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── mixed: bad-cop clean + bad-cop with bugs → True (any is enough) ──────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": ["clean/file.py"]},
-        {"agent": "bad-cop", "at": 2.0, "covers": []},
-    ])
-    check("mixed stamps (clean + bugs) → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
-
-    # ── good-cop + bad-cop-clean only → False ────────────────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "good-cop", "at": 1.0, "covers": []},
-        {"agent": "bad-cop", "at": 2.0, "covers": ["file.py"]},
-    ])
-    check("good-cop empty + bad-cop clean → False",
-          _bad_cop_ran_with_bugs(SESSION), False)
-
-    # ── covers=False (falsy but not list) → True ─────────────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": False}
-    ])
-    check("covers=False (falsy non-list) → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
-
-    # ── covers=0 (falsy integer) → True ──────────────────────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": 0}
-    ])
-    check("covers=0 (falsy int) → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
-
-    # ── covers={} (empty dict, falsy) → True ─────────────────────────────────
-    _write_record(tmpdir, SESSION, [
-        {"agent": "bad-cop", "at": 1.0, "covers": {}}
-    ])
-    check("covers={} (falsy empty dict) → True",
-          _bad_cop_ran_with_bugs(SESSION), True)
+    def test_bad_cop_with_real_covers_is_a_clean_pass(self, vg):
+        """Non-empty covers is bad-cop finding nothing, which ends the loop.
+        Reading it as 'bugs found' would send good-cop after a clean pass."""
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "bad-cop", "at": 1.0, "covers": ["some/file.py"]},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
 
 
-# ── property 8: _record_path import from verifier_state ──────────────────────
-print()
-try:
-    from verifier_state import _record_path as _rp_check
-    result = _rp_check("test")
-    check("_record_path importable and callable from verifier_state",
-          isinstance(result, Path), True)
-except Exception as e:
-    FAIL.append("_record_path import")
-    print(f"  FAIL  _record_path import: {e}")
+class TestGoodCopStampedFix:
+    def test_good_cop_with_covers_is_a_stamped_fix(self, vg):
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "good-cop", "at": 1.0, "covers": ["some/file.py"]},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_FIX_STAMPED
+
+    def test_good_cop_with_empty_covers_is_not_a_stamped_fix(self, vg):
+        """good-cop's job is to stamp what it fixed. Empty covers is not a fix,
+        and must not read as one just because good-cop was the last to run."""
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "good-cop", "at": 1.0, "covers": []},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
 
 
-# ── property 7: _bump_block_count fires BEFORE the if/else branch ─────────────
-# Inspect the source directly — read the AST order from the file.
-print()
-gate_src = (HOOKS_DIR / "verifier-gate.py").read_text(encoding="utf-8")
-lines = gate_src.splitlines()
+class TestOnlyTheLastStampCounts:
+    """The reason _bad_cop_ran_with_bugs was replaced. Scanning every stamp meant
+    round one's finding kept firing after the loop had already moved past it."""
 
-bump_line = None
-bad_cop_check_line = None
-for i, line in enumerate(lines, 1):
-    if "_bump_block_count(session_id)" in line and bump_line is None:
-        bump_line = i
-    if "_bad_cop_ran_with_bugs(session_id)" in line and bad_cop_check_line is None:
-        bad_cop_check_line = i
+    def test_a_later_clean_pass_overrides_an_earlier_finding(self, vg):
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "bad-cop", "at": 1.0, "covers": []},
+            {"agent": "good-cop", "at": 2.0, "covers": ["fixed.py"]},
+            {"agent": "bad-cop", "at": 3.0, "covers": ["fixed.py"]},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
 
-if bump_line and bad_cop_check_line:
-    check(
-        f"_bump_block_count (line {bump_line}) fires BEFORE _bad_cop_ran_with_bugs (line {bad_cop_check_line})",
-        bump_line < bad_cop_check_line,
-        True,
-    )
-else:
-    FAIL.append("bump/if-else ordering check")
-    print(f"  FAIL  could not find lines: bump={bump_line}, bad_cop_check={bad_cop_check_line}")
+    def test_a_later_finding_overrides_an_earlier_clean_pass(self, vg):
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "bad-cop", "at": 1.0, "covers": ["clean.py"]},
+            {"agent": "bad-cop", "at": 2.0, "covers": []},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_BUGS_FOUND
+
+    def test_mid_loop_good_cop_stamp_routes_to_the_recheck(self, vg):
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "bad-cop", "at": 1.0, "covers": []},
+            {"agent": "good-cop", "at": 2.0, "covers": ["fixed.py"]},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_FIX_STAMPED
 
 
-# ── property 6: return code is still 2 regardless of which branch ─────────────
-# Both branches must lead to `return 2`, not 0 or something else.
-# Check that exactly one `return 2` comes AFTER both the if and the else blocks.
-print()
-return_2_after_branch = any(
-    "return 2" in lines[i]
-    for i in range(bad_cop_check_line or 0, len(lines))
-) if bad_cop_check_line else False
+class TestFailsOpen:
+    """A gate that raises on bad input blocks the turn for a reason that has
+    nothing to do with the code under review. Every one of these returns the
+    neutral stage rather than throwing."""
 
-check(
-    "return 2 present after _bad_cop_ran_with_bugs branch (block/allow unchanged)",
-    return_2_after_branch,
-    True,
-)
+    def test_no_record_file(self, vg):
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
 
-# ── summary ───────────────────────────────────────────────────────────────────
-print(f"\n{'='*50}")
-print(f"Results: {len(PASS)} passed, {len(FAIL)} failed")
-if FAIL:
-    print("FAILED:", FAIL)
-else:
-    print("All adversarial checks passed.")
-if __name__ == "__main__":
-    sys.exit(1 if FAIL else 0)
+    def test_malformed_json(self, vg):
+        _write_raw(vg._test_home, SESSION, "{not valid json ][")
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
+
+    def test_stamps_key_missing(self, vg):
+        _write_raw(vg._test_home, SESSION, json.dumps({"session_id": SESSION}))
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
+
+    def test_empty_stamps_list(self, vg):
+        _write_record(vg._test_home, SESSION, [])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
+
+    @pytest.mark.parametrize("stamps", [42, "bad-cop", {"agent": "bad-cop"}, None])
+    def test_stamps_is_not_a_list(self, vg, stamps):
+        """The old implementation raised TypeError here: `any(... for s in 42)`.
+        Its contract said fail open, and only the caller's outer except block
+        kept the gate from dying. _last_verifier_agent's isinstance check fixes
+        it at the source, so assert the fix rather than the defect."""
+        _write_raw(vg._test_home, SESSION,
+                   json.dumps({"session_id": SESSION, "stamps": stamps}))
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
+
+    def test_agent_key_missing(self, vg):
+        _write_record(vg._test_home, SESSION, [{"at": 1.0, "covers": []}])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER
+
+    def test_an_unknown_agent_is_not_a_cop(self, vg):
+        _write_record(vg._test_home, SESSION, [
+            {"agent": "quick-cop", "at": 1.0, "covers": []},
+        ])
+        assert vg.loop_stage(SESSION) == vg.STAGE_NO_VERIFIER, (
+            "quick-cop stamps nothing and must never satisfy this gate"
+        )
+
+
+class TestTheThreeStagesAreDistinct:
+    def test_stage_constants_do_not_collide(self, vg):
+        """Routing branches on these by value. Two equal constants would make
+        two different situations produce the same nudge, silently."""
+        stages = {vg.STAGE_NO_VERIFIER, vg.STAGE_BUGS_FOUND, vg.STAGE_FIX_STAMPED}
+        assert len(stages) == 3
+
+    def test_record_path_is_stable_for_a_session(self, vg):
+        from verifier_state import _record_path
+        assert _record_path(SESSION) == _record_path(SESSION)
+        assert _record_path(SESSION) != _record_path(SESSION + "-other")

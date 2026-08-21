@@ -81,8 +81,10 @@ def step_banner() -> None:
     if out:
         print(out.rstrip("\n"))
     # Clear stale bytecode so a hot-reload picks up edited server modules.
+    # Points at clean-rag now; mcp-rag-server was the retired 8612 server and
+    # its tree is gone, so this loop was iterating over nothing.
     cleared = 0
-    for p in (BOOST_HOME / "mcp-rag-server").rglob("__pycache__"):
+    for p in (BOOST_HOME / "clean-rag").rglob("__pycache__"):
         shutil.rmtree(p, ignore_errors=True)
         cleared += 1
     print(f"  caches cleared ({cleared})")
@@ -101,7 +103,13 @@ def step_rag() -> dict:
     Returns a dict the report builder consumes.
     """
     out = {"ready": False}
-    rc, start_out = _run([PY, str(SCRIPTS / "rag-server-start.py")], timeout=90)
+    # clean-rag's own control CLI. This used to call scripts/rag-server-start.py,
+    # which started the retired 8612 server; both that script and the server it
+    # started are gone.
+    rc, start_out = _run(
+        [PY, str(BOOST_HOME / "clean-rag" / "cli" / "server_ctl.py"), "start"],
+        timeout=90,
+    )
     last = start_out.strip().splitlines()[-1] if start_out.strip() else ""
     print(f"  rag-server: {last or ('exit ' + str(rc))}")
 
@@ -120,28 +128,39 @@ def step_rag() -> dict:
         print("  RAG: NOT READY — server did not respond. Run /rag and retry.")
         return out
 
-    # status=ready only means the HTTP layer is up — the embedding model loads in a
-    # background thread and may still be cold. Block on /warmup so the calls below
-    # (heal, context, index) don't fire against a half-loaded model and 500. Then
-    # re-fetch status: embedding_dimensions and dimension_mismatch only populate once
-    # the model is loaded.
-    try:
-        warm = _post("/warmup", {}, timeout=180)
-        if not warm.get("ready"):
-            print(f"  RAG: model warmup did not finish — {warm.get('error', 'unknown')}")
-        status = _get("/status", timeout=5)
-    except Exception as e:
-        print(f"  RAG: warmup failed — {e}")
+    # The HTTP layer answers before the embedding model has loaded, so indexing
+    # below would fire against a cold model. There is no /warmup route on
+    # clean-rag; it reports the three states directly on /status, so poll that:
+    # "ready" once the model is in, "failed" when the load raised and no amount
+    # of waiting will help, "warming_up" while it is still coming.
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        try:
+            status = _get("/status", timeout=5)
+        except Exception as e:
+            print(f"  RAG: status check failed — {e}")
+            break
+        state = status.get("status")
+        if state == "ready":
+            break
+        if state == "failed":
+            print(f"  RAG: model will not load — {status.get('last_error', 'unknown')}")
+            break
+        time.sleep(3)
+    else:
+        print("  RAG: model still warming after 180s, continuing anyway")
 
     out["ready"] = True
     out["status"] = status
-    cols = status.get("collections", {})
-    k = cols.get("knowledge", {})
-    a = cols.get("agents", {})
+    # Reports indexed projects, which is what clean-rag's /status actually
+    # returns. It used to print `collections.knowledge` and `collections.agents`
+    # chunk counts; those were the retired 8612 server's shape, and both the
+    # collections and the directories behind them are gone.
+    projects = status.get("projects", {})
     print(
-        f"  RAG: ready | model={status.get('model')} dim={status.get('embedding_dimensions')} "
-        f"| knowledge {k.get('chunks', 0)}ch/{k.get('files', 0)}f "
-        f"| agents {a.get('chunks', 0)}ch/{a.get('files', 0)}f"
+        f"  RAG: ready | model={status.get('code_embedding_model')} "
+        f"| {projects.get('count', 0)} project(s) indexed "
+        f"| {status.get('ram_mb', 0)} MB"
     )
 
     # Sentinel — lets the session-primer hook stop nagging about RAG.
@@ -150,36 +169,23 @@ def step_rag() -> dict:
     except Exception as e:
         print(f"  (sentinel write failed: {e})")
 
-    # Heal a dimension mismatch (stale collection embedded with a different model).
-    mismatch = [s for s in status.get("dimension_mismatch", []) if s != "memories"]
+    # The scope rebuild loop that lived here healed a dimension mismatch on the
+    # knowledge and agents collections. Those were 8612 concepts: clean-rag has
+    # no scopes, and it reports a per project provenance mismatch through
+    # `stale_projects` on a search instead, which names the project and the
+    # model it was built with.
     out["healed"] = []
-    if mismatch:
-        print(f"  DIM MISMATCH in {mismatch} — model swap left these unqueryable. Rebuilding...")
-        for scope in mismatch:
-            try:
-                r = _post("/index", {"scope": scope, "force": True}, timeout=600)
-                print(
-                    f"    rebuilt {scope}: {r.get('files_indexed', '?')} files, "
-                    f"{r.get('chunks_created', '?')} chunks"
-                )
-                out["healed"].append(scope)
-            except Exception as e:
-                print(f"    rebuild {scope} FAILED: {e}")
-
-    # Prime tiered context.
-    try:
-        ctx = _post(
-            "/context",
-            {"agent": "debug-agent", "task_description": "session start", "max_tokens": 2000},
-            timeout=30,
-        )
-        print(f"  context: tokens={ctx.get('total_tokens_approx')} sources={ctx.get('sources_used')}")
-    except Exception as e:
-        print(f"  context: FAILED — {e}")
+    stale = [
+        e for e in status.get("projects", {}).get("entries", [])
+        if e.get("incomplete")
+    ]
+    if stale:
+        print(f"  {len(stale)} project(s) hold an incomplete index; "
+              f"a sweep resumes them, or run /index-project to force one")
 
     # Index the ClaudeBoost codebase (incremental).
     try:
-        idx = _post("/index", {"project_path": str(BOOST_HOME)}, timeout=600)
+        idx = _post("/index-project", {"project_path": str(BOOST_HOME)}, timeout=600)
         g = idx.get("graph", {})
         print(
             f"  index(self): {idx.get('files_indexed', 0)} files, {idx.get('chunks_created', 0)} chunks, "
@@ -189,12 +195,9 @@ def step_rag() -> dict:
     except Exception as e:
         print(f"  index(self): FAILED — {e}")
 
-    # Index memories (no-op if the memory dir is empty / absent).
-    try:
-        mem = _post("/index", {"scope": "memories"}, timeout=120)
-        print(f"  memories: {mem.get('chunks_created', mem.get('chunks', 0))} chunks")
-    except Exception as e:
-        print(f"  memories: skipped — {e}")
+    # A "memories" scope index used to run here. Scopes were an 8612 concept and
+    # clean-rag has none; memory files are read directly from disk by the
+    # session hooks, not searched, so there is nothing to index.
 
     return out
 

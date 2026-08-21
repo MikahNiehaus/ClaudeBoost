@@ -1,5 +1,4 @@
-"""Adversarial tests for the resource limiting batch layered on the
-embedding warmup/provenance fix (already verified separately):
+"""Tests for the resource limits the background reindex runs under:
 
   server/config.py       CPU_MAX_PERCENT, MIN_FREE_RAM_MB, TORCH_THREADS,
                           SWEEP_INTERVAL_S, CPU_BACKOFF_S, CPU_BACKOFF_MAX_WAIT_S
@@ -10,11 +9,13 @@ embedding warmup/provenance fix (already verified separately):
   cli/server_ctl.py      STOP_MARKER_NAME, _mark_stopped_by_user(),
                           _clear_stopped_by_user()
 
-Written by bad-cop. Never fixes anything, only proves what breaks.
+Each test states the failure it is there to catch, so a later change that
+reintroduces one fails here rather than in production.
 """
 import asyncio
 import importlib.util
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-CLEAN_RAG = Path("C:/Development/ClaudeBoost/clean-rag")
+CLEAN_RAG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_RAG))
 sys.path.insert(0, str(CLEAN_RAG / "hooks"))
 sys.path.insert(0, str(CLEAN_RAG / "cli"))
@@ -86,6 +87,7 @@ class FakePsutil:
     def __init__(self, cpu_sequence, available_mb):
         self._cpu_sequence = list(cpu_sequence)
         self._calls = 0
+        self.vm_calls = 0
         self._available_mb = available_mb
 
     def cpu_percent(self, interval=None):
@@ -95,6 +97,7 @@ class FakePsutil:
         return 0.0
 
     def virtual_memory(self):
+        self.vm_calls += 1
         vm = MagicMock()
         vm.available = self._available_mb * 1024 * 1024
         return vm
@@ -500,10 +503,9 @@ def _manifest_files(indexing, project: Path) -> set[str]:
 
 
 def test_index_project_stops_mid_project_when_pressure_appears(isolated_indexing, tmp_path):
-    """The real gap bad-cop found: index_project ran a whole project in one
-    executor call with no way to yield. It must now stop between files when the
-    injected check says the machine is needed, and what it leaves behind must
-    be coherent."""
+    """index_project used to run a whole project in one executor call with no
+    way to yield. It must stop between files when the injected check says the
+    machine is needed, and what it leaves behind must be coherent."""
     indexing = isolated_indexing
     project = _make_project(tmp_path / "proj", n_files=6)
 
@@ -547,6 +549,38 @@ def test_index_project_with_headroom_is_unchanged(isolated_indexing, tmp_path):
     assert without_check["chunks_created"] == with_check["chunks_created"]
 
 
+def test_a_pressure_probe_that_raises_neither_stops_the_run_nor_hides_itself(
+    isolated_indexing, tmp_path, caplog,
+):
+    """psutil can fail on a machine under real duress, and the manifest for
+    everything embedded since the last checkpoint only exists in memory until
+    the run ends. An exception out of the probe must therefore not end the run,
+    and it must not pass silently either: unguarded is a state an operator has
+    to be able to find out about."""
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=3)
+
+    def exploding_probe():
+        raise OSError("psutil could not read memory info")
+
+    caplog.set_level(logging.ERROR)
+    result = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=exploding_probe,
+    )
+
+    assert result["files_indexed"] == 3, (
+        "a failed pressure read ended the run and discarded the work it had "
+        "already embedded"
+    )
+    assert "stopped_early" not in result
+    assert indexing.index_is_incomplete(str(project)) is False
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "OSError" in logged and "psutil could not read memory info" in logged, (
+        f"the probe failure was swallowed without naming its cause: {logged!r}"
+    )
+
+
 def test_aborted_index_resumes_instead_of_starting_over(isolated_indexing, tmp_path):
     """An abort that could not be resumed would livelock: every sweep would
     redo the same first N files and never reach the end on a busy machine.
@@ -578,6 +612,392 @@ def test_aborted_index_resumes_instead_of_starting_over(isolated_indexing, tmp_p
     assert _manifest_files(indexing, project) == {f"module_{i:02d}.py" for i in range(6)}
     assert done_first < _manifest_files(indexing, project)
     assert indexing.index_is_incomplete(str(project)) is False
+
+
+def test_manual_retry_resumes_without_going_through_the_sweep_at_all(
+    isolated_indexing, tmp_path,
+):
+    """.claude/commands/index-project.md's step 5 / lock section claims 'only
+    the sweep's full rebuild branch ever resumes' an incomplete index, and
+    that a project needs 50+ changed files in one sweep pass to get there.
+
+    This calls index_project(force=False) directly, the exact call
+    handle_index_project makes for a plain manual retry (server/app.py:546-548
+    passes force=body.get('force', False)), with no auto_reindex module, no
+    FULL_REINDEX_THRESHOLD, and no 'resuming' flag anywhere in the call path.
+    If this resumes and clears __incomplete__, the doc's claim is false: a
+    human does not need 50 changed files or the sweep at all, a second call to
+    the same manual endpoint the doc itself documents in step 3 is sufficient.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=6)
+
+    seen = {"n": 0}
+
+    def abort_after_two():
+        seen["n"] += 1
+        return "free RAM 500 MB (need 4322 MB)" if seen["n"] > 2 else None
+
+    first = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=abort_after_two
+    )
+    assert first["files_indexed"] == 2
+    assert indexing.index_is_incomplete(str(project)) is True
+
+    # The plain manual retry from step 3 of the doc: same function, force off,
+    # no should_abort, nothing from auto_reindex.py involved.
+    second = indexing.index_project(str(project), StubEmbedder(), force=False)
+
+    assert second["files_indexed"] == 4, "the manual retry did not finish the project"
+    assert indexing.index_is_incomplete(str(project)) is False, (
+        "a plain manual /index-project retry (force off, no sweep, no 50-file "
+        "threshold) cleared __incomplete__ on its own -- the doc's claim that "
+        "'only the sweep's full rebuild branch ever resumes one' is "
+        "contradicted by the real index_project() behaviour, which is the "
+        "same behaviour the doc's own step 3 describes two sections earlier"
+    )
+
+
+def test_zero_files_indexed_stopped_early_registry_row_matches_the_docs_own_dead_row_test(
+    isolated_indexing, tmp_path,
+):
+    """.claude/commands/index-project.md's new step 0 says a registry row is
+    'dead' -- and should be deleted -- when files_indexed is 0 AND
+    chunks_created is 0. _update_project_registry (indexing.py:1138-1168)
+    writes exactly that shape for a run that stopped_early on the very first
+    file, with indexed_at set to the current time (never null), because
+    index_project calls _update_project_registry unconditionally regardless of
+    stopped_early.
+
+    So the same diff that adds the pressure guard makes the guard's own most
+    aggressive outcome -- abort before file 1 on a busy machine -- produce a
+    registry row indistinguishable, by the doc's own stated test, from a dead
+    row that should be deleted. Deleting it does not touch the manifest or the
+    chroma store, but it does drop the project from state/projects.json, which
+    is what the sweep and rag-enforce's _has_real_index both read.
+    """
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=6)
+
+    def abort_immediately():
+        return "free RAM 100 MB (need 4322 MB)"
+
+    result = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=abort_immediately,
+    )
+
+    assert result["files_indexed"] == 0
+    assert result["chunks_created"] == 0
+    assert result["stopped_early"] == "free RAM 100 MB (need 4322 MB)"
+    # Genuinely resumable: the manifest and the guard agree this project is
+    # incomplete, not empty.
+    assert indexing.index_is_incomplete(str(project)) is True
+
+    registry_path = indexing.STATE_DIR / "projects.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    entry = registry[result["project_id"]]
+
+    # This is exactly the doc's own step-0 dead-row test:
+    # "indexed_at is null" OR "files_indexed is 0 and chunks_created is 0".
+    is_dead_by_the_docs_own_rule = (
+        entry.get("indexed_at") is None
+        or (entry.get("files_indexed") == 0 and entry.get("chunks_created") == 0)
+    )
+    assert entry.get("indexed_at") is not None, (
+        "sanity check on the doc's first dead-row clause: indexed_at is "
+        "always set by _update_project_registry, so the doc's own "
+        "'indexed_at is null' test can never actually fire for this state"
+    )
+    assert is_dead_by_the_docs_own_rule, (
+        "a genuinely incomplete-but-resumable project (files_indexed=0, "
+        "chunks_created=0, __incomplete__=True) reads as a dead row under the "
+        "doc's own step-0 rule, which instructs a human to delete it"
+    )
+
+
+def test_abort_before_file_one_separates_nothing_to_do_from_nothing_indexed(
+    isolated_indexing, tmp_path,
+):
+    """A pressure abort on the very first check, before a single file's hash is
+    compared, against two projects that need completely different actions: one
+    already fully indexed by a prior run, one never indexed at all.
+
+    files_indexed, files_unchanged and chunks_created are all 0 either way,
+    because they only count files this run actually looked at. So the response
+    has to carry the difference somewhere, and the manifest has to keep it: a
+    routine resync whose guard fires before it examines anything has confirmed
+    nothing and changed nothing, and calling that complete index incomplete
+    makes /search report a healthy project stale until some later run clears it.
+    """
+    indexing = isolated_indexing
+
+    complete = _make_project(tmp_path / "complete", n_files=10)
+    baseline = indexing.index_project(str(complete), StubEmbedder(), force=True)
+    assert baseline["files_indexed"] == 10
+    assert indexing.index_is_incomplete(str(complete)) is False
+
+    never_indexed = _make_project(tmp_path / "fresh", n_files=10)
+
+    def abort_immediately():
+        return "free RAM 100 MB (need 4322 MB)"
+
+    resync = indexing.index_project(
+        str(complete), StubEmbedder(), force=False, should_abort=abort_immediately,
+    )
+    first_run = indexing.index_project(
+        str(never_indexed), StubEmbedder(), force=False, should_abort=abort_immediately,
+    )
+
+    # Identical on every field that counts examined files, in both cases.
+    for result in (resync, first_run):
+        assert result["files_indexed"] == 0
+        assert result["files_unchanged"] == 0
+        assert result["chunks_created"] == 0
+        assert result["files_pending"] == 10, (
+            "a caller cannot tell an untouched run from a completed one without "
+            "being told how many files went unexamined"
+        )
+
+    assert resync["index_incomplete"] is False, (
+        "every one of the 10 files is already indexed and unchanged, so this "
+        "run left a complete index complete and the caller has nothing to do"
+    )
+    assert indexing.index_is_incomplete(str(complete)) is False, (
+        "a should_abort that fired before any file was hashed re-marked a "
+        "previously complete project __incomplete__, which makes /search warn "
+        "that a fully indexed project is stale"
+    )
+
+    assert first_run["index_incomplete"] is True, (
+        "nothing is indexed here and 10 files still need doing, so this run "
+        "must not read the same as the resync above"
+    )
+    assert indexing.index_is_incomplete(str(never_indexed)) is True
+
+
+# ---------------------------------------------------------------------------
+# POST /index-project, driven through the real handler with the real
+# production defaults (INDEX_PRESSURE_CHECK_S=15, MIN_FREE_RAM_MB from config)
+# rather than the interval_s=0 the rest of this file uses for speed.
+#
+# A checkpoint that lives for one request has to check the machine it was
+# handed, not the machine it has 15 seconds from now: a run that finishes
+# inside the interval would otherwise never be sampled, however starved the
+# machine was for all of it, and "already below the floor before file 0" is
+# precisely the incident the guard exists for.
+# ---------------------------------------------------------------------------
+
+class _StubRequest:
+    """Enough of aiohttp's Request for handle_index_project: a JSON body."""
+
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+def test_manual_index_stops_before_file_one_when_ram_is_already_below_the_floor(
+    isolated_indexing, tmp_path, monkeypatch,
+):
+    """The exact scenario in the ticket: free RAM already critically low
+    (0.1 GB observed) when a manual /index-project arrives.
+
+    Driven through handle_index_project rather than through a hand-built
+    checkpoint, so it is the endpoint's own guard under test. StubEmbedder
+    makes the run finish in well under INDEX_PRESSURE_CHECK_S, which is the
+    window a per-request checkpoint used to spend entirely unguarded.
+    """
+    import server.app as app_mod
+    from server.config import MIN_FREE_RAM_MB
+
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=25)
+
+    assert MIN_FREE_RAM_MB > 100, "test setup: 100 MB free has to be under the floor"
+
+    # The lock and the model cache are the only server state the handler needs;
+    # patching them keeps this off the real state/ directory.
+    monkeypatch.setattr(app_mod, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(app_mod, "release_index_lock", lambda *a, **kw: None)
+    monkeypatch.setattr(app_mod, "_model_cache", StubEmbedder())
+
+    # Available RAM pinned as low as the ticket's own 0.1 GB incident, for the
+    # whole run. CPU is idle, so CPU can play no part in the outcome.
+    starved = FakePsutil(cpu_sequence=[0.0] * 200, available_mb=100)
+
+    with patch.dict(sys.modules, {"psutil": starved}):
+        response = asyncio.run(app_mod.handle_index_project(
+            _StubRequest({"project_path": str(project), "force": True})
+        ))
+
+    body = json.loads(response.body.decode("utf-8"))
+    assert response.status == 200, body
+
+    assert body["files_indexed"] == 0, (
+        f"{body['files_indexed']} of 25 files were embedded on a machine that "
+        f"was under the free RAM floor before the request even arrived"
+    )
+    assert "free RAM 100 MB" in body["stopped_early"], body["stopped_early"]
+    assert f"need {MIN_FREE_RAM_MB:.0f} MB" in body["stopped_early"], (
+        f"the reason has to name the real numbers, got {body['stopped_early']!r}"
+    )
+    assert "CPU" not in body["stopped_early"], (
+        f"the start check has no usable cpu_percent baseline yet, so it must "
+        f"not make a CPU claim: {body['stopped_early']!r}"
+    )
+    assert body["files_pending"] == 25
+    # A force run emptied the collection, so this really is incomplete, and the
+    # next call with force off is what finishes it.
+    assert body["index_incomplete"] is True
+    assert indexing.index_is_incomplete(str(project)) is True
+
+
+def test_manual_index_on_a_healthy_machine_finishes_and_samples_ram_once(
+    isolated_indexing, tmp_path, monkeypatch,
+):
+    """The other half of the guard's contract: checking the machine at the start
+    must not cost a healthy run anything. It finishes every file, reports no
+    stopped_early, and the whole 25 file run reads free RAM exactly once,
+    because the interval never elapses."""
+    import server.app as app_mod
+
+    project = _make_project(tmp_path / "proj", n_files=25)
+
+    monkeypatch.setattr(app_mod, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(app_mod, "release_index_lock", lambda *a, **kw: None)
+    monkeypatch.setattr(app_mod, "_model_cache", StubEmbedder())
+
+    healthy = FakePsutil(cpu_sequence=[0.0] * 200, available_mb=8000)
+
+    with patch.dict(sys.modules, {"psutil": healthy}):
+        response = asyncio.run(app_mod.handle_index_project(
+            _StubRequest({"project_path": str(project), "force": True})
+        ))
+
+    body = json.loads(response.body.decode("utf-8"))
+    assert response.status == 200, body
+    assert body["files_indexed"] == 25, body
+    assert body["chunks_created"] > 0, "test setup: nothing was actually indexed"
+    assert "stopped_early" not in body, (
+        f"a healthy machine had a manual index run stop early: "
+        f"{body.get('stopped_early')!r}"
+    )
+    assert healthy.vm_calls == 1, (
+        f"{healthy.vm_calls} psutil memory reads across 25 files -- the probe "
+        f"is meant to cost one read at the start and then one per "
+        f"INDEX_PRESSURE_CHECK_S, not one per file"
+    )
+
+
+def test_request_scoped_checkpoint_checks_ram_at_once_then_throttles_as_before():
+    """The mechanism the endpoint test rests on, shown directly: the first call
+    to a request scoped checkpoint samples free RAM immediately, and every call
+    after it is throttled by the interval exactly as before."""
+    from server.resource_guard import PressureCheckpoint
+
+    critically_low = FakePsutil(cpu_sequence=[0.0, 0.0, 0.0], available_mb=100)  # 0.1 GB
+    with patch.dict(sys.modules, {"psutil": critically_low}):
+        checkpoint = PressureCheckpoint(check_ram_at_start=True)  # else defaults
+        first = checkpoint.pressure()
+        second = checkpoint.pressure()
+
+    assert first is not None and "free RAM" in first, (
+        f"a run starting at 100 MB free was told to carry on: {first!r} -- the "
+        f"15s interval must not swallow the first check on a checkpoint that "
+        f"only lives as long as one request"
+    )
+    assert second is None, (
+        f"the start check is a one off; the interval has to throttle "
+        f"everything after it, got {second!r}"
+    )
+
+
+def test_start_check_ignores_cpu_because_it_has_no_baseline_to_diff_against():
+    """cpu_percent(interval=None) reports the delta since the previous call, and
+    the previous call here is the priming one microseconds earlier. psutil
+    documents anything under 0.1s as unreliable, so a CPU throttle configured
+    below 100 must not be able to abort a run on that reading. Free RAM is an
+    instantaneous level and carries no such caveat, which is why it is the half
+    the start check uses."""
+    from server.resource_guard import PressureCheckpoint
+
+    # Healthy RAM, and a cpu_percent that would trip an 80% ceiling instantly.
+    hostile_cpu = FakePsutil(cpu_sequence=[99.0] * 5, available_mb=8000)
+    with patch.dict(sys.modules, {"psutil": hostile_cpu}):
+        cp = PressureCheckpoint(
+            interval_s=3600, max_percent=80, min_free_ram_mb=3072,
+            check_ram_at_start=True,
+        )
+        assert cp.pressure() is None, (
+            "the start check aborted a healthy run on a sub millisecond CPU "
+            "delta, which is the reading psutil says not to trust"
+        )
+    assert hostile_cpu.vm_calls == 1, (
+        f"the start check has to read free RAM exactly once, got "
+        f"{hostile_cpu.vm_calls} reads"
+    )
+
+
+class _FakeClock:
+    """Stands in for resource_guard's `time` module, so a test can cross an
+    interval without sleeping through it."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+
+def test_a_slow_start_does_not_buy_the_run_another_interval_of_silence(monkeypatch):
+    """Loading an embedding model can take longer than the whole interval, so
+    the first check often arrives already past due. The start check must not
+    push the first full sample out by another interval from there: by then the
+    machine has gone a full interval unsampled, which is what the interval was
+    supposed to bound."""
+    from server import resource_guard
+
+    clock = _FakeClock()
+    monkeypatch.setattr(resource_guard, "time", clock)
+
+    fake = FakePsutil(cpu_sequence=[0.0, 95.0, 95.0], available_mb=8000)
+    with patch.dict(sys.modules, {"psutil": fake}):
+        cp = resource_guard.PressureCheckpoint(
+            interval_s=15, max_percent=80, min_free_ram_mb=3072,
+            check_ram_at_start=True,
+        )
+        clock.now += 40  # a slow model load, well past one interval
+
+        assert cp.pressure() is None, "the start check: free RAM is healthy"
+        assert "CPU 95%" in cp.pressure(), (
+            "the interval elapsed during startup, so the next check had to be a "
+            "real sample rather than another 15 seconds of silence"
+        )
+
+
+def test_default_checkpoint_takes_no_sample_at_all_before_its_first_interval():
+    """The sweep (auto_reindex._sweep_project) and cli/reindex_batch.py build
+    PressureCheckpoint() with no overrides and reuse one instance across every
+    project in a pass, having already gated on wait_for_system_headroom()
+    before starting. Their sampling rate must not change: no psutil read of
+    any kind before the first interval elapses."""
+    from server.resource_guard import PressureCheckpoint
+
+    fake = FakePsutil(cpu_sequence=[0.0] * 10, available_mb=100)
+    with patch.dict(sys.modules, {"psutil": fake}):
+        cp = PressureCheckpoint(interval_s=3600, max_percent=80, min_free_ram_mb=3072)
+        cpu_calls_after_priming = fake._calls
+        for _ in range(200):
+            assert cp.pressure() is None
+
+    assert fake._calls == cpu_calls_after_priming, (
+        f"{fake._calls - cpu_calls_after_priming} cpu_percent reads in 200 calls"
+    )
+    assert fake.vm_calls == 0, (
+        f"{fake.vm_calls} virtual_memory reads before the first interval -- a "
+        f"long lived checkpoint now samples more often than it used to"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +1165,13 @@ def test_release_project_resources_evicts_the_real_connection(tmp_path, monkeypa
     from server.store import _conn_cache
     assert db_path in _conn_cache, "connection was never cached in the first place"
 
+    # Checked in first, so this is the sweep's normal case: nothing holds the
+    # handle, so the eviction closes and drops the record on the spot. A record
+    # still held is deferred instead and deliberately stays cached, which would
+    # make the assertion below pass or fail for a reason that has nothing to do
+    # with the path this builds.
+    store.close()
+
     import server.config as config_mod
     monkeypatch.setattr(config_mod, "DATABASES_DIR", fake_databases_dir)
 
@@ -775,6 +1202,11 @@ def test_mutant_missing_chroma_suffix_is_a_noop(tmp_path, monkeypatch):
     from server.store import _conn_cache
     assert db_path in _conn_cache
 
+    # Checked in first, so a hit on the right path would drop the record here and
+    # now. Left held, the record stays cached either way and the assertion below
+    # could no longer tell a miss from a hit.
+    store.close()
+
     # The mutant: omit "/chroma".
     wrong_path = fake_databases_dir / "_projects" / pid
     ChromaStore.evict_cache(str(wrong_path))
@@ -782,6 +1214,276 @@ def test_mutant_missing_chroma_suffix_is_a_noop(tmp_path, monkeypatch):
     assert db_path in _conn_cache, "mutant test setup is wrong: eviction should have missed"
     # cleanup
     ChromaStore.evict_cache(str(chroma_dir))
+
+
+# ---------------------------------------------------------------------------
+# _sweep_project's bool return and the release that is gated on it in
+# auto_reindex_loop: this is the actual production incident (a running
+# /index-project killed by "Cannot operate on a closed database" because the
+# sweep released a project's connection unconditionally, even when it had
+# never touched that project this pass).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_release_is_skipped_when_the_index_lock_was_busy(auto_reindex, monkeypatch, tmp_path):
+    """The exact production incident: _sweep_project bails with the index
+    lock held by another job (a real /index-project already running), and
+    the sweep loop must NOT evict that project's connection out from under
+    the job that is still using it.
+
+    This is the mutant-1 kill test: revert the caller to an unconditional
+    `_release_project_resources(project.pid)` and this fails, because the
+    release would then run even though _sweep_project returned False for
+    exactly the reason (lock busy) the original bug hit.
+    """
+    # _read_registry is stubbed directly rather than pointing STATE_DIR at
+    # tmp_path: auto_reindex._read_registry is bound at import time to
+    # reindex_unit.read_registry, which reads reindex_unit's own STATE_DIR
+    # global, not auto_reindex's. Patching auto_reindex.STATE_DIR (the
+    # pattern several tests in this file use) has no effect on what the loop
+    # actually reads; it silently falls through to this machine's real
+    # state/projects.json instead of the fixture below. Confirmed directly:
+    # patching only STATE_DIR here made the loop sweep this machine's real
+    # registered projects, not the single "p1" fixture project.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    # Real _sweep_project, not a stub: force it down the "lock busy" branch.
+    monkeypatch.setattr(auto_reindex, "find_changed_files",
+                        lambda p: (["f1.py"], []))
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: False)
+
+    released = []
+    monkeypatch.setattr(auto_reindex, "_release_project_resources",
+                        lambda pid: released.append(pid))
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    # Both the outer gate that runs before the loop (wait_for_cpu_headroom, an
+    # alias) and the per project gate (wait_for_system_headroom, called
+    # directly inside the for loop) must be stubbed. Leaving the real one in
+    # place means its own internal `await asyncio.sleep(0.1)` shares the call
+    # counter below with the outer `await asyncio.sleep(INTERVAL_S)` and
+    # fires the CancelledError before _sweep_project is ever reached, which
+    # would make this test pass for the wrong reason, never getting there at
+    # all.
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with pytest.raises(asyncio.CancelledError):
+        await auto_reindex.auto_reindex_loop(lambda: object())
+
+    assert released == [], (
+        f"_release_project_resources was called for {released} even though "
+        f"_sweep_project bailed on a busy index lock -- this is the exact "
+        f"incident that closed a shared connection under a running index job"
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_runs_when_the_sweep_actually_did_work(auto_reindex, monkeypatch, tmp_path):
+    """The other half: gating the release on a busy lock must not silently
+    turn into never releasing at all, which would leak one open sqlite
+    handle per project for the life of the process (the exact cost the
+    comment above _release_project_resources's call site describes)."""
+    # See the comment in the sibling test above: _read_registry has to be
+    # stubbed directly, not reached via STATE_DIR.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    monkeypatch.setattr(auto_reindex, "find_changed_files", lambda p: ([], []))
+
+    async def fake_sweep_project(pid, entry, model_cache, checkpoint=None):
+        return True  # actually did work and released the lock itself
+
+    monkeypatch.setattr(auto_reindex, "_sweep_project", fake_sweep_project)
+
+    released = []
+    monkeypatch.setattr(auto_reindex, "_release_project_resources",
+                        lambda pid: released.append(pid))
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    # See the comment in the sibling test above: both names have to be
+    # stubbed or the real wait_for_system_headroom eats the fake sleep's
+    # call budget before _sweep_project is ever reached.
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with pytest.raises(asyncio.CancelledError):
+        await auto_reindex.auto_reindex_loop(lambda: object())
+
+    assert released == ["p1"], (
+        "a sweep that actually proceeded must still release its handles, or "
+        "every registered project leaks one open sqlite connection forever"
+    )
+
+
+def test_sweep_project_returns_false_specifically_for_a_busy_lock(auto_reindex, monkeypatch, tmp_path):
+    """Mutant-2 kill test: invert `if not acquire_index_lock():` to
+    `if acquire_index_lock():` in _sweep_project. Under that mutant, a busy
+    lock (acquire returns False) makes the condition False, so the body
+    that assumes the lock was acquired runs anyway -- corrupting a project
+    another job holds the lock for -- and this test's return-value
+    assertion fails because the busy-lock path would then fall through to
+    `return True` instead of `return False`.
+    """
+    import asyncio as real_asyncio
+
+    monkeypatch.setattr(auto_reindex, "find_changed_files", lambda p: (["f1.py"], []))
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: False)
+
+    result = real_asyncio.run(
+        auto_reindex._sweep_project("p1", {"project_path": str(tmp_path)}, object())
+    )
+    assert result is False, (
+        "_sweep_project must return False when the index lock is busy, not "
+        "True -- a True here tells the caller it is safe to evict the "
+        "connection a still-running job is using"
+    )
+
+
+def test_release_index_lock_only_clears_its_own_pid(tmp_path, monkeypatch):
+    """Mutant-3 kill test: drop the `lock_data.get('pid') == os.getpid()`
+    check in release_index_lock(). Under that mutant this test fails,
+    because release_index_lock() would delete a lock file recorded under a
+    DIFFERENT live PID -- letting this process's finally-block cleanup tear
+    down another process's in-flight index lock and letting a second sweep
+    or a manual /index-project start concurrently with the first.
+    """
+    from server import indexing
+
+    monkeypatch.setattr(indexing, "_INDEX_LOCK_PATH", tmp_path / "index-lock.json")
+    other_pid = indexing.os.getpid() + 1  # guaranteed different from ours
+    indexing._INDEX_LOCK_PATH.write_text(json.dumps({
+        "pid": other_pid, "operation": "index", "started": "2026-01-01T00:00:00Z",
+    }), encoding="utf-8")
+
+    indexing.release_index_lock()
+
+    assert indexing._INDEX_LOCK_PATH.exists(), (
+        "release_index_lock() deleted a lock file recorded under a "
+        "different, still-running PID -- this would let two indexing "
+        "operations run concurrently against the same sqlite connection"
+    )
+
+
+def test_lock_is_still_released_on_the_new_full_reindex_return_true_path(
+    tmp_path, monkeypatch, auto_reindex,
+):
+    """The added `return True` in the full-reindex branch sits inside the
+    same `try:` the `finally: release_index_lock()` already covered. Confirm
+    that path still actually releases the lock -- a `return` inside a `try`
+    always runs the `finally` in real Python, but this is exactly the kind
+    of control-flow change (SIR: statement removal / reordering) that a
+    careless refactor gets wrong, so it is asserted here against the real
+    function rather than trusted from reading it.
+    """
+    monkeypatch.setattr(auto_reindex, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(auto_reindex, "find_changed_files",
+                        lambda p: ([f"f{i}.py" for i in range(60)], []))  # >= FULL_REINDEX_THRESHOLD
+    monkeypatch.setattr(auto_reindex, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(auto_reindex, "index_is_incomplete", lambda p: False)
+    monkeypatch.setattr(
+        auto_reindex, "index_project",
+        lambda *a, **kw: {"files_indexed": 60, "chunks_created": 60, "files_failed": 0},
+    )
+
+    released = {"n": 0}
+    monkeypatch.setattr(auto_reindex, "release_index_lock",
+                        lambda: released.__setitem__("n", released["n"] + 1))
+
+    import asyncio as real_asyncio
+    result = real_asyncio.run(
+        auto_reindex._sweep_project("p1", {"project_path": str(tmp_path)}, object())
+    )
+
+    assert result is True
+    assert released["n"] == 1, (
+        "the full-reindex branch's new `return True` skipped the `finally` "
+        "and never released the index lock -- every subsequent sweep or "
+        "manual /index-project would see the lock as permanently busy"
+    )
+
+
+@pytest.mark.asyncio
+async def test_swept_counter_excludes_projects_that_never_actually_swept(
+    auto_reindex, monkeypatch, tmp_path, caplog,
+):
+    """The "Reindex sweep done: %d project(s)" line must count projects this
+    pass really touched.
+
+    `swept += 1` used to run regardless of `proceeded`, so a pass where every
+    project bailed on a busy index lock still reported one project per registered
+    project. Nothing downstream branches on the number, so this is log accuracy
+    only, and log accuracy is the whole reason to read that line: it is the one
+    place lock contention shows up.
+    """
+    # _read_registry is stubbed directly rather than pointing STATE_DIR at
+    # tmp_path: it is bound at import time to reindex_unit.read_registry, which
+    # reads reindex_unit's own STATE_DIR global. Patching auto_reindex.STATE_DIR
+    # does not reach it, and the loop then falls through to this machine's real
+    # state/projects.json instead of the fixture below.
+    monkeypatch.setattr(
+        auto_reindex, "_read_registry",
+        lambda: {"p1": {"project_path": str(tmp_path)}},
+    )
+
+    async def fake_sweep_project(pid, entry, model_cache, checkpoint=None):
+        return False  # bailed on a busy lock, touched nothing
+
+    monkeypatch.setattr(auto_reindex, "_sweep_project", fake_sweep_project)
+    monkeypatch.setattr(auto_reindex, "_release_project_resources", lambda pid: None)
+
+    async def headroom_true(*a, **kw):
+        return True
+
+    monkeypatch.setattr(auto_reindex, "wait_for_cpu_headroom", headroom_true)
+    monkeypatch.setattr(auto_reindex, "wait_for_system_headroom", headroom_true)
+
+    calls = {"n": 0}
+
+    async def sleep_then_cancel(_s):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(auto_reindex, "asyncio", _FakeAsyncioNamespace(asyncio, sleep_then_cancel))
+
+    with caplog.at_level("INFO", logger="server.auto_reindex"):
+        with pytest.raises(asyncio.CancelledError):
+            await auto_reindex.auto_reindex_loop(lambda: object())
+
+    done_lines = [r.message for r in caplog.records if "Reindex sweep done" in r.message]
+    assert done_lines, "the sweep-done summary line was never logged"
+    assert "0 project(s)" in done_lines[-1], (
+        f"a pass where every project bailed on a busy index lock reported real "
+        f"work: {done_lines[-1]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

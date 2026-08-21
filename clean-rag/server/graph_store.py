@@ -179,6 +179,57 @@ def _is_external_symbol(
     return True
 
 
+def _project_namespaces(file_map: dict[str, str]) -> set[str]:
+    """Every path segment of every indexed file, for any language.
+
+    Used by resolve_target_files to decide whether an import it could not
+    resolve is a third party package or just a project module it has no file
+    for. Membership means "ours", so anything missing here gets called
+    external, and a false negative is the expensive direction.
+
+    A segment is taken exactly as it appears on disk, never split further. A
+    directory named "google.api" contributes "google.api" and nothing else,
+    so a Python `from google.cloud import storage` in the same project is
+    still recognised as the third party package it is. C# needs a wider set
+    than this one; that widening lives in _csharp_namespaces so it cannot
+    reach any other language's answer.
+    """
+    namespaces: set[str] = set()
+    for key in file_map:
+        namespaces.update(key.replace("\\", "/").split("/"))
+    return namespaces
+
+
+def _csharp_namespaces(file_map: dict[str, str]) -> set[str]:
+    """The project namespace set as C# sees it: path segments plus the dotted
+    pieces of any directory name.
+
+    A .NET folder normally carries the dotted namespace it holds, so
+    "ViveryAscend.API/" is namespace ViveryAscend.API, and "ViveryAscend" is
+    as much a project namespace as the folder is. Without that, "using
+    ViveryAscend.API.Services;" reduces to a first segment of "ViveryAscend",
+    which matches no folder, and the project's own code gets filed under
+    _external_. Measured on 300 real .cs files, that was 507 of the 514
+    symbols the fallback marked external.
+
+    This is deliberately separate from _project_namespaces rather than folded
+    into it. The split is a fact about C# project layout, not about paths in
+    general, and one shared set let a dotted directory belonging to another
+    language (a vendored "protos/google.api/" tree, say) decide that the real
+    google-cloud-storage package was project code.
+
+    File names are deliberately not split, because "OrderService.cs" would
+    register "cs" as a project namespace.
+    """
+    namespaces = _project_namespaces(file_map)
+    for key in file_map:
+        directories = key.replace("\\", "/").split("/")[:-1]
+        for directory in directories:
+            if "." in directory:
+                namespaces.update(seg for seg in directory.split(".") if seg)
+    return namespaces
+
+
 # ---------------------------------------------------------------------------
 # Symbol resolution
 # ---------------------------------------------------------------------------
@@ -601,18 +652,17 @@ class SQLiteGraphStore:
         """
         with self._connect() as conn:
             unresolved = conn.execute(
-                "SELECT id, target_symbol, source_file FROM edges WHERE target_file = ''"
+                "SELECT id, target_symbol, source_file, edge_type FROM edges "
+                "WHERE target_file = ''"
             ).fetchall()
 
         if not unresolved:
             return 0
 
-        # Build set of project namespace segments for fallback detection
-        project_namespaces: set[str] = set()
-        for k in file_map:
-            parts = k.replace("\\", "/").split("/")
-            for part in parts:
-                project_namespaces.add(part)
+        project_namespaces = _project_namespaces(file_map)
+        # Built on first use, so a project with no C# in it never sees the
+        # dotted folder widening at all.
+        csharp_namespaces: set[str] | None = None
 
         updates: list[tuple[str, int]] = []
         external_count = 0
@@ -632,6 +682,46 @@ class SQLiteGraphStore:
                     symbol = symbol.split(" as ")[0].strip()
                 first_seg = symbol.split(".")[0]
                 if first_seg and first_seg not in project_namespaces:
+                    updates.append((_EXTERNAL_SENTINEL, row["id"]))
+                    external_count += 1
+            elif (
+                row["edge_type"] == "imports"
+                and row["source_file"].endswith((".cs", ".cshtml"))
+            ):
+                # C# fallback, imports only. _is_external_symbol above knows
+                # only the hardcoded _CS_EXTERNAL_PREFIXES list, so a using
+                # directive for a third party namespace outside that list
+                # matched nothing and stayed empty forever.
+                #
+                # The imports gate is what keeps _external_ meaning "third party
+                # or stdlib". A using directive names a namespace, so comparing
+                # its first segment against the project's namespaces answers a
+                # real question. Every other C# edge type carries a bare type or
+                # method name instead: "calls" carries a call qualifier,
+                # "inherits" and "implements" carry a base type. Those never
+                # look like a namespace, so the same comparison would only ever
+                # report "not a project folder", which is true of almost every
+                # identifier in the language. Measured on 300 real indexed .cs
+                # files: letting every edge type through put _external_ on 953
+                # distinct symbols, among them loop counters and mock fields,
+                # against 96 with this gate, every one of those a real BCL or
+                # NuGet namespace.
+                #
+                # .cshtml is here to stay level with _is_external_symbol's own
+                # suffix tuple, which already carries it. Razor files are
+                # indexed as chunks but ext_to_lang returns None for them, so
+                # nothing extracts edges from one today; dropping the suffix
+                # from one of the two places would only make them disagree.
+                #
+                # _csharp_namespaces, not project_namespaces: the dotted folder
+                # widening it adds is true of .NET project layout only, and
+                # letting it reach the Python branch above made a vendored
+                # "protos/google.api/" tree claim the real google-cloud-storage
+                # package as project code.
+                if csharp_namespaces is None:
+                    csharp_namespaces = _csharp_namespaces(file_map)
+                first_seg = row["target_symbol"].split(".")[0]
+                if first_seg and first_seg not in csharp_namespaces:
                     updates.append((_EXTERNAL_SENTINEL, row["id"]))
                     external_count += 1
 

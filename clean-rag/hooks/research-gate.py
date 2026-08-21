@@ -1,26 +1,35 @@
 #!/usr/bin/env python
 """PreToolUse gate on Edit, Write, and MultiEdit.
 
-Blocks a code edit when the file hasn't been covered by research this session.
+Nudges toward research when the file hasn't been covered this session, and
+allows the edit either way. Nothing here refuses an edit.
 
 This replaces the old proof gate idea outright. That one asked the model to
 write a proof file attesting it had researched, which proves nothing: the model
 writes the file, so the file only ever says what the model wanted it to say.
-This one keys off something the model cannot fabricate. Only Claude Code can
-start an agent, and the record is stamped by a PostToolUse hook after the agent
-finishes. No agent run, no record, no edit.
 
 Markdown and other non code files pass through untouched. So do the usual
 scratch directories. Research is for code, and gating a doc tweak on a subagent
 spawn would just teach you to hate the gate.
 
-Previously this hook was softened to a nudge (exit 0) because per-turn scoping
-wiped coverage on every follow-up message, causing constant false blocks.
-That scoping bug is now fixed: open_turn() preserves existing stamps across
-messages instead of resetting them. Coverage persists until the TTL expires or
-new research runs. With persistent stamps the gate can be a real block again.
+This hook is a nudge on purpose, and it stays one. It blocked once, and the
+per-turn scoping wiped coverage on every follow-up message, so a file swiper
+had just covered needed covering again the moment another message arrived.
+open_turn() later fixed that scoping by preserving stamps across messages,
+which made a real block possible again. It is still not one, by decision: the
+research the gate asks for is a process step, not a safety boundary, and the
+measured tradeoff (arxiv 2604.11088) is that a hard boundary is worth its
+friction for something irreversible, not for ceremony. An unresearched edit is
+recoverable. A nudge plus an honest audit trail is the whole job here.
 
-Exit codes: 0 = allowed, 2 = blocked (PreToolUse hard refuse).
+The audit trail is the part that still cannot be faked. Only Claude Code can
+start an agent, and the record is stamped by a PostToolUse hook after the agent
+finishes, so "I researched it" is never what gets recorded.
+
+Exit codes: 0 always, on any payload shape. Nothing here blocks. The payload
+arrives on stdin from outside this process, so its fields are read defensively
+(_str_field) and the __main__ guard catches anything left over: a gate that
+crashes on a surprising payload is a gate that reports nothing.
 """
 
 import json
@@ -75,6 +84,22 @@ def _is_exempt(file_path: str) -> tuple[bool, str]:
     return False, ""
 
 
+def _str_field(source, key: str) -> str:
+    """A string field read out of an untrusted payload object, or "" if it isn't one.
+
+    Stdin is a system boundary, and every shape that breaks a naive
+    source[key] read is still valid JSON: the containing object present but null
+    (so .get's default never applies) or a string instead of an object, and the
+    field itself a number or a list rather than a string. Each of those reaches
+    code that assumes str and raises somewhere unrelated -- Path() raises
+    TypeError on an int file_path, and a non-str session_id raises AttributeError
+    on .encode() while being hashed. Reading them all as "" routes them to the
+    same paths that already handle a genuinely absent field.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, str) else ""
+
+
 def _block(file_path: str, reason: str) -> int:
     print(
         f"[research-gate] NUDGE: {reason}.\n\n"
@@ -95,19 +120,24 @@ def main() -> int:
         # is right here: a broken gate must not brick all editing.
         return 0
 
+    # Valid JSON is not necessarily an object. A bare scalar or list has no .get,
+    # so it tells us nothing about the edit either, same as an unparseable payload.
+    if not isinstance(payload, dict):
+        return 0
+
     if payload.get("tool_name") not in ("Edit", "Write", "MultiEdit"):
         return 0
 
     if os.environ.get("CLEAN_RAG_RESEARCH_GATE") == "off":
         return 0
 
-    file_path = payload.get("tool_input", {}).get("file_path", "")
+    file_path = _str_field(payload.get("tool_input"), "file_path")
 
     exempt, _why = _is_exempt(file_path)
     if exempt:
         return 0
 
-    session_id = payload.get("session_id", "")
+    session_id = _str_field(payload, "session_id")
 
     # A /ps turn is the human's explicit skip. Allow the edit, but still chain an
     # audit entry so a quick turn is permanently visible, not an invisible bypass.
@@ -120,7 +150,7 @@ def main() -> int:
 
     ok, reason = check_file_researched(session_id, file_path)
 
-    # Every code edit gets a line, allowed or blocked, chained to the one before.
+    # Every code edit gets a line, covered or not, chained to the one before.
     #
     # This is the part that survives a forged stamp. Someone can hand themselves
     # a pass in the moment, but they cannot go back and quietly unwrite this
@@ -143,4 +173,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(0)
