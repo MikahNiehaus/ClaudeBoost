@@ -104,7 +104,7 @@ Add `"force": true` for a full rebuild. Without it, files whose content hash is 
 
 **5. Read the 200 body honestly.**
 
-The result dict is built at `indexing.py:872-886`:
+The result dict is built at `indexing.py:949-971`:
 
 - `files_indexed` — embedded and stored.
 - `files_unchanged` — skipped, hash matched.
@@ -112,21 +112,24 @@ The result dict is built at `indexing.py:872-886`:
 - `chunks_created`, `elapsed_s`, `ram_mb` — as named.
 - `graph.edges_total` / `graph.edges_resolved` — if `edges_total` is 0, the graph is empty and `mode: "graph"` quietly falls back to plain vector search. Usually the tree-sitter grammar for that language is not installed.
 - `graph.error` — a graph build failure lands **inside** the `graph` object, not at the top level. Checking only `edges_total` misses it.
-- `stopped_early` — **read this one.** A run that hits the memory floor stops between files and reports the reason here, for example `RAM 1.1 GB free (floor 4.2 GB)`. The status is still 200 and every other number is real, so a 200 alone does not mean the project is fully indexed.
+- `stopped_early` — **read this one.** A run that hits the memory floor stops between files and reports the reason here, for example `free RAM 1100 MB (need 4322 MB)`. The status is still 200 and every other number is real, so a 200 alone does not mean the project is fully indexed. The guard is checked before the first file too, so a request that arrives on an already starved machine can stop having indexed nothing.
+- `files_pending` — present only alongside `stopped_early`: how many files the run never looked at. Every other count covers only the files it did look at, so this is what tells you the run was cut short rather than finished.
+- `index_incomplete` — present only alongside `stopped_early`: whether any of those pending files still need indexing. `false` means the run stopped after confirming every remaining file was already indexed and unchanged, so there is nothing to do and the manifest is left complete. `true` means work is outstanding and the manifest is marked `__incomplete__`.
 
 So a 200 has two outcomes, not one, and there are three in total:
 
 | Outcome | How you tell | What to do |
 |---|---|---|
 | Done | 200, no `stopped_early` | Go to step 6. |
-| Partial | 200, `stopped_early` present | The machine ran low on memory and the run gave up on purpose. Nothing is corrupt. Free some memory and **retry without `force`**, which resumes from the checkpointed manifest per step 3. |
+| Partial | 200, `stopped_early` present, `index_incomplete: true` | The machine ran low on memory and the run gave up on purpose. Nothing is corrupt. Free some memory and **retry without `force`**, which resumes from the checkpointed manifest per step 3. |
+| Nothing to do | 200, `stopped_early` present, `index_incomplete: false` | The run stopped early but every file it had left was already indexed and unchanged. The index is complete. Free some memory before the next real reindex, but there is nothing to finish here. |
 | Failed | non 200 | See the table in step 4. Nothing was indexed. |
 
 Do not leave a partial index sitting, but finishing one is easy: **run step 3 again without `force`.** That resumes from the checkpointed manifest, skips the hashes that already match, and clears `__incomplete__` when it completes. No sweep involvement, no `force` needed.
 
 What will not reliably happen is anything finishing it *for* you. The manifest stays marked `__incomplete__`, `/search` serves the project with a `stale_projects` warning and `served: true` (`search.py:357`), and the only automatic path that resumes an incomplete index is the sweep's full rebuild branch (`auto_reindex.py:353`), which needs 50 or more changed files in one sweep (`auto_reindex.py:60`). A project whose files rarely change can therefore sit incomplete indefinitely. Noticing is the human's job; fixing it is one retry.
 
-`files_indexed: 0` is not automatically a failure. It is correct when every file's hash already matched (check `files_unchanged`), or when the tree holds no files matching `CODE_EXTENSIONS`. Zero indexed **and** zero unchanged means nothing was found, which is a real problem.
+`files_indexed: 0` is not automatically a failure. It is correct when every file's hash already matched (check `files_unchanged`), or when the tree holds no files matching `CODE_EXTENSIONS`. Zero indexed **and** zero unchanged means nothing was found, which is a real problem, unless `stopped_early` is present: then the run never got as far as looking, and `files_pending` plus `index_incomplete` are the two fields that say what state the project is actually in.
 
 **6. Prove search works before declaring success.**
 

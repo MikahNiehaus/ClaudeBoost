@@ -15,6 +15,7 @@ reintroduces one fails here rather than in production.
 import asyncio
 import importlib.util
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -86,6 +87,7 @@ class FakePsutil:
     def __init__(self, cpu_sequence, available_mb):
         self._cpu_sequence = list(cpu_sequence)
         self._calls = 0
+        self.vm_calls = 0
         self._available_mb = available_mb
 
     def cpu_percent(self, interval=None):
@@ -95,6 +97,7 @@ class FakePsutil:
         return 0.0
 
     def virtual_memory(self):
+        self.vm_calls += 1
         vm = MagicMock()
         vm.available = self._available_mb * 1024 * 1024
         return vm
@@ -500,10 +503,9 @@ def _manifest_files(indexing, project: Path) -> set[str]:
 
 
 def test_index_project_stops_mid_project_when_pressure_appears(isolated_indexing, tmp_path):
-    """The real gap bad-cop found: index_project ran a whole project in one
-    executor call with no way to yield. It must now stop between files when the
-    injected check says the machine is needed, and what it leaves behind must
-    be coherent."""
+    """index_project used to run a whole project in one executor call with no
+    way to yield. It must stop between files when the injected check says the
+    machine is needed, and what it leaves behind must be coherent."""
     indexing = isolated_indexing
     project = _make_project(tmp_path / "proj", n_files=6)
 
@@ -545,6 +547,38 @@ def test_index_project_with_headroom_is_unchanged(isolated_indexing, tmp_path):
     without_check = indexing.index_project(str(project), StubEmbedder(), force=True)
     assert without_check["files_indexed"] == with_check["files_indexed"]
     assert without_check["chunks_created"] == with_check["chunks_created"]
+
+
+def test_a_pressure_probe_that_raises_neither_stops_the_run_nor_hides_itself(
+    isolated_indexing, tmp_path, caplog,
+):
+    """psutil can fail on a machine under real duress, and the manifest for
+    everything embedded since the last checkpoint only exists in memory until
+    the run ends. An exception out of the probe must therefore not end the run,
+    and it must not pass silently either: unguarded is a state an operator has
+    to be able to find out about."""
+    indexing = isolated_indexing
+    project = _make_project(tmp_path / "proj", n_files=3)
+
+    def exploding_probe():
+        raise OSError("psutil could not read memory info")
+
+    caplog.set_level(logging.ERROR)
+    result = indexing.index_project(
+        str(project), StubEmbedder(), force=True, should_abort=exploding_probe,
+    )
+
+    assert result["files_indexed"] == 3, (
+        "a failed pressure read ended the run and discarded the work it had "
+        "already embedded"
+    )
+    assert "stopped_early" not in result
+    assert indexing.index_is_incomplete(str(project)) is False
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "OSError" in logged and "psutil could not read memory info" in logged, (
+        f"the probe failure was swallowed without naming its cause: {logged!r}"
+    )
 
 
 def test_aborted_index_resumes_instead_of_starting_over(isolated_indexing, tmp_path):
@@ -681,143 +715,289 @@ def test_zero_files_indexed_stopped_early_registry_row_matches_the_docs_own_dead
     )
 
 
-def test_response_reports_zero_progress_on_a_project_already_mostly_indexed(
+def test_abort_before_file_one_separates_nothing_to_do_from_nothing_indexed(
     isolated_indexing, tmp_path,
 ):
-    """index-project.md step 5 tells the reader to read files_indexed,
-    files_unchanged and chunks_created as an honest account of the run. Attack:
-    a project that is already fully indexed from a prior run, then hit with a
-    pressure abort on the very first should_abort check of a later (non-force)
-    run, before a single file's hash is even compared.
+    """A pressure abort on the very first check, before a single file's hash is
+    compared, against two projects that need completely different actions: one
+    already fully indexed by a prior run, one never indexed at all.
 
-    files_unchanged only increments inside the per-file loop, after the abort
-    check, so a run that aborts on file 0 reports files_unchanged=0 -- even
-    though every file in the project is, in fact, unchanged and already
-    indexed from the earlier run. A caller reading files_indexed=0,
-    files_unchanged=0, chunks_created=0 for this response has no way to tell
-    'nothing in this project is indexed' apart from 'this project is fully
-    indexed and this run simply never got to check', and the two states are
-    completely different actions for a human to take.
+    files_indexed, files_unchanged and chunks_created are all 0 either way,
+    because they only count files this run actually looked at. So the response
+    has to carry the difference somewhere, and the manifest has to keep it: a
+    routine resync whose guard fires before it examines anything has confirmed
+    nothing and changed nothing, and calling that complete index incomplete
+    makes /search report a healthy project stale until some later run clears it.
     """
     indexing = isolated_indexing
-    project = _make_project(tmp_path / "proj", n_files=10)
 
-    baseline = indexing.index_project(str(project), StubEmbedder(), force=True)
+    complete = _make_project(tmp_path / "complete", n_files=10)
+    baseline = indexing.index_project(str(complete), StubEmbedder(), force=True)
     assert baseline["files_indexed"] == 10
-    assert indexing.index_is_incomplete(str(project)) is False
+    assert indexing.index_is_incomplete(str(complete)) is False
+
+    never_indexed = _make_project(tmp_path / "fresh", n_files=10)
 
     def abort_immediately():
         return "free RAM 100 MB (need 4322 MB)"
 
-    second = indexing.index_project(
-        str(project), StubEmbedder(), force=False, should_abort=abort_immediately,
+    resync = indexing.index_project(
+        str(complete), StubEmbedder(), force=False, should_abort=abort_immediately,
+    )
+    first_run = indexing.index_project(
+        str(never_indexed), StubEmbedder(), force=False, should_abort=abort_immediately,
     )
 
-    assert second["files_indexed"] == 0
-    assert second["files_unchanged"] == 0, (
-        "files_unchanged is 0 for a run against a project where all 10 files "
-        "are, in fact, unchanged since the last index -- the field cannot "
-        "distinguish 'this project has no data' from 'this project is fully "
-        "indexed, this call just never got to look', which is exactly the "
-        "ambiguity index-project.md tells a human to resolve by reading this "
-        "field"
+    # Identical on every field that counts examined files, in both cases.
+    for result in (resync, first_run):
+        assert result["files_indexed"] == 0
+        assert result["files_unchanged"] == 0
+        assert result["chunks_created"] == 0
+        assert result["files_pending"] == 10, (
+            "a caller cannot tell an untouched run from a completed one without "
+            "being told how many files went unexamined"
+        )
+
+    assert resync["index_incomplete"] is False, (
+        "every one of the 10 files is already indexed and unchanged, so this "
+        "run left a complete index complete and the caller has nothing to do"
     )
-    assert second["chunks_created"] == 0
-    # The project's real, already-indexed state is untouched -- this is about
-    # what the RESPONSE says, not about any actual data loss.
-    assert indexing.index_is_incomplete(str(project)) is True, (
-        "a should_abort that fires before any file is even hashed marks a "
-        "previously-COMPLETE project __incomplete__ again, purely because "
-        "_save_project_manifest(incomplete=stopped_early is not None) cannot "
-        "tell 'aborted with real work outstanding' from 'aborted having "
-        "confirmed nothing needs doing'"
+    assert indexing.index_is_incomplete(str(complete)) is False, (
+        "a should_abort that fired before any file was hashed re-marked a "
+        "previously complete project __incomplete__, which makes /search warn "
+        "that a fully indexed project is stale"
     )
+
+    assert first_run["index_incomplete"] is True, (
+        "nothing is indexed here and 10 files still need doing, so this run "
+        "must not read the same as the resync above"
+    )
+    assert indexing.index_is_incomplete(str(never_indexed)) is True
 
 
 # ---------------------------------------------------------------------------
-# handle_index_project builds PressureCheckpoint() with no overrides
-# (server/app.py: `should_abort=PressureCheckpoint().pressure`), so these run
-# with the real production defaults (INDEX_PRESSURE_CHECK_S=15,
-# MIN_FREE_RAM_MB=4322) rather than the interval_s=0 the rest of this file
-# uses for speed. They prove the manual endpoint's actual, deployed guard
-# behaviour, not a test-only stand-in for it.
+# POST /index-project, driven through the real handler with the real
+# production defaults (INDEX_PRESSURE_CHECK_S=15, MIN_FREE_RAM_MB from config)
+# rather than the interval_s=0 the rest of this file uses for speed.
+#
+# A checkpoint that lives for one request has to check the machine it was
+# handed, not the machine it has 15 seconds from now: a run that finishes
+# inside the interval would otherwise never be sampled, however starved the
+# machine was for all of it, and "already below the floor before file 0" is
+# precisely the incident the guard exists for.
 # ---------------------------------------------------------------------------
 
-def test_production_default_checkpoint_gives_zero_protection_to_a_run_under_15s(
-    isolated_indexing, tmp_path,
+class _StubRequest:
+    """Enough of aiohttp's Request for handle_index_project: a JSON body."""
+
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+def test_manual_index_stops_before_file_one_when_ram_is_already_below_the_floor(
+    isolated_indexing, tmp_path, monkeypatch,
 ):
     """The exact scenario in the ticket: free RAM already critically low
-    (0.1 GB observed) when a manual /index-project starts.
+    (0.1 GB observed) when a manual /index-project arrives.
 
-    server/app.py constructs PressureCheckpoint() with no arguments, so the
-    real interval is INDEX_PRESSURE_CHECK_S=15s, and PressureCheckpoint.pressure()
-    is a no-op (returns None without touching psutil) until 15 wall-clock
-    seconds have passed since construction -- see resource_guard.py's own
-    comment: "First real sample is one interval away". A run that finishes in
-    under 15s therefore gets checked exactly zero times, however starved the
-    machine is for the whole run.
-
-    This is not a hypothetical: StubEmbedder makes indexing fast enough that a
-    real project finishes well inside that window, so this test proves it
-    against the real index_project() call with the real, unmodified
-    PressureCheckpoint class and its production default interval -- not a
-    speeded-up test double.
+    Driven through handle_index_project rather than through a hand-built
+    checkpoint, so it is the endpoint's own guard under test. StubEmbedder
+    makes the run finish in well under INDEX_PRESSURE_CHECK_S, which is the
+    window a per-request checkpoint used to spend entirely unguarded.
     """
+    import server.app as app_mod
+    from server.config import MIN_FREE_RAM_MB
+
     indexing = isolated_indexing
     project = _make_project(tmp_path / "proj", n_files=25)
 
-    # Available RAM pinned far below MIN_FREE_RAM_MB (4322 MB) for the entire
-    # run -- as low as the 100 MB the ticket's own 0.1 GB incident describes.
+    assert MIN_FREE_RAM_MB > 100, "test setup: 100 MB free has to be under the floor"
+
+    # The lock and the model cache are the only server state the handler needs;
+    # patching them keeps this off the real state/ directory.
+    monkeypatch.setattr(app_mod, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(app_mod, "release_index_lock", lambda *a, **kw: None)
+    monkeypatch.setattr(app_mod, "_model_cache", StubEmbedder())
+
+    # Available RAM pinned as low as the ticket's own 0.1 GB incident, for the
+    # whole run. CPU is idle, so CPU can play no part in the outcome.
     starved = FakePsutil(cpu_sequence=[0.0] * 200, available_mb=100)
 
-    from server.resource_guard import PressureCheckpoint
-
     with patch.dict(sys.modules, {"psutil": starved}):
-        checkpoint = PressureCheckpoint()  # no overrides: production defaults
-        result = indexing.index_project(
-            str(project), StubEmbedder(), force=True, should_abort=checkpoint.pressure,
-        )
+        response = asyncio.run(app_mod.handle_index_project(
+            _StubRequest({"project_path": str(project), "force": True})
+        ))
 
-    assert result["files_indexed"] == 25, (
-        f"only {result['files_indexed']} of 25 files were indexed -- if this "
-        f"assertion ever fails because the run legitimately got slow enough to "
-        f"cross the 15s interval, that is fine; today, with StubEmbedder, the "
-        f"whole project finishes with zero pressure samples taken, which is "
-        f"the gap this test exists to demonstrate"
+    body = json.loads(response.body.decode("utf-8"))
+    assert response.status == 200, body
+
+    assert body["files_indexed"] == 0, (
+        f"{body['files_indexed']} of 25 files were embedded on a machine that "
+        f"was under the free RAM floor before the request even arrived"
     )
-    assert "stopped_early" not in result, (
-        "the guard never fired even once during a run that ran the entire "
-        "time at 100 MB free (far under the 4322 MB floor) -- the production "
-        "default PressureCheckpoint() gives a fast-finishing manual index run "
-        "no protection at all, contradicting the requirement that a manual "
-        "run must stop rather than take the machine down when free memory is "
-        "already below the floor"
+    assert "free RAM 100 MB" in body["stopped_early"], body["stopped_early"]
+    assert f"need {MIN_FREE_RAM_MB:.0f} MB" in body["stopped_early"], (
+        f"the reason has to name the real numbers, got {body['stopped_early']!r}"
+    )
+    assert "CPU" not in body["stopped_early"], (
+        f"the start check has no usable cpu_percent baseline yet, so it must "
+        f"not make a CPU claim: {body['stopped_early']!r}"
+    )
+    assert body["files_pending"] == 25
+    # A force run emptied the collection, so this really is incomplete, and the
+    # next call with force off is what finishes it.
+    assert body["index_incomplete"] is True
+    assert indexing.index_is_incomplete(str(project)) is True
+
+
+def test_manual_index_on_a_healthy_machine_finishes_and_samples_ram_once(
+    isolated_indexing, tmp_path, monkeypatch,
+):
+    """The other half of the guard's contract: checking the machine at the start
+    must not cost a healthy run anything. It finishes every file, reports no
+    stopped_early, and the whole 25 file run reads free RAM exactly once,
+    because the interval never elapses."""
+    import server.app as app_mod
+
+    project = _make_project(tmp_path / "proj", n_files=25)
+
+    monkeypatch.setattr(app_mod, "acquire_index_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(app_mod, "release_index_lock", lambda *a, **kw: None)
+    monkeypatch.setattr(app_mod, "_model_cache", StubEmbedder())
+
+    healthy = FakePsutil(cpu_sequence=[0.0] * 200, available_mb=8000)
+
+    with patch.dict(sys.modules, {"psutil": healthy}):
+        response = asyncio.run(app_mod.handle_index_project(
+            _StubRequest({"project_path": str(project), "force": True})
+        ))
+
+    body = json.loads(response.body.decode("utf-8"))
+    assert response.status == 200, body
+    assert body["files_indexed"] == 25, body
+    assert body["chunks_created"] > 0, "test setup: nothing was actually indexed"
+    assert "stopped_early" not in body, (
+        f"a healthy machine had a manual index run stop early: "
+        f"{body.get('stopped_early')!r}"
+    )
+    assert healthy.vm_calls == 1, (
+        f"{healthy.vm_calls} psutil memory reads across 25 files -- the probe "
+        f"is meant to cost one read at the start and then one per "
+        f"INDEX_PRESSURE_CHECK_S, not one per file"
     )
 
 
-def test_production_default_checkpoint_is_silent_immediately_after_construction():
-    """Narrower version of the same gap, isolated from index_project entirely:
-    the very first call to a freshly constructed, default-interval
-    PressureCheckpoint always returns None, even when psutil reports RAM at
-    the exact 0.1 GB level named in the ticket's own incident. This is the
-    mechanism the test above's result rests on, shown directly."""
+def test_request_scoped_checkpoint_checks_ram_at_once_then_throttles_as_before():
+    """The mechanism the endpoint test rests on, shown directly: the first call
+    to a request scoped checkpoint samples free RAM immediately, and every call
+    after it is throttled by the interval exactly as before."""
     from server.resource_guard import PressureCheckpoint
 
     critically_low = FakePsutil(cpu_sequence=[0.0, 0.0, 0.0], available_mb=100)  # 0.1 GB
     with patch.dict(sys.modules, {"psutil": critically_low}):
-        checkpoint = PressureCheckpoint()  # production defaults, no overrides
+        checkpoint = PressureCheckpoint(check_ram_at_start=True)  # else defaults
         first = checkpoint.pressure()
         second = checkpoint.pressure()
 
-    assert first is None, (
-        "PressureCheckpoint() with production defaults reported no pressure on "
-        "its very first call despite 100 MB free RAM (well under the 4322 MB "
-        "floor) -- the 15s interval means a manual /index-project started on "
-        "an already-starved machine is not checked at all until 15 real "
-        "seconds have elapsed, during which model loading and file embedding "
-        "proceed completely unguarded"
+    assert first is not None and "free RAM" in first, (
+        f"a run starting at 100 MB free was told to carry on: {first!r} -- the "
+        f"15s interval must not swallow the first check on a checkpoint that "
+        f"only lives as long as one request"
     )
-    assert second is None, "same call again, still inside the 15s window"
+    assert second is None, (
+        f"the start check is a one off; the interval has to throttle "
+        f"everything after it, got {second!r}"
+    )
+
+
+def test_start_check_ignores_cpu_because_it_has_no_baseline_to_diff_against():
+    """cpu_percent(interval=None) reports the delta since the previous call, and
+    the previous call here is the priming one microseconds earlier. psutil
+    documents anything under 0.1s as unreliable, so a CPU throttle configured
+    below 100 must not be able to abort a run on that reading. Free RAM is an
+    instantaneous level and carries no such caveat, which is why it is the half
+    the start check uses."""
+    from server.resource_guard import PressureCheckpoint
+
+    # Healthy RAM, and a cpu_percent that would trip an 80% ceiling instantly.
+    hostile_cpu = FakePsutil(cpu_sequence=[99.0] * 5, available_mb=8000)
+    with patch.dict(sys.modules, {"psutil": hostile_cpu}):
+        cp = PressureCheckpoint(
+            interval_s=3600, max_percent=80, min_free_ram_mb=3072,
+            check_ram_at_start=True,
+        )
+        assert cp.pressure() is None, (
+            "the start check aborted a healthy run on a sub millisecond CPU "
+            "delta, which is the reading psutil says not to trust"
+        )
+    assert hostile_cpu.vm_calls == 1, (
+        f"the start check has to read free RAM exactly once, got "
+        f"{hostile_cpu.vm_calls} reads"
+    )
+
+
+class _FakeClock:
+    """Stands in for resource_guard's `time` module, so a test can cross an
+    interval without sleeping through it."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+
+def test_a_slow_start_does_not_buy_the_run_another_interval_of_silence(monkeypatch):
+    """Loading an embedding model can take longer than the whole interval, so
+    the first check often arrives already past due. The start check must not
+    push the first full sample out by another interval from there: by then the
+    machine has gone a full interval unsampled, which is what the interval was
+    supposed to bound."""
+    from server import resource_guard
+
+    clock = _FakeClock()
+    monkeypatch.setattr(resource_guard, "time", clock)
+
+    fake = FakePsutil(cpu_sequence=[0.0, 95.0, 95.0], available_mb=8000)
+    with patch.dict(sys.modules, {"psutil": fake}):
+        cp = resource_guard.PressureCheckpoint(
+            interval_s=15, max_percent=80, min_free_ram_mb=3072,
+            check_ram_at_start=True,
+        )
+        clock.now += 40  # a slow model load, well past one interval
+
+        assert cp.pressure() is None, "the start check: free RAM is healthy"
+        assert "CPU 95%" in cp.pressure(), (
+            "the interval elapsed during startup, so the next check had to be a "
+            "real sample rather than another 15 seconds of silence"
+        )
+
+
+def test_default_checkpoint_takes_no_sample_at_all_before_its_first_interval():
+    """The sweep (auto_reindex._sweep_project) and cli/reindex_batch.py build
+    PressureCheckpoint() with no overrides and reuse one instance across every
+    project in a pass, having already gated on wait_for_system_headroom()
+    before starting. Their sampling rate must not change: no psutil read of
+    any kind before the first interval elapses."""
+    from server.resource_guard import PressureCheckpoint
+
+    fake = FakePsutil(cpu_sequence=[0.0] * 10, available_mb=100)
+    with patch.dict(sys.modules, {"psutil": fake}):
+        cp = PressureCheckpoint(interval_s=3600, max_percent=80, min_free_ram_mb=3072)
+        cpu_calls_after_priming = fake._calls
+        for _ in range(200):
+            assert cp.pressure() is None
+
+    assert fake._calls == cpu_calls_after_priming, (
+        f"{fake._calls - cpu_calls_after_priming} cpu_percent reads in 200 calls"
+    )
+    assert fake.vm_calls == 0, (
+        f"{fake.vm_calls} virtual_memory reads before the first interval -- a "
+        f"long lived checkpoint now samples more often than it used to"
+    )
 
 
 # ---------------------------------------------------------------------------

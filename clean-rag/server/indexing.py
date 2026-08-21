@@ -413,6 +413,61 @@ def _project_paths(project_path: str) -> tuple[Path, str, Path, Path, Path]:
     return project_root, pid, index_dir, chroma_dir, manifest_path
 
 
+def _rel_path(file_path: str, project_root: Path) -> str:
+    """The manifest key for *file_path*: project relative, forward slashed.
+
+    One function rather than the same four lines at each site, because every
+    reader of the manifest has to derive the key the exact same way the writer
+    did. A site that derived it differently would look up a hash that is on
+    disk under another spelling and conclude the file was never indexed.
+
+    Falls back to the absolute path for anything outside the root, which is
+    what the manifest has always keyed such a file on.
+    """
+    try:
+        return str(Path(file_path).relative_to(project_root)).replace("\\", "/")
+    except ValueError:
+        return file_path.replace("\\", "/")
+
+
+def _pressure_reason(
+    should_abort: Callable[[], str | None], project_path: str
+) -> str | None:
+    """Ask *should_abort* whether to stop, treating its own failure as carry on.
+
+    psutil can fail on exactly the machine this guard exists for, and the
+    manifest entries for everything embedded since the last checkpoint live in
+    memory until the run ends. So an exception escaping here would throw away
+    real work in order to report a failed memory read. Logged at error level
+    because "this run is now unguarded" is not something to discover later.
+    """
+    try:
+        return should_abort()
+    except Exception as e:
+        logger.error(
+            "Pressure check failed for %s, continuing unguarded: %s: %s",
+            project_path, type(e).__name__, e,
+        )
+        return None
+
+
+def _count_absent_from_manifest(
+    file_paths: list[str], manifest: dict, project_root: Path
+) -> int:
+    """How many of *file_paths* the manifest holds no entry for.
+
+    A file the manifest already knows has its chunks in the store, so a run that
+    stops before revisiting it costs nothing: at worst its hash is stale, which
+    is the ordinary changed file case the next run picks up. A file with no
+    entry is genuinely missing from the index. That distinction is what separates
+    a run that stopped with work outstanding from one that stopped having
+    confirmed there was none.
+    """
+    return sum(
+        1 for fp in file_paths if _rel_path(fp, project_root) not in manifest
+    )
+
+
 # ---------------------------------------------------------------------------
 # Graph store helpers
 # ---------------------------------------------------------------------------
@@ -489,11 +544,17 @@ def index_project(
             inside a run_in_executor worker, and a Future that has already
             started cannot be cancelled, so stopping has to be cooperative --
             the worker checks a flag at a safe point and returns by itself.
-            Left unset (the manual /index-project path) nothing is checked and
-            behaviour is exactly as before.
+            The background sweep and POST /index-project both pass one; left
+            unset nothing is checked. An exception out of it is logged and
+            treated as "no pressure" rather than allowed to end the run, because
+            a probe that cannot answer must not discard work already done.
 
     Returns stats dict. A run that stopped early carries ``stopped_early`` with
-    the reason, and its manifest is marked incomplete so the next pass resumes.
+    the reason, ``files_pending`` with the number of files it never looked at,
+    and ``index_incomplete`` saying whether any of those still need indexing.
+    Only that last case marks the manifest incomplete for the next pass to
+    resume from: a run that stopped having confirmed every remaining file was
+    already indexed leaves a complete index complete.
     """
     project_root, pid, index_dir, chroma_dir, manifest_path = _project_paths(project_path)
 
@@ -547,10 +608,7 @@ def index_project(
         current_files: set[str] = set()
 
         for fp in file_paths:
-            try:
-                rp = str(Path(fp).relative_to(project_root)).replace("\\", "/")
-            except ValueError:
-                rp = fp.replace("\\", "/")
+            rp = _rel_path(fp, project_root)
             current_files.add(rp)
             _register_file_variants(rp, file_map)
 
@@ -603,6 +661,10 @@ def index_project(
         files_failed = 0
         edges_extracted = 0
         stopped_early: str | None = None
+        # Files this run never looked at, and how many of those the manifest has
+        # never held an entry for. Both stay 0 unless the run stops early.
+        files_pending = 0
+        files_never_indexed = 0
         start_time = time.time()
 
         # Next wall clock moment the manifest gets flushed. Monotonic, so a system
@@ -610,26 +672,30 @@ def index_project(
         # checkpointing or fire it every iteration.
         next_checkpoint_at = time.monotonic() + INDEX_MANIFEST_CHECKPOINT_S
 
-        for file_path in file_paths:
+        for position, file_path in enumerate(file_paths):
             # Cooperative abort point: between files, never part way through one.
             # A file only enters the manifest once its chunks are actually in the
             # store, so stopping here always leaves the manifest and the store
             # agreeing about what is indexed.
             if should_abort is not None:
-                reason = should_abort()
+                reason = _pressure_reason(should_abort, project_path)
                 if reason:
                     stopped_early = reason
+                    pending = file_paths[position:]
+                    files_pending = len(pending)
+                    files_never_indexed = _count_absent_from_manifest(
+                        pending, manifest, project_root
+                    )
                     logger.warning(
                         "Giving the machine back part way through %s: %s "
-                        "(%d of %d files done, resuming next sweep)",
+                        "(%d of %d files done, %d not looked at, %d of those "
+                        "never indexed)",
                         project_path, reason, files_indexed, len(file_paths),
+                        files_pending, files_never_indexed,
                     )
                     break
 
-            try:
-                rel_path = str(Path(file_path).relative_to(project_root)).replace("\\", "/")
-            except ValueError:
-                rel_path = file_path.replace("\\", "/")
+            rel_path = _rel_path(file_path, project_root)
 
             suffix = Path(rel_path).suffix.lower()
             is_doc = suffix in {".md", ".mdx", ".rst", ".txt"}
@@ -842,10 +908,21 @@ def index_project(
         # manifest would claim files are indexed whose chunks no longer exist, and
         # nothing would ever notice or reindex them. __incomplete__ is what stops
         # the resume from being a restart, see index_is_incomplete().
+        #
+        # Stopping early is not the same thing as being incomplete, which is why
+        # this asks how many pending files the manifest never knew about rather
+        # than just whether the run stopped. A routine incremental resync whose
+        # guard fires before file 0 has confirmed nothing and changed nothing, and
+        # every file is still indexed from the run before; marking that incomplete
+        # would make a complete project report itself stale to /search until some
+        # later run happened to clear it. A force run always has work outstanding
+        # after a break, because the collection was emptied above and the manifest
+        # starts empty with it.
+        index_incomplete = stopped_early is not None and files_never_indexed > 0
         _save_project_manifest(
             manifest_path, manifest, str(project_root),
             pipeline_version=PIPELINE_VERSION,
-            incomplete=stopped_early is not None,
+            incomplete=index_incomplete,
             # The backward compat branch above sets model_id to "" when a plain
             # embedder was passed instead of a ModelCache. Empty is "unknown", not
             # a real model id, so normalize it to None and let the carry over keep
@@ -882,7 +959,15 @@ def index_project(
     if graph_stats:
         result["graph"] = graph_stats
     if stopped_early:
+        # files_indexed and files_unchanged only count files this run actually
+        # looked at, so on their own they read the same for "nothing here" and
+        # "everything here, already done, never looked at". files_pending says
+        # how many files went unexamined and index_incomplete says whether any of
+        # them still need indexing, which is the difference between "retry this"
+        # and "nothing to do".
         result["stopped_early"] = stopped_early
+        result["files_pending"] = files_pending
+        result["index_incomplete"] = index_incomplete
     return result
 
 

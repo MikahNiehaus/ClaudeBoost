@@ -852,6 +852,21 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("speak-tts.py")}],
     }, sentinel="speak-tts.py", label="TTS speak hook")
 
+    # --- Session restore ledger: records what is open so a reboot can reopen it ---
+    # SessionStart adds the session, SessionEnd removes it. A reboot never
+    # delivers SessionEnd, so whatever is still listed is what was open.
+    _install_hook(settings, "SessionStart", {
+        "matcher": "Always",
+        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
+                   "timeout": 3000,
+                   "statusMessage": "Recording session for restore..."}],
+    }, sentinel="session-restore-ledger.py", label="session restore ledger (start)")
+
+    _install_hook(settings, "SessionEnd", {
+        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
+                   "timeout": 3000}],
+    }, sentinel="session-restore-ledger.py", label="session restore ledger (end)")
+
 
 
 # ---------------------------------------------------------------------------
@@ -1803,6 +1818,40 @@ def install_netcoredbg() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Session restore: the at logon trigger
+#
+# The only OS level autostart ClaudeBoost registers. Everything else self heals
+# from a hook inside an already running session, which cannot work here because
+# the whole point is that nothing is running yet after a reboot.
+#
+# Set CLAUDEBOOST_NO_SESSION_RESTORE_TASK=1 to skip it. uninstall.py removes it.
+# ---------------------------------------------------------------------------
+def install_session_restore_task() -> None:
+    _info("\nRegistering session restore at logon...")
+
+    if os.environ.get("CLAUDEBOOST_NO_SESSION_RESTORE_TASK"):
+        _skip("session restore task (CLAUDEBOOST_NO_SESSION_RESTORE_TASK is set)")
+        return
+
+    if not IS_WINDOWS:
+        _skip("session restore at logon is Windows only "
+              "(the ledger and manual restore still work everywhere)")
+        return
+
+    script = BOOST_HOME / "scripts" / "session-restore.py"
+    if not script.exists():
+        _warn(f"session-restore.py missing at {script}, skipping the logon task")
+        return
+
+    rc, out = run_cmd([sys.executable, str(script), "--install-task"])
+    for line in (out or "").splitlines():
+        if line.strip():
+            print(f"  {line.rstrip()}")
+    if rc != 0:
+        _warn("session restore task not registered, run /restore-sessions by hand after a reboot")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -1828,6 +1877,7 @@ def main() -> int:
     install_mermaid_cli()
     install_netcoredbg()
     install_clean_rag()
+    install_session_restore_task()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")

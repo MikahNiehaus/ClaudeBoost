@@ -535,16 +535,24 @@ async def handle_index_project(request: web.Request) -> web.Response:
         # for, which is why the psutil sampling lock there is process wide rather
         # than per instance.
         #
+        # check_ram_at_start because this instance lives for one request. The
+        # sweep reuses one checkpoint across every project it visits and gates on
+        # wait_for_system_headroom() before it starts, so it pays the interval's
+        # opening blind spot once, on a machine already checked. Here that blind
+        # spot would be the whole run for anything finishing inside 15s, and it
+        # would swallow exactly the incident above: RAM already at 0.1 GB when the
+        # request arrives.
+        #
         # This bounds when a run gives up, not how much one file may allocate, so
         # it prevents the crash and nothing more. A run that stops this way
-        # answers 200 with a stopped_early reason and leaves the manifest
-        # __incomplete__, and only the sweep's full rebuild branch ever resumes
-        # one, so a caller has to read that field and retry without force.
+        # answers 200 with a stopped_early reason, files_pending for the files it
+        # never reached, and index_incomplete saying whether any of those files
+        # still need work. Retrying without force resumes from what it kept.
         result = await loop.run_in_executor(
             None,
             partial(
                 index_project, project_path, _model_cache, force=force,
-                should_abort=PressureCheckpoint().pressure,
+                should_abort=PressureCheckpoint(check_ram_at_start=True).pressure,
             ),
         )
     finally:
