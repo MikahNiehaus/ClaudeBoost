@@ -20,6 +20,19 @@ sqlite-vec>=0.1.9,<1.0
 sentence-transformers==3.4.1
 transformers==4.57.6
 huggingface-hub==0.36.2
+
+# Required by the default code embedding model, not by us directly, which is
+# why it was missed. nomic-ai/CodeRankEmbed (config.py CODE_EMBEDDING_MODEL,
+# and lang_router's MODEL_FALLBACK) ships its own modeling code, and
+# transformers runs check_imports on that file before downloading any weights.
+# Without einops it raises ImportError there, so the model never loads, the
+# server reports status "failed" with code_embedding_loaded false, and every
+# /index-project answers 500. Nothing in the log points at requirements.txt.
+#
+# Ranged rather than pinned: it is a small standalone tensor reshaping helper
+# with a stable API, not part of the transformers/sentence-transformers version
+# knot above that has to agree with itself.
+einops>=0.7,<1.0
 httpx>=0.27.0,<1.0
 html2text>=2024.2.26,<2026.0
 networkx>=3.0,<4.0

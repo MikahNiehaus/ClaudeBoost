@@ -122,10 +122,13 @@ Use everything gathered to fill out the template. Rules:
 
 **Voice and style rules (apply to every word in the document):**
 
-Read `$CLAUDEBOOST_HOME/knowledge/human-voice.xml` and apply all rules. The short version:
+Apply the human voice rules from `CLAUDE.md` ("Always on rules"). This used to
+open `$CLAUDEBOOST_HOME/knowledge/human-voice.xml`, deleted in 754a2d4 with the
+rest of the knowledge base, so the read failed and only the summary below
+actually applied. That summary is the whole rule set, so nothing was lost:
 
 - **Zero dashes of any kind.** No em dash (—), no en dash (–), no spaced hyphen ( - ), and no hyphenated compound words. "auto-dismiss" becomes "auto dismiss". "double-banner" becomes "double banner". "step-by-step" becomes "step by step". "client-side" becomes "client side". The only exception is when a dash is part of an actual identifier being named (a filename, branch name, or flag).
-- No AI vocabulary: never use seamless, robust, leverage, utilize, facilitate, comprehensive, nuanced, pivotal, delve, empower, holistic, or any word from the banned list in the XML.
+- No AI vocabulary: never use seamless, robust, leverage, utilize, facilitate, comprehensive, nuanced, pivotal, delve, empower, holistic, or any word from the banned list in CLAUDE.md.
 - Write like a person wrote it. Contractions are fine. Sentence fragments are fine. Opinions are fine.
 - Vary sentence length. Three sentences the same shape in a row reads like a machine.
 - Be specific and concrete. "The JWT secret was base64 decoded instead of read as UTF8" beats "there was an encoding issue".

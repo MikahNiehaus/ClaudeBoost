@@ -18,6 +18,8 @@ import os
 import sys
 from pathlib import Path
 
+from rag_port import rag_url
+
 from workspace_identity import get_instance_id, normalize_cwd, read_ws_instance, resolve_active_workspace
 
 
@@ -102,53 +104,41 @@ def main() -> int:
     if not workspace_path:
         return 0
 
+    # This used to print a five tier token budget for POST /context on port
+    # 8612. Every line of it was describing the retired server: clean-rag has
+    # no /context route, no tiers and no agent definition injection. What is
+    # actually useful at session start is where the workspace is and how to
+    # search this project.
     stack = _detect_stack(project_path) if project_path else ""
-    tier3_suffix = f" (stack: {stack})" if stack else ""
 
     t3c_exists, t3c_files = _tier3c_status(workspace_path)
-    if t3c_exists:
-        t3c_line = f"  Tier 3c  Task research           ~400 tok  [EXISTS - {t3c_files} index files]\n"
-        t3c_action = "Tier 3c is ready. Task research auto-loads when workspace_path is in /context.\n"
-    else:
-        t3c_line = "  Tier 3c  Task research           ~400 tok  [NOT BUILT - research gate builds it on code edits]\n"
-        t3c_action = "Tier 3c is NOT BUILT yet. The research gate builds it automatically as agents edit code.\n"
+    research_line = (
+        f"Task research:    READY ({t3c_files} index files)"
+        if t3c_exists else
+        "Task research:    NOT BUILT (the research gate builds it as agents edit code)"
+    )
 
     project_info = ""
     if project_path:
         project_info = f"\nProject:          {project_path}" + (f" ({stack})" if stack else "")
 
-    context_body = (
-        '  {\n'
-        '    "agent": "...",\n'
-        '    "task_description": "...",\n'
-    )
+    lines = [
+        f"ACTIVE WORKSPACE: {workspace_id}",
+        f"Workspace path:   {workspace_path}{project_info}",
+        research_line,
+    ]
+
     if project_path:
-        context_body += f'    "project_path": "{project_path}",\n'
-    context_body += f'    "workspace_path": "{workspace_path}"\n'
-    context_body += '  }'
+        lines += [
+            "",
+            "Codebase search:",
+            f"  POST {rag_url('/search')}",
+            f'  {{"query": "...", "sources": ["project:{project_path}"], "mode": "both"}}',
+            "  mode both runs vector similarity and the import graph together."
+            " They surface different files, so never run only one.",
+        ]
 
-    briefing = (
-        f"ACTIVE WORKSPACE: {workspace_id}\n"
-        f"Workspace path:   {workspace_path}"
-        f"{project_info}\n"
-        "\n"
-        "RAG CONTEXT TIERS - include workspace_path in every /context call:\n"
-        "\n"
-        "  POST http://127.0.0.1:8612/context\n"
-        + context_body + "\n"
-        "\n"
-        "Token budget (~6000 tokens total):\n"
-        "  Tier 0   Agent definition        ~200 tok   (always included)\n"
-        "  Tier 1   Guardrails              ~800 tok   (always included)\n"
-        "  Tier 2   Declared knowledge      ~400 tok   (agent-specific)\n"
-        f"  Tier 3   General best practices ~1200 tok  (semantic search{tier3_suffix})\n"
-        + t3c_line
-        + "  Tier 4   Project codebase        ~3000 tok  (requires project_path and indexed project)\n"
-        "\n"
-        + t3c_action
-    )
-
-    print(json.dumps({"additionalContext": briefing}))
+    print(json.dumps({"additionalContext": "\n".join(lines)}))
     return 0
 
 

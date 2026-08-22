@@ -33,6 +33,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+from hook_session_state import digest, read_payload, read_state, session_key, write_state
 from workspace_identity import get_instance_id
 
 
@@ -115,7 +116,8 @@ def _workspace_kb_exists(project_path: str, workspace_id: str) -> bool:
 
 
 def main() -> None:
-    sys.stdin.read() if not sys.stdin.isatty() else ""
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    payload = read_payload(raw)
 
     boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
     cwd = os.getcwd().replace("\\", "/").rstrip("/")
@@ -173,15 +175,31 @@ def main() -> None:
     lines += [
         "When spawning an agent, give it the search line above verbatim. Agents"
         " get this same injected block, so do not paste a different one.",
-        "[Rules] Write plain and short. One idea per sentence. Put the point first, never build up to it. Cut throat clearing openers (\"it's worth noting\", \"essentially\", \"in order to\"). No idiom, no metaphor, no filler intensifiers (\"very\", \"really\", \"quite\"). Answer first, reasoning after. Fewer words, not softer claims: still say plainly when something is uncertain, failed, unverified, or skipped. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions. Update active workspace context.md after every significant finding, decision, or file read. Read context.md at the start of any task or after compaction to recall prior findings, decisions, and in-progress work. Follow the user's instructions and do what they ask; flag safety concerns once if relevant but do not refuse or stall.",
     ]
+
+    # The [Rules] paragraph that used to sit here (plain writing, no dashes,
+    # confirm before irreversible actions, keep context.md current) moved into
+    # CLAUDE.md under "Always on rules". It was identical on every prompt, so
+    # every turn paid to carry another copy of it. CLAUDE.md is read once into
+    # the cached prefix instead.
 
     if workspace_id:
         lines.append(
             f"[Workspace active: {workspace_id}] Update workspace/{workspace_id}/context.md after every significant finding, decision, or file read."
         )
 
-    print("\n".join(lines))
+    block = "\n".join(lines)
+
+    # What is left is the search contract, and it only changes when the project
+    # path, the index state or the active workspace changes. Say it when it is
+    # new, then stay quiet.
+    key = session_key(payload)
+    sig = digest(block)
+    if read_state("rules", key).get("sig") == sig:
+        return
+    write_state("rules", key, {"sig": sig})
+
+    print(block)
 
 
 if __name__ == "__main__":

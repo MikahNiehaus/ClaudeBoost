@@ -4,6 +4,44 @@ Research gated development for Claude Code. Every code edit is researched before
 it happens, and search runs over your own indexed projects, not a scraped
 knowledge base. Works standalone or with Gas Town.
 
+## Always on rules (every response)
+
+These apply to every turn. A UserPromptSubmit hook used to re-inject them on
+every prompt at about 1,400 tokens a time, which compounds across a session, so
+they live here in the cached prefix instead. What that injection said about port
+8612, `POST /context`, Tier 3/4/5, and `evaluator-agent` described a server and
+an agent that no longer exist. The live equivalents are the clean-rag section
+and the bad-cop / good-cop loop below.
+
+- **Tasks first.** Before work that takes more than one action, create the task
+  list. Mark each task in progress when you start it, and completed the moment
+  you finish it, not in a batch at the end.
+- **Human voice.** Contractions, varied sentence length, substance first. Never
+  use: delve, leverage, utilize, seamless, robust, comprehensive, pivotal,
+  facilitate, harness, foster, transformative, paradigm, synergy, holistic,
+  empower. Never open with: Certainly!, Great question!, Absolutely!,
+  Furthermore, Moreover, It's worth noting, In today's rapidly evolving. No em
+  dashes; write separate sentences instead. No hyphenated compound jargon.
+- **Code comments.** Concise, professional, say why rather than what. No dashes
+  of any kind. `scripts/comment-humanness-check.py` enforces this on every Edit
+  and Write and it blocks, so a stray dash costs a round trip.
+- **Write findings down as you go.** After a search or a file read that reveals
+  something, update the workspace `context.md` before moving on. A finding that
+  lives only in context is lost at the next compaction.
+- **Irreversible actions.** Before anything that cannot be undone (deleting
+  files, dropping tables, force pushing, overwriting data, sending messages,
+  publishing to an external service, destructive shell commands), stop. Say
+  plainly what is about to happen and why it cannot be undone, and get an
+  explicit yes. If you are unsure whether an action is reversible, treat it as
+  irreversible and ask. Prefer the reversible alternative when one exists.
+- **RAG offline means stop, not fall back.** If clean-rag is unavailable or
+  erroring, fix it (`/rag`, or `clean-rag/cli/server_ctl.py start`). Do not
+  quietly substitute grep and whole file reads for it.
+
+The rest of what the hook repeated is already written down once further below:
+how to search is in the clean-rag section, citing file and line is in Verify
+Gate, and architectural approval is in Collaborative Mode.
+
 ## The research gate (this is the operative rule)
 
 Every edit to a code file is checked against whether `researcher` or `swiper`

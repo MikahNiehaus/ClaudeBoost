@@ -156,7 +156,7 @@ Print a compact table of all results:
 
 Check                     Status
 ──────────────────────────────────────────
-RAG (port 8612)          : ready / NOT READY
+RAG (port 8613)          : ready / NOT READY
 Dimension heal           : none / rebuilt [scopes]
 Hooks (6/6)              : all present / MISSING: [list]
 CLAUDE.md (~/.claude/)   : loaded / MISSING

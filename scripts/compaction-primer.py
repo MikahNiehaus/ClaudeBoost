@@ -53,12 +53,15 @@ def main() -> int:
     print(json.dumps({
         "additionalContext": (
             workspace_line
+            # evaluator-agent and POST /context both went away with the 8612
+            # server. Naming them here sent every post compaction turn after
+            # machinery that does not exist.
             + "STANDING ORDERS (re-injected before compaction): "
             "Search RAG before reading files. "
             "Cite file:line for every finding. "
-            "Spawn evaluator-agent — never self-verify. "
-            "CONSULT before new endpoints/tables/dependencies. "
-            "POST http://127.0.0.1:8612/context first in every agent spawn prompt."
+            "Verify with bad-cop in a fresh context, never self review your own diff. "
+            "CONSULT before new endpoints, tables or dependencies. "
+            "The full rules are in CLAUDE.md."
         )
     }))
     sys.exit(0)

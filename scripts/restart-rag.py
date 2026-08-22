@@ -1,14 +1,19 @@
 """
 restart-rag.py — Kill the RAG HTTP server process to force a clean restart.
 
-The RAG server is a standalone HTTP daemon on port 8612, not an MCP process.
-After killing it, restart with: python scripts/rag-server-start.py
+The RAG server is a standalone HTTP daemon, not an MCP process. It listens on
+the port clean-rag's own config names (8613 by default).
+
+After killing it, restart with:
+  python clean-rag/cli/server_ctl.py start
+
+This used to say `python scripts/rag-server-start.py`. That script was deleted
+along with the 8612 server, so the instruction pointed at nothing.
 
 Use this when the RAG server is stuck or needs to pick up code changes.
 
 Usage (Claude can call this directly):
   python scripts/restart-rag.py
-  python scripts/rag-server-start.py
 """
 from __future__ import annotations
 
@@ -78,7 +83,7 @@ def main() -> int:
     new_pids = find_rag_server_pids()
     if not new_pids:
         print("RAG server stopped. Restart with:")
-        print("  python scripts/rag-server-start.py")
+        print("  python clean-rag/cli/server_ctl.py start")
         print("Or run /rag in Claude Code.")
     elif new_pids == pids:
         print("Warning: same PID still running — SIGTERM may have been ignored")

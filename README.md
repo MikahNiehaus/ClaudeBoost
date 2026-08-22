@@ -4,10 +4,11 @@
 
 Claude knows how to code. ClaudeBoost knows how to do it right.
 
-It loads security standards, testing methodology, and 109 knowledge files into every
-session. When something's missing, it researches and indexes it on the fly. Whatever
-you're building, whatever stack you're on — ClaudeBoost makes sure Claude behaves like
-a senior engineer who already knows your domain.
+It researches every code edit before it happens and loads what it finds into the
+session. Search runs over your own indexed projects, plus live web, GitHub and
+StackOverflow lookups, rather than a scraped knowledge base. Whatever you're
+building, whatever stack you're on, ClaudeBoost makes sure Claude behaves like a
+senior engineer who already knows your domain.
 
 ## What It Does
 
@@ -75,16 +76,20 @@ Microsoft's full GraphRAG synthesizes graph edges from unstructured text using L
 
 ```
 ClaudeBoost/
-├── agents/              25 agent definitions (XML)
-├── knowledge/           109 knowledge files (XML)
-│   ├── lang-*.xml       21 language guides
-│   └── fw-*.xml         33 framework guides
-├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
+├── clean-rag/           HTTP RAG server on port 8613, hooks, agents, skills
+│   ├── server/          Search, indexing, graph, web and GitHub sources
+│   ├── hooks/           The research gate, verifier gate and auto test gate
+│   └── portable/        Agents and skills installed into ~/.claude
 ├── .claude/commands/    35 slash commands
 ├── scripts/             Setup, hooks, and maintenance scripts
 ├── CLAUDE.md            Orchestration rules (loaded globally)
 └── docs/                Reference documentation
 ```
+
+The XML `agents/` and `knowledge/` trees and the `mcp-rag-server/` HTTP server
+on port 8612 were removed. Search now runs over projects you index yourself
+rather than a shipped knowledge base, and the agents are native Claude Code
+subagents under `clean-rag/portable/agents/`.
 
 ## Quick Start
 
@@ -169,17 +174,23 @@ the session, and shows recent workspaces. From there:
 /security-review         OWASP-grounded security audit
 ```
 
-The RAG server exposes an HTTP API at `http://127.0.0.1:8612`:
+The RAG server exposes an HTTP API at `http://127.0.0.1:8613`:
 
 | Endpoint | What it does |
 |----------|-------------|
-| `POST /context` | Load agent identity + relevant knowledge + codebase context |
-| `POST /search` | Semantic search (knowledge, agents, or codebase) |
-| `POST /index` | Index a project's source code |
-| `GET /status` | Server health + collection sizes |
+| `POST /search` | Vector and import graph search over indexed projects |
+| `POST /index-project` | Index a project's source code |
+| `POST /web-search` | DuckDuckGo, source ranked and sanitized |
+| `POST /github-search`, `/github-file`, `/stackoverflow-search` | Outside sources |
+| `GET /status` | Server health and indexed projects |
 
-Agents call `POST /context` as their first action on every spawn. That's what makes
-knowledge loading automatic rather than manual.
+Search takes `sources`, a list of `project:<absolute path>`, and a `mode`. Use
+`mode: "both"` on every code search: vector finds semantic matches, graph finds
+structural neighbours, and they surface different files.
+
+`POST /context` is gone. It belonged to the retired 8612 server, along with the
+five tier token budget that loaded an agent's identity and knowledge on spawn.
+Agents are now native Claude Code subagents that carry their own definitions.
 
 ## Features
 
@@ -218,8 +229,9 @@ above 75%.
 
 ### Agent RAG Usage
 
-Every agent calls `POST /context` first — that's enforced by hook and blocks any spawn
-without it. Beyond that, each specialist agent is also wired with explicit search rules:
+Agents used to be required to call `POST /context` first, enforced by a hook that
+blocked the spawn otherwise. That route and its enforcement are both gone. Agents
+carry their own definitions now, and each is wired with explicit search rules:
 
 **Vector search (`mode=vector`)** — called before writing any code to find existing
 patterns, utilities, or similar implementations. Prevents duplication.
@@ -228,7 +240,7 @@ patterns, utilities, or similar implementations. Prevents duplication.
 and importers. Every agent that touches code knows the blast radius before touching
 anything.
 
-The `reviewer-agent` runs a mandatory Caller Impact pass: it graph-searches every
+`bad-cop` runs a mandatory Caller Impact pass: it graph-searches every
 changed file and checks each caller for silent breakage. A change that looks clean in
 isolation but breaks a caller is flagged as a BLOCKER.
 
@@ -239,7 +251,7 @@ parallel review: a deterministic pre-scan (grep patterns for closure-scope timer
 secret rendering, and loading states with no exit) runs first, then 15 passes run in parallel
 (logic, security, performance, test coverage, dead code, debug artifacts, banned patterns,
 project pattern consistency, caller impact, ticket alignment, async pattern audit, and template
-rendering security), then the evaluator-agent (Opus) runs last in a fresh context.
+rendering security), then bad-cop runs last in a fresh context.
 Every finding needs a `file:line` citation or it gets dropped.
 
 Scope flags: `--staged`, `--branch`, `--pr <url>`.
@@ -253,7 +265,7 @@ with `--full` for a whole-project audit.
 
 1. **App discovery** — Playwright snapshot crawl + RAG codebase search to build a
    component registry and app map
-2. **Test plan generation** — equivalence partitioning and boundary values; evaluator-agent
+2. **Test plan generation** — equivalence partitioning and boundary values; bad-cop
    removes unverified test cases; you approve the plan before execution starts
 3. **Test execution** — browser-only tools only (no DB queries, no API bypasses);
    annotated screenshots saved for every PASS; honest FAIL written for every failure
@@ -285,11 +297,14 @@ Every finding from a review or audit agent must be proven from actual code befor
 reaches you. The protocol:
 
 - Each finding needs a `file:line` citation
-- A fresh evaluator-agent reads only that citation — no session context — and returns
-  CONFIRMED or UNVERIFIED
-- UNVERIFIED findings are dropped before the report is written
-- Hooks nudge the orchestrator to spawn the evaluator; agents self-report confidence
-  levels (HIGH / MEDIUM / LOW) and the orchestrator escalates on LOW
+- A fresh `bad-cop` reads only that citation — no session context — writes an
+  adversarial test, runs it, and reports what actually failed with the execution
+  output attached
+- Findings that do not reproduce are dropped before the report is written
+- When bad-cop finds something real, `good-cop` researches and applies the fix,
+  then bad-cop re-checks it. The loop ends only when bad-cop itself stamps
+  `VERIFIED:`
+- `clean-rag/hooks/verifier-gate.py` nudges on Stop and names the unverified files
 
 "No issues found" is always a valid outcome. Finding something is not the goal.
 Finding real things is.
@@ -345,7 +360,7 @@ even needs research, so trivial edits skip the step. It all happens automaticall
 you work, no separate command to run.
 
 KB files are indexed as part of the project codebase. When relevant to a query they
-surface in `POST /context` Tier 4 results alongside source code. Run `/index-project`
+surface in `POST /search` results alongside source code. Run `/index-project`
 first so they're in the index.
 
 **Enforcement:** The workspace dashboard (injected at the start of every session) shows
@@ -355,31 +370,23 @@ when one is detected.
 
 ## Agents
 
+Installed into `~/.claude/agents/` from `clean-rag/portable/agents/`:
+
 | Agent | Specialty | Model |
 |-------|-----------|-------|
-| architect-agent | System design, SOLID principles, DDD | Opus |
-| reviewer-agent | Code review, verify gate | Opus |
-| ticket-analyst-agent | Requirements analysis | Opus |
-| debug-agent | Root cause analysis, step-through debugging | Sonnet |
-| test-agent | Testing strategy, TDD | Sonnet |
-| security-agent | Security auditing, OWASP | Sonnet |
-| performance-agent | Performance profiling, optimization | Sonnet |
-| refactor-agent | Code refactoring | Sonnet |
-| ui-agent | Frontend, accessibility | Sonnet |
-| docs-agent | Documentation | Sonnet |
-| research-agent | Web and codebase investigation | Sonnet |
-| explore-agent | Code exploration, fast file/symbol search | Sonnet |
-| browser-agent | Playwright browser automation | Sonnet |
-| e2e-agent | Structured E2E testing with screenshot evidence | Sonnet |
-| workflow-agent | Complex multi-step workflows | Sonnet |
-| compliance-agent | Compliance auditing | Sonnet |
-| evaluator-agent | Independent output verification | Sonnet |
-| standards-validator-agent | Standards validation | Sonnet |
-| estimator-agent | Story pointing | Sonnet |
-| devops-agent | CI/CD, Docker, deployment | Sonnet |
-| database-agent | Schema design, queries, migrations | Sonnet |
-| observability-agent | Logging, metrics, alerting | Sonnet |
-| rag-indexing-agent | RAG index health and filtering | Sonnet |
+| researcher | Codebase structure and the engineering standard for a change | Sonnet |
+| swiper | What can be swiped, from the project, stdlib, a dependency, GitHub or StackOverflow | Sonnet |
+| bad-cop | Adversarial review: writes tests, runs them, reports real failures | Sonnet |
+| good-cop | Researches and applies the fix bad-cop's findings call for | Opus |
+| quick-cop | The fast path for small changes | Sonnet |
+
+`researcher` and `swiper` are the only two agents the research gate counts.
+`bad-cop` provides the terminal `VERIFIED:` stamp.
+
+The 23 XML specialists this table used to list (architect-agent, reviewer-agent,
+evaluator-agent and the rest) lived only in `agents/*.xml` and were loaded as
+Tier 0 of `POST /context`. Both the directory and that route were deleted, so
+they are gone rather than renamed.
 
 ## Slash Commands
 

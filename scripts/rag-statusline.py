@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+from rag_port import rag_port
+
 # Force UTF-8 output so Unicode status chars render on Windows terminals
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -30,7 +32,9 @@ BLUE   = "\033[34;1m"
 DIM    = "\033[2m"
 RESET  = "\033[0m"
 
-RAG_HTTP_PORT = 8612  # SHA256("ClaudeBoost-rag-server") % 900 + 8100
+# Was hardcoded to 8612, the retired server, so the statusline reported RAG
+# down on a perfectly healthy machine. clean-rag's own config owns the number.
+RAG_HTTP_PORT = rag_port()
 
 
 def _rag_index_dir() -> Path:

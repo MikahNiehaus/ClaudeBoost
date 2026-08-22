@@ -32,12 +32,19 @@ Read `$ARGUMENTS` (the text the user typed after `/visualize`).
 Derive three things you'll use throughout:
 - **TOPIC** — a human-readable title for what's being visualized (e.g. "Auth Flow", "RAG Pipeline", "CI/CD Pipeline", "Architecture")
 - **SLUG** — a lowercase, hyphenated filename stem (e.g. `auth-flow`, `rag-pipeline`, `ci-cd-pipeline`, `architecture`)
-- **MODE** — one of: `concept`, `self-map`, `project-map`, `excalidraw`
+- **MODE** — one of: `concept`, `project-map`, `excalidraw`
 
 Rules:
 - `$ARGUMENTS` contains `--excalidraw` → **excalidraw** mode; strip `--excalidraw` to derive TOPIC/SLUG from remainder (default TOPIC = "Architecture" if blank). Skip Steps 3–3b; go to Step 3c.
 - `$ARGUMENTS` is empty or `--project` → **project-map** mode, TOPIC = "Architecture", SLUG = `architecture`
-- `$ARGUMENTS` is `--self` → **self-map** mode, TOPIC = "How ClaudeBoost Works", SLUG = `claudeboost`
+- `$ARGUMENTS` is `--self` → **project-map** mode pointed at ClaudeBoost itself, TOPIC = "How ClaudeBoost Works", SLUG = `claudeboost`. Gather from `$CLAUDEBOOST_HOME` rather than the current directory.
+
+There used to be a separate `self-map` mode with its own data source,
+`scripts/visualize-extract.py`, which read the `agents/` and `knowledge/` XML
+trees in one shot. All three were deleted in 754a2d4 with the rest of the
+retired knowledge base, so that path ran a script that was not there. `--self`
+still works because project-map gathers from repo structure and needs nothing
+ClaudeBoost specific.
 - `$ARGUMENTS` describes a concept, flow, or question (e.g. "auth flow", "how the RAG system works", "data pipeline") → **concept** mode; derive TOPIC and SLUG from the argument text
 
 For concept mode: TOPIC = title-cased version of the argument, SLUG = lowercase hyphenated (strip "how", "the", "a" if they'd make the slug awkward). Example: `how the RAG system works` → TOPIC `RAG System`, SLUG `rag-system`.
@@ -71,26 +78,16 @@ Novice-first rules (apply unless TOPIC signals technical/expert audience):
 
 ## Step 1: Detect Mode
 
-```bash
-ls agents/ knowledge/ 2>/dev/null | head -5
-```
+`MODE` is already set from Phase 0c. There is nothing to detect here, so do not
+run a detection command.
 
-- `MODE` is already set from Phase 0c — skip detection only if the user passed an explicit flag (`--self`, `--project`, `--excalidraw`) or a concept argument.
-- If no argument was given, use the directory check: both `agents/` and `knowledge/` exist → set MODE to **self-map**; otherwise **project-map**.
+This step used to run `ls agents/ knowledge/` and set MODE to `self-map` when
+both directories were present. Both were deleted in 754a2d4, so the check could
+only ever fall through to project-map, and it cost a shell call to reach a
+conclusion Phase 0c had already reached.
 
-User can always override: `--self` forces self-map, `--project` forces project-map.
-
----
-
-## Step 2a: Self-Map — Get Data from Extractor
-
-Run the extractor — it reads all agents, knowledge files, hooks, and commands in one shot:
-
-```bash
-"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/visualize-extract.py" "${CLAUDEBOOST_HOME}" /tmp/cb-graph.json
-```
-
-Then **Read** `/tmp/cb-graph.json` with the Read tool. Use the `layers`, `side_rails`, and card fields (`title`, `subtitle`, `detail`, `responsibilities`, `icon`, `accent`) as your content. Do not run any other data-gathering commands — everything is already in the JSON.
+`--self` and `--project` both mean project-map; they differ only in what
+directory is gathered from and what the diagram is titled.
 
 ---
 
@@ -107,7 +104,7 @@ Then **Read** `/tmp/cb-graph.json` with the Read tool. Use the `layers`, `side_r
 
 ## Step 2c: Ticket Context Enrichment (runs whenever a workspace ticket is available)
 
-After gathering project/self-map data, check for active ticket context. This step turns a plain architecture map into a *why are we here* diagram.
+After gathering project data, check for active ticket context. This step turns a plain architecture map into a *why are we here* diagram.
 
 **Check for workspace files:**
 
@@ -518,7 +515,7 @@ function downloadSVG() {
 
 ## Step 3b: Add Audio Tour (MANDATORY — DO NOT SIMPLIFY)
 
-**Only run when MODE = concept, self-map, or project-map.** Skip for `excalidraw` mode — go directly to Step 3c.
+**Only run when MODE = concept or project-map.** Skip for `excalidraw` mode — go directly to Step 3c.
 
 Every visualization MUST include the **full audio bar system** using the Web Speech API. This is non-negotiable — users expect it in every diagram.
 
@@ -1166,7 +1163,7 @@ For excalidraw files: if the `.excalidraw` extension isn't associated with anyth
 ## Step 5: Report
 
 Tell the user:
-- What was visualized (TOPIC) and which mode was used (self-map / project-map / concept)
+- What was visualized (TOPIC) and which mode was used (project-map / concept / excalidraw)
 - How many components and layers are in the diagram
 - Where the file was saved (`[SLUG].html`)
 

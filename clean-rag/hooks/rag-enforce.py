@@ -47,6 +47,72 @@ def _log_path() -> Path:
     return _clean_rag_home() / "state" / "rag-enforce.log"
 
 
+def _same_as_last(session_id, kind: str, text: str) -> bool:
+    """
+    True when this exact text was already emitted for this session and kind.
+
+    Records the new value as a side effect, so a caller is "say it when it
+    changes" in one line. Keyed on session_id, never pid: a hook is a fresh
+    process per prompt, so a pid key never repeats and every check would miss.
+    """
+    import hashlib
+    safe_sid = re.sub(r"[^A-Za-z0-9_.]", "_", str(session_id or "nosession"))[:64]
+    safe_kind = re.sub(r"[^A-Za-z0-9_.-]", "_", kind)[:32]
+    path = _clean_rag_home() / "state" / f"last-{safe_kind}-{safe_sid}"
+    digest = hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+    try:
+        if path.exists() and path.read_text(encoding="utf-8").strip() == digest:
+            return True
+    except Exception:
+        # Never let the bookkeeping suppress the message. Saying it twice is a
+        # small waste; swallowing it because a read failed is a real problem.
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(digest, encoding="utf-8")
+    except Exception:
+        pass
+    return False
+
+
+def _offline_marker(session_id) -> Path:
+    """
+    One file per conversation, present while this session has been told the
+    server is down.
+
+    Keyed on session_id rather than pid: a hook is a fresh process on every
+    prompt, so a pid key never repeats and every check would miss.
+    """
+    safe = re.sub(r"[^A-Za-z0-9_.]", "_", str(session_id or "nosession"))[:64]
+    return _clean_rag_home() / "state" / f"offline-reported-{safe}"
+
+
+def _offline_already_reported(session_id) -> bool:
+    try:
+        return _offline_marker(session_id).exists()
+    except Exception:
+        # Never let the bookkeeping suppress the warning. Saying it twice is a
+        # small waste; swallowing it because a stat failed is a real problem.
+        return False
+
+
+def _mark_offline_reported(session_id) -> None:
+    try:
+        marker = _offline_marker(session_id)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except Exception:
+        pass
+
+
+def _clear_offline_reported(session_id) -> None:
+    """Called on a healthy turn, so the next outage is announced again."""
+    try:
+        _offline_marker(session_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 try:
     _log_file = _log_path()
     _log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1313,6 +1379,11 @@ def main() -> int:
     # agent runs. This is the "every time I say something" half of the gate.
     # A leading /ps marks the turn quick (skip research and the verifier). Detected
     # deterministically here on the raw prompt, never trusted to a model written marker.
+    # Bound before the try, because the offline warning further down keys its
+    # once per outage marker on it. Leaving it to be assigned inside the try
+    # means an exception on the first line leaves the name unbound and turns a
+    # logged failure into a NameError.
+    session_id = ""
     try:
         session_id = _str_field(hook_payload, "session_id")
         quick = bool(_QUICK_RE.match(user_prompt)) or bool(_QUICK_COMMAND_RE.search(user_prompt))
@@ -1340,8 +1411,15 @@ def main() -> int:
     # is no stored value that could be read again on a later prompt at all.
     project_root = _project_root()
 
+    # Printed when it changes, not on every prompt. This block is one of three
+    # fixed strings (indexed, not indexed, refusing to index a container), and
+    # whichever one applies is identical every turn until the index state
+    # actually moves. Injected context is re-read by every later request, so
+    # repeating "not indexed yet, queued in background" for a whole session
+    # costs about 39 tokens a turn to restate something already said, and it
+    # never stops while the server is down and indexing can never finish.
     git_context = _git_project_context(port, project_root)
-    if git_context:
+    if git_context and not _same_as_last(session_id, "project-context", git_context):
         print(git_context)
 
     keywords = _extract_keywords(user_prompt) if user_prompt else []
@@ -1412,6 +1490,16 @@ def main() -> int:
         # skipped when the server was stopped on purpose, when one was tried in
         # the last 15 minutes, and now when the cooldown cannot be persisted, so
         # claiming "self healing initiated" here was wrong most of the time.
+        #
+        # Said once per outage, not once per prompt. The text is identical every
+        # time, and injected context is re-read by every later request in the
+        # session, so repeating it while the server stays down costs about 116
+        # tokens a turn to say nothing new. The first line still lands the
+        # moment the server goes away, and _clear_offline_reported below makes
+        # the next outage speak up again.
+        if _offline_already_reported(session_id):
+            return 0
+        _mark_offline_reported(session_id)
         print(
             f"\n[WARN] clean-rag did not answer on port {port}.\n"
             "This turn has no injected research context.\n"
@@ -1421,6 +1509,8 @@ def main() -> int:
             "yourself: python clean-rag/cli/server_ctl.py start\n"
         )
         return 0
+
+    _clear_offline_reported(session_id)
 
     reranked = _rerank_results(rag_results)
     reranked = _filter_by_keyword_relevance(search_query, reranked)

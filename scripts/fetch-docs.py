@@ -40,6 +40,7 @@ import time
 from collections import deque
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
+from rag_port import rag_url
 
 try:
     import httpx
@@ -572,9 +573,9 @@ def main():
         print(f"Files in KB: {len(list(kb_dir.glob('*.md')))}")
         print(f"\nIndex into RAG:")
         print(
-            f'  curl -s -X POST http://127.0.0.1:8612/index '
+            f'  curl -s -X POST {rag_url("/index-project")} '
             f'-H "Content-Type: application/json" '
-            f"-d '{{\"project_path\":\"{project}\",\"force\":true}}'"
+            f"-d '{{\"project_path\":\"{project}\"}}'"
         )
         return
 
@@ -584,9 +585,9 @@ def main():
 
     print(f"\nIndex into RAG:")
     print(
-        f'  curl -s -X POST http://127.0.0.1:8612/index '
+        f'  curl -s -X POST {rag_url("/index-project")} '
         f'-H "Content-Type: application/json" '
-        f"-d '{{\"project_path\":\"{project}\",\"force\":true}}'"
+        f"-d '{{\"project_path\":\"{project}\"}}'"
     )
 
 

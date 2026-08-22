@@ -1,39 +1,31 @@
 """
-ClaudeBoost session primer — UserPromptSubmit command hook.
+ClaudeBoost session primer, a UserPromptSubmit command hook.
 
-Injects a compact, imperative behavior briefing into Claude's context
-before every substantive user message. Acts as standing orders that
-re-surface at the start of each turn before Claude decides anything.
+Emits only what CHANGED since the last prompt. It used to restate a fixed
+1,437 token block of rules on every message. That text is not paid for once:
+additionalContext lands in the transcript and every later request re-reads it,
+so a constant block costs on the order of N squared across N prompts, roughly
+86k tokens of pure repetition by turn 60.
 
-Also handles /clear recovery: if /clear-safe wrote state/clear-pending.json
-before the clear, this script injects the saved workspace context on the
-first message after /clear (regardless of prompt length).
+The rules themselves now live in CLAUDE.md, which is loaded once into the
+cached prefix. What is left here is the part CLAUDE.md genuinely cannot carry,
+because it is only knowable at runtime:
 
-Skips:
-- Short prompts (<15 chars) when no clear-pending flag is present
+- the RAG server going offline or coming back
+- CONSULT and AUTO being toggled
+- the active workspace changing, or one of its indexes flipping state
+- one shot restores after /clear and after a compaction
+
+Steady state, when nothing has changed, this emits a single pointer line.
+
+State is tracked per session in a temp file keyed on session_id, so a delta is
+measured against the previous prompt in the same conversation rather than
+against a process that no longer exists.
 
 Boost injection modes (state/boost-injection.json):
-- "false"  — skip all injection entirely
-- "true"   — inject always-on rules only, skip RAG verification
-- "verify" — (default) full RAG-gated behavior
-
-Always-on rules (A-H) inject in both "true" and "verify" modes:
-A. Tasks first — create tasks before multi-step work
-B. Human voice
-C. Code comments, no dashes
-D. Architectural approval before changes
-E. RAG usage when available
-F. Workspace update when one exists
-G. Dynamic RAG tiers — project_path/workspace_path params and what each enables
-H. Irreversible actions — stop and confirm before anything that can't be undone
-
-RAG standing orders (1-8) only inject in "verify" mode when RAG is confirmed online.
-
-Workspace dashboard injects when active-workspace.json resolves to a real path (any mode):
-- Live tier status: codebase index (checked via GET /status) + research index (directory check)
-- REQUIRED directives when indexes are missing, with exact skill to run
-- Exact POST /context params to use this session (including task_description from user message)
-- Self-clearing: once an index is built, its directive disappears automatically
+- "false"  skip all injection entirely
+- "true"   skip the RAG health check, still emit deltas and restores
+- "verify" (default) full behavior
 """
 from __future__ import annotations
 
@@ -42,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,38 +52,40 @@ _STOP_WORDS = frozenset({
 })
 
 
-def _get_rag_status(timeout: float = 0.2) -> dict | None:
-    """Quick GET /status. Returns status dict or None if unreachable or slow."""
+from hook_session_state import (
+    digest as _digest,
+    read_payload,
+    read_state,
+    session_key as _session_key,
+    temp_dir,
+    write_state,
+)
+from rag_port import rag_url, server_ctl
+from workspace_identity import get_instance_id, read_ws_instance, normalize_cwd
+
+
+def _get_rag_status(timeout: float = 0.5) -> dict | None:
+    """
+    Quick GET /status. Returns the status dict, or None if unreachable or slow.
+
+    Probed on every prompt rather than cached. There was a 60s cache here, and
+    it was keyed on os.getpid(), so it never once hit: a hook is a fresh
+    process per prompt. Probing every time is therefore the behavior that has
+    actually been running all along. Reinstating a real cache would be worse
+    than useless now, because a cached healthy answer hides the server going
+    down for as long as the cache lives, and going down is precisely the
+    transition this hook exists to report.
+    """
     import urllib.request
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8612/status", timeout=timeout) as r:
+        with urllib.request.urlopen(rag_url("/status"), timeout=timeout) as r:
             return json.loads(r.read())
     except Exception:
         return None
 
 
-from workspace_identity import get_instance_id, read_ws_instance, normalize_cwd
-
-
-def _get_cached_rag_status(timeout: float = 0.2) -> dict | None:
-    """GET /status with a 60s per-process cache. Skips the round-trip on every prompt."""
-    import time
-    temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
-    cache_path = Path(temp) / f"claudeboost_status_cache_{os.getpid()}.json"
-    _CACHE_TTL = 60.0
-    try:
-        raw = json.loads(cache_path.read_text(encoding="utf-8"))
-        if time.time() - float(raw.get("_ts", 0)) < _CACHE_TTL:
-            return raw.get("status")
-    except Exception:
-        pass
-    status = _get_rag_status(timeout)
-    if status is not None:
-        try:
-            cache_path.write_text(json.dumps({"_ts": time.time(), "status": status}), encoding="utf-8")
-        except Exception:
-            pass
-    return status
+def _temp_dir() -> Path:
+    return temp_dir()
 
 
 def _tokenize(text: str) -> set:
@@ -321,36 +316,24 @@ def _active_workspace_reminder(
 
     lines += [
         '',
-        'RAG TIER STATUS:',
-        f'  Tiers 3+4 (codebase):  {codebase_detail}',
-        f'  Tier 5  (research):    {t3c_detail}',
-        f'  Project KB:            {project_kb_detail}',
-        '',
-        'HOW TO USE THIS SESSION:',
+        'INDEX STATUS:',
+        f'  codebase (clean-rag):  {codebase_detail}',
+        f'  task research:         {t3c_detail}',
+        f'  project KB:            {project_kb_detail}',
     ]
 
-    ctx_desc = task_description[:120].replace('"', "'") if task_description else "[user's current message]"
-    if project_path and ws_path:
+    # Deliberately no task_description echo here. Repeating the user's own
+    # message back at them costs tokens and, worse, made this block different
+    # on every prompt, so the change detection below could never call it
+    # unchanged and it reprinted forever.
+    if project_path:
         lines += [
-            '  Every POST /context call MUST use these exact params:',
-            f'    project_path     = "{project_path}"',
-            f'    workspace_path   = "{ws_path}"',
-            f'    task_description = "{ctx_desc}"',
+            '',
+            'Codebase search this session:',
+            f'  POST {rag_url("/search")}',
+            f'    sources = ["project:{project_path}"]',
+            '    mode    = "both"   (vector and graph together, never only one)',
         ]
-    elif project_path:  # pragma: no cover
-        lines += [
-            '  Every POST /context call MUST include:',
-            f'    project_path     = "{project_path}"',
-            f'    task_description = "{ctx_desc}"',
-        ]
-
-    lines += [
-        "  Always use the user's actual message as task_description - NOT 'session start'.",
-        '  Every agent spawn: call POST /context as FIRST action in the spawn prompt.',
-        '  Codebase search: ALWAYS run BOTH mode=vector AND mode=graph for every codebase query —',
-        '  vector finds semantic matches, graph finds structural neighbours; NEVER run only one.',
-        '  New finding? Update workspace/context.md before moving on.',
-    ]
 
     return '\n'.join(lines)
 
@@ -387,17 +370,18 @@ def rag_verified() -> bool:
 
 def _try_auto_recover_rag(home: Path) -> bool:
     """
-    Auto-recover when sentinel is missing.
+    Auto recover when the sentinel is missing.
 
-    First checks if the server is already up (common: sentinel deleted at SessionStart
-    but the long-running server daemon is still healthy). If it responds, writes the
-    sentinel and returns True.
+    Fast path: the server is already up (common, because rag-session-reset.py
+    deletes the sentinel at every SessionStart while the daemon keeps running).
+    Write the sentinel and return.
 
-    If the server is down, launches rag-server-start.py in the background and writes
-    the sentinel optimistically — the server will be ready within a few seconds.
-    Returns True on launch, False only if the start script itself can't be found.
+    Slow path: start it detached. This used to launch scripts/rag-server-start.py,
+    which was deleted with the 8612 server, so recovery always failed and every
+    prompt got a "could not be started" banner it could do nothing about.
+    clean-rag's own server_ctl.py is the launcher that exists.
     """
-    # Fast path: server already running — just write the sentinel
+    # Fast path: already running, so just write the sentinel
     if _get_rag_status(timeout=1.0) is not None:
         try:
             _sentinel_path().touch()
@@ -405,8 +389,7 @@ def _try_auto_recover_rag(home: Path) -> bool:
             pass
         return True
 
-    # Slow path: server is down — launch it as a detached background process
-    start_script = home / "scripts" / "rag-server-start.py"
+    start_script = server_ctl()
     if not start_script.exists():
         return False
 
@@ -419,8 +402,9 @@ def _try_auto_recover_rag(home: Path) -> bool:
         }
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-        subprocess.Popen([python, str(start_script)], **kwargs)
-        # Write sentinel optimistically — server will be up within ~5s
+        subprocess.Popen([python, str(start_script), "start"], **kwargs)
+        # Optimistic: the server takes a few seconds, and the alternative is
+        # warning about it on every prompt until it finishes booting.
         try:
             _sentinel_path().touch()
         except Exception:
@@ -551,152 +535,137 @@ def _consume_compaction_pending(home: Path) -> bool:
     return True
 
 
+# Steady state output. Short on purpose: the rules it points at are in
+# CLAUDE.md, already in the cached prefix, and repeating them here is what
+# cost 1,437 tokens a prompt.
+POINTER = "ClaudeBoost active. Standing rules are in CLAUDE.md: always on rules, the research gate, CONSULT mode."
+
+RAG_OFFLINE = (
+    "clean-rag is OFFLINE. Start it with /rag, or "
+    "`clean-rag/cli/server_ctl.py start`. Until it is up, say so rather than "
+    "quietly falling back to grep and whole file reads."
+)
+
+RAG_BACK = "clean-rag is back online. Search it before reading files."
+
+# How long to wait before trying to launch the server again, when it is down.
+RECOVER_COOLDOWN_S = 120.0
+
+COMPACTION_NOTE = (
+    "Context was just compacted. Re-read the workspace context.md before "
+    "continuing, and pick up from the last documented next step."
+)
+
+CONSULT_ON = (
+    "CONSULT mode is now ON. Architectural decisions need an explicit yes "
+    "first (see Collaborative Mode in CLAUDE.md)."
+)
+
+CONSULT_OFF = (
+    "AUTO mode is now ON. Proceed autonomously on architectural decisions, "
+    "still citing sources."
+)
+
+
+def _dashboard_signature(dashboard: str) -> str:
+    """
+    Hash only the part of the workspace dashboard that reflects real state.
+
+    The candidate list at the top is ranked by keyword overlap with the current
+    message, so it reorders as the conversation moves even when nothing about
+    the workspace changed. Hashing it would make the dashboard look different
+    on every prompt and defeat the whole point of emitting deltas.
+    """
+    marker = 'ACTIVE WORKSPACE:'
+    idx = dashboard.find(marker)
+    return _digest(dashboard[idx:] if idx != -1 else dashboard)
+
+
 def main() -> int:
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
-    try:
-        data = json.loads(raw) if raw else {}
-    except Exception:
-        data = {}
+    data = read_payload(raw)
 
     prompt = data.get("prompt", "").strip()
     home = _get_home()
 
     boost_mode = _get_boost_injection_mode(home)
-
-    # boost false: skip all injection entirely
     if boost_mode == "false":
         return 0
 
-    # Always check for clear-pending flag — inject even on short prompts like "continue"
+    # Both flags are one shot and must be consumed even if we emit nothing
+    # else, so read them before the short prompt guard.
     clear_context = _consume_clear_pending(home)
-
-    # Check for compaction-pending flag — bypass 15-char guard after compaction too
     compaction_pending = _consume_compaction_pending(home)
 
-    # Skip standing orders for short prompts unless a post-clear or post-compaction flag is set
     if len(prompt) < 15 and not clear_context and not compaction_pending:
         return 0
 
-    # Always-inject rules: fire regardless of RAG state
-    always_inject = (
-        "ALWAYS-ON RULES (apply to every response): "
-        "(A) TASKS FIRST — before doing any work that involves more than one action, call TaskCreate. "
-        "This is not optional. If the user's request can be broken into steps, create tasks before starting. "
-        "Mark each task in_progress when you begin it. Mark it completed the moment you finish it — not in a batch at the end. "
-        "Never forget a step because it was not tracked. Tasks are your memory. Use them. "
-        "(B) Human voice — every word you write must sound like a human wrote it. "
-        "Use contractions. Vary sentence length. Start with the substance. "
-        "Never use: delve, leverage, utilize, seamless, robust, comprehensive, "
-        "pivotal, facilitate, harness, foster, transformative, paradigm, synergy, holistic, empower. "
-        "Never open with: Certainly!, Great question!, Absolutely!, Furthermore,, Moreover,, "
-        "It's worth noting, In today's rapidly evolving. "
-        "No em-dashes. Rewrite as separate sentences instead. "
-        "No hyphenated compound jargon (no-go, hard-block, soft-fail, non-trivial). "
-        "Say what you mean in plain words instead. "
-        "(C) Code comments — non-formal but professional, concise, say why not what. "
-        "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
-        "(D) Architectural changes — before making any architectural change (new class, endpoint, "
-        "table, schema, service, or pattern): (1) stop completely, (2) explain in plain terms "
-        "what you are changing, why, and what the impact is, (3) use AskUserQuestion to get "
-        "explicit YES confirmation — not a vague ok or continued conversation. "
-        "The user must understand the change before you proceed, not just acknowledge it. "
-        "This applies in CONSULT mode (default). In AUTO mode this check is skipped. "
-        "(E) RAG usage — when RAG is available, always call POST http://127.0.0.1:8612/search before reading files or grepping. "
-        "For scope=codebase queries, ALWAYS run BOTH mode=vector AND mode=graph — vector finds semantic matches, graph finds structural neighbours; NEVER run only one. "
-        "Never substitute grep or Read for RAG when RAG is online. "
-        "If RAG is erroring or unavailable, stop and fix it (run /rag to start the server). "
-        "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
-        "(F) Workspace update — if a workspace context.md exists for the current task, "
-        "update it after each meaningful finding or decision. "
-        "Do not let findings accumulate in context only. "
-        "(G) Dynamic RAG tiers — POST /context loads knowledge in layers. "
-        "project_path enables Tier 3 stack-boosted knowledge + Tier 4 codebase search. "
-        "workspace_path enables Tier 3c task research. "
-        "Omit a param and that tier is skipped. "
-        "Always pass both when you have them. "
-        "If no workspace exists yet, pass project_path alone to get Tier 3 + Tier 4. "
-        "(H) Irreversible actions — before doing ANYTHING that cannot be undone "
-        "(deleting files, dropping tables, force-pushing, overwriting data, sending messages, "
-        "publishing to external services, running destructive shell commands), STOP. "
-        "Tell the user exactly what you are about to do and why it cannot be undone. "
-        "Use AskUserQuestion to get explicit YES confirmation before proceeding. "
-        "If uncertain whether an action is reversible, treat it as irreversible and ask. "
-        "Prefer safe reversible alternatives whenever one exists — soft deletes over hard deletes, "
-        "backups before overwrites, dry-runs before destructive commands."
-    )
+    session_key = _session_key(data)
+    last = read_state("primer", session_key)
+    first_prompt = not last
 
-    # Find active workspace first — only call GET /status when one exists.
-    # The HTTP call blocks for up to timeout seconds and is only needed to check
-    # codebase index state in the dashboard. Skip it when there's no active workspace.
+    # Ask the server rather than trusting the sentinel file. _try_auto_recover_rag
+    # touches that sentinel optimistically, before the daemon has finished
+    # booting, so a launch that never succeeds reads as healthy forever. Under
+    # the old always inject behavior that only cost a wrong line on an otherwise
+    # identical block; now it would mean the offline warning fires once and can
+    # never fire again for the rest of the session.
+    #
+    # boost "true" means skip the health check, not skip the deltas.
+    now = time.time()
+    recover_ts = float(last.get("recover_ts") or 0)
+    rag_status = None
+    rag_online = True
+    if boost_mode != "true":
+        rag_status = _get_rag_status()
+        rag_online = rag_status is not None
+        if not rag_online and now - recover_ts > RECOVER_COOLDOWN_S:
+            # Throttled: without this, every prompt while the server is down
+            # spawns another launcher.
+            _try_auto_recover_rag(home)
+            recover_ts = now
+
+    consult = consult_mode_active(home)
+
     ws_info = _find_best_workspace(home, prompt)
-    rag_status = _get_cached_rag_status() if (ws_info[1] and rag_verified()) else None
-    workspace_reminder = _active_workspace_reminder(home, rag_status, prompt, ws_info=ws_info)
+    ws_id, ws_path = ws_info[0], ws_info[1]
+    dashboard = _active_workspace_reminder(home, rag_status, prompt, ws_info=ws_info)
+    ws_sig = _dashboard_signature(dashboard) if dashboard else ''
 
-    def _emit(ctx: str) -> int:
-        full = (ctx + "\n\n" + workspace_reminder) if workspace_reminder else ctx
-        print(json.dumps({"additionalContext": full}))
-        return 0
+    parts: list[str] = []
 
-    # Standing orders fire on every message — no RAG sentinel required.
-    # The user should not need to run /rag just to receive workflow rules.
-    standing_orders = (
-        "RAG STANDING ORDERS (non-negotiable): "
-        "(1) RAG before files — POST http://127.0.0.1:8612/search before Read/Grep. "
-        "(2) Health check — at start of any investigation, call GET http://127.0.0.1:8612/status. "
-        "If unresolved edges or errors, stop and fix before continuing. "
-        "(3) Write findings — after each RAG search or file read that reveals something, "
-        "update workspace/[task-id]/context.md with what you found before moving on. "
-        "Do not accumulate findings in your head; write them down as you go. "
-        "(4) Cite file:line — for every finding. "
-        "(5) Evaluator — spawn evaluator-agent, never self-verify. "
-        "(6) RAG context first — call POST http://127.0.0.1:8612/context as first step in every agent spawn prompt. "
-        "(7) RAG dual-mode — for every scope=codebase query, run BOTH mode=vector (semantic) AND mode=graph (structural neighbours) — never run only one. "
-        "Use /context for knowledge; /search?scope=codebase with both modes for codebase work. "
-        "When RAG errors mid-task, fix it (run /rag to start the server) — never skip RAG and "
-        "substitute grep or file reads. "
-        "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
-        "do NOT self-recover by searching files; tell the user RAG is offline and wait."
-    )
+    if clear_context:
+        parts.append(clear_context)
+    elif compaction_pending:
+        parts.append(COMPACTION_NOTE)
 
-    if consult_mode_active(home):
-        standing_orders += (
-            " (CONSULT MODE IS ACTIVE) You must NOT make architectural decisions without express user permission. "
-            "This includes: new endpoints, tables, dependencies, modules, middleware, auth strategies, "
-            "API designs, config changes, concurrency models, or any structural change. "
-            "Before proposing: explain what you want to do and why in plain language the user can understand. "
-            "Then use AskUserQuestion — wait for an explicit YES before touching anything. "
-            "A vague ok, continue, or non-response is NOT approval. "
-            "If you are unsure whether something counts as architectural, treat it as if it does and ask."
-        )
+    if rag_online != last.get("rag"):
+        if not rag_online:
+            parts.append(RAG_OFFLINE)
+        elif not first_prompt:
+            # Coming back up is worth one line. Being up on the first prompt of
+            # a session is the normal case and needs no announcement.
+            parts.append(RAG_BACK)
 
-    # boost true: inject always-on rules + standing orders, skip RAG verification
-    if boost_mode == "true":
-        base = (clear_context + "\n\n") if clear_context else ""
-        return _emit(base + always_inject + "\n\n" + standing_orders)
+    if not first_prompt and consult != last.get("consult"):
+        parts.append(CONSULT_ON if consult else CONSULT_OFF)
 
-    # Post-clear restore path — bypass RAG hard-stop.
-    # rag-session-reset.py unconditionally deletes the sentinel at every SessionStart,
-    # so rag_verified() is always false on the first post-clear message. Blocking on
-    # RAG here means auto-restore can never work. Inject context directly with a soft nudge.
-    if clear_context and not rag_verified():
-        _try_auto_recover_rag(home)
-        # Fall through whether recovery succeeded or not — restore context is more important
-        # than a RAG warning on a post-clear message.
+    if dashboard and ws_sig != last.get("ws_sig"):
+        parts.append(dashboard)
 
-    if not rag_verified():
-        recovered = _try_auto_recover_rag(home)
-        if not recovered:
-            context = (
-                "NOTE: RAG could not be started automatically. Run /rag manually before spawning agents "
-                "or starting any multi-step investigation."
-                "\n\n" + always_inject + "\n\n" + standing_orders
-            )
-            return _emit(context)
-        # Auto-recovered — fall through to normal path below
+    write_state("primer", session_key, {
+        "rag": rag_online,
+        "consult": consult,
+        "ws": ws_id,
+        "ws_sig": ws_sig,
+        "recover_ts": recover_ts,
+    })
 
-    # RAG verified — full context, no warning needed
-    base = (clear_context + "\n\n") if clear_context else ""
-    return _emit(base + always_inject + "\n\n" + standing_orders)
+    if not parts:
+        parts.append(POINTER)
+
+    print(json.dumps({"additionalContext": "\n\n".join(parts)}))
+    return 0
 
 
 if __name__ == "__main__":

@@ -138,4 +138,3 @@ After spawning, tell the user:
 | Server is fixed and a project needs reindexing | `POST /index-project` with `{"project_path":"<abs path>","force":true}` |
 | Server keeps failing | Check `clean-rag/state/server.json` and server logs manually |
 | You want to verify the fix | `curl http://127.0.0.1:8613/status` |
-| The ClaudeBoost RAG server (8612) is also down | `/rag` (separate server, separate fix) |

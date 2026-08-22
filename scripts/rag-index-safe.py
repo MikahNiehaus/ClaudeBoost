@@ -1,8 +1,8 @@
 """
-rag-index-safe.py — Safely index a project or workspace with RAG, with retries and timeouts.
+rag-index-safe.py — Safely index a project with RAG, with retries and timeouts.
 
-Calls the RAG HTTP /index endpoint with automatic retries, progress reporting,
-and hard limits (10 minute total, 3 retries per request).
+Calls clean-rag's /index-project route with automatic retries, progress
+reporting, and hard limits (10 minute total, 3 retries per request).
 
 Usage:
   python rag-index-safe.py --project-path C:/path/to/project
@@ -21,21 +21,25 @@ import time
 import urllib.error
 import urllib.request
 
+from rag_port import rag_url
+
+
 def index_with_retries(project_path, workspace_path=None, timeout=120, max_retries=3, max_runtime=600):
     """
-    Call RAG /index endpoint with retry logic and timeout guards.
+    Call clean-rag's /index-project with retry logic and timeout guards.
+
+    workspace_path is accepted and ignored. It was a parameter of the retired
+    8612 server's /index route; callers still pass it, so dropping the argument
+    would break them for no gain.
 
     Returns: (success: bool, message: str)
     """
     start_time = time.time()
-    rag_url = "http://127.0.0.1:8612/index"
+    # Was 8612/index. That server is gone; clean-rag serves /index-project and
+    # knows nothing about force or workspace_path.
+    url = rag_url("/index-project")
 
-    payload = {
-        "project_path": project_path,
-        "force": True
-    }
-    if workspace_path:
-        payload["workspace_path"] = workspace_path
+    payload = {"project_path": project_path}
 
     json_data = json.dumps(payload).encode("utf-8")
 
@@ -54,7 +58,7 @@ def index_with_retries(project_path, workspace_path=None, timeout=120, max_retri
             print(f"\n[Attempt {attempt}/{max_retries}] Indexing (timeout: {request_timeout}s)...")
 
             req = urllib.request.Request(
-                rag_url,
+                url,
                 data=json_data,
                 headers={"Content-Type": "application/json"},
                 method="POST"

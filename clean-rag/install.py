@@ -437,6 +437,22 @@ def _wrap_command(command: str, runner: str | None = None) -> str:
     if not command or ".py" not in command or "hook-run.py" in command:
         return command
 
+    # A compound shell command is not `<interpreter> <script>`, and inserting the
+    # runner after its first token corrupts it. setup.py writes a portable
+    # `if command -v X >/dev/null; then X script; elif ...; fi` fallback chain,
+    # and splitting that on whitespace put the runner straight after the `if`:
+    #
+    #   if "<runner>" command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then ...
+    #
+    # which asks the shell to execute hook-run.py with `command -v ...` as its
+    # arguments. It fails, the `if` goes false, and the elif branch runs the
+    # script unwrapped. So the hook still works, and the protection this
+    # function exists to add is silently skipped on every hook written in that
+    # form. 27 of them on a real machine. Leave compound commands alone.
+    if re.search(r'(^|\s)(if|then|elif|else|fi|for|while|do|done|case)(\s|$)'
+                 r'|[;&|]', command):
+        return command
+
     if runner is None:
         runner = str(HOOK_RUNNER).replace("\\", "/")
 
@@ -447,6 +463,25 @@ def _wrap_command(command: str, runner: str | None = None) -> str:
 
     interpreter, rest = match.group(1), match.group(2).strip()
     return f'{interpreter} "{runner}" {rest}'
+
+
+def _unwrap_mangled(command: str, runner: str | None = None) -> str:
+    """
+    Undo a runner that a previous install injected into a shell fallback chain.
+
+    _wrap_command now refuses to touch compound commands, but any settings.json
+    written before that fix still carries the corrupted form, and the guard in
+    _wrap_command ("hook-run.py" in command) means it will never be revisited.
+    This repairs it in place.
+    """
+    if not command or "hook-run.py" not in command:
+        return command
+    if runner is None:
+        runner = str(HOOK_RUNNER).replace("\\", "/")
+    mangled = f'if "{runner}" command -v'
+    if mangled in command:
+        return command.replace(mangled, "if command -v")
+    return command
 
 
 def _hook_target_script(command: str) -> Path | None:
@@ -520,6 +555,7 @@ def heal_stale_hooks() -> None:
         return
 
     pruned = 0
+    unmangled = 0
     wrapped = 0
     for event, entries in list(hooks.items()):
         kept = []
@@ -536,6 +572,14 @@ def heal_stale_hooks() -> None:
                     drop_entry = True
                     pruned += 1
                     break
+                # Repair first. A command mangled by an older install already
+                # contains hook-run.py, so _wrap_command would decline it and
+                # the corruption would survive every future re-install.
+                repaired = _unwrap_mangled(cmd)
+                if repaired != cmd:
+                    h["command"] = repaired
+                    cmd = repaired
+                    unmangled += 1
                 new_cmd = _wrap_command(cmd)
                 if new_cmd != cmd:
                     h["command"] = new_cmd
@@ -544,9 +588,10 @@ def heal_stale_hooks() -> None:
                 kept.append(entry)
         hooks[event] = kept
 
-    if pruned or wrapped:
+    if pruned or wrapped or unmangled:
         write_json(SETTINGS_PATH, settings)
-        _ok(f"healed hooks: pruned {pruned} dead, wrapped {wrapped} through hook-run.py")
+        _ok(f"healed hooks: pruned {pruned} dead, repaired {unmangled} mangled, "
+            f"wrapped {wrapped} through hook-run.py")
     else:
         _ok("hooks healthy: none dead, all wrapped")
 

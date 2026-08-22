@@ -454,43 +454,27 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
 | `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8613/search` with `{"sources":["project:<path>"],"mode":"both"}` |
 | `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
-| `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
+| `/visualize` | Interactive architecture board. `--self` maps ClaudeBoost, `--project` maps the current repo |
 | `/self-improve` | ClaudeBoost self-improvement audit cycle (meta-work only) |
 | `/done` | Submit completed work to merge queue |
 | `/handoff` | Hand off to a fresh session when context is getting full |
 | `/clear-safe` | Pre-flight save before /clear — preserves active workspace state |
 | `/changes` | Interactive change explorer — review everything changed on this branch |
 
-#### Knowledge Bases (always accessed via RAG — never read directly)
-| Area | File | When Relevant |
-|------|------|--------------|
-| Architecture | `knowledge/architecture.xml` | New systems, modules, design decisions |
-| Testing | `knowledge/testing.xml` | Any code changes, coverage, test strategy |
-| Security | `knowledge/security.xml` | Auth, input validation, data, HTTP endpoints |
-| Performance | `knowledge/performance.xml` | Queries, loops, caching, hot paths |
-| Database | `knowledge/database.xml` | Schema, migrations, queries, indexing |
-| DevOps | `knowledge/devops.xml` | CI/CD, Docker, deployment |
-| UI Implementation | `knowledge/ui-implementation.xml` | Frontend components, accessibility |
-| E2E Testing | `knowledge/e2e-testing.xml` | Browser-level test strategy |
-| Playwright | `knowledge/playwright.xml` | Browser automation specifics |
-| Observability | `knowledge/observability.xml` | Logging, tracing, metrics |
-| Refactoring | `knowledge/refactoring.xml` | Code restructuring patterns |
-| Debugging | `knowledge/debugging.xml` | Root cause analysis, error tracing |
-| Documentation | `knowledge/documentation.xml` | Doc strategy, README, API docs |
-| Research | `knowledge/research.xml` | Investigation methodology |
-| Code Exploration | `knowledge/code-exploration.xml` | Codebase navigation strategy |
-| Workflow | `knowledge/workflow.xml` | Multi-step orchestration |
-| API Design | `knowledge/api-design.xml` | REST/GraphQL API conventions |
-| Coding Standards | `knowledge/coding-standards.xml` | Language/framework conventions |
-| Verify Gate | `knowledge/verify-gate.xml` | Anti-hallucination, finding validation |
-| Consult Mode | `knowledge/consult-mode.xml` | When to consult vs auto-proceed |
-| Ticket Understanding | `knowledge/ticket-understanding.xml` | Requirements parsing, ambiguity resolution |
-| Completion Verification | `knowledge/completion-verification.xml` | Definition of done, exit criteria |
-| Multi-Agent Failures | `knowledge/multi-agent-failures.xml` | Common agent failure modes, recovery |
-| Scope Governance | `knowledge/scope-governance.xml` | Scope creep, change management |
-| Model Selection | `knowledge/model-selection.xml` | When to use Opus vs Sonnet |
-| PR Review | `knowledge/pr-review.xml` | Code review standards |
-| Branching Strategy | `knowledge/branching-strategy.xml` | Git branching, PR workflow |
+#### Where domain knowledge comes from
+
+There is no knowledge base to read. A table here used to map each area
+(architecture, testing, security, and 27 more) to a `knowledge/*.xml` file.
+All of them were deleted in 754a2d4, so every row pointed at a file that is
+not there.
+
+Do not rebuild it. `clean-rag/CLAUDE.md` records why under "Why the KB is
+gone": a mechanical query has no judgment behind it, so retrieval returned a
+confident nearest neighbour for questions it had no answer to, and no score
+threshold separated those from real hits.
+
+Get domain knowledge from `researcher` and `swiper` instead. They pick their
+own queries, read the project index, and cite what they found.
 
 ### 3c — Produce a tool mapping
 
@@ -664,11 +648,16 @@ Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ---
 
-## Knowledge Bases Engaged
+## Research Sources
 
-| File | Why Relevant to This Work |
-|------|--------------------------|
-| [knowledge/X.xml] | [specific reason] |
+| Source | Why Relevant to This Work |
+|--------|--------------------------|
+| [file:line, repo, or URL that `researcher` or `swiper` actually cited] | [specific reason] |
+
+This was a "Knowledge Bases Engaged" table listing `knowledge/X.xml` files. They
+were deleted in 754a2d4, so it now records what the research agents cited: a
+real path or URL somebody can open, not a pointer into a base that no longer
+exists.
 
 ---
 

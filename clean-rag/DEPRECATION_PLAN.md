@@ -3,6 +3,61 @@
 Mapped by two exploration passes over the whole repo. This is the plan for
 approval before any execution.
 
+## STATUS: executed
+
+Kept as the record of what was decided and why, not as outstanding work.
+
+- **Phase 1: done.** The research commands are gone.
+  `scripts/research-task-nudge.py` was emptied but left registered, so the hook
+  ran a zero byte script on every prompt until it was deleted and added to
+  `_REMOVED_HOOK_SCRIPTS` in `scripts/setup.py`.
+- **Phase 2: done.** `mcp-rag-server/` was deleted in `754a2d4`. Every live 8612
+  reference in `scripts/` and `.claude/commands/` now reads the port from
+  `scripts/rag_port.py`, which imports it from `clean-rag/server/config.py`. The
+  only mentions left are comments explaining the retirement. `/rag` and
+  `session-primer.py` invoked `scripts/rag-server-start.py` and
+  `scripts/rag-supervisor.py`, both deleted with the server, and now call
+  `clean-rag/cli/server_ctl.py start`. The `/context` repoint turned out to be
+  free: no command was still calling it.
+- **Phase 3: done, as plan A.** `knowledge/` and `agents/` are both deleted, so
+  the A versus B question below resolved itself by deletion. The five surviving
+  agents (`researcher`, `swiper`, `bad-cop`, `good-cop`, `quick-cop`) are native
+  Claude Code subagents in `clean-rag/portable/agents/`.
+- **Phase 4: done, on the second pass.** `CLAUDE.md`, `README.md` and the
+  affected commands describe the clean-rag flow.
+
+  It was marked done once before it was. The first pass fixed the prose that
+  named 8612 and swept `scripts/`, and missed the slash commands, where a dead
+  reference is not a documentation problem: the model executes those steps.
+  Found afterwards, by chasing an unrelated xfail:
+
+  - `/visualize` picked its mode with `ls agents/ knowledge/` and then shelled
+    `scripts/visualize-extract.py`. All three were deleted here, so self-map
+    mode was dead twice over and said nothing. `--self` is now an alias for
+    project-map, which gathers from repo structure and needs no extractor.
+  - `/ticket-handoff` read `knowledge/human-voice.xml` before applying voice
+    rules. The read failed silently; only the inline summary underneath it
+    ever applied.
+  - `/workspace` listed 27 `knowledge/*.xml` files as where to find domain
+    knowledge.
+  - `/self-improve` audited `agents/*.xml` and `knowledge/*.xml` counts and
+    well-formedness, so five of its checks passed vacuously against zero files.
+  - `/consult` still listed `knowledge/` as an exempt path.
+
+  `tests/test_no_dead_command_refs.py` now fails if any command or portable
+  skill names a script or directory that is not there, so this class cannot go
+  quiet again. It deliberately allows a mention that explains the retirement,
+  and ignores install paths under `~/.claude`, which is where portable skills
+  land and where a first cut produced eight false positives.
+
+One thing this plan did not anticipate. The dead 8612 guidance was not only in
+docs and call sites, it was being injected into the model's context on every
+single prompt: about 1,437 tokens from `session-primer.py` plus roughly 994
+tokens of SessionStart prompt hooks, all of it instructions to call a server
+that no longer existed. Because injected context is re-read by every later
+request, that repetition cost far more than the wrong routes did. See the
+"Always on rules" section of `CLAUDE.md` for where those rules live now.
+
 ## What you asked for
 
 1. Remove `/research-rag`, `/research-task`, `/research-project`.

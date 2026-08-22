@@ -21,9 +21,28 @@ import sys
 import time
 from pathlib import Path
 
+from rag_port import rag_url
+
 # Block after this many consecutive file searches without RAG.
-# Set above context-nudge.py's RAG_THRESHOLD (5) so the soft reminder fires first.
-RAG_THRESHOLD = 6
+#
+# Was 6, paired with a soft reminder at 5, so six whole-file reads landed in the
+# main context before anything engaged. Measured across 322 real transcripts,
+# Read is the single most expensive channel there is: 5,167 calls averaging
+# 1,267 tokens, and weighted by how many later requests re-read each one it
+# costs 1.66b tokens, more than every Bash discovery command combined. A RAG
+# chunk is roughly 500 tokens. Engaging at 3 moves discovery to the cheap path
+# sooner.
+#
+# It could not be tightened before now: this hook pointed at port 8612 and told
+# the model to call an `rag_search` MCP tool, neither of which existed, so
+# blocking earlier would only have blocked more reads while offering a broken
+# alternative.
+#
+# Must stay ABOVE context-nudge.py's RAG_THRESHOLD, or the soft reminder becomes
+# dead code. A PreToolUse block stops the tool running, so PostToolUse never
+# fires and the counter never climbs past this number.
+# tests/test_rag_guard_thresholds.py holds that ordering.
+RAG_THRESHOLD = 3
 
 # Always allow reads of these paths -- no RAG needed for config/workspace files
 EXEMPTED_SUFFIXES = {".json", ".lock", ".env", ".gitignore", ".toml", ".yaml", ".yml"}
@@ -52,15 +71,31 @@ def is_exempted(tool_input: dict) -> bool:
 
 
 def _resolve_heartbeat_path() -> Path:
-    """Resolve heartbeat file path from env vars. Called once at module load."""
-    _rag_index_dir = os.environ.get("RAG_INDEX_DIR", "")
-    if not _rag_index_dir:
-        _local_appdata = os.environ.get("LOCALAPPDATA", "")
-        if _local_appdata:
-            _rag_index_dir = str(Path(_local_appdata) / "rag-server-index")
-        else:
-            _rag_index_dir = str(Path(__file__).resolve().parent.parent / "mcp-rag-server" / ".rag-index")
-    return Path(_rag_index_dir) / ".heartbeat" if _rag_index_dir else Path()
+    """The liveness file this guard trusts before it blocks anything.
+
+    This pointed at mcp-rag-server/.rag-index/.heartbeat, which belonged to the
+    retired 8612 server. That server was deleted, so on a fresh clone the file
+    does not exist at all, and on a machine that still has the leftover
+    directory it sits hours stale with model_loaded false. Either way
+    _rag_is_live() returned False and the guard never blocked a single read. It
+    was not mistuned, it was dead code, which is why raising or lowering
+    RAG_THRESHOLD had no observable effect.
+
+    clean-rag writes its own every 30s at clean-rag/state/.heartbeat
+    (server/app.py _write_heartbeat) in a compatible shape: ts, model_loaded,
+    plus a status field this does not need.
+
+    The old RAG_INDEX_DIR override is deliberately not honored any more. It
+    named the retired server's index directory, so respecting a value someone
+    still has set would point the guard straight back at the dead file.
+    """
+    clean_rag_home = os.environ.get("CLEAN_RAG_HOME")
+    if clean_rag_home:
+        return Path(clean_rag_home) / "state" / ".heartbeat"
+    boost_home = os.environ.get("CLAUDEBOOST_HOME") or str(
+        Path(__file__).resolve().parent.parent
+    )
+    return Path(boost_home) / "clean-rag" / "state" / ".heartbeat"
 
 
 # Resolve once per process — env vars don't change between hook invocations.
@@ -133,12 +168,18 @@ def main() -> int:
     if not _rag_is_live():
         return 0
 
+    # Every part of this message used to name something that no longer exists:
+    # port 8612, an `rag_search` MCP tool, and a `scope` parameter. Blocking a
+    # read and then handing back an unusable alternative is worse than not
+    # blocking at all.
     print(
         f"BLOCKED -- {reads_since_rag} file searches since last RAG call. "
-        "Call POST http://127.0.0.1:8612/search FIRST before reading more files. "
-        "RAG finds the relevant file; Grep/Read reads it -- not the other way around. "
-        "Run: rag_search(scope='codebase', query='<what you are looking for>') "
-        "then read only the files RAG identifies as relevant. "
+        f"Search first: POST {rag_url('/search')} with "
+        '{"query": "<what you are looking for>", '
+        f'"sources": ["project:{os.getcwd()}"], "mode": "both"}}. '
+        "RAG finds the relevant file, Grep and Read then open it, not the other "
+        "way around. Run both modes: vector finds semantic matches, graph finds "
+        "structural neighbours. Then read only what came back. "
         "Do NOT bypass this by reading files directly.",
         file=sys.stderr,
     )

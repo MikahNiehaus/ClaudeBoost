@@ -33,7 +33,12 @@ from workspace_identity import resolve_active_workspace, get_instance_id
 
 NUDGE_INTERVAL = 8         # workspace checkpoint every N tool uses (was 20 — more continuous)
 NO_WORKSPACE_NUDGE_THRESHOLD = 60
-RAG_THRESHOLD = 5          # reads without RAG before reminding
+# Reads without RAG before the soft reminder. Lowered from 5 alongside the block
+# in rag_read_guard, which moved from 6 to 3. This has to stay BELOW that number
+# or the reminder never fires at all: a PreToolUse block stops the read, so this
+# PostToolUse hook never runs and the counter never gets past 3. At 2 the
+# sequence is one warning, then the block.
+RAG_THRESHOLD = 2          # reads without RAG before reminding
 EVALUATOR_THRESHOLD = 2    # agent spawns without evaluator before reminding
 COMPREHENSIVE_INTERVAL = 25  # full behavior checklist every N tool uses
 CLEAR_CONSIDERATION_THRESHOLD = 100   # start suggesting /clear-safe at this tool count

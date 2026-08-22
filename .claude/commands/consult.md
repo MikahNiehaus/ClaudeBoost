@@ -34,6 +34,6 @@ Consultation is **additive, not gatekeeping** — RAG-required standards (securi
    >
    > **Triggers**: new endpoints, new DB tables, new dependencies, new middleware, auth/validation/error/logging strategies, new modules, new config surfaces, new concurrency models.
    >
-   > **Not triggers**: typos, single-line fixes, tests, docs, value-only config tweaks, renames within one file, edits under workspace/ .claude/ knowledge/ plans/ docs/.
+   > **Not triggers**: typos, single-line fixes, tests, docs, value-only config tweaks, renames within one file, edits under workspace/ state/ .claude/ plans/ docs/.
    >
    > Use `/auto` to bypass consultation for prototyping or trivial work.

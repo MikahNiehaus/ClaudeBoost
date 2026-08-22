@@ -28,7 +28,11 @@ import time
 import urllib.request
 from pathlib import Path
 
-PORT = 8612
+from rag_port import rag_port
+
+# Was 8612, the retired bundled server. rag_port reads the live number from
+# clean-rag's own config so this file cannot drift out of date again.
+PORT = rag_port()
 BASE = f"http://127.0.0.1:{PORT}"
 
 BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
@@ -364,7 +368,7 @@ def main() -> int:
     step_banner()
     print("\n--- privacy ---")
     step_privacy()
-    print("\n--- RAG (port 8612) ---")
+    print(f"\n--- RAG (port {PORT}) ---")
     rag = step_rag()
     print("\n--- hooks ---")
     missing_hooks = step_hooks()

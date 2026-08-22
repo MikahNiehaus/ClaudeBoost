@@ -36,6 +36,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rag_port import rag_port
+
 # ---------------------------------------------------------------------------
 # Colors — ANSI codes work everywhere modern (Windows Terminal, macOS, Linux).
 # Falling back to plain on dumb terminals keeps log files readable.
@@ -125,7 +128,7 @@ def preflight() -> bool:
 # ---------------------------------------------------------------------------
 # MCP cleanup: remove rag-server from mcp.json if it was registered by an
 # older version of setup. The RAG server is now a standalone HTTP daemon on
-# port 8612 — no MCP registration needed or wanted.
+# HTTP daemon on the port clean-rag names, no MCP registration needed or wanted.
 # ---------------------------------------------------------------------------
 def update_mcp_configs() -> None:
     # ~/.claude/mcp.json — remove rag-server if present from old installs
@@ -367,6 +370,17 @@ def _clean_stale_hooks(settings: dict) -> None:
 _SUPERSEDED_PROMPT_SENTINELS = (
     "VERIFY GATE: Scan agent output",       # replaced by verify-gate-cmd.py
     "AGENT SPAWN QUALITY ROUTING",          # replaced by agent-spawn-gate.py
+    # The next five described the retired 8612 server: POST /context, the Tier
+    # 0 to 4 budget, rag_context and evaluator-agent. None of that exists now,
+    # so they were teaching every new session an API it could not call. What
+    # was worth keeping moved into CLAUDE.md, which is read once into the
+    # cached prefix rather than re-stated on each SessionStart.
+    "Quality-first routing: Check CLAUDE.md decision flow",
+    "CLAUDEBOOST MODE",                     # CONSULT vs AUTO, now in CLAUDE.md
+    "CODEBASE RAG: When calling rag_context",
+    "RAG HTTP API: The RAG server runs on",
+    "WORKSPACE CREATION CHECK",
+    "CONTEXT PRESERVATION",
 )
 
 
@@ -408,6 +422,14 @@ def _remove_superseded_hooks(settings: dict) -> None:
 # env-var paths ($CLAUDEBOOST_HOME/...), so we match by basename instead.
 _REMOVED_HOOK_SCRIPTS = (
     "git-guard.py",
+    # Advertised /research-task, a command retired in favor of the clean-rag
+    # research setup. setup.py stopped registering it, but existing installs
+    # kept the entry and the file was emptied rather than deleted, so the hook
+    # ran a zero byte script on every prompt.
+    "research-task-nudge.py",
+    # Both launchers went with the 8612 server.
+    "rag-server-start.py",
+    "rag-supervisor.py",
 )
 
 
@@ -522,77 +544,6 @@ def _install_all_hooks(settings: dict) -> None:
     _remove_superseded_hooks(settings)
     _remove_deleted_script_hooks(settings)
 
-    # --- SessionStart: workflow routing ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("Quality-first routing: Check CLAUDE.md decision flow. For each action, "
-                       "pick the RIGHT approach — not the cheapest, not the most ceremonial. "
-                       "Full ceremony where quality demands it (reviews, security, architecture). "
-                       "Lightweight where it doesn't (explore, research, docs). Always use "
-                       "evaluator-agent for finding verification — never self-verify findings "
-                       "(confirmation bias). Rework costs more than doing it right."),
-            "statusMessage": "Loading ClaudeBoost workflow...",
-            "timeout": 15,
-        }],
-    }, sentinel="Quality-first routing", label="workflow routing")
-
-    # --- SessionStart: CONSULT mode protocol ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": (
-                "CLAUDEBOOST MODE — CONSULT vs AUTO:\n\n"
-                "Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. "
-                "Field: ``mode``. Default CONSULT.\n\n"
-                "If mode=CONSULT, for any architectural decision you MUST:\n"
-                "  1. POST http://127.0.0.1:8612/search (feature keywords) + read 2-3 project files. Cite file:line.\n"
-                "  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.\n"
-                "  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.\n"
-                "  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.\n"
-                "  5. Implement. RAG-required standards apply automatically.\n\n"
-                "Architectural = new endpoint, new class/module, new DB table, new dep, new middleware, "
-                "auth/validation/error/logging strategy, new public API, new config surface, "
-                "new concurrency model.\n\n"
-                "NOT architectural = typo, 1-line fix, test, doc, value-only config tweak, "
-                "rename in one file, edits under workspace/ .claude/ knowledge/ plans/ docs/.\n\n"
-                "Consultation is ADDITIVE, not gatekeeping. Present what RAG requires as already-handled; "
-                "invite the user to ADD constraints (size caps, character allowlists, rate limits). "
-                "Do not debate whether to validate.\n\n"
-                "Check session-approvals.json before spawning architect-agent — if this axis was "
-                "already decided, proceed with the approved choice.\n\n"
-                "If mode=AUTO: proceed autonomously, still cite sources."
-            ),
-            "statusMessage": "Loading CONSULT mode protocol...",
-        }],
-    }, sentinel="CONSULT vs AUTO", label="CONSULT protocol")
-
-    # --- SessionStart: codebase RAG reminder ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8612. "
-                       "All RAG access uses HTTP — no MCP tools are needed. "
-                       "Key endpoints: POST /context (load agent context), "
-                       "POST /search (semantic + graph search), "
-                       "GET /status (server health), "
-                       "POST /index (reindex files). "
-                       "When loading context for an agent, POST to /context with "
-                       "{\"agent\":\"...\",\"task_description\":\"...\",\"project_path\":\"...\",\"workspace_path\":\"...\"} "
-                       "where project_path is the primary working directory (enables Tier 4 codebase search + stack detection) "
-                       "and workspace_path is the active workspace directory e.g. $CLAUDEBOOST_HOME/workspace/[task-id] "
-                       "(enables Tier 3c task-specific research). Omit workspace_path only if no workspace exists. "
-                       "When searching code, POST to /search with "
-                       "{\"query\":\"...\",\"scope\":\"codebase\",\"project_path\":\"...\"}. "
-                       "If the project has not been indexed, run /index-project first. "
-                       "Use mode=graph for import and dependency chains."),
-            "statusMessage": "Loading RAG HTTP API config...",
-        }],
-    }, sentinel="RAG HTTP API", label="RAG HTTP API config")
-
     # --- SessionStart: compaction restore ---
     _install_hook(settings, "SessionStart", {
         "matcher": "Always",
@@ -628,7 +579,7 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
     # Lives under clean-rag/hooks/, but enforces
-    # core ClaudeBoost RAG (port 8612) — installed unconditionally here, not
+    # the core research gate, installed unconditionally here, not
     # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
     # concern even though it's physically colocated with clean-rag's hooks.
     _install_hook(settings, "PreToolUse", {
@@ -649,20 +600,6 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Bash(mkdir*workspace*)",
         "hooks": [{"type": "command", "command": _py_cmd("workspace-boost-gate.py")}],
     }, sentinel="workspace-boost-gate.py", label="workspace boost gate (command-type)")
-
-    # --- PreToolUse: workspace creation (prompt-type) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash(mkdir*workspace*)",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("WORKSPACE CREATION CHECK: You are creating a workspace directory. "
-                       "Before proceeding:\n"
-                       "1. Call POST http://127.0.0.1:8612/search with the task description to find relevant knowledge\n"
-                       "2. Ensure you have a task ID and will create context.md after this\n"
-                       "This is the start of complex work. RAG should be active."),
-            "statusMessage": "Enforcing RAG lookup on workspace creation...",
-        }],
-    }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
 
     # --- PreToolUse: TDD guard (blocks source edits without test changes) ---
     # Default mode is "soft" (nudge, not block) until user opts into strict.
@@ -735,21 +672,11 @@ def _install_all_hooks(settings: dict) -> None:
     # --- PreCompact: context preservation + compaction save ---
     _install_hook(settings, "PreCompact", {
         "matcher": "Always",
+        # The prompt hook that used to lead this entry named POST /context and
+        # evaluator-agent, both retired with the 8612 server, and restated the
+        # CONSULT rule that CLAUDE.md already carries. compaction-primer.py is
+        # the live equivalent and it runs on this same event.
         "hooks": [
-            {
-                "type": "prompt",
-                "prompt": ("CONTEXT PRESERVATION — quality-first routing:\n"
-                           "1. Agent spawns: call POST http://127.0.0.1:8612/context (Step 1), route by type "
-                           "(full/standard/lightweight)\n"
-                           "2. Finding verification: ALWAYS evaluator-agent, never self-verify "
-                           "(confirmation bias)\n"
-                           "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
-                           "4. Rework costs more than ceremony. Do it right the first time.\n"
-                           "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json "
-                           "— re-check after compact. Default CONSULT: research + propose + ask "
-                           "before architectural decisions."),
-                "statusMessage": "Preserving RAG/CONSULT awareness before compaction...",
-            },
             {
                 "type": "command",
                 "command": _py_cmd("compaction-save.py"),
@@ -757,7 +684,13 @@ def _install_all_hooks(settings: dict) -> None:
                 "statusMessage": "Saving working state before compaction...",
             },
         ],
-    }, sentinel="CONTEXT PRESERVATION", label="context preservation + compaction save")
+    # Sentinel is the script name, not the old "CONTEXT PRESERVATION" prompt
+    # text. _install_hook decides "already installed" by finding the sentinel in
+    # the entry's prompt plus command text, so when that prompt was removed the
+    # sentinel stopped matching anything and every setup run appended another
+    # copy of this entry. Keying on something the entry still contains is what
+    # makes it idempotent.
+    }, sentinel="compaction-save.py", label="compaction save")
 
     # --- PreCompact: Low Token Mode handler ---
     _install_hook(settings, "PreCompact", {
@@ -1295,13 +1228,13 @@ def _seed_rag_index() -> None:
 
 # ---------------------------------------------------------------------------
 # MCP cleanup: remove rag-server from `claude mcp` if it was registered by an
-# older setup. The RAG server is now accessed entirely via HTTP on port 8612.
+# older setup. The RAG server is now accessed entirely over HTTP.
 # ---------------------------------------------------------------------------
 def _cleanup_mcp_registration() -> None:
     """Remove the rag-server MCP registration if it still exists.
 
     Idempotent — safe to run multiple times. The RAG server no longer uses MCP;
-    it runs as a standalone HTTP daemon on port 8612.
+    it runs as a standalone HTTP daemon on the port clean-rag names.
     """
     # Try `claude mcp list` to see current configs
     rc, out = run_cmd(["claude", "mcp", "list"])
@@ -1881,7 +1814,7 @@ def main() -> int:
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")
-    print( "  RAG HTTP server started on port 8612")
+    print(f"  RAG HTTP server started on port {rag_port()}")
     print( "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, "
            "PreCompact, UserPromptSubmit, Stop)")
     _say("\nNext steps:", "yellow")

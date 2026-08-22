@@ -75,19 +75,40 @@ def _port_in_use(port: int) -> bool:
 
     This, not the PID file, is the real single instance guard. The PID file
     lies: it goes stale when a server dies badly, and it knows nothing about a
-    server someone started by hand or from the .bat. Observed for real this
-    session, "stop" cheerfully reported success while a different live process
-    was still holding 8613.
+    server someone started by hand or from the .bat. Observed for real, "stop"
+    cheerfully reported success while a different live process was still
+    holding 8613. A connect still catches that: a live listener answers.
 
-    Binding is the only honest test. If the bind fails, someone's home.
+    Connect, do not bind. Binding looks like the honest test and is not. A bind
+    without SO_REUSEADDR also fails when the port merely holds a socket in
+    TIME_WAIT, which is exactly the state a server leaves behind for up to a
+    minute after it stops. `start` then refuses with "already running" while
+    nothing is listening at all, and the only fix is to wait, which is not what
+    the message tells you to do. Measured: right after a listener closes, a bind
+    probe reports in use and a connect probe correctly reports free.
+
+    A TIME_WAIT socket refuses connections, so it reads as free, and the server
+    can take the port straight back because aiohttp's run_app binds with
+    reuse_address (true on POSIX).
+
+    The tradeoff, stated plainly: a server that has bound but is not yet
+    accepting reads as free for those few milliseconds. That window is far
+    smaller than the minute of false "already running" it replaces, and the PID
+    file check in cmd_start still names a live process when there is one.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        # No SO_REUSEADDR on purpose. We want this to fail when the port is taken.
-        try:
-            sock.bind(("127.0.0.1", port))
-            return False
-        except OSError:
-            return True
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _status_responds(port: int, timeout: float = 5.0) -> bool:
+    """True when /status answers 200. Uses urllib so it needs nothing installed."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def cmd_start(args):
@@ -166,19 +187,36 @@ def cmd_start(args):
         "clean_rag_home": clean_rag_home,
     }, indent=2), encoding="utf-8")
 
+    # Give it a moment, then find out what actually happened.
+    #
+    # This used to sleep, `import httpx`, and treat every failure the same way.
+    # httpx lives in clean-rag's venv, so on any interpreter without it the
+    # probe raised before reaching the network at all and printed the same
+    # reassuring "model loading may take 30-60 seconds" as a healthy warm up.
+    # A server that died instantly on a missing dependency was indistinguishable
+    # from one that was starting normally, and it left a PID file behind
+    # pointing at a dead process for `status` to find later.
+    #
+    # proc.poll() separates the two cases for free, and urllib does the probe
+    # without needing anything installed.
+    time.sleep(2)
+
+    exit_code = proc.poll()
+    if exit_code is not None:
+        server_json.unlink(missing_ok=True)
+        print(f"clean-rag server FAILED to start: the process exited with {exit_code}.")
+        if headless:
+            print("Re-run without CLEAN_RAG_HEADLESS=1 to see the traceback.")
+        print("A missing dependency is the usual cause. Run: python clean-rag/install.py")
+        return 1
+
     print(f"clean-rag server started (PID {proc.pid}, port {port})")
 
-    # Wait a moment and verify it's running
-    time.sleep(2)
-    try:
-        import httpx
-        resp = httpx.get(f"http://127.0.0.1:{port}/status", timeout=5)
-        if resp.status_code == 200:
-            print("Server is ready.")
-        else:
-            print("Server started but /status returned non-200. Check logs.")
-    except Exception:
-        print("Server process started. Model loading may take 30-60 seconds.")
+    if _status_responds(port):
+        print("Server is ready.")
+    else:
+        print("Server process is alive. Model loading may take 30-60 seconds.")
+    return 0
 
 
 #: Written by `stop`, cleared by `start`, read by hooks/rag-enforce.py. An

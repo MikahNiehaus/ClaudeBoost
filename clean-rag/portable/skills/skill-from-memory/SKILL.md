@@ -22,8 +22,12 @@ So the classifier is the whole job. Everything else is plumbing.
 ## Phase 1: read the store
 
 ```
-C:\Users\mniehaus\.claude\projects\C--Development-ClaudeBoost\memory\
+~/.claude/projects/<slugified-project-path>/memory/
 ```
+
+The slug is the absolute project path with the separators replaced by dashes,
+which is how Claude Code names the directory. Derive it, do not hardcode a
+machine's home directory.
 
 Glob `*.md`. Read `MEMORY.md` first: its section headings are a human's existing
 clustering and are more reliable than anything you would recompute. Each other

@@ -1,5 +1,5 @@
 ---
-argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | xml | counts | rag | rules | memory | all] — OR — hooks [enable|disable|status] [workspace-path]
+argument-hint: [target] [focus — code | security | tests | quality | docs | enforcement | deadrefs | counts | rag | rules | memory | all] — OR — hooks [enable|disable|status] [workspace-path]
 description: Self-improvement audit — ClaudeBoost internals (default), any workspace, or any project path. Also manages per-workspace protocol hooks.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
@@ -15,7 +15,7 @@ Format: `[target] [focus]`  — OR — `hooks [enable|disable|status] [workspace
   - An absolute path (e.g. `/home/user/myapp` or `C:/Development/MyApp`) → **PROJECT mode**: audit any project codebase
   - `hooks` → **HOOKS mode**: manage per-directory protocol enforcement hooks (see section below)
 - **focus** (optional, default: `all`):
-  - SELF mode: `docs | enforcement | xml | counts | rag | rules | memory | all`
+  - SELF mode: `docs | enforcement | deadrefs | counts | rag | rules | memory | all`
   - WORKSPACE mode: `code | security | tests | quality | docs | all`
   - PROJECT mode: `code | security | tests | quality | docs | all`
 
@@ -95,7 +95,7 @@ Announce: `Round R[N+1]`
 ## Phase 1: Index
 
 **SELF mode:**
-1. `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME","force":true}` — rebuilds the ClaudeBoost codebase index (agents, knowledge, hooks and scripts all live in it).
+1. `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME","force": true}` rebuilds the ClaudeBoost codebase index (hooks, scripts, commands and the portable agents and skills all live in it).
 
 Report: "Indexed X files (ClaudeBoost)"
 
@@ -170,13 +170,13 @@ Use POST http://127.0.0.1:8613/search with `{"sources":["project:<PROJECT_PATH>"
 
 | FOCUS | Lenses to run |
 |-------|--------------|
-| `docs` | Count accuracy: stated agent/knowledge/command counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
+| `docs` | Count accuracy: stated agent/skill/command counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
-| `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
-| `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
-| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8613/search` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
+| `deadrefs` | Any command or skill naming a script, directory or endpoint that no longer exists. Replaces the old `xml` lens: agents/*.xml and knowledge/*.xml were deleted in 754a2d4, so well-formedness had nothing left to check, while dead references are the failure that deletion actually causes |
+| `counts` | Count clean-rag/portable/agents/*.md, clean-rag/portable/skills/*/SKILL.md, .claude/commands/*.md; compare to all docs stating a number |
+| `rag` | Vector search (ST-07, ST-08) and graph search (ST-13) over the ClaudeBoost project index. Index health: ST-10. Both used to run against separate `knowledge` and `agents` scopes; clean-rag has neither, only `project:` sources. |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
-| `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
+| `memory` | Memory staleness: read the memory index for this project under `~/.claude/projects/`. The directory is the absolute project path with separators replaced by dashes, so derive it rather than hardcoding one. Flag entries older than 60 days |
 | `all` | All of the above |
 
 ### WORKSPACE mode lenses
@@ -218,16 +218,16 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 
 | ID | Check | Pass condition |
 |----|-------|----------------|
-| ST-01 | `ls agents/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
-| ST-02 | `ls knowledge/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
+| ST-01 | `ls clean-rag/portable/agents/*.md \| wc -l` | Count matches stated count in CLAUDE.md and README.md |
+| ST-02 | `ls -d clean-rag/portable/skills/*/ \| wc -l` | Count matches stated count in the docs |
 | ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches CLAUDEBOOST-REFERENCE.md section 5 |
-| ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
-| ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
-| ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |
+| ST-04 | Every `scripts/*.py` named by a command or skill exists on disk | No dead script references |
+| ST-05 | `grep -rn "8612" scripts/ .claude/commands/` | Only historical mentions explaining the retirement, no live call sites |
+| ST-06 | Every hook registered in `~/.claude/settings.json` resolves to a file that exists | No hook shells a missing script |
 | ST-07 | `POST http://127.0.0.1:8613/search {"query":"OWASP SQL injection","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
 | ST-08 | `POST http://127.0.0.1:8613/search {"query":"playwright browser testing","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
-| ST-10 | `GET /status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `GET /status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via POST /index output instead |
+| ST-10 | `GET /status` | `code_embedding_loaded` is true and the ClaudeBoost project appears in `projects.entries` with `files_indexed` > 0. The old check counted a combined knowledge plus agents chunk total, and both collections were deleted. |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
 | ST-13 | `POST http://127.0.0.1:8613/search` with `{"query":"rag search implementation","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
@@ -350,7 +350,7 @@ Source files modified only in Phase 5 (Fix), only for CONFIRMED findings, only w
 ```
 /self-improve                              # ClaudeBoost self-audit (original behavior)
 /self-improve self                         # Same as above, explicit
-/self-improve self counts                  # Check only agent/knowledge/command counts
+/self-improve self counts                  # Check only agent, skill and command counts
 
 /self-improve add-auth-2026-05-14          # Audit workspace 'add-auth-2026-05-14'
 /self-improve add-auth-2026-05-14 security # Security-only audit of that workspace

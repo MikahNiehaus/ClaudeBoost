@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rag_port import rag_url
+
 
 def main() -> int:
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
@@ -67,8 +69,11 @@ def main() -> int:
         "additionalContext": (
             f"PROJECT RAG STALE{change_note}: "
             "The codebase search index is outdated. "
-            "Call POST http://127.0.0.1:8612/index with {project_path: cwd, force: true} "
-            "before searching the codebase — stale results will mislead."
+            # /index on 8612 was the retired server's route. clean-rag calls it
+            # /index-project and takes no force flag.
+            f"Call POST {rag_url('/index-project')} with "
+            '{"project_path": "<cwd>"} '
+            "before searching the codebase, stale results will mislead."
         )
     }))
     return 0
