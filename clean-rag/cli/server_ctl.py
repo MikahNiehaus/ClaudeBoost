@@ -25,6 +25,34 @@ from pathlib import Path
 _CLEAN_RAG_HOME = Path(__file__).resolve().parent.parent
 
 
+def _server_python() -> str:
+    """The interpreter the server process runs on.
+
+    Same shape as graphrag_client._venv_python, for the same reason: the heavy
+    ML dependencies live in their own venv rather than wherever the launcher
+    happens to have come from. This script itself is stdlib only, so it does not
+    care which interpreter runs it; the server does.
+
+    Falls back to sys.executable when the venv is absent, so a checkout that has
+    not been installed yet still starts. That fallback is how the server ended up
+    on the user's global packages in the first place, so it warns rather than
+    failing silently: a broken global stack produces an import error at model
+    load time, thousands of lines deep in a log, which is much harder to read
+    than one line here.
+    """
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    exe = "python.exe" if os.name == "nt" else "python"
+    venv_py = _CLEAN_RAG_HOME / "clean-rag-venv" / scripts / exe
+    if venv_py.is_file():
+        return str(venv_py)
+    print(
+        "[warn] clean-rag-venv not found, starting on "
+        f"{sys.executable}. Run clean-rag/install.py to create it.",
+        file=sys.stderr,
+    )
+    return sys.executable
+
+
 def _state_dir() -> Path:
     # Add clean-rag root to path so server.config is importable
     _root = str(_CLEAN_RAG_HOME)
@@ -106,7 +134,7 @@ def cmd_start(args):
     if sys.platform == "win32":
         if headless:
             proc = subprocess.Popen(
-                [sys.executable, server_script],
+                [_server_python(), server_script],
                 cwd=clean_rag_home,
                 env=env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
@@ -115,14 +143,14 @@ def cmd_start(args):
             )
         else:
             proc = subprocess.Popen(
-                [sys.executable, server_script],
+                [_server_python(), server_script],
                 cwd=clean_rag_home,
                 env=env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NEW_CONSOLE,
             )
     else:
         proc = subprocess.Popen(
-            [sys.executable, server_script],
+            [_server_python(), server_script],
             cwd=clean_rag_home,
             env=env,
             start_new_session=True,

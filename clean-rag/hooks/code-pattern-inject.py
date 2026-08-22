@@ -28,6 +28,16 @@ def _log_path() -> Path:
 try:
     _log_file = _log_path()
     _log_file.parent.mkdir(parents=True, exist_ok=True)
+    # Before basicConfig opens the file, not during the run. This hook fires once
+    # per tool call as its own process, so rotating from inside a live handler is
+    # the one thing that does not work here. See _log_rotate for the detail.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _log_rotate import trim_if_large
+
+        trim_if_large(_log_file)
+    except Exception:
+        pass
     logging.basicConfig(
         level=logging.INFO,
         filename=str(_log_file),

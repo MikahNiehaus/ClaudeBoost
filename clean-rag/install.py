@@ -824,6 +824,69 @@ def setup_graphrag() -> None:
             print(f"  [warn] could not pull {model}: {e}")
 
 
+def setup_clean_rag_venv() -> None:
+    """Set up the isolated venv the server's embedding stack runs in.
+
+    Same shape and same reasoning as setup_graphrag above: create it if missing,
+    probe for the package, install only when absent. Idempotent and best effort.
+
+    Why this exists at all. The server used to import torch, transformers and
+    sentence-transformers from whatever interpreter happened to launch it,
+    normally the user's global one. Three packages that must agree on versions,
+    installed next to everything else on the machine, is a standing conflict. It
+    went wrong exactly the way that predicts: an interrupted pip run left
+    huggingface_hub with no __init__.py, and transformers holding 1773 files
+    from a version its own dist-info disagreed with. Every embedding load failed
+    for days, and pip could not repair it because the metadata recording what to
+    delete was itself wrong. A venv is the fix that generalises, rather than
+    repairing one machine by hand.
+
+    The pins live in requirements.txt. They are exact for the three packages
+    that broke, because a loose range is what let the versions drift apart with
+    nothing to catch it.
+    """
+    import subprocess
+
+    home = Path(__file__).resolve().parent
+    venv = home / "clean-rag-venv"
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    venv_py = venv / scripts / ("python.exe" if os.name == "nt" else "python")
+    reqs = home / "requirements.txt"
+
+    try:
+        if not venv_py.is_file():
+            print("  creating clean-rag-venv ...")
+            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [skip] could not create clean-rag-venv: {e}")
+        return
+
+    if not reqs.is_file():
+        print(f"  [skip] no requirements.txt at {reqs}")
+        return
+
+    try:
+        probe = subprocess.run(
+            [str(venv_py), "-c",
+             "import importlib.util as u; print(u.find_spec('sentence_transformers') is not None)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "True" in probe.stdout:
+            print("  clean-rag-venv already populated")
+        else:
+            # torch alone is a few hundred MB, so this is the slow step of the
+            # whole install. Long timeout on purpose: a half installed venv is
+            # the state this function exists to avoid creating.
+            print("  installing requirements into clean-rag-venv (large download) ...")
+            subprocess.run(
+                [str(venv_py), "-m", "pip", "install", "--quiet", "-r", str(reqs)],
+                check=True, timeout=3600,
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] clean-rag-venv requirements install failed: {e}")
+        print("  the server falls back to the launching interpreter, which may be broken")
+
+
 # ---------------------------------------------------------------------------
 # Step 5g: Register spec-compliance-gate hook (Stop) -- checks task keywords
 # ---------------------------------------------------------------------------
@@ -1171,6 +1234,11 @@ def main():
     register_reindex_hook()
     register_verify_after_edit_hook()
     register_record_edit_hook()
+
+    # Step 5c2. Before GraphRAG on purpose: this is the venv the server itself
+    # runs in, so nothing else works until it exists.
+    print("\nStep 5c2: Setting up clean-rag's own venv (large download)...")
+    setup_clean_rag_venv()
 
     # Step 5d
     print("\nStep 5d: Setting up GraphRAG (isolated venv + models; may download)...")

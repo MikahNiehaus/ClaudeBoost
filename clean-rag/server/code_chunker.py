@@ -34,6 +34,53 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _force_split(text: str, max_tokens: int) -> list[str]:
+    """Cut *text* into pieces no larger than *max_tokens*, whatever it contains.
+
+    The last resort behind every other splitter here. Those all cut at a natural
+    boundary, a definition, a blank line, a paragraph, which works right up until
+    the text has no such boundary in it. A minified bundle is one line; a wall of
+    legal prose is one paragraph. Neither offers anywhere to cut, so a splitter
+    that only knows natural boundaries returns the whole file as one piece.
+
+    That is not a cosmetic problem. An oversized chunk goes straight to
+    SentenceTransformer.encode, whose attention allocation grows with sequence
+    length, and a single 500KB file (the MAX_FILE_SIZE ceiling in file_scan) was
+    observed asking the allocator for 9663676416 bytes, 9 GB, and taking the
+    indexer down with it. The model's own limit is 512 tokens. Nothing between
+    the chunker and the encoder enforced it.
+
+    So this cuts at a line boundary when there is one inside the budget, and
+    slices mid line when there is not. Slicing mid line loses the tail of a token
+    and can split an identifier, which is a real cost, accepted deliberately: a
+    slightly ragged chunk still embeds and still retrieves, while an unsplit one
+    stops the whole run.
+    """
+    if max_tokens <= 0:
+        return [text] if text else []
+    limit = max_tokens * 4  # estimate_tokens is len // 4, so invert it
+    if len(text) <= limit:
+        return [text] if text.strip() else []
+
+    pieces: list[str] = []
+    start = 0
+    while start < len(text):
+        end = start + limit
+        if end >= len(text):
+            piece = text[start:]
+        else:
+            # Prefer the last newline inside the budget. Only accept one past
+            # the halfway mark, otherwise a file whose newlines cluster early
+            # produces a long tail of tiny pieces.
+            cut = text.rfind("\n", start + limit // 2, end)
+            end = cut + 1 if cut != -1 else end
+            piece = text[start:end]
+        if piece.strip():
+            pieces.append(piece)
+        start = end
+    return pieces
+
+
 # Node types that represent top-level definitions per language
 _DEFINITION_TYPES: dict[str, set[str]] = {
     "python": {
@@ -383,21 +430,40 @@ def _split_at_blank_lines(
     lines: list[str], section: str, offset: int,
     max_tokens: int, min_tokens: int,
 ) -> list[RawChunk]:
-    """Split lines at blank-line boundaries, respecting token limits."""
+    """Split lines at blank-line boundaries, respecting token limits.
+
+    Two guards here rather than one, because blank lines cannot be relied on.
+    The token check used to sit inside the "is this a blank line" branch, so a
+    run of code with no blank line in it never reached the check and came out as
+    one chunk however long it was. And a single minified line can exceed the
+    budget on its own, which no line based accumulation can fix. So over long
+    lines are cut up first, and the size check now applies on every line instead
+    of only at a blank one.
+    """
     chunks = []
     current_lines = []
     current_start = offset
 
+    # A single line can be larger than the whole budget. Cut those up before
+    # accumulating, otherwise the loop below has nothing it can do about them.
+    lines = [piece for line in lines for piece in (_force_split(line, max_tokens) or [line])]
+
+    current_chars = 0
+    limit_chars = max_tokens * 4
     for i, line in enumerate(lines):
         current_lines.append(line)
+        current_chars += len(line) + 1
         is_blank = line.strip() == ""
         is_last = i == len(lines) - 1
+        # Tracked as a running total rather than re-joining the buffer on every
+        # line, which would be quadratic on exactly the huge files this guards.
+        over_budget = current_chars >= limit_chars
 
-        if (is_blank or is_last) and current_lines:
+        if (is_blank or is_last or over_budget) and current_lines:
             current_text = "\n".join(current_lines)
             tokens = estimate_tokens(current_text)
 
-            if tokens >= max_tokens or is_last:
+            if tokens >= max_tokens or is_last or over_budget:
                 chunks.append(RawChunk(
                     content=current_text.strip(),
                     section=section,
@@ -406,6 +472,7 @@ def _split_at_blank_lines(
                     token_count_approx=tokens,
                 ))
                 current_lines = []
+                current_chars = 0
                 current_start = offset + i + 1
 
     # Merge small trailing chunk
@@ -426,7 +493,18 @@ def _fallback_chunk(
     text: str, source_file: str, max_tokens: int, min_tokens: int, chunk_overlap: int = 0,
 ) -> list[RawChunk]:
     """Fallback: split at double-blank-line boundaries."""
-    blocks = re.split(r"\n\n+", text)
+    # Force-split every block before the accumulation loop sees it. The loop's
+    # own size check (below) compares current + next against max_tokens, and it
+    # only fires when current is not empty, so the FIRST block was emitted at
+    # whatever size it happened to be. A file with no blank line in it is one
+    # block, which is how a 500KB minified file became a single chunk and asked
+    # the allocator for 9 GB. Splitting here means no block reaching the loop is
+    # ever oversized, so the existing logic is correct again rather than patched.
+    blocks = [
+        piece
+        for block in re.split(r"\n\n+", text)
+        for piece in _force_split(block, max_tokens)
+    ]
     chunks = []
     current_text = ""
     current_start = 1

@@ -107,6 +107,24 @@ cd <path-to-ClaudeBoost>
 `scripts/setup.py` handles the rest — registers hooks globally, sets CLAUDEBOOST_HOME,
 starts the RAG server, and links all slash commands.
 
+**The install builds clean-rag its own virtualenv, and you need it.** The
+embedding stack (torch, transformers, sentence-transformers) goes into
+`clean-rag/clean-rag-venv/`, never onto your global interpreter, and the server
+is launched with that venv's Python. Expect the download to be a few hundred
+megabytes and to be the slowest part of the install. The venv is built per
+machine and is gitignored, so a fresh clone has to run the installer before
+search or indexing will work.
+
+Two consequences worth knowing:
+
+- If you see `[warn] clean-rag-venv not found`, the venv is missing and the
+  server has fallen back to whatever interpreter launched it. Run
+  `python clean-rag/install.py` to build it.
+- The three embedding packages are pinned exactly in
+  `clean-rag/requirements.txt`, not ranged. They have to agree on versions with
+  each other, and a range let them drift apart until every embedding load failed.
+  Bump them together or not at all.
+
 ### Uninstall
 
 `uninstall.sh` / `uninstall.bat` (or the `/uninstall` slash command) reverse `setup.py`.

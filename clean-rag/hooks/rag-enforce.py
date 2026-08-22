@@ -50,6 +50,15 @@ def _log_path() -> Path:
 try:
     _log_file = _log_path()
     _log_file.parent.mkdir(parents=True, exist_ok=True)
+    # Rotate before the handler opens the file. This hook is a separate process
+    # per prompt, so a live rotating handler would race another copy of itself.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _log_rotate import trim_if_large
+
+        trim_if_large(_log_file)
+    except Exception:
+        pass
     logging.basicConfig(
         level=logging.INFO,
         filename=str(_log_file),

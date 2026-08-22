@@ -21,6 +21,7 @@ state/*.log
 .venv-router/
 .venv-coref/
 graphrag-venv/
+clean-rag-venv/
 
 # Local AI models for the GraphRAG extraction service (GGUF and friends). Large,
 # machine specific, never committed. Each machine provides its own model file.
