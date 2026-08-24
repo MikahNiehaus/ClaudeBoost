@@ -41,6 +41,19 @@ STATE = BOOST_HOME / "state"
 PY = sys.executable
 
 
+def _number_or_zero(value) -> float:
+    """A count from a JSON body, tolerant of a string or a missing field.
+
+    /status is parsed straight off the wire, so a field can arrive as "12"
+    rather than 12. Comparing a str to an int raises, and a health check that
+    raises reports nothing at all.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _temp_dir() -> Path:
     # Match session-primer.py: TEMP, then TMPDIR, then /tmp.
     return Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp")
@@ -179,13 +192,29 @@ def step_rag() -> dict:
     # `stale_projects` on a search instead, which names the project and the
     # model it was built with.
     out["healed"] = []
+    # Two things were wrong here and each hid the other.
+    #
+    # `entries` is a dict keyed by project hash, not a list, so iterating it
+    # yielded the keys. Calling .get on a str raised AttributeError and took
+    # the whole of /boost down before it printed a single check.
+    #
+    # And `incomplete` is not a field clean-rag writes. An entry carries
+    # project_path, files_indexed, chunks_created, graph, indexed_at, server
+    # and source. So even with the iteration fixed the test could never fire.
+    # files_indexed is the real signal, and it is the one rag-enforce already
+    # keys on in _has_real_index: a registered project with nothing behind it.
+    entries = status.get("projects", {}).get("entries", {})
+    values = entries.values() if isinstance(entries, dict) else entries
     stale = [
-        e for e in status.get("projects", {}).get("entries", [])
-        if e.get("incomplete")
+        e for e in values
+        if isinstance(e, dict) and not _number_or_zero(e.get("files_indexed"))
     ]
     if stale:
-        print(f"  {len(stale)} project(s) hold an incomplete index; "
-              f"a sweep resumes them, or run /index-project to force one")
+        names = ", ".join(
+            str(e.get("project_path", "?")).rsplit("/", 1)[-1] for e in stale[:3]
+        )
+        print(f"  {len(stale)} project(s) registered with an empty index ({names}); "
+              f"run /index-project on them, searches over them return nothing")
 
     # Index the ClaudeBoost codebase (incremental).
     try:

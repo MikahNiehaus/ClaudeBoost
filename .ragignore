@@ -11,5 +11,10 @@ data/
 # Project KB research docs — searchable via knowledge/project KB tier, not codebase search
 .claudeboost/
 
+# Benchmark run output. results/run_log.txt is not UTF-8, so every sweep logged
+# "Failed to read ... invalid start byte" against it. It is a run artifact, not
+# source, so nothing should have been reading it in the first place.
+results/
+
 # Scripts that are generated or vendored (add more as needed)
 # example: vendor/
