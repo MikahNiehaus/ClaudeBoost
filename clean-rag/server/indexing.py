@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .code_chunker import RawChunk, chunk_code, estimate_tokens
+from .code_chunker import RawChunk, _force_split, chunk_code, estimate_tokens
 from .config import (
     CHUNK_OVERLAP_TOKENS,
     DATABASES_DIR,
@@ -182,8 +182,15 @@ def chunk_markdown(
         section_chunks = _process_section(section, max_tokens, min_tokens, chunk_overlap)
         chunks.extend(section_chunks)
 
-    # Merge trailing small chunks into the previous one
-    if len(chunks) > 1 and chunks[-1].token_count_approx < min_tokens:
+    # Merge a trailing runt into the previous chunk, but only when the result
+    # still fits. Merging unconditionally can hand back a chunk over max_tokens
+    # after every other step took care to stay under it, which is the one thing
+    # the caller relies on.
+    if (
+        len(chunks) > 1
+        and chunks[-1].token_count_approx < min_tokens
+        and chunks[-2].token_count_approx + chunks[-1].token_count_approx <= max_tokens
+    ):
         last = chunks.pop()
         chunks[-1] = RawChunk(
             content=chunks[-1].content + "\n\n" + last.content,
@@ -256,7 +263,27 @@ def _process_section(
             token_count_approx=tokens,
         )]
 
-    paragraphs = re.split(r"\n\n+", section.content)
+    # Paragraphs are the finest boundary this splitter knows, so a paragraph
+    # that is itself over budget has nowhere to be cut and was emitted whole.
+    # Markdown makes that the normal case rather than the exotic one: a table
+    # contains no blank line, so an entire parameter table is one paragraph.
+    # A 147KB Helm chart README (argo-cd) became a single chunk that asked the
+    # allocator for 51.55 GiB and killed the server, and because auto reindex
+    # retries every 10 minutes it killed it again on a timer.
+    #
+    # _force_split is the last resort the code path has used for exactly this
+    # since the 9 GB incident recorded in its docstring. Splitting them up
+    # front means the accumulation loop below is unchanged and every chunk it
+    # can emit is already within budget.
+    paragraphs = [
+        piece
+        for para in re.split(r"\n\n+", section.content)
+        for piece in (
+            _force_split(para, max_tokens)
+            if estimate_tokens(para) > max_tokens
+            else [para]
+        )
+    ]
     chunks = []
     current_text = ""
     current_start = section.line_start
