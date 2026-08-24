@@ -538,11 +538,43 @@ def install_clean_rag() -> None:
 # Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
 # re-running this script never duplicates an entry that the PowerShell
 # version installed previously.
+def _collapse_duplicate_hooks(settings: dict) -> None:
+    """Collapse byte identical entries within one event.
+
+    _install_hook is idempotent only while its sentinel still appears in the
+    entry it guards. When one stops matching, every run appends another copy,
+    and the copies persist after the sentinel is fixed: the fix stops the
+    growth but cannot undo it. That happened here, and the result was
+    compaction-save.py running twice on every compaction.
+
+    Compares the whole entry, so two hooks that share a script but differ in
+    matcher or timeout are left alone. rag-read-guard is deliberately
+    registered twice, once for Grep and once for Read.
+    """
+    hooks = settings.get("hooks") or {}
+    removed = 0
+    for hook_type in list(hooks.keys()):
+        seen: set[str] = set()
+        kept = []
+        for entry in hooks[hook_type] or []:
+            key = json.dumps(entry, sort_keys=True)
+            if key in seen:
+                removed += 1
+                continue
+            seen.add(key)
+            kept.append(entry)
+        hooks[hook_type] = kept
+    settings["hooks"] = hooks
+    if removed:
+        _ok(f"Collapsed {removed} duplicate hook entr(ies)")
+
+
 def _install_all_hooks(settings: dict) -> None:
     _info("\nCleaning up stale hooks...")
     _clean_stale_hooks(settings)
     _remove_superseded_hooks(settings)
     _remove_deleted_script_hooks(settings)
+    _collapse_duplicate_hooks(settings)
 
     # --- SessionStart: compaction restore ---
     _install_hook(settings, "SessionStart", {

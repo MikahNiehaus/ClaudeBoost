@@ -70,6 +70,50 @@ def test_installing_the_hook_set_twice_changes_nothing(setup_mod, capsys):
     assert once == twice
 
 
+def test_a_pre_existing_duplicate_is_collapsed(setup_mod, capsys):
+    """
+    Fixing a sentinel stops the growth but cannot undo it.
+
+    Once a sentinel stopped matching, every setup run appended another copy of
+    that entry. Correcting the sentinel prevents new copies and leaves the ones
+    already written, so a real install still ran compaction-save.py twice on
+    every compaction. The cleanup pass has to remove them.
+    """
+    entry = {
+        "matcher": "Always",
+        "hooks": [{"type": "command", "command": "x /some/script.py", "timeout": 5000}],
+    }
+    settings = {"hooks": {"PreCompact": [dict(entry), dict(entry), dict(entry)]}}
+
+    setup_mod._collapse_duplicate_hooks(settings)
+    capsys.readouterr()
+
+    assert len(settings["hooks"]["PreCompact"]) == 1, (
+        "byte identical entries for the same event must collapse to one"
+    )
+
+
+def test_entries_differing_only_by_matcher_are_kept(setup_mod, capsys):
+    """
+    rag-read-guard is registered twice on purpose, once for Grep and once for
+    Read. Collapsing on the script name rather than the whole entry would
+    silently drop one of them.
+    """
+    def mk(matcher):
+        return {
+            "matcher": matcher,
+            "hooks": [{"type": "command",
+                       "command": "x /scripts/rag-read-guard.py", "timeout": 10}],
+        }
+
+    settings = {"hooks": {"PreToolUse": [mk("Grep"), mk("Read")]}}
+    setup_mod._collapse_duplicate_hooks(settings)
+    capsys.readouterr()
+
+    assert len(settings["hooks"]["PreToolUse"]) == 2
+    assert {e["matcher"] for e in settings["hooks"]["PreToolUse"]} == {"Grep", "Read"}
+
+
 def test_every_sentinel_appears_in_the_entry_it_guards(setup_mod, capsys):
     """
     The structural form of the rule above.
