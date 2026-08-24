@@ -7,21 +7,24 @@ knowledge base. Works standalone or with Gas Town.
 ## The research gate (this is the operative rule)
 
 Every edit to a code file is checked against whether `researcher` or `swiper`
-has run this session and declared that it covered that file. The gate is a
-hard PreToolUse block: an uncovered file cannot be edited. Coverage persists
-across follow-up messages (not reset on every message) and expires after one
-hour of inactivity or when new research runs. The block is keyed off a real
-agent completion stamped by a PostToolUse hook — it cannot be satisfied by
-claiming you researched.
+has run this session and declared that it covered that file, and nudges toward
+research when neither has. The gate does not block: `research-gate.py` exits 0
+on every payload shape, by decision — an unresearched edit is recoverable, so
+it gets a nudge and an honest audit trail rather than a refusal. Coverage
+persists across follow-up messages (not reset on every message) and expires
+after one hour of inactivity or when new research runs. What can't be faked is
+the record, not a refusal: only Claude Code can start an agent, and a
+PostToolUse hook stamps the coverage after the agent finishes, so "I
+researched it" is never what gets written down.
 
-When the gate blocks:
+When the gate nudges toward research:
 
 1. **Spawn `researcher` and/or `swiper`** (Sonnet, foreground). Tell them what
    you're changing, why, and the code you intend to write. Both cover depth and
    breadth and report with sources and a `COVERS:` line naming the files they
-   covered. That scope is what the gate checks: an edit to an uncovered file is
-   blocked, not just flagged. Wait for them before attempting the edit — there is
-   no point trying the edit first. Spawn in the foreground (`run_in_background:
+   covered. That scope is what the audit trail checks; nothing refuses the edit,
+   but an uncovered file shows up as uncovered. Wait for them before editing
+   anyway; that's still the point. Spawn in the foreground (`run_in_background:
    false`), never backgrounded — a backgrounded completion arrives later as a
    `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
    record never fires for it and the gate never sees the coverage.
@@ -31,9 +34,11 @@ When the gate blocks:
    no swapped libraries or approaches, no added structure the reference didn't
    have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
    allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
-2. There is no cheap triage tier. A change either has research covering the
-   file or it doesn't. If it doesn't, the gate blocks. `/ps` is the human's
-   escape for a turn they already know is trivial.
+2. There is no cheap triage tier. The old one decided whether a change needed
+   research WITHOUT reading the code, and that blind guess was wrong often
+   enough to remove. researcher and swiper look first, so their judgment is
+   grounded. They do real research every time they run; do not build a
+   triviality shortcut into them or any other agent.
 3. Genuinely trivial work that needs no research is the human's call, not a
    model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
    you already know the change is trivial.
@@ -97,12 +102,13 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   the only way a real reference reaches their review; do not give either its own
   GitHub/web fetch access, that would duplicate the one injection-exposed agent
   this codebase deliberately keeps to one. `hooks/verifier-gate.py`
-  (a Stop hook) requires a real stamp before the turn can end: bad-cop always
-  provides the terminal stamp — either directly on a clean initial pass, or
-  after a final re-check that finds nothing following good-cop's fix —
-  writing a `VERIFIED:` line naming the files it covered, checked
-  per file the same way the research gate checks `COVERS:`, invalidated if a
-  file is edited again after being reviewed. `high_stakes.py`
+  (a Stop hook) asks for a real stamp but never refuses the stop: it exits 0
+  always and writes its nudge to stderr, naming the unverified files and who to
+  spawn. bad-cop provides the terminal stamp — either directly on a clean
+  initial pass, or after a final re-check that finds nothing following
+  good-cop's fix — writing a `VERIFIED:` line naming the files it covered,
+  checked per file the same way the research gate checks `COVERS:`, invalidated
+  if a file is edited again after being reviewed. `high_stakes.py`
   labels which surface it touched so the review points at the sharpest risk. A
   `/ps` turn skips both, the same quick mode escape that skips the research gate.
 

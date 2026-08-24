@@ -26,11 +26,21 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The developer's home directory, and this clone's absolute location.
+# The developer's home directory, and this clone's absolute location. Each
+# needs two forms: the real path (colon and slash/backslash) and Claude Code's
+# own mangled slug for it (~/.claude/projects/<mangled cwd>/, every non
+# alphanumeric character replaced with a dash -- see scripts/session-restore.py
+# _transcript_exists). A doc that quotes the mangled slug directly, as
+# .claude/commands/self-improve.md once did, is just as machine specific as
+# one that quotes the raw path, and the colon/slash form alone misses it.
 # Case-insensitive: Windows paths get spelled both ways.
 BANNED = {
-    "personal home directory": re.compile(r"[Cc]:[\\/]+Users[\\/]+mniehaus", re.IGNORECASE),
-    "this clone's absolute path": re.compile(r"[Cc]:[\\/]+Development[\\/]+ClaudeBoost", re.IGNORECASE),
+    "personal home directory": re.compile(
+        r"[Cc]:[\\/]+Users[\\/]+mniehaus|C--Users-mniehaus", re.IGNORECASE
+    ),
+    "this clone's absolute path": re.compile(
+        r"[Cc]:[\\/]+Development[\\/]+ClaudeBoost|C--Development-ClaudeBoost", re.IGNORECASE
+    ),
 }
 
 # Extensions that can actually execute or instruct. Binary and lock files are
@@ -103,8 +113,10 @@ def test_the_banned_patterns_actually_match_what_they_claim():
 
     assert home.search(r"C:\Users\mniehaus\.claude\agents\quick-cop.md")
     assert home.search("C:/Users/mniehaus/.claude/settings.json")
+    assert home.search("~/.claude/projects/C--Users-mniehaus/memory/MEMORY.md")
     assert clone.search(r"Path('C:\Development\ClaudeBoost\clean-rag')")
     assert clone.search('sys.path.insert(0, "C:/Development/ClaudeBoost/clean-rag")')
+    assert clone.search("~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md")
 
     # ...and do not fire on the synthetic fixtures the suite legitimately uses.
     for benign in (

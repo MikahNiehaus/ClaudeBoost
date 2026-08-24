@@ -21,9 +21,13 @@ So the classifier is the whole job. Everything else is plumbing.
 
 ## Phase 1: read the store
 
-```
-C:\Users\mniehaus\.claude\projects\C--Development-ClaudeBoost\memory\
-```
+The memory directory for this project. Claude Code exposes it directly (a
+system reminder or your own prior turns will have already named it); it lives
+under `~/.claude/projects/<mangled cwd>/memory/`, where the mangling replaces
+every non alphanumeric character in the working directory's path with a dash
+(very long paths are truncated and hashed instead), for example
+`C:/Users/foo/.claude/projects/C--prj-ClaudeBoost/memory/` for a project at
+`C:\prj\ClaudeBoost`. Never hardcode a specific machine's path here.
 
 Glob `*.md`. Read `MEMORY.md` first: its section headings are a human's existing
 clustering and are more reliable than anything you would recompute. Each other

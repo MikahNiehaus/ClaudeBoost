@@ -176,7 +176,7 @@ Use POST http://127.0.0.1:8613/search with `{"sources":["project:<PROJECT_PATH>"
 | `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
 | `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8613/search` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
-| `memory` | Memory staleness: read `~/.claude/projects/C--Development-ClaudeBoost/memory/MEMORY.md`; flag entries older than 60 days |
+| `memory` | Memory staleness: read `~/.claude/projects/<mangled cwd>/memory/MEMORY.md` (mangling replaces every non alphanumeric character in the project path with a dash); flag entries older than 60 days |
 | `all` | All of the above |
 
 ### WORKSPACE mode lenses
