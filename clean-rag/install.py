@@ -403,6 +403,31 @@ def install_pptx_tools() -> None:
 
 # Lives in ~/.claude/, deliberately outside the repo, because that's the whole
 # point of it.
+def _hook_python() -> str:
+    """The interpreter hook commands are registered with.
+
+    Every hook here used to be registered as a bare `python`. That name does
+    not exist on macOS, which ships python3 only, and is not guaranteed on a
+    modern Linux either. The result is `/bin/sh: python: command not found` on
+    every Edit, Write and Bash, and the part that actually matters is not the
+    noise: the hook never runs, so the gate it enforces is silently absent. All
+    14 of clean-rag's hooks were dead that way on the first machine without a
+    `python` shim, including the research gate and the verifier gate.
+
+    Prefer $CLAUDEBOOST_PYTHON, the interpreter the rest of the toolkit already
+    agrees on. Otherwise use the one running this installer, which exists by
+    definition. Resolved to an absolute path at install time rather than left
+    as a variable, because settings.json is per machine anyway and a name that
+    has to resolve at hook run time is exactly what failed here.
+    """
+    env = os.environ.get("CLAUDEBOOST_PYTHON", "").strip()
+    if env and Path(env).exists():
+        return env
+    return sys.executable
+
+
+HOOK_PYTHON = _hook_python()
+
 HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
 
 # Portable launcher for clean-rag's own hooks: an env var each install resolves
@@ -667,7 +692,7 @@ def _register_hook(
 # ---------------------------------------------------------------------------
 def register_graph_context_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/graph-context-inject.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/graph-context-inject.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -755,7 +780,7 @@ def register_session_prompt() -> None:
 def register_rag_enforce_hook() -> None:
     settings = read_json(SETTINGS_PATH)
     # Use env var for portability across machines
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/rag-enforce.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/rag-enforce.py"'
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -771,7 +796,7 @@ def register_rag_enforce_hook() -> None:
 def register_reindex_hook() -> None:
     settings = read_json(SETTINGS_PATH)
     # Use env var for portability across machines
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/reindex-after-edit.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/reindex-after-edit.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -786,7 +811,7 @@ def register_verify_after_edit_hook() -> None:
     # The post write half of the gate: after code is written, nudge to verify it
     # by running a check, not by self reviewing. See verify-after-edit.py.
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verify-after-edit.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/verify-after-edit.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -802,7 +827,7 @@ def register_record_edit_hook() -> None:
     # session cwd is not the repo being edited. See record-edit.py and
     # turn_edits.py.
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/record-edit.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/record-edit.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -947,7 +972,7 @@ def register_spec_compliance_gate_hook() -> None:
     satisfy what was actually asked for.
     """
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -965,7 +990,7 @@ def register_spec_compliance_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_auto_test_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/auto-test-gate.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/auto-test-gate.py"'
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -983,7 +1008,7 @@ def register_auto_test_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_verifier_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-gate.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/verifier-gate.py"'
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -1001,7 +1026,7 @@ def register_verifier_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_verifier_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-record.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/verifier-record.py"'
     hook_entry = {
         "matcher": "Task|Agent",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1018,7 +1043,7 @@ def register_verifier_record_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_lint_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/lint-gate.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/lint-gate.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1078,7 +1103,7 @@ def register_code_pattern_inject_hook() -> None:
     and research injection. Non-blocking in background threads.
     """
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1099,7 +1124,7 @@ def register_code_pattern_inject_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/research-gate.py"'
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1117,7 +1142,7 @@ def register_research_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_gate_bash_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate-bash.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/research-gate-bash.py"'
     hook_entry = {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1135,7 +1160,7 @@ def register_research_gate_bash_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-record.py"'
+    hook_command = f'"{HOOK_PYTHON}" "$CLEAN_RAG_HOME/hooks/research-record.py"'
     hook_entry = {
         "matcher": "Task|Agent",
         "hooks": [{"type": "command", "command": hook_command}],
