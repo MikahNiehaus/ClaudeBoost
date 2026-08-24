@@ -1,0 +1,23 @@
+# Test dependencies. Not needed to run clean-rag, only to run its tests.
+#
+# These were undeclared, and it showed: 27 of the tests here are async and
+# carry @pytest.mark.asyncio, which does nothing without pytest-asyncio. Without
+# the plugin pytest does not skip them, it fails them, so a correct checkout
+# reported 27 failures and a warning about an "unknown mark" that reads like a
+# typo rather than a missing package.
+#
+#   python -m pip install -r clean-rag/requirements-dev.txt
+#
+# The system interpreter on macOS is usually externally managed (PEP 668) and
+# will refuse. Install into clean-rag's own venv instead, which is where the
+# rest of this project's dependencies already live:
+#
+#   clean-rag/clean-rag-venv/bin/python -m pip install -r clean-rag/requirements-dev.txt
+#   clean-rag/clean-rag-venv/bin/python -m pytest clean-rag/tests/
+#
+# tests/conftest.py skips the async tests with an actionable reason when the
+# plugin is absent, so a run without these still reports honestly rather than
+# looking broken.
+
+pytest>=8.0
+pytest-asyncio>=0.23,<2.0

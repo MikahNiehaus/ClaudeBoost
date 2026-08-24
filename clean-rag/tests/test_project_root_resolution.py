@@ -25,6 +25,21 @@ import pytest
 CLEAN_RAG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_RAG / "hooks"))
 
+#: Some cases here assert properties of the Windows filesystem rather than of
+#: this code, and POSIX simply does not have them. A trailing dot is a literal
+#: character here, not stripped, so `x.` and `x` are two different directories
+#: and the test's own sanity assertion fails first. `C:\` is not a drive root
+#: here, it is an odd relative name, so the resolver correctly walks up from the
+#: working directory and returns a real project instead of None.
+#:
+#: Marked rather than deleted: they are the reason _same_dir_key exists, and
+#: they need to keep running on Windows, where they pass.
+windows_only = pytest.mark.skipif(
+    os.name != "nt",
+    reason="asserts Windows filesystem spelling rules (trailing dots, drive "
+           "roots, UNC, illegal characters) that POSIX does not share",
+)
+
 
 @pytest.fixture()
 def rag_enforce():
@@ -140,6 +155,7 @@ class TestNormPath:
     spelling of the same path onto one string, or the cheap comparison is also
     a wrong one."""
 
+    @windows_only
     def test_the_same_path_spelled_differently_normalizes_the_same(self, rag_enforce):
         forms = [
             "C:\\Development\\Domain",
@@ -167,6 +183,7 @@ class TestNormPath:
     def test_a_drive_root_normalizes_consistently_with_itself(self, rag_enforce):
         assert rag_enforce._norm_path("C:\\") == rag_enforce._norm_path("C:/")
 
+    @windows_only
     def test_it_does_not_claim_to_fold_a_spelling_only_the_filesystem_knows(
         self, rag_enforce, tmp_path
     ):
@@ -182,14 +199,27 @@ class TestNormPath:
         assert rag_enforce._norm_path(dotted) != rag_enforce._norm_path(str(plain))
 
 
+def _run_cmd(args: list[str]):
+    """Run a `cmd /c` command, or return None where there is no cmd at all.
+
+    Both helpers below already promise None when the machine cannot do the
+    thing, and every caller honours that with pytest.skip. The gap was that
+    subprocess.run raises FileNotFoundError rather than returning non zero when
+    the executable itself is absent, so on macOS and Linux these blew up before
+    they could report "cannot". 21 tests failed that way, every one of them
+    describing a Windows filesystem spelling that cannot exist here.
+    """
+    try:
+        return subprocess.run(args, capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        return None
+
+
 def _make_junction(link: Path, target: Path):
     """A junction at *link* pointing at *target*, or None if this machine
     cannot make one."""
-    proc = subprocess.run(
-        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0 or not link.exists():
+    proc = _run_cmd(["cmd", "/c", "mklink", "/J", str(link), str(target)])
+    if proc is None or proc.returncode != 0 or not link.exists():
         return None
     return link
 
@@ -197,10 +227,9 @@ def _make_junction(link: Path, target: Path):
 def _short_name_of(directory: Path):
     """*directory* spelled as its 8.3 alias, or None when the volume has 8.3
     name generation switched off."""
-    proc = subprocess.run(
-        ["cmd", "/c", "dir", "/x", "/ad", str(directory.parent)],
-        capture_output=True, text=True,
-    )
+    proc = _run_cmd(["cmd", "/c", "dir", "/x", "/ad", str(directory.parent)])
+    if proc is None:
+        return None
     for line in proc.stdout.splitlines():
         if not line.endswith(directory.name):
             continue
@@ -231,6 +260,7 @@ class TestSameDirKey:
             pytest.skip("8.3 name generation is off on this volume")
         assert rag_enforce._same_dir_key(str(short)) == rag_enforce._same_dir_key(str(long_form))
 
+    @windows_only
     def test_a_trailing_dot_spelling_shares_one_key_with_the_plain_form(
         self, rag_enforce, tmp_path
     ):
@@ -336,6 +366,7 @@ class TestRegistrySpellingsOnlyTheFilesystemCanFold:
         result = self._project_root_with_registered(rag_enforce, home, short, long_form)
         assert result is not None and Path(result) == long_form.resolve()
 
+    @windows_only
     def test_a_trailing_dot_registration_still_resolves_to_the_project(
         self, rag_enforce, home
     ):
@@ -403,9 +434,9 @@ class TestRegistrySpellingsOnlyTheFilesystemCanFold:
 class TestProjectRootNeverRaises:
     @pytest.mark.parametrize("label,make_path", [
         ("nonexistent path", lambda home: str(home / "does" / "not" / "exist")),
-        ("UNC path", lambda home: r"\\localhost\C$\does_not_exist_share_probe"),
-        ("drive root", lambda home: "C:\\"),
-        ("illegal windows chars", lambda home: "C:\\bad?name<>|path"),
+        pytest.param("UNC path", lambda home: r"\\localhost\C$\does_not_exist_share_probe", marks=windows_only),
+        pytest.param("drive root", lambda home: "C:\\", marks=windows_only),
+        pytest.param("illegal windows chars", lambda home: "C:\\bad?name<>|path", marks=windows_only),
         # A NUL byte reaches os.scandir() through the marker glob and raises
         # ValueError, not OSError. The resolver's contract is a path or None,
         # and a UserPromptSubmit hook may not end the turn with a traceback,
