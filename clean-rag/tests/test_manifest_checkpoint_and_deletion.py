@@ -613,8 +613,13 @@ class TestSweepDoesNotRebuildOnDeletion:
         monkeypatch.setattr(ar, "FULL_REINDEX_THRESHOLD", 2)
 
         # The drop fails, the way a locked or unreadable database would fail it.
+        # Patched on drop_manifest_key, which is what the sweep's deletion loop
+        # calls. It used to route deletions through reindex_file with a flag;
+        # eviction is its own function now, so patching reindex_file here would
+        # intercept nothing, the real drop would succeed, and this test would
+        # pass for the wrong reason.
         monkeypatch.setattr(
-            ar, "reindex_file", lambda *a, **k: {"error": "could not drop"}
+            ar, "drop_manifest_key", lambda *a, **k: {"error": "could not drop"}
         )
 
         forced = []

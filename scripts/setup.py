@@ -408,6 +408,7 @@ def _remove_superseded_hooks(settings: dict) -> None:
 # env-var paths ($CLAUDEBOOST_HOME/...), so we match by basename instead.
 _REMOVED_HOOK_SCRIPTS = (
     "git-guard.py",
+    "lt-precompact.py",   # Low Token Mode dropped 2026-08-23; PreCompact hook
 )
 
 
@@ -759,18 +760,11 @@ def _install_all_hooks(settings: dict) -> None:
         ],
     }, sentinel="CONTEXT PRESERVATION", label="context preservation + compaction save")
 
-    # --- PreCompact: Low Token Mode handler ---
-    _install_hook(settings, "PreCompact", {
-        "matcher": "Always",
-        "hooks": [
-            {
-                "type": "command",
-                "command": _py_cmd("lt-precompact.py"),
-                "timeout": 8000,
-                "statusMessage": "Checking Low Token Mode...",
-            },
-        ],
-    }, sentinel="lt-precompact.py", label="Low Token Mode precompact handler")
+    # Low Token Mode was removed on 2026-08-23. It opened a new Windows
+    # Terminal tab when context filled and killed the current one. The launcher
+    # hardcoded `pwsh`, which is not installed by default on Windows, so every
+    # compaction raised "error 2147942402 ... cannot find the file specified"
+    # and no new tab appeared. /clear-safe covers the same need and is kept.
 
     # --- SessionEnd: clear handoff save ---
     _install_hook(settings, "SessionEnd", {

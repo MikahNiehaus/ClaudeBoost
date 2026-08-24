@@ -70,7 +70,6 @@ Everything else in the tables below is available, but most of it runs automatica
 | `/rag-health [scope]` | Detailed health check on a specific RAG collection. Every check produces PASS, WARN, or FAIL. Scope options: `project`, `knowledge`, `agents`, `task`, `all`. | `/rag-health project` |
 | `/clear-safe` | Saves current workspace context before you clear. Prevents losing mid-task state. | `/clear-safe` |
 | `/handoff` | Saves session state and prepares for a fresh context. Good for long-running tasks that need a clean start. | `/handoff` |
-| `/low-token [on\|off\|status]` | Toggles Low Token Mode. When on: the status bar shows context pressure, and at compaction a new terminal opens automatically in the same directory so the new session picks up where the old one left off. | `/low-token on` |
 
 ### Planning & Workspace
 

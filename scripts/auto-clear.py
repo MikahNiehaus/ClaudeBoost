@@ -4,6 +4,11 @@ ClaudeBoost auto-clear — Stop command hook.
 When /clear-safe writes state/auto-clear-pending.json, this hook injects
 /clear into the terminal after Claude finishes responding (tmux only).
 
+/clear-safe also has a Windows path: clear-safe-launch.py opens a new
+Windows Terminal tab and writes state/clear-safe-terminal-signal.json. This
+hook consumes that signal and kills the Claude process so the OLD tab closes.
+Without the consumer here, /clear-safe leaves two tabs open.
+
 Injection method:
   - tmux ($TMUX set): tmux send-keys
   - Non-tmux: no-op. User types /clear manually.
@@ -27,11 +32,44 @@ from pathlib import Path
 
 MAX_AGE_SECONDS = 300  # 5 minutes
 
-_CREATE_NO_WINDOW = 0x08000000
-_CREATE_NEW_PROCESS_GROUP = 0x00000200
-
-
 from workspace_identity import _find_claude_pid_windows
+
+
+def _close_old_clear_safe_tab(home: str) -> bool:
+    """Consume /clear-safe's terminal handoff signal and close the old tab.
+
+    clear-safe-launch.py opens the replacement Windows Terminal tab and writes
+    state/clear-safe-terminal-signal.json. It is the ONLY writer, and this is
+    the only reader: delete one without the other and /clear-safe silently
+    leaves two tabs open.
+
+    Returns True if a signal was found, in which case the caller is done for
+    this Stop, the /clear injection below is for the tmux flow instead.
+    """
+    signal_path = Path(home) / "state" / "clear-safe-terminal-signal.json"
+    if not signal_path.exists():
+        return False
+
+    try:
+        data = json.loads(signal_path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+
+    # One shot: gone before anything can fail, so a bad signal cannot wedge
+    # every future Stop into trying to kill something.
+    signal_path.unlink(missing_ok=True)
+
+    if time.time() - data.get("timestamp", 0) < MAX_AGE_SECONDS:
+        node_pid = _find_claude_pid_windows()
+        if node_pid:
+            try:
+                os.kill(node_pid, 9)
+            except Exception:
+                # The tab is already gone, or is not ours to kill. Both mean
+                # the job is done. There is nothing a Stop hook could usefully
+                # report here and no logger in this process to report it to.
+                pass
+    return True
 
 
 def main() -> int:
@@ -39,23 +77,7 @@ def main() -> int:
     if not home:
         return 0
 
-    # Low Token Mode terminal kill: lt-precompact.py writes this signal when
-    # context fills and it has already launched a new terminal. We kill the
-    # Claude Code process here so the current tab closes cleanly.
-    lt_signal = Path(home) / "state" / "lt-terminal-signal.json"
-    if lt_signal.exists():
-        try:
-            data = json.loads(lt_signal.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-        lt_signal.unlink(missing_ok=True)
-        if time.time() - data.get("timestamp", 0) < MAX_AGE_SECONDS:
-            node_pid = _find_claude_pid_windows()
-            if node_pid:
-                try:
-                    os.kill(node_pid, 9)
-                except Exception:
-                    pass
+    if _close_old_clear_safe_tab(home):
         return 0
 
     flag_path = Path(home) / "state" / "auto-clear-pending.json"

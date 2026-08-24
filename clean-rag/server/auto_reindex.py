@@ -33,6 +33,7 @@ from .indexing import (
     UNREADABLE_SENTINEL,
     _project_paths,
     acquire_index_lock,
+    drop_manifest_key,
     file_hash,
     index_is_incomplete,
     index_project,
@@ -172,6 +173,15 @@ def find_changed_files(project_path: str) -> tuple[list[str], list[str]]:
     Returns (changed, deleted). Changed covers new and modified files alike,
     since reindex_file handles either.
 
+    `deleted` means "in the manifest, not in the scan set". That is two
+    situations, not one: the file was removed from disk, or it is still there
+    and is no longer indexable because the skip rules or the project's
+    .gitignore changed since it was indexed. Both are reported here and both
+    get evicted, because either way the stored chunks no longer describe
+    anything the index should return. The caller evicts them with
+    drop_manifest_key, which acts on the key; an is_file() check alone cannot
+    see the second case, since that file is still sitting there readable.
+
     Uses scan_project, which is the same function index_project uses, so
     SKIP_DIRS, SKIP_FILES, SKIP_SUFFIXES, CODE_EXTENSIONS and the 500KB cap all
     still apply. Nothing gets picked up here that wouldn't have been indexed in
@@ -310,17 +320,44 @@ async def _sweep_project(
         # `changed` alone. No pressure check in this loop: these are row deletes
         # measured in milliseconds, not embedding work.
         #
-        # find_changed_files returns `deleted` RELATIVE to the project root
-        # while `changed` is absolute, so these have to be joined back before
-        # reindex_file resolves them.
+        # find_changed_files returns `deleted` as manifest keys, and they stay
+        # keys all the way down. They are not joined onto the project root,
+        # because every path in `deleted` is already known to be outside the
+        # scan set: find_changed_files built it as (manifest keys) minus (what
+        # scan_project returned). That covers a file that vanished and a file
+        # that is still on disk but no longer indexable, and both
+        # mean its stored chunks are stale. The second kind used to never drop:
+        # this loop asked reindex_file to do it, its is_file() gate saw a live
+        # file, fell through, hashed it, matched the manifest, and returned
+        # unchanged without saving, so the same paths came back as deleted on
+        # every sweep. 74,358 log lines and 377 files re-read every ten minutes.
+        #
+        # Safe for quarantined files specifically, and the ordering that makes
+        # it safe is load bearing: find_changed_files adds every scanned path to
+        # `seen` before it checks UNREADABLE_SENTINEL, so a quarantined file is
+        # never in `deleted` and never reaches this loop.
         dropped = 0
         for rel_path in deleted:
-            abs_path = str(Path(project_path) / rel_path)
+            # The key goes straight through. No absolute path is built around it
+            # and none is derived back out, because that round trip is what kept
+            # losing the key: a case only rename came back respelled, an
+            # absolute out of root key could not be rebuilt at all, and a key
+            # holding '..' collapsed somewhere else entirely. Each shape got its
+            # own guard here and each guard was followed by a new shape. The
+            # shapes were never the bug. drop_manifest_key takes the key itself
+            # and never consults the filesystem, so there is nothing left to
+            # lose it in.
             try:
                 outcome = await loop.run_in_executor(
-                    None, partial(reindex_file, project_path, abs_path, model_cache)
+                    None, partial(drop_manifest_key, project_path, rel_path)
                 )
-                if outcome.get("deleted"):
+                # `was_in_manifest`, not `deleted`. The delete is keyed on a
+                # string and reports success for any string, so counting on
+                # `deleted` alone let a key that matched no entry log
+                # "Dropped 1 of 1" while the real entry sat there and came back
+                # every sweep. A stuck entry that claims success is worse than
+                # one that complains: nothing in the log points at it.
+                if outcome.get("was_in_manifest"):
                     dropped += 1
                 else:
                     logger.warning(

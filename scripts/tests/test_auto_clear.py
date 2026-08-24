@@ -18,6 +18,12 @@ from helpers import SCRIPTS_DIR, run_hook
 
 
 def _load_auto_clear():
+    # scripts/ on sys.path: auto-clear.py imports its sibling workspace_identity,
+    # which resolves for free when the hook runs as a script but not when it is
+    # loaded from a file path here.
+    import sys
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
     spec = importlib.util.spec_from_file_location("auto_clear", SCRIPTS_DIR / "auto-clear.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -176,6 +182,26 @@ class TestTmuxBranch:
         popen_cmd = mock_popen.call_args[0][0]
         assert "rename" in popen_cmd[2]  # bash -c "sleep 5 && tmux send-keys '/rename ...'"
 
+    def test_signal_does_not_block_the_tmux_path_later(self, boost_home, monkeypatch):
+        """A consumed signal is gone, so the next Stop reaches the /clear flag.
+
+        The signal branch returns early. If it ever stopped consuming the file,
+        the auto-clear flag would be starved forever instead of once.
+        """
+        self._write_fresh_flag(boost_home)
+        (boost_home / "state" / "clear-safe-terminal-signal.json").write_text(
+            json.dumps({"cwd": "C:/prj/x", "timestamp": time.time()}), encoding="utf-8")
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1234,0")
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: None)
+
+        with patch.object(subprocess, "run", MagicMock()):
+            mod.main()          # consumes the signal, returns early
+            mod.main()          # second Stop: now the /clear flag is reached
+
+        assert not (boost_home / "state" / "auto-clear-pending.json").exists()
+
     def test_tmux_without_session_name_no_popen(self, boost_home, monkeypatch):
         """TMUX set + empty session_name → Popen NOT called (lines 61 branch False)."""
         self._write_fresh_flag(boost_home, session_name="")
@@ -192,3 +218,177 @@ class TestTmuxBranch:
 
         mock_run.assert_called_once()
         mock_popen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# /clear-safe terminal handoff signal
+#
+# clear-safe-launch.py opens the replacement Windows Terminal tab and writes
+# state/clear-safe-terminal-signal.json; this hook is what closes the OLD tab.
+# Without a test, deleting the consumer here leaves /clear-safe silently
+# half working: two tabs open, no error anywhere. That is how it broke once.
+#
+# os.kill is stubbed in every case below. A test that can kill the real editor
+# it is running under is not a test.
+# ---------------------------------------------------------------------------
+
+class TestClearSafeTerminalSignal:
+    FAKE_PID = 987654
+
+    def _write_signal(self, boost_home, age_seconds: float = 0.0):
+        """Write the signal exactly as clear-safe-launch.py writes it."""
+        path = boost_home / "state" / "clear-safe-terminal-signal.json"
+        path.write_text(
+            json.dumps({"cwd": "C:/prj/x", "timestamp": time.time() - age_seconds},
+                       indent=2),
+            encoding="utf-8",
+        )
+        return path
+
+    def _run(self, boost_home, monkeypatch, pid, age_seconds=0.0):
+        signal = self._write_signal(boost_home, age_seconds)
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setenv("TMUX", "")
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: pid)
+
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+        rc = mod.main()
+        return rc, signal, killed
+
+    def test_fresh_signal_is_consumed_and_kills_the_tab(self, boost_home, monkeypatch):
+        rc, signal, killed = self._run(boost_home, monkeypatch, self.FAKE_PID)
+
+        assert rc == 0
+        assert not signal.exists(), "signal must be one shot"
+        assert killed == [(self.FAKE_PID, 9)]
+
+    def test_stale_signal_is_consumed_without_killing(self, boost_home, monkeypatch):
+        # Ten minutes old, past MAX_AGE_SECONDS. Killing on a stale signal would
+        # tear down a session the user has since gone back to using.
+        rc, signal, killed = self._run(
+            boost_home, monkeypatch, self.FAKE_PID, age_seconds=600)
+
+        assert rc == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_no_pid_found_is_survivable(self, boost_home, monkeypatch):
+        # Not on Windows, or the process walk came up empty.
+        rc, signal, killed = self._run(boost_home, monkeypatch, None)
+
+        assert rc == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_malformed_signal_is_consumed_without_killing(self, boost_home, monkeypatch):
+        # No timestamp to trust, so it is treated as infinitely old.
+        signal = boost_home / "state" / "clear-safe-terminal-signal.json"
+        signal.write_text("not valid json!", encoding="utf-8")
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: self.FAKE_PID)
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+
+        assert mod.main() == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_no_signal_means_no_kill(self, boost_home, monkeypatch):
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: self.FAKE_PID)
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+
+        assert mod.main() == 0
+        assert killed == []
+
+
+# ---------------------------------------------------------------------------
+# /clear-safe terminal handoff signal
+#
+# clear-safe-launch.py opens the replacement Windows Terminal tab and writes
+# state/clear-safe-terminal-signal.json; this hook is what closes the OLD tab.
+# Without a test, deleting the consumer here leaves /clear-safe silently
+# half-working — two tabs open, no error anywhere. That is how it broke once.
+#
+# os.kill is stubbed in every case below. A test that can kill the real editor
+# it is running under is not a test.
+# ---------------------------------------------------------------------------
+
+class TestClearSafeTerminalSignal:
+    FAKE_PID = 987654
+
+    def _write_signal(self, boost_home, age_seconds: float = 0.0):
+        """Write the signal exactly as clear-safe-launch.py writes it."""
+        path = boost_home / "state" / "clear-safe-terminal-signal.json"
+        path.write_text(
+            json.dumps({"cwd": "C:/prj/x", "timestamp": time.time() - age_seconds},
+                       indent=2),
+            encoding="utf-8",
+        )
+        return path
+
+    def _run(self, boost_home, monkeypatch, pid, age_seconds=0.0):
+        signal = self._write_signal(boost_home, age_seconds)
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setenv("TMUX", "")
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: pid)
+
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+        rc = mod.main()
+        return rc, signal, killed
+
+    def test_fresh_signal_is_consumed_and_kills_the_tab(self, boost_home, monkeypatch):
+        rc, signal, killed = self._run(boost_home, monkeypatch, self.FAKE_PID)
+
+        assert rc == 0
+        assert not signal.exists(), "signal must be one-shot"
+        assert killed == [(self.FAKE_PID, 9)]
+
+    def test_stale_signal_is_consumed_without_killing(self, boost_home, monkeypatch):
+        # Ten minutes old, past MAX_AGE_SECONDS. Killing on a stale signal would
+        # tear down a session the user has since gone back to using.
+        rc, signal, killed = self._run(
+            boost_home, monkeypatch, self.FAKE_PID, age_seconds=600)
+
+        assert rc == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_no_pid_found_is_survivable(self, boost_home, monkeypatch):
+        # Non-Windows, or the process walk came up empty.
+        rc, signal, killed = self._run(boost_home, monkeypatch, None)
+
+        assert rc == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_malformed_signal_is_consumed_without_killing(self, boost_home, monkeypatch):
+        # No timestamp to trust, so it is treated as infinitely old.
+        signal = boost_home / "state" / "clear-safe-terminal-signal.json"
+        signal.write_text("not valid json!", encoding="utf-8")
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: self.FAKE_PID)
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+
+        assert mod.main() == 0
+        assert not signal.exists()
+        assert killed == []
+
+    def test_no_signal_means_no_kill(self, boost_home, monkeypatch):
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: self.FAKE_PID)
+        killed = []
+        monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
+
+        assert mod.main() == 0
+        assert killed == []

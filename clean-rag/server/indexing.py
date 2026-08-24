@@ -971,6 +971,124 @@ def index_project(
     return result
 
 
+def drop_manifest_key(project_path: str, rel_path: str) -> dict:
+    """Evict one manifest key: its chunks, its graph edges, and its entry.
+
+    Takes the manifest KEY itself, never a filesystem path, and that is the
+    whole point of the function existing.
+
+    The sweep knows exactly which key it wants gone: it read the string out of
+    the manifest. What it used to do was rebuild an absolute path around that
+    string, hand the path to reindex_file, and let reindex_file derive a key
+    back out of it. That round trip is lossy, and three separate rounds of
+    adversarial review each found a different shape it loses:
+
+      * a case only rename, where Path.resolve() rewrote the key to the real
+        on disk spelling and the eviction deleted a key nobody asked about,
+      * an absolute key from outside the root, where relative_to refused and
+        the entry could never be dropped at all,
+      * a relative key containing '..', where the rebuilt path collapsed
+        somewhere else entirely and the drop reported success against a string
+        matching neither the manifest nor the store.
+
+    Each was fixed in turn by another guard on the path derivation, and each
+    fix was followed by a new shape. The shapes are not the bug. Converting a
+    key to a path and back is the bug, so this does not do it. Nothing here
+    consults the filesystem: the file may be present, absent, renamed, or
+    outside the project root, and none of that changes which rows are stale.
+    delete_by_source and delete_edges_referencing_file are plain SQL deletes
+    keyed on the stored string, so they never needed a real file either.
+
+    Caller must hold ``acquire_index_lock()``. May run VACUUM, which needs
+    exclusive access.
+    """
+    project_root, _pid, index_dir, chroma_dir, manifest_path = _project_paths(project_path)
+
+    if not chroma_dir.exists():
+        return {"error": f"Project not indexed: {project_path}. Run index-project first."}
+
+    manifest: dict = {}
+    if manifest_path.exists():
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+        except Exception:
+            manifest = {}
+
+    # `with`: the shared handle has to be checked back in on the raising path
+    # too, see ChromaStore.__del__.
+    with ChromaStore(persist_dir=str(chroma_dir)) as store:
+        # No collection means no chunks, which is a reason to skip the store and
+        # nothing else. The manifest entry still has to go: it is the manifest,
+        # not the store, that find_changed_files reads to decide a key is
+        # deleted, so returning early here leaves the key to be rediscovered on
+        # every sweep forever. That is the exact loop this function exists to
+        # end, and it survived every test because they all stubbed the store
+        # with collection_exists() -> True. It took running the real sweep
+        # against a project whose store was empty (todaymechanic, 377 keys, a
+        # populated manifest and a vectors.db holding zero tables) to see it.
+        collection = store.collection_exists("codebase")
+        removed = store.delete_by_source("codebase", rel_path) if collection else 0
+
+        # Unconditional, unlike the update path, which skips docs. Skipping here
+        # would rely on the extension to decide whether edges can exist, and if
+        # that guess is ever wrong the edges are orphaned permanently with
+        # nothing left to reindex them. Deleting zero rows costs nothing, so ask
+        # the question rather than predict the answer.
+        #
+        # Both directions, also unlike the update path. That one re-extracts the
+        # file and adds its outgoing edges straight back, so it must keep the
+        # inbound ones it cannot re-derive. Here nothing will ever reindex this
+        # key, so an edge from a surviving file INTO it would leak permanently
+        # and keep mode=graph search returning something that is not there.
+        graph_db_path = index_dir / "graph.db"
+        if graph_db_path.exists():
+            try:
+                from .graph_store import SQLiteGraphStore
+                edges_removed = SQLiteGraphStore(
+                    str(graph_db_path)
+                ).delete_edges_referencing_file(rel_path)
+                logger.debug(
+                    "Removed %d graph edge(s) referencing dropped %s",
+                    edges_removed, rel_path,
+                )
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.warning("Graph edge cleanup failed for dropped %s: %s", rel_path, e)
+
+        # Dropping the entry, not blanking it. A leftover entry would keep
+        # claiming chunks that are gone, and find_changed_files reports a path as
+        # deleted for exactly as long as the manifest still lists it, so leaving
+        # it hands the same key back on every sweep from now on.
+        #
+        # `present` is reported rather than assumed. An eviction that matched no
+        # manifest entry is the signature of a caller that respelled the key, and
+        # the sweep logging "Dropped 1 of 1" for that was how a stuck entry hid.
+        present = rel_path in manifest
+        manifest.pop(rel_path, None)
+        _save_project_manifest(manifest_path, manifest, str(project_root))
+
+        # Deletes are what grow the freelist, so this is the path that most wants
+        # the reclaim. Threshold guarded, so it is a no-op until it isn't. Only
+        # worth asking when something was actually deleted.
+        if collection:
+            store.vacuum_if_needed()
+
+        logger.info("Dropped %s from the index", rel_path)
+        return {
+            "file": rel_path,
+            "deleted": True,
+            "chunks_removed": removed,
+            "was_in_manifest": present,
+            # False means the store held no collection, so only the manifest
+            # entry was dropped. Surfaced because a project in that state has an
+            # empty index and needs a real reindex, which the sweep cannot infer
+            # from a per key drop.
+            "collection_present": collection,
+        }
+
+
 def reindex_file(
     project_path: str,
     file_path: str,
@@ -984,6 +1102,12 @@ def reindex_file(
 
     Args:
         model_cache: A ModelCache instance or plain embedder (backward compat).
+
+    This takes a filesystem PATH and asks what should happen to the file there,
+    so it resolves that path against the filesystem. Evicting a known manifest
+    key is the other question and belongs to drop_manifest_key, which takes the
+    key and never touches the filesystem at all. Keeping the two apart is what
+    stopped a sweep from respelling a key on its way to being deleted.
 
     Caller must hold ``acquire_index_lock()`` before calling.  The function
     may run VACUUM on the SQLite file, which requires exclusive access.
@@ -1010,6 +1134,12 @@ def reindex_file(
     # Resolved before the embedder on purpose: a file that has been deleted is
     # handled below without ever loading a model, and an embedder is 1 to 2 GB
     # resident. Nothing here depends on the embedder.
+    #
+    # resolve() is right here and only here. This function was handed a path and
+    # asked about the file at it, so the key it derives has to be the one
+    # index_project would have stored, which is the file's real on disk
+    # spelling. A caller that already holds a manifest key wants
+    # drop_manifest_key instead, which takes the key and never derives one.
     abs_file = Path(file_path).resolve()
     try:
         rel_path = str(abs_file.relative_to(project_root)).replace("\\", "/")
@@ -1017,64 +1147,12 @@ def reindex_file(
         return {"error": f"File {file_path} is not under project root {project_path}"}
 
     if not abs_file.is_file():
-        # The file is gone. This used to return an error and bail, which is why
-        # auto_reindex forced a whole project rebuild whenever anything was
-        # deleted: no path existed to drop one file's rows. The store never
-        # actually needed one to exist. delete_by_source and
-        # delete_edges_for_file are both plain SQL deletes keyed on the stored
-        # rel_path, with no filesystem check, so they work on a vanished file
-        # exactly as they do on a live one. The bail was the only obstacle.
-        # `with`: the shared handle has to be checked back in on the raising path too,
-        # see ChromaStore.__del__.
-        with ChromaStore(persist_dir=str(chroma_dir)) as store:
-            if not store.collection_exists("codebase"):
-                return {"error": "Project collection does not exist. Run index-project first."}
-
-            removed = store.delete_by_source("codebase", rel_path)
-
-            # Unconditional, unlike the update path below which skips docs. Skipping
-            # here would rely on the extension to decide whether edges can exist,
-            # and if that guess is ever wrong the edges are orphaned permanently
-            # with the file gone and nothing left to reindex. Deleting zero rows
-            # costs nothing, so ask the question rather than predict the answer.
-            #
-            # Both directions, unlike the update path below. That one re-extracts
-            # the file and adds its outgoing edges straight back, so it must keep
-            # the inbound ones it cannot re-derive. Here the file is gone: nothing
-            # will ever reindex it, so an edge from a surviving file INTO this path
-            # would leak permanently and keep mode=graph search returning a file
-            # that no longer exists. delete_ghost_edges is the bulk form of the
-            # same rule, but it only runs inside a full index_project and takes the
-            # whole current_files set, which this path does not have.
-            graph_db_path = index_dir / "graph.db"
-            if graph_db_path.exists():
-                try:
-                    from .graph_store import SQLiteGraphStore
-                    edges_removed = SQLiteGraphStore(
-                        str(graph_db_path)
-                    ).delete_edges_referencing_file(rel_path)
-                    logger.debug(
-                        "Removed %d graph edge(s) referencing deleted %s",
-                        edges_removed, rel_path,
-                    )
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.warning("Graph edge cleanup failed for deleted %s: %s", rel_path, e)
-
-            # Dropping the entry, not blanking it. A leftover entry would keep
-            # claiming chunks that are gone, and find_changed_files only reports a
-            # path as deleted while the manifest still lists it, so leaving it would
-            # hand this same file back on every sweep from now on.
-            manifest.pop(rel_path, None)
-            _save_project_manifest(manifest_path, manifest, str(project_root))
-
-            # Deletes are what grow the freelist, so this is the path that most
-            # wants the reclaim. Threshold guarded, so it is a no-op until it isn't.
-            store.vacuum_if_needed()
-
-            logger.info("Removed deleted file from index: %s", rel_path)
-            return {"file": rel_path, "deleted": True, "chunks_removed": removed}
+        # The file is gone, so its rows are stale. Same work as an eviction the
+        # sweep asks for by key, so it is the same function rather than a second
+        # copy of it: two copies of a delete are how the two drifted apart in the
+        # first place. rel_path is the key derived above from the real on disk
+        # spelling, which is what index_project stored.
+        return drop_manifest_key(project_path, rel_path)
 
     # Resolve the embedder: use the project's stored model from ModelCache,
     # or fall back to the passed object if it's a plain embedder.

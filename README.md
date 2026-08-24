@@ -386,7 +386,7 @@ when one is detected.
 Commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/rag-health` `/uninstall` `/index-project` `/index-boost` `/low-token`
+`/boost` `/rag` `/rag-health` `/uninstall` `/index-project` `/index-boost`
 
 **Planning & Workspace**
 `/ws` `/workspace` `/create-prd` `/explore` `/graph`

@@ -3,7 +3,7 @@ ClaudeBoost clear-safe-launch — called by the /clear-safe skill after context.
 
 Writes all handoff state files and opens a new Windows Terminal tab with the
 workspace context pre-loaded in the startup prompt. The old tab closes automatically
-via auto-clear.py (Stop hook) which reads lt-terminal-signal.json.
+via auto-clear.py (Stop hook) which reads clear-safe-terminal-signal.json.
 
 Usage:
     python clear-safe-launch.py \
@@ -121,8 +121,9 @@ def main() -> int:
     else:
         print(f"Open a new terminal in {cwd} and run: claude '{launch_msg}'")
 
-    # Signal auto-clear.py (Stop hook) to kill the current node.exe after this response
-    write_json(state / "lt-terminal-signal.json", {
+    # Signal auto-clear.py (Stop hook) to kill the current node.exe after this
+    # response, so this tab closes now that the replacement tab is open.
+    write_json(state / "clear-safe-terminal-signal.json", {
         "cwd": cwd,
         "timestamp": now_unix,
     })

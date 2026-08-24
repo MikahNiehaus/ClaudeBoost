@@ -150,23 +150,6 @@ def main() -> None:
     else:
         parts.append(f"{DIM}| WS N/A{RESET}")
 
-    # Low Token Mode indicator — only shown when enabled in state/low-token-mode.json
-    boost_home = Path(os.environ.get("CLAUDEBOOST_HOME", "") or Path(__file__).resolve().parent.parent)
-    try:
-        lt_state = json.loads((boost_home / "state" / "low-token-mode.json").read_text(encoding="utf-8"))
-    except Exception:
-        lt_state = {}
-
-    if lt_state.get("enabled", False):
-        threshold = int(lt_state.get("threshold_pct", 70))
-        if used_pct >= threshold + 10:
-            lt_color = RED
-        elif used_pct >= threshold:
-            lt_color = YELLOW
-        else:
-            lt_color = GREEN
-        parts.append(f"{DIM}|{RESET} {lt_color}LT ●{RESET}")
-
     print(" ".join(parts), end="", flush=True)
 
 

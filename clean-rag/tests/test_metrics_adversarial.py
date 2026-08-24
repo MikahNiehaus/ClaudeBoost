@@ -169,6 +169,44 @@ def _deep_source(depth: int) -> str:
     )
 
 
+def _radon_measures(source: str) -> bool:
+    """Can radon's recursive visitors actually walk this source?"""
+    try:
+        from radon.complexity import cc_visit
+    except ImportError:
+        pytest.skip("radon is not installed")
+    try:
+        cc_visit(source)
+    except RecursionError:
+        return False
+    return True
+
+
+def _radon_unmeasurable_depth() -> int:
+    """A depth this interpreter parses fine but radon's visitors cannot walk.
+
+    This was the literal 3000 for a long time, and 3000 is a fact about the
+    interpreter rather than about the code under test. CPython's parser budget
+    and sys.getrecursionlimit() both move between versions: on 3.12.6 the parse
+    stage itself started raising at 3000, so the test stopped exercising the
+    band it describes and began failing in its own precondition instead, which
+    reads as a product bug and is not one. Measured at run time now, so it keeps
+    testing the same property wherever it runs.
+    """
+    for depth in (2000, 1500, 1000, 750, 500, 250):
+        source = _deep_source(depth)
+        try:
+            ast.parse(source)
+        except RecursionError:
+            continue
+        if not _radon_measures(source):
+            return depth
+    pytest.skip(
+        "no depth on this interpreter both parses and defeats radon, so the "
+        "band this test covers does not exist here"
+    )
+
+
 def test_parser_stack_exhaustion_keeps_loc_and_schema(make_file):
     """P3 (bad-cop's re-check finding): at this depth CPython's PEG parser
     itself refuses the source, raising MemoryError("Parser stack overflowed")
@@ -202,7 +240,7 @@ def test_radon_stack_exhaustion_keeps_call_graph_and_schema(make_file):
 
     ast.walk is deque-based, so unlike the parse-stage case the call graph is
     fully recoverable here and must actually come back populated."""
-    source = _deep_source(3000)
+    source = _deep_source(_radon_unmeasurable_depth())
     ast.parse(source)  # precondition: the parse stage succeeds at this depth
 
     result = _compute_metrics(make_file(".py", source))

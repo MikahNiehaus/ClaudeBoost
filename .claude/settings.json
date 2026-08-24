@@ -85,15 +85,6 @@
             "timeout": 10
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/lt-precompact.py\"",
-            "timeout": 15
-          }
-        ]
       }
     ],
     "PreToolUse": [

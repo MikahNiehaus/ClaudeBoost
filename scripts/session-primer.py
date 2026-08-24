@@ -521,7 +521,7 @@ def _consume_clear_pending(home: Path) -> str:
     return (
         "POST-CLEAR CONTEXT RESTORATION\n"
         "===============================\n\n"
-        "You just returned from a /clear or a Low Token Mode terminal switch. "
+        "You just returned from a /clear. "
         "Below is your saved working state.\n\n"
         + workspace_memo
         + (f"\n\nHANDOFF TASK:\n{handoff_msg}" if handoff_msg else "")

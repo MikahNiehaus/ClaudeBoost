@@ -280,9 +280,23 @@ class TestSameDirKey:
         real_stat = os.stat
 
         class NoInodeStat:
+            """Everything the real stat reported, except st_ino, which reads 0.
+
+            Delegates rather than copying named fields. This replaces os.stat
+            globally, so every stat the walk performs comes back through here,
+            including the one pathlib's glob does inside _has_project_marker,
+            and that one reads st_mode. Listing fields by hand passed only for
+            as long as nothing downstream read a field that was not copied;
+            it broke on st_mode and would break again on the next one.
+            """
+
             def __init__(self, st):
-                self.st_dev = st.st_dev
+                self._st = st
                 self.st_ino = 0
+
+            def __getattr__(self, name):
+                # Only reached for names not set in __init__, so st_ino stays 0.
+                return getattr(self._st, name)
 
         # Only successful stats are rewritten, so a missing path still raises and
         # every existence check in the walk keeps working.

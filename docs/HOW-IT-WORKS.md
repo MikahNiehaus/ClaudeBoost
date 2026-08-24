@@ -124,7 +124,6 @@ reading, not reading blindly.
 | `/ticket-handoff` | Generate a Confluence handoff document for a completed ticket |
 | `/telemetry` | Show per-session tool call and RAG usage stats |
 | `/better-permissions` | Audit and install all ClaudeBoost hooks |
-| `/low-token` | Toggle Low Token Mode — auto-opens a new terminal when context fills up |
 
 ## Session Flow
 
