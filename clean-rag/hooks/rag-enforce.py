@@ -546,6 +546,23 @@ _STOP_MARKER_NAME = "server-stopped-by-user"
 _SELF_HEAL_COOLDOWN_S = 15 * 60
 _SELF_HEAL_STAMP_NAME = "last-self-heal"
 
+# The cooldown above throttles restarts. It never stops them, so a startup
+# failure a restart cannot fix gets retried every 15 minutes forever. On
+# 2026-08-26 that produced six restarts in three hours, all of the same
+# NotImplementedError from the same model load.
+#
+# So count consecutive restarts that found the SAME reported error and give up
+# after this many. Giving up is the correct answer: the failure is in the
+# process's own startup, and a fresh process runs the same startup.
+_MAX_IDENTICAL_SELF_HEALS = 3
+_SELF_HEAL_FAILURE_NAME = "self-heal-failures.json"
+
+# Longer than the cooldown on purpose. The counter is about "this same thing
+# keeps failing", so it has to outlive several cooldown windows to see the
+# repeat at all. It still expires, because a fault fixed by hand should not
+# leave self healing disabled forever with no way to notice.
+_FAILURE_SIGNATURE_TTL_S = 6 * 60 * 60
+
 
 def _load_write_durably():
     """Resolve ``server.durable_write.write_durably``, or None if unavailable.
@@ -647,6 +664,132 @@ def _record_self_heal_attempt(home) -> bool:
     return True
 
 
+def _status_failure_signature(port: str) -> str | None:
+    """The error /status is reporting, or None if there isn't one to compare.
+
+    None covers three different situations and they all mean the same thing
+    here: there is no repeated-error case to count. The server is unreachable
+    (a restart is exactly the right response), or it is healthy, or it answered
+    something unreadable. Only a server that is up and naming its own startup
+    failure gives us a signature worth comparing against the last one.
+    """
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/status", method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    if _str_field(data, "status") != "failed":
+        return None
+    return _str_field(data, "last_error") or None
+
+
+def _read_failure_record(home) -> tuple[str, int] | None:
+    """The remembered (signature, count), or None if there is no usable one.
+
+    Unreadable, malformed and expired records all read as None, which means no
+    suppression. Same reasoning as the cooldown stamp: a record we cannot trust
+    must not be able to refuse self healing, because a permanent outage is
+    worse than an extra restart.
+    """
+    path = home / "state" / _SELF_HEAL_FAILURE_NAME
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.error("Could not read the self-heal failure record %s: %s", path, e)
+        return None
+
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Self-heal failure record %s is not JSON; ignoring it.", path
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    signature = data.get("signature")
+    count = data.get("count")
+    recorded_at = data.get("at")
+    if not isinstance(signature, str) or not isinstance(count, int):
+        return None
+    if not isinstance(recorded_at, (int, float)):
+        return None
+
+    age = time.time() - recorded_at
+    # A future date is clock skew or a restored file, not a real record.
+    if age < 0 or age > _FAILURE_SIGNATURE_TTL_S:
+        return None
+    return signature, count
+
+
+def _write_failure_record(home, signature: str, count: int) -> None:
+    """Remember the signature and how many restarts in a row it has survived.
+
+    A failure to write is logged and swallowed. Unlike the cooldown stamp, this
+    record only ever makes self healing MORE conservative, so losing it costs
+    an extra restart attempt rather than a restart storm.
+    """
+    write_durably = _load_write_durably()
+    if write_durably is None:
+        return
+    path = home / "state" / _SELF_HEAL_FAILURE_NAME
+    payload = json.dumps(
+        {"signature": signature, "count": count, "at": time.time()}
+    )
+    try:
+        write_durably(path, payload)
+    except OSError as e:
+        logger.error("Could not persist the self-heal failure record: %s", e)
+
+
+def _clear_failure_record(home) -> None:
+    """Forget the remembered failure. Called when the error changes."""
+    path = home / "state" / _SELF_HEAL_FAILURE_NAME
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.error("Could not clear the self-heal failure record %s: %s", path, e)
+
+
+def _repeated_failure_suppressed(home, port: str) -> str | None:
+    """Return a reason to stop restarting, or None to go ahead.
+
+    Also updates the record, so this is the one place that counts.
+    """
+    signature = _status_failure_signature(port)
+    if signature is None:
+        # No comparable error this time. Whatever we were counting is no longer
+        # what is happening, so the count is meaningless. Start clean.
+        _clear_failure_record(home)
+        return None
+
+    previous = _read_failure_record(home)
+    if previous is not None and previous[0] == signature:
+        count = previous[1] + 1
+    else:
+        count = 1
+
+    _write_failure_record(home, signature, count)
+
+    if count >= _MAX_IDENTICAL_SELF_HEALS:
+        return (
+            f"the same startup error has now survived {count} restarts, so "
+            f"restarting is not going to fix it. Error: {signature[:300]}. "
+            f"Fix the cause, then run cli/server_ctl.py restart by hand, or "
+            f"delete state/{_SELF_HEAL_FAILURE_NAME} to re-arm self healing."
+        )
+    return None
+
+
 def _trigger_self_heal(port: str) -> None:
     """Attempt to restart RAG server if down, unless suppressed."""
     home = _clean_rag_home()
@@ -654,6 +797,14 @@ def _trigger_self_heal(port: str) -> None:
     reason = _self_heal_suppressed(home)
     if reason is not None:
         logger.info("Self-heal skipped: %s", reason)
+        return
+
+    # Checked after the cooldown, not before, so the counter advances once per
+    # actual restart attempt rather than once per prompt. Counting every prompt
+    # would hit the limit in seconds and never restart anything.
+    reason = _repeated_failure_suppressed(home, port)
+    if reason is not None:
+        logger.error("Self-heal stopped: %s", reason)
         return
 
     # Fail closed. Without a stamp on disk there is no cooldown, and this hook

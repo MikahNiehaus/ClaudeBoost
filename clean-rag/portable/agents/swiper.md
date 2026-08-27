@@ -121,7 +121,7 @@ than no results — it will send the builder toward a pattern that was deleted.
 4. **Is the task "make the agent do X"? Search the skill registry before
    GitHub at large.** Output styles, hooks, skills and plugins already exist
    for most of it, and a published skill beats a repo somebody has to read and
-   adapt. Use your `WebFetch` tool on the registry search API. WebFetch is a
+   wire in by hand. Use your `WebFetch` tool on the registry search API. WebFetch is a
    first class tool and is not subject to the Bash cage, so this needs no
    `curl` and no `npx`, neither of which would be allowed:
 

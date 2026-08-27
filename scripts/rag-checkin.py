@@ -21,6 +21,10 @@ LOG = HOME / "clean-rag" / "state" / "server.log"
 WATCH = HOME / "state" / "memory-watch.jsonl"
 PORT = 8613
 
+# What server.app logs on boot. Marks where the current run's output begins in
+# a log that survives restarts.
+START_MARKER = "Starting clean-rag server"
+
 
 def server() -> tuple[str, float]:
     try:
@@ -57,13 +61,33 @@ def memory() -> tuple[float, str]:
 
 
 def sweeps() -> tuple[int, int, int]:
-    """(sweeps seen, files dropped, could-not-drop warnings) in the log tail."""
+    """(sweeps seen, files dropped, could-not-drop warnings) for the CURRENT run.
+
+    Scoped to the running process on purpose. The log is append only across
+    restarts, so a fixed size tail covers however many past runs happen to fit
+    in it. Measured on a 2.9 MB log spanning three days and three restarts: the
+    unscoped read reported 602 'Could not drop deleted' lines and flagged a
+    regression, while the running server had produced zero. Every one of those
+    lines came from a process that died before the fix went in.
+
+    That failure mode only ever points one way. Old warnings never age out of a
+    byte window until enough new log pushes them past it, so the check would
+    have cried regression for days. A monitor that reports history as news gets
+    ignored, and an ignored monitor is worse than none: it reads as green when
+    it is only stale.
+    """
     if not LOG.exists():
         return 0, 0, 0
     with LOG.open("rb") as fh:
         fh.seek(0, os.SEEK_END)
         fh.seek(max(0, fh.tell() - 400_000))
         tail = fh.read().decode("utf-8", "replace")
+    # Everything before the last restart belongs to a different process. If the
+    # marker is not in the window, the current run simply started further back
+    # than the window reaches, so the whole window is already current.
+    cut = tail.rfind(START_MARKER)
+    if cut != -1:
+        tail = tail[cut:]
     done = len(re.findall(r"Reindex sweep done", tail))
     dropped = sum(
         int(m) for m in re.findall(r"Dropped (\d+) of \d+ deleted file", tail)

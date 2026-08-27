@@ -264,6 +264,29 @@ class ModelCache:
         self._cache: OrderedDict = OrderedDict()
         self._slot_locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
+        #: Held across every actual model construction, process wide.
+        #:
+        #: The per model_id _slot_locks below serialize two callers racing for
+        #: the SAME model. They do nothing about two callers loading DIFFERENT
+        #: models at once, and that is the case that breaks: transformers
+        #: materializes weights off the meta device and, for a
+        #: trust_remote_code model, copies and imports the custom modeling code
+        #: into the shared transformers_modules package with no locking of its
+        #: own (huggingface/transformers#22555). Two of those in flight land on
+        #:     NotImplementedError: Cannot copy out of meta tensor; no data!
+        #: which is huggingface/transformers#41782, reproduced upstream with a
+        #: ThreadPoolExecutor and still open. Threads break it; separate
+        #: processes do not.
+        #:
+        #: Measured here on 2026-08-26: six failures that day, every one of
+        #: them two "ModelCache: loading" lines for different model ids started
+        #: within a second of each other, against roughly forty sequential
+        #: loads the same day with no failure at all.
+        #:
+        #: This is deliberately NOT _global_lock. _slot_lock() takes
+        #: _global_lock, and so does _enforce_max_resident(), both of them
+        #: inside the load block. Reusing it here deadlocks on the first load.
+        self._construct_lock = threading.Lock()
         self._max_resident = max_resident or self.DEFAULT_MAX_RESIDENT
         #: model_id -> (failed_at_monotonic, exception). Consulted before a
         #: retry so a doomed load is attempted at most once per FAILURE_TTL_S.
@@ -275,6 +298,24 @@ class ModelCache:
             if model_id not in self._slot_locks:
                 self._slot_locks[model_id] = threading.Lock()
             return self._slot_locks[model_id]
+
+    def _construct(self, model_id: str):
+        """Build and warm one embedder, serialized against every other build.
+
+        Every construction in this process goes through here so no two run at
+        once. See _construct_lock for why. The cost is real: a load can take
+        135 seconds (SFR), and a second caller wanting a different model waits
+        that out. That is the trade. A cache hit never reaches this method, so
+        only genuine misses pay it.
+        """
+        from .embedding import SentenceTransformerEmbedding
+        with self._construct_lock:
+            emb = SentenceTransformerEmbedding(model_name=model_id)
+            # Force the lazy _load_model() now, inside the lock. Warming it
+            # afterwards would put the part that actually touches the meta
+            # device back outside the serialization and rebuild the bug.
+            emb.embed(["warmup"])
+        return emb
 
     def get(self, model_id: str):
         """Return the embedder for *model_id*, loading it lazily.
@@ -294,7 +335,6 @@ class ModelCache:
             return self._cache[model_id]
         with self._slot_lock(model_id):
             if model_id not in self._cache:
-                from .embedding import SentenceTransformerEmbedding
                 from .config import CODE_EMBEDDING_MODEL
 
                 # A recent failure short circuits before paying for the load
@@ -316,11 +356,10 @@ class ModelCache:
 
                 logger.info("ModelCache: loading %s", model_id)
                 try:
-                    emb = SentenceTransformerEmbedding(model_name=model_id)
-                    # Force the lazy _load_model() now so any incompatibility
+                    # Constructed under _construct_lock so any incompatibility
                     # surfaces here where we can catch it, rather than later
                     # inside embed().
-                    emb.embed(["warmup"])
+                    emb = self._construct(model_id)
                     self._cache[model_id] = emb
                     self._failures.pop(model_id, None)
                     self._enforce_max_resident(keep=model_id)
@@ -336,8 +375,7 @@ class ModelCache:
                         # so we never retry the failing model.
                         if fallback not in self._cache:
                             try:
-                                fb_emb = SentenceTransformerEmbedding(model_name=fallback)
-                                fb_emb.embed(["warmup"])
+                                fb_emb = self._construct(fallback)
                             except Exception as fb_exc:
                                 # Both the requested model and the fallback are
                                 # down. Memoize the fallback too, or the next

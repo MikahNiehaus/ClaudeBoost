@@ -112,6 +112,27 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   labels which surface it touched so the review points at the sharpest risk. A
   `/ps` turn skips both, the same quick mode escape that skips the research gate.
 
+**Check bad-cop and good-cop's actual diff yourself, not their self report.**
+After either stamps or reports done, read the real result: `git diff` on the
+files they touched, or Read the changed files directly. Confirm two things
+concretely: the diff stays inside the scope you gave that agent (no unrelated
+files, no drive by refactors, no touching config, secrets, or infra it was
+never asked about), and nothing in it is a destructive or irreversible action.
+Do this by reading the resulting files or `git diff`, never by opening the
+agent's own JSONL transcript to watch its reasoning; that pulls tool noise
+into your context for no reason and is not what this check is for. If the
+diff looks wrong, say so and stop, do not silently revert it yourself and do
+not just trust the agent's own "done" claim.
+
+**Use quick-cop far more than you currently do.** Every time you say
+something is done, fixed, verified, confirmed, or has no gaps, that sentence
+is exactly the trigger quick-cop exists for (see its own agent description).
+Dispatch it liberally and backgrounded, meaning fire it and keep working,
+do not block waiting on it. This includes your own claims after a bad-cop or
+good-cop run: their self reported "VERIFIED" or "all tests green" is still a
+claim, so hand it to quick-cop to independently confirm rather than repeating
+it to the user as settled fact.
+
 Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
 confirms it.

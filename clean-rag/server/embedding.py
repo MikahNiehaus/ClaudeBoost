@@ -150,6 +150,32 @@ class SentenceTransformerEmbedding:
                     self._model = SentenceTransformer(
                         self._model_name, local_files_only=True, **kwargs
                     )
+                except NotImplementedError as meta_exc:
+                    # "Cannot copy out of meta tensor; no data!" Weights were
+                    # left on the meta device and .to(device) cannot move them.
+                    #
+                    # This is huggingface/transformers#41782, still open, and
+                    # it fires when two model loads run in different threads at
+                    # once. ModelCache._construct_lock now serializes every
+                    # construction in the server, so this should not be
+                    # reachable from that path any more. It stays because this
+                    # class is importable on its own: nothing stops another
+                    # caller from building two of these on two threads without
+                    # going through ModelCache.
+                    #
+                    # A plain retry, NOT the _repair_snapshot path below. The
+                    # cache is not damaged here, the race is, so re downloading
+                    # several GB would cost minutes and fix nothing.
+                    if "meta tensor" not in str(meta_exc):
+                        raise
+                    logger.warning(
+                        "Model %s hit the meta tensor load race (%s). Retrying "
+                        "the load once.",
+                        self._model_name, meta_exc,
+                    )
+                    self._model = SentenceTransformer(
+                        self._model_name, local_files_only=True, **kwargs
+                    )
                 except (OSError, ValueError) as first_exc:
                     logger.warning(
                         "Model %s failed to load from cache (%s: %s). Re downloading "

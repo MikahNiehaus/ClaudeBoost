@@ -153,7 +153,54 @@ def sample() -> dict:
     }
 
 
+def already_running() -> int | None:
+    """PID of another live watcher on this same script, or None.
+
+    This runs from a SessionStart hook, and a machine routinely has several
+    Claude sessions open at once (six, on the machine this was written for).
+    Without this check each session starts its own watcher, every one of them
+    sampling on the same interval and appending to the same file. That is six
+    times the CPU and an interleaved log, which makes the watcher part of the
+    memory problem it exists to measure.
+
+    Matched on the resolved script path rather than a PID file: a PID file goes
+    stale when a watcher is killed and says nothing about one started by hand.
+    The same reasoning server_ctl.py uses when it checks the port instead of its
+    own PID file.
+    """
+    me = os.getpid()
+    try:
+        mine = Path(__file__).resolve()
+    except OSError:
+        return None
+
+    for proc in psutil.process_iter(["pid", "name"]):
+        pid = proc.info["pid"]
+        if pid == me:
+            continue
+        # Cheap name filter first. _script_of reads the command line, which on
+        # Windows goes through ReadProcessMemory, so it is not something to pay
+        # for on every process.
+        if Path(proc.info["name"] or "").stem.lower() not in _INTERPRETERS:
+            continue
+        script = _script_of(proc)
+        if not script:
+            continue
+        try:
+            if Path(script).resolve() == mine:
+                return pid
+        except OSError:
+            continue
+    return None
+
+
 def main() -> int:
+    other = already_running()
+    if other is not None:
+        print(f"memory-watcher already running (pid {other}), nothing to do",
+              file=sys.stderr)
+        return 0
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     print(f"Sampling every {INTERVAL_S}s to {OUT}")
     print(f"Drops to {PRESSURE_INTERVAL_S}s sampling below {PRESSURE_MB} MB free.")

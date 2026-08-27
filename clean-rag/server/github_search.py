@@ -18,6 +18,7 @@ removal), and whatever injects it should label it untrusted, same as web results
 
 import base64
 import html
+import json
 import logging
 import os
 import re
@@ -40,6 +41,41 @@ GITHUB_CONTENTS_URL = "https://api.github.com/repos/{owner}/{repo}/contents/{pat
 # 401 without one). Measured caveat: it throttles hard and answers a throttle
 # with an HTML page, not JSON, so it is a fallback and not the default.
 GREP_APP_URL = "https://grep.app/api/search"
+
+# grep.app's own MCP endpoint, and the one path that works for everybody with no
+# setup at all: no account, no key, no signup. That is the whole reason it is the
+# default free path rather than the scraped /api/search above, which answers 429
+# on the first request from a fresh IP and has no key to raise the limit.
+#
+# Measured on 2026-08-21: initialize 200, one tool `searchGitHub`, a real query
+# 200 in 0.32s, and 8 rapid calls all 200 between 0.20s and 0.42s with no
+# throttling. Plain JSON-RPC 2.0 over POST, so httpx is enough and no MCP SDK
+# is pulled in for one call.
+GREP_MCP_URL = "https://mcp.grep.app"
+GREP_MCP_TOOL = "searchGitHub"
+
+# Streamable HTTP servers answer either as a JSON body or as SSE `data:` lines,
+# and this one has been seen to do both, so every read goes through _mcp_json.
+_MCP_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+# One block per file in the tool's text output, shaped like:
+#   Repository: owner/name
+#   Path: some/file.py
+#   URL: https://github.com/...
+#   License: MIT
+#   Snippets:
+#   --- Snippet 1 (Line 39) ---
+#   <code>
+_MCP_FIELD_RE = re.compile(
+    r"^Repository:\s*(?P<repo>.+?)\s*$.*?"
+    r"^Path:\s*(?P<path>.+?)\s*$.*?"
+    r"^URL:\s*(?P<url>\S+)\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+_MCP_SNIPPET_RE = re.compile(r"^---\s*Snippet\s+\d+.*?---\s*$", re.MULTILINE)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -223,6 +259,140 @@ def _strip_html(s):
     return html.unescape(_TAG_RE.sub("", s or "")).strip()
 
 
+def _mcp_json(resp):
+    """The JSON-RPC payload out of a Streamable HTTP response, or None.
+
+    The body is either JSON outright or an SSE stream whose `data:` lines carry
+    it. Handling only the first would work until the server chose the other.
+    """
+    text = resp.text or ""
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        try:
+            return json.loads(stripped)
+        except ValueError:
+            return None
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            try:
+                return json.loads(line[5:].strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_mcp_blocks(blocks, per_page):
+    """Turn the tool's text blocks into the same shape every other search returns.
+
+    Fields are pulled by name rather than by position: a block missing License,
+    or carrying an extra field later, still yields its repo, path and URL.
+    """
+    results = []
+    for block in blocks:
+        if len(results) >= per_page:
+            break
+        text = block.get("text") or ""
+        found = _MCP_FIELD_RE.search(text)
+        if not found:
+            continue
+        body = text[found.end():]
+        # [1:] drops everything before the first "--- Snippet N ---" marker.
+        # That leading piece is the License and "Snippets:" header, never code,
+        # and keeping it handed the caller a header line as if it were a match.
+        pieces = _MCP_SNIPPET_RE.split(body)[1:]
+        matches = [_clean_code(p.strip()) for p in pieces if p.strip()]
+        results.append({
+            "repo": found.group("repo"),
+            "path": found.group("path"),
+            "url": found.group("url"),
+            # grep.app does not return star counts. Reporting 0 says "unknown"
+            # in the same field shape; inventing a number would be worse.
+            "stars": 0,
+            "matches": matches,
+        })
+    return results
+
+
+def grep_mcp_code_search(query, max_results=10, language=None, timeout=DEFAULT_TIMEOUT):
+    """Search public GitHub file contents via grep.app's MCP endpoint. No auth.
+
+    The portable path: it needs no account, no API key, and no per machine setup,
+    so a fresh ClaudeBoost clone can answer "does this already exist" on the day
+    it is installed. Nothing about it is tied to one user.
+
+    Returns the standard shape plus source="mcp.grep.app". Match text is
+    untrusted reference content like any other web result.
+    """
+    if not query or not isinstance(query, str) or not query.strip():
+        return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+                "error": "Invalid query"}
+
+    per_page = max(1, min(int(max_results), 100))
+    arguments = {"query": query.strip()}
+    if language:
+        # The tool takes a list here, and a bare string would be dropped.
+        arguments["language"] = [language] if isinstance(language, str) else list(language)
+
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": GREP_MCP_TOOL, "arguments": arguments},
+    }
+
+    last_err = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_BACKOFF_S[min(attempt - 2, len(_BACKOFF_S) - 1)])
+        try:
+            with httpx.Client(timeout=timeout, headers=_MCP_HEADERS) as client:
+                resp = client.post(GREP_MCP_URL, json=body)
+        except httpx.TimeoutException:
+            last_err = f"timed out after {timeout}s"
+            logger.warning("grep.app MCP attempt %d of %d: %s",
+                           attempt, _MAX_ATTEMPTS, last_err)
+            continue
+        except httpx.HTTPError as e:
+            last_err = f"{type(e).__name__}: {e}"
+            logger.warning("grep.app MCP attempt %d of %d: %s",
+                           attempt, _MAX_ATTEMPTS, last_err)
+            continue
+
+        if resp.status_code in _RETRY_STATUS and attempt < _MAX_ATTEMPTS:
+            last_err = f"HTTP {resp.status_code}"
+            logger.warning("grep.app MCP transient %s, attempt %d of %d",
+                           last_err, attempt, _MAX_ATTEMPTS)
+            continue
+        if resp.status_code >= 400:
+            return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+                    "error": f"grep.app MCP failed: HTTP {resp.status_code}"}
+
+        payload = _mcp_json(resp)
+        if payload is None:
+            snippet = (resp.text or "")[:200].replace("\n", " ")
+            return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+                    "error": f"grep.app MCP returned an unparseable body: {snippet!r}"}
+        if "error" in payload:
+            detail = (payload.get("error") or {}).get("message", "")
+            return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+                    "error": f"grep.app MCP error: {detail or payload['error']}"}
+
+        result = payload.get("result") or {}
+        blocks = result.get("content") or []
+        results = _parse_mcp_blocks(blocks, per_page)
+        # A tool level failure arrives as isError with the reason in the text,
+        # not as a JSON-RPC error, so an unchecked read would look like 0 hits.
+        if result.get("isError"):
+            text = (blocks[0].get("text") if blocks else "") or "unspecified"
+            return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+                    "error": f"grep.app MCP tool error: {text[:200]}"}
+        return {"results": results, "total_count": len(blocks),
+                "source": "mcp.grep.app", "error": None}
+
+    return {"results": [], "total_count": 0, "source": "mcp.grep.app",
+            "error": f"grep.app MCP failed after {_MAX_ATTEMPTS} attempts ({last_err})"}
+
+
 def grep_app_code_search(query, max_results=10, language=None, timeout=DEFAULT_TIMEOUT):
     """Search public GitHub file contents via grep.app. No key required.
 
@@ -297,20 +467,27 @@ def github_code_search(query, max_results=10, timeout=DEFAULT_TIMEOUT, language=
 
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
-        # GitHub's code search API returns 401 without a token, so fall back to
-        # grep.app rather than returning an empty list. An empty list reads as
-        # "no code like this exists on GitHub", which is a false and expensive
-        # thing for a swipe check to conclude.
-        out = grep_app_code_search(query, max_results=max_results,
-                                   language=language, timeout=timeout)
-        if out["results"] or not out.get("error"):
-            return out
-        # Both paths are unavailable. Now the user genuinely has to act, so say
-        # so with a distinct flag a caller can branch on, not just prose.
-        out["error"] = (f"No code search available. grep.app: {out['error']} "
-                        "GitHub code search needs GITHUB_TOKEN in clean-rag/.env "
-                        "(a classic token with public_repo scope is enough), then "
-                        "restart the server.")
+        # No token is the normal case, not a degraded one. GitHub's code search
+        # API returns 401 without one, so try the two keyless paths in order of
+        # how well they actually work, and only escalate if both are down.
+        #
+        # mcp.grep.app first: it needs no setup of any kind, which is what makes
+        # a fresh clone useful on day one. The scraped /api/search second, since
+        # it answers 429 on a first request from a fresh IP.
+        errors = []
+        for probe in (grep_mcp_code_search, grep_app_code_search):
+            out = probe(query, max_results=max_results,
+                        language=language, timeout=timeout)
+            if out["results"] or not out.get("error"):
+                return out
+            errors.append(f"{out.get('source', probe.__name__)}: {out['error']}")
+
+        # Every keyless path is down. Only now is this the user's problem, and
+        # it gets a flag a caller can branch on rather than prose to pattern match.
+        out["error"] = ("No code search available. "
+                        + " | ".join(errors)
+                        + " A GITHUB_TOKEN in clean-rag/.env (classic, public_repo "
+                          "scope) would also work, then restart the server.")
         out["needs_user_action"] = True
         return out
 

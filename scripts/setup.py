@@ -254,6 +254,13 @@ def _is_junction(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Settings.json: env + statusLine + hooks.
 # ---------------------------------------------------------------------------
+# Lives in ~/.claude/, deliberately outside the repo: a checkout cannot remove
+# it, so it still answers for a branch that predates the hook pointing at it.
+# clean-rag/install.py defines the same path for the same reason; the two must
+# agree or a hook wrapped by one looks unwrapped to the other.
+HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
+
+
 def _statusline_cmd() -> str:
     """Build the status line command with same fallback chain as _py_cmd."""
     script = '"$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
@@ -277,7 +284,8 @@ def _load_settings() -> dict:
         sys.exit(1)
 
 
-def _py_cmd(script_name: str, base_dir: str = "scripts") -> str:
+def _py_cmd(script_name: str, base_dir: str = "scripts",
+            runner: str | None = None) -> str:
     """Hook command that invokes a ClaudeBoost script.
 
     Resolves the working Python launcher ONCE via `command -v` (an existence
@@ -295,13 +303,24 @@ def _py_cmd(script_name: str, base_dir: str = "scripts") -> str:
     already-drained stdin, producing duplicate/contradictory hook output
     (and, for scripts with input-order bugs, a crash on the retry).
     Checking with `command -v` first avoids ever running the script twice.
+
+    Each branch launches through hook-run.py rather than the script directly, so
+    a branch switch that removes the script exits 0 instead of 2 (Claude Code
+    reads 2 from a PreToolUse hook as "block this tool call"). The runner goes
+    inside every branch because every branch runs its own interpreter. It is
+    emitted here, at the one place that knows the script path, rather than
+    spliced in afterwards by parsing this finished string: that post-hoc parse
+    read the leading `if` as the interpreter and corrupted 29 registrations.
     """
+    if runner is None:
+        runner = str(HOOK_RUNNER).replace("\\", "/")
     script = f'"$CLAUDEBOOST_HOME/{base_dir}/{script_name}"'
+    launch = f'"{runner}" {script}'
     return (
-        f'if command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then "$CLAUDEBOOST_PYTHON" {script}; '
-        f'elif command -v python3 >/dev/null 2>&1; then python3 {script}; '
-        f'elif command -v python >/dev/null 2>&1; then python {script}; '
-        f'else py {script}; fi'
+        f'if command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then "$CLAUDEBOOST_PYTHON" {launch}; '
+        f'elif command -v python3 >/dev/null 2>&1; then python3 {launch}; '
+        f'elif command -v python >/dev/null 2>&1; then python {launch}; '
+        f'else py {launch}; fi'
     )
 
 
@@ -313,9 +332,13 @@ def _hook_command_stale(cmd: str) -> bool:
     they're intentionally written that way.
     """
     import re
-    m = re.search(r'"([^"]+\.py)"', cmd)
-    if m:
-        candidate = m.group(1)
+    # Skip the hook-run.py wrapper. It is an absolute path that always exists,
+    # and it now sits in front of the real script, so matching the first .py
+    # would answer "not stale" for every command regardless of its target.
+    candidates = [c for c in re.findall(r'"([^"]+\.py)"', cmd)
+                  if "hook-run.py" not in c]
+    if candidates:
+        candidate = candidates[0]
         # Env-var-relative paths are portable — skip
         if "$" in candidate or "%" in candidate:
             return False
@@ -615,6 +638,17 @@ def _install_all_hooks(settings: dict) -> None:
             "statusMessage": "Loading workspace tier briefing...",
         }],
     }, sentinel="workspace-primer.py", label="workspace tier primer (command-type)")
+
+    # The memory watcher is deliberately NOT registered here. It was, for one
+    # session on 2026-08-24, and it made the machine unusable: SessionStart
+    # fires on every session start, Claude Code was restarting repeatedly at
+    # the time, and each firing put a visible Python console on screen. The
+    # launcher asked for CREATE_NO_WINDOW and DETACHED_PROCESS together, which
+    # are contradictory on Windows, so the window was never reliably
+    # suppressed. Start it by hand instead:
+    #     python scripts/memory-watcher.py
+    # Before wiring it to a hook again, fix the creationflags and prove no
+    # window appears across a real session start, not just a manual run.
 
     # --- SessionStart: RAG session reset (clears sentinel for fresh session verification) ---
     _install_hook(settings, "SessionStart", {

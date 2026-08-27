@@ -6,6 +6,7 @@ Finds and kills rag_server processes. When no server is running, reports
 """
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import signal
@@ -24,19 +25,70 @@ _rr_spec.loader.exec_module(_rr_mod)
 
 
 class TestNoServerRunning:
-    def test_exits_0_when_no_rag_server(self, tmp_path):
-        # On a clean test machine (or where rag_server is not running), should exit 0
-        result = run_script("restart-rag.py")
-        assert result.returncode == 0
+    """These used to run restart-rag.py for real. They must not.
 
-    def test_reports_not_running_when_no_process(self):
-        result = run_script("restart-rag.py")
-        # Either "not running" or it found and stopped a server — both are exit 0
-        assert result.returncode == 0
-        output = result.stdout.decode(errors="replace")
-        # If no server: prints "not running" message
-        # If server found: prints PID info
-        assert "rag" in output.lower() or "server" in output.lower() or output == ""
+    The two removed tests called `run_script("restart-rag.py")` with no mocking
+    at all. That runs the real script, which runs a real WMI query and then
+    `os.kill(pid, SIGTERM)` on every match. On Windows os.kill with SIGTERM is
+    TerminateProcess: immediate, no cleanup, no way to decline.
+
+    The match is a substring test against the whole command line:
+
+        $_.CommandLine -like '*rag_server*' -and $_.Name -like 'python*'
+
+    Nothing matches that today, because the server runs
+    clean-rag/server/__main__.py. The old comment, "On a clean test machine (or
+    where rag_server is not running), should exit 0", is the whole problem: the
+    test's safety was an assumption about the machine, checked nowhere, and any
+    python process that ever gets `rag_server` into its command line turns a
+    test run into a kill.
+
+    Every branch of main() is already covered in TestMainFunction with
+    find_rag_server_pids and os.kill patched, so running the real thing was
+    buying no coverage in exchange for that.
+    """
+
+    def test_exits_0_when_nothing_matches(self):
+        """What the removed end to end tests were actually asserting."""
+        with patch.object(_rr_mod, "find_rag_server_pids", return_value=[]):
+            assert _rr_mod.main() == 0
+
+    def test_says_the_server_is_not_running(self):
+        captured = []
+        with patch.object(_rr_mod, "find_rag_server_pids", return_value=[]):
+            with patch("builtins.print", side_effect=lambda *a, **k: captured.append(" ".join(str(x) for x in a))):
+                assert _rr_mod.main() == 0
+        joined = " ".join(captured).lower()
+        assert "not running" in joined or "no rag_server" in joined, captured
+
+    def test_the_suite_never_executes_the_real_killer(self):
+        """Self policing, so the removed pattern cannot come back quietly.
+
+        Parses this file and fails if anything calls run_script on
+        restart-rag.py again. A comment saying "do not do this" does not
+        survive a future edit; a failing test does.
+
+        AST rather than a text scan, because a text scan matches its own
+        docstring and its own detection line. It did, first time.
+        """
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name not in ("run_script", "run_hook"):
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and "restart-rag.py" in str(arg.value):
+                    offenders.append(f"line {node.lineno}: {name}({arg.value!r})")
+
+        assert not offenders, (
+            "restart-rag.py sends SIGTERM to every process matching "
+            "'*rag_server*'. Patch find_rag_server_pids and call main() "
+            f"directly instead. Offending calls: {offenders}"
+        )
 
 
 # ---------------------------------------------------------------------------

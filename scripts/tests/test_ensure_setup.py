@@ -10,12 +10,61 @@ import json
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from helpers import SCRIPTS_DIR, COVERAGERC
+
+
+#: Written by the stub setup.py so a test can prove which script actually ran.
+STUB_MARKER_NAME = "stub-setup-ran.txt"
+
+
+def _install_stub_setup(tmp_home: Path) -> Path:
+    """Point ensure-setup.py at a harmless setup.py and return the marker path.
+
+    This is not tidiness, it is containment, and it belongs in the harness so no
+    future test in this file can opt out of it by accident.
+
+    ensure-setup.py's _find_setup_script() tries ~/.claude/claudeboost-home.txt
+    FIRST and only then falls back to a __file__ relative path. Run from inside
+    the repo with no claudeboost-home.txt, that fallback resolves to the real
+    scripts/setup.py, and main() then launches it with DETACHED_PROCESS. What
+    that actually did, measured on 2026-08-26:
+
+        setup.py -> clean-rag/install.py -> pip install -r requirements.txt
+
+    into the live venv, still running after pytest exited, because DETACHED
+    means it does not die with its parent. The same thing on 2026-08-24 left a
+    HuggingFace cache inside a pytest temp directory, which the real server then
+    logged:
+
+        Could not reconcile the snapshot for nomic-ai/CodeRankEmbed (OSError:
+        [WinError 1314] ... -> 'C:\\Users\\...\\pytest-1136\\
+        test_exits_0_when_no_home_and_0\\.cache\\huggingface\\hub\\...')
+
+    `test_exits_0_when_no_home_and_0` is this file's own temp directory name.
+    A test suite that reinstalls the machine it is running on is not a test
+    suite, so the first candidate is always a stub from here on.
+    """
+    claude_dir = tmp_home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+
+    stub_repo = tmp_home / "stub-claudeboost"
+    (stub_repo / "scripts").mkdir(parents=True, exist_ok=True)
+    marker = tmp_home / STUB_MARKER_NAME
+    # Writes the marker and exits. Enough to prove the spawn happened and that
+    # it landed here rather than on the real installer.
+    (stub_repo / "scripts" / "setup.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (claude_dir / "claudeboost-home.txt").write_text(str(stub_repo), encoding="utf-8")
+    return marker
 
 
 def _run_ensure_setup(tmp_home: Path, env_overrides: dict | None = None) -> subprocess.CompletedProcess:
@@ -28,6 +77,9 @@ def _run_ensure_setup(tmp_home: Path, env_overrides: dict | None = None) -> subp
     env["HOME"] = str(tmp_home)
     env["USERPROFILE"] = str(tmp_home)
 
+    # Unconditional. See _install_stub_setup for what happens without it.
+    _install_stub_setup(tmp_home)
+
     if env_overrides:
         env.update(env_overrides)
 
@@ -38,6 +90,20 @@ def _run_ensure_setup(tmp_home: Path, env_overrides: dict | None = None) -> subp
         capture_output=True,
         env=env,
     )
+
+
+def _wait_for_marker(marker: Path, timeout_s: float = 15.0) -> bool:
+    """Wait for the stub's marker file. The spawn is detached, so it is a race.
+
+    Returns False on timeout rather than raising, so the caller decides whether
+    a missing marker is a failure or the expected outcome.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if marker.exists():
+            return True
+        time.sleep(0.1)
+    return marker.exists()
 
 
 class TestSetupAlreadyDone:
@@ -66,20 +132,58 @@ class TestSetupAlreadyDone:
 
 
 class TestSetupNeeded:
-    def test_exits_0_when_no_home_and_no_setup_script(self, tmp_path):
-        """No CLAUDEBOOST_HOME, no claudeboost-home.txt → outputs context message."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
+    def test_announces_auto_setup_and_spawns_the_resolved_script(self, tmp_path):
+        """No CLAUDEBOOST_HOME and none in settings, so setup is needed.
 
+        Was `test_exits_0_when_no_home_and_no_setup_script`. The old name was
+        wrong: there was always a setup script to find, because
+        _find_setup_script() falls back to a __file__ relative path and this
+        runs from inside the repo. So it resolved the REAL scripts/setup.py and
+        launched it detached, which is how a test run reinstalled the machine.
+        See _install_stub_setup.
+
+        The old body could not catch that either. Its only assertion was
+        guarded by `if result.stdout.strip():`, so an empty stdout asserted
+        nothing at all and the test passed whatever happened.
+        """
         result = _run_ensure_setup(
             tmp_path,
             env_overrides={"CLAUDEBOOST_HOME": ""},
         )
         assert result.returncode == 0
-        if result.stdout.strip():
-            output = json.loads(result.stdout)
-            ctx = output.get("additionalContext", "")
-            assert "CLAUDEBOOST" in ctx.upper() or "setup" in ctx.lower()
+        assert result.stdout.strip(), "setup was needed but nothing was announced"
+
+        output = json.loads(result.stdout)
+        ctx = output.get("additionalContext", "")
+        assert "AUTO-SETUP" in ctx.upper(), ctx
+
+        marker = tmp_path / STUB_MARKER_NAME
+        assert _wait_for_marker(marker), (
+            "the spawned setup script never wrote its marker, so either nothing "
+            "was spawned or something other than the stub was"
+        )
+        assert marker.read_text(encoding="utf-8") == "ran"
+
+    def test_the_real_repo_setup_is_never_the_spawn_target(self, tmp_path):
+        """The containment itself, stated as an assertion rather than a comment.
+
+        Reads the path ensure-setup.py would resolve, and fails if it is the
+        repo's own installer. This is the regression guard: it fails on the
+        exact arrangement that let a test run pip install into the live venv.
+        """
+        mod = _load_ensure_setup()
+        _install_stub_setup(tmp_path)
+
+        with patch.object(Path, "home", lambda: tmp_path):
+            resolved = mod._find_setup_script()
+
+        assert resolved is not None
+        real_setup = (SCRIPTS_DIR / "setup.py").resolve()
+        assert resolved.resolve() != real_setup, (
+            f"ensure-setup.py resolved the real installer at {real_setup}. "
+            f"Running it detached is what reinstalled the machine mid test run."
+        )
+        assert resolved.resolve().is_relative_to(tmp_path.resolve()), resolved
 
     def test_sentinel_prevents_double_spawn(self, tmp_path):
         """If sentinel file exists, script exits silently (no double-spawn)."""

@@ -417,6 +417,48 @@ PORTABLE_HOOK_RUNNER = "$CLEAN_RAG_HOME/portable/hook-run.py"
 CLEAN_RAG_OWNED_MARKERS = ("$CLEAN_RAG_HOME", SESSION_SENTINEL)
 
 
+# The runner spliced in front of a compound `if`. That is what the old
+# single-interpreter regex produced when handed `_py_cmd()`'s chain: it captured
+# the keyword `if` as the interpreter. Matched here so the corruption can be
+# repaired rather than read as "already wrapped".
+_MANGLED_IF = re.compile(
+    r'^(\s*if\s+)("[^"]*hook-run\.py"|\S*hook-run\.py)\s+(?=command\s)'
+)
+
+# The interpreter of one branch in that chain. Only a branch body follows `then`
+# or `else`, so this cannot match the `command -v` test itself, which is the
+# mistake the old regex made.
+_BRANCH_INTERPRETER = re.compile(r'\b(then|else)\s+("[^"]*"|[^\s;]+)(\s+)')
+
+
+def _is_compound(command: str) -> bool:
+    """True for a shell if/elif/else chain rather than `<interpreter> <script>`."""
+    return command.lstrip().startswith("if ")
+
+
+def _unmangle_command(command: str) -> str:
+    """Strip a runner that was spliced in front of a compound `if`."""
+    return _MANGLED_IF.sub(r"\1", command, count=1)
+
+
+def _wrap_compound(command: str, runner: str) -> str:
+    """Insert the runner into each branch of an if/elif/else chain.
+
+    Per branch, not once at the front: each branch runs its own interpreter, so
+    each needs its own wrap. Branches already carrying the runner are left as
+    they are, which is what makes a second install a no-op instead of a double
+    wrap.
+    """
+    def wrap_branch(match: re.Match) -> str:
+        keyword, interpreter, gap = match.group(1), match.group(2), match.group(3)
+        body = command[match.end():].split(";", 1)[0]
+        if "hook-run.py" in body:
+            return match.group(0)
+        return f'{keyword} {interpreter} "{runner}"{gap}'
+
+    return _BRANCH_INTERPRETER.sub(wrap_branch, command)
+
+
 def _wrap_command(command: str, runner: str | None = None) -> str:
     """Route a hook command through hook-run.py so a branch switch can't brick Claude.
 
@@ -433,12 +475,33 @@ def _wrap_command(command: str, runner: str | None = None) -> str:
     hook-run.py runs the script if it's there, exits 0 if it isn't, and passes
     real exit codes straight through so a genuine gate can still block a genuine
     edit. It only swallows absence.
+
+    Two command shapes arrive here. A simple `<interpreter> <script>`, which is
+    what clean-rag's own registrations emit, and the if/elif/else fallback chain
+    ClaudeBoost's `_py_cmd()` emits. The chain needs the runner inside each
+    branch, because the thing at the front of it is the keyword `if`, not an
+    interpreter. Wrapping the front of a chain produced
+    `if "<runner>" command -v ...`, which corrupted 29 live registrations: the
+    runner ran against the argument `command`, found no such script, exited 0,
+    so the test passed and the real script ran unwrapped. The protection was
+    silently absent while every hook still appeared to work.
     """
-    if not command or ".py" not in command or "hook-run.py" in command:
+    if not command or ".py" not in command:
         return command
 
     if runner is None:
         runner = str(HOOK_RUNNER).replace("\\", "/")
+
+    # Repair that corruption before deciding anything else. A mangled command
+    # contains "hook-run.py" but is NOT wrapped, so the bare substring cannot
+    # be trusted as an "already done" signal the way it once was.
+    command = _unmangle_command(command)
+
+    if _is_compound(command):
+        return _wrap_compound(command, runner)
+
+    if "hook-run.py" in command:
+        return command
 
     # Split the interpreter off the front, keep whatever it was.
     match = re.match(r'^\s*("[^"]*"|\S+)\s+(.*)$', command)
