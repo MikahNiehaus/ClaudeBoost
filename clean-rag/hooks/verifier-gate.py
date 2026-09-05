@@ -9,18 +9,33 @@ repo has also run the blocking version twice and reverted it twice: the research
 gate's per-turn block was removed as too disruptive, and verify-gate-cmd.py
 records a forced-response hook that stalled batch work. The ordering still
 matters and is still stated: bad-cop first, good-cop only when bad-cop found
-something real, then bad-cop again on the fix. That is advice now, not a refusal.
+something Critical or High, then bad-cop again on the fix. That is advice now,
+not a refusal.
 
 The test run (auto-test-gate) proves the tests pass. It does not prove the tests
 catch the bug, which is the whole reason a reviewer is worth spawning at all.
 So the advice this hook gives, after a code change: send bad-cop at the changed
-files first, with adversarial tests and real execution output. If bad-cop finds
-nothing real it stamps VERIFIED: itself and the pass is done, no separate
-good-cop run to re-confirm a clean pass. If it finds something, good-cop fixes
-what was found, checks logging quality, test coverage and correctness, then
-stamps the files it covered, and bad-cop re-checks the fix. The loop ends when
-bad-cop stamps VERIFIED: on a clean pass. A /ps turn skips all of it, the same
-way it skips research.
+files first, with adversarial tests and real execution output. bad-cop closes
+with one of three lines, and the nudge routes on which.
+
+  - VERIFIED: it found nothing, the pass is done, no separate good-cop run to
+    re-confirm a clean pass.
+  - NITS: everything it found was Nit severity. good-cop is not spawned, since
+    a nit is non blocking by definition. The orchestrator applies the fixes and
+    re-runs bad-cop for the stamp. bad-cop does not stamp on that run, because
+    check_file_verified invalidates a stamp once the file's mtime advances past
+    it, so a stamp written before the fixes land erases itself.
+  - HANDOFF: at least one Critical or High. good-cop fixes what was found,
+    checks logging quality, test coverage and correctness, then stamps the
+    files it covered, and bad-cop re-checks the fix.
+
+The loop ends when bad-cop stamps VERIFIED: on a clean pass. A /ps turn skips
+all of it, the same way it skips research.
+
+NITS: and HANDOFF: both leave `covers` empty, so record_verifier writes a
+separate nits_only flag and loop_stage reads it. A stamp from before that flag
+existed has no key, reads as False, and lands on the good-cop route, which is
+the old behavior.
 
 The nudge goes to stderr, which the model reads. Hooks cannot spawn agents
 directly, so the message names who to spawn and what to hand them.
@@ -37,9 +52,11 @@ no high stakes surface is still worth a reviewer, because "green tests" and
 "correct" are different questions everywhere, not only on those surfaces.
 
 MAX_BLOCKS_PER_SESSION keeps its old name and no longer caps a block, since
-there is none to cap. It caps how many times the nudge repeats in one session. A
-reminder that prints on every Stop stops being read, so one ignored that many
-times has already failed and goes quiet instead of adding noise.
+there is none to cap. It caps how many times the nudge repeats in one round; a
+round that ends in a stamp (NITS: or good-cop's VERIFIED:) resets it, so the cap
+counts rounds that went nowhere rather than the whole session. A reminder that
+prints on every Stop stops being read, so one ignored that many times has
+already failed and goes quiet instead of adding noise.
 
 Rules, in order:
 
@@ -80,7 +97,13 @@ RAG_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
 # Where the bad-cop → good-cop → bad-cop loop stands, from the newest stamp.
 STAGE_NO_VERIFIER = "no-verifier-yet"
 STAGE_BUGS_FOUND = "bad-cop-found-bugs"
+STAGE_NITS_ONLY = "bad-cop-found-nits-only"
 STAGE_FIX_STAMPED = "good-cop-stamped-fix"
+
+# Stages where a round ended with a real stamp and the next one is a re-check.
+# Only these clear the nudge cap, so the cap keeps its teeth on the stages that
+# produced no stamp at all (STAGE_NO_VERIFIER, STAGE_BUGS_FOUND).
+PROGRESS_STAGES = frozenset({STAGE_NITS_ONLY, STAGE_FIX_STAMPED})
 
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
@@ -162,7 +185,7 @@ def _bump_block_count(session_id: str) -> None:
 
 
 def _reset_block_count(session_id: str) -> None:
-    """Clear the cap once verification actually succeeds.
+    """Clear the cap once a round actually produces a stamp.
 
     Without this, the cap silences the nudge for the rest of the session the
     first time two of them land in a row, even if good-cop runs correctly on
@@ -190,16 +213,16 @@ def _last_verifier_agent(session_id: str):
     """
     path = _record_path(session_id)
     if not path.exists():
-        return "", []
+        return "", [], False
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "", []
+        return "", [], False
     stamps = record.get("stamps", [])
     if not isinstance(stamps, list) or not stamps:
-        return "", []
+        return "", [], False
     last = stamps[-1]
-    return last.get("agent", ""), last.get("covers") or []
+    return last.get("agent", ""), last.get("covers") or [], bool(last.get("nits_only"))
 
 
 def loop_stage(session_id: str) -> str:
@@ -207,10 +230,14 @@ def loop_stage(session_id: str) -> str:
 
     One place decides it, so the nudge message and the counter reset cannot
     disagree, and a test can assert the routing without restating the condition.
+
+    A NITS: close and a HANDOFF: close both leave `covers` empty, so nits_only
+    is what separates them. Stamps written before that flag existed have no key
+    and read as False, which lands them on the old good-cop route.
     """
-    agent, covers = _last_verifier_agent(session_id)
+    agent, covers, nits_only = _last_verifier_agent(session_id)
     if agent == "bad-cop" and not covers:
-        return STAGE_BUGS_FOUND
+        return STAGE_NITS_ONLY if nits_only else STAGE_BUGS_FOUND
     if agent == "good-cop" and covers:
         return STAGE_FIX_STAMPED
     return STAGE_NO_VERIFIER
@@ -333,13 +360,11 @@ def main() -> int:
 
     stage = loop_stage(session_id)
 
-    # When good-cop just completed a fix cycle and stamped VERIFIED, reset the
-    # consecutive-nudge cap before bad-cop is asked for the re-check. The cap
-    # guards against a stuck loop (an agent that never produces a parseable stamp),
-    # not against a healthy loop making real progress each round. Resetting here
-    # keeps the cap scoped to consecutive failures within one round rather than
-    # accumulated across rounds of a healthy bad-cop → good-cop → bad-cop cycle.
-    if stage == STAGE_FIX_STAMPED:
+    # A round that ended in a stamp is progress, so it clears the nudge cap
+    # before the next re-check is asked for. Without this, a session that spent
+    # its budget on earlier rounds gets one nudge for the new round and then
+    # permanent silence, leaving the file unverified with nothing actionable left.
+    if stage in PROGRESS_STAGES:
         _reset_block_count(session_id)
 
     # The counter no longer caps a block, since nothing here blocks. It caps how
@@ -381,6 +406,27 @@ def main() -> int:
             "VERIFIED: itself — that is the only terminal condition.",
             file=sys.stderr,
         )
+    elif stage == STAGE_NITS_ONLY:
+        print(
+            "[verifier-gate] NUDGE: bad-cop closed with NITS:, meaning every "
+            "finding was Nit severity, no Critical and no High — "
+            f"these files still have no valid verifier stamp: {files}\n\n"
+            "Do NOT spawn good-cop. A nit is non blocking by definition and an "
+            "Opus fix pass costs more than the findings are worth. Apply "
+            "bad-cop's nit fixes yourself, right now, in this context.\n\n"
+            "Then spawn bad-cop again (Sonnet model, fresh context, "
+            "foreground, run_in_background: false) for the re-check that "
+            "earns the stamp. Give it three things only: (1) the "
+            "requirements/ticket context, (2) the correctness properties, "
+            "(3) the updated diff including your nit fixes. bad-cop did not "
+            "stamp on the nit only run on purpose: a stamp is invalidated "
+            "once a file's mtime advances past it, so one written before your "
+            "fixes landed would erase itself. If the re-check finds nothing, "
+            "bad-cop stamps VERIFIED: and the loop ends. If it finds "
+            "something Critical or High this time, it emits HANDOFF: and "
+            "good-cop runs then.",
+            file=sys.stderr,
+        )
     elif stage == STAGE_FIX_STAMPED:
         print(
             "[verifier-gate] NUDGE: good-cop stamped VERIFIED: but "
@@ -413,16 +459,19 @@ def main() -> int:
             "reasoning for the change, that is what biases a reviewer into "
             "agreeing with it. bad-cop writes adversarial tests, runs the code, "
             "adds logging, and reports the real failures it finds.\n\n"
-            "If bad-cop finds nothing real, it stamps VERIFIED: itself and "
-            "the loop ends — no separate good-cop run needed. Only if it finds "
-            "something: spawn good-cop next (Opus, fresh context, foreground, "
-            "four things: requirements, correctness properties, diff, and "
-            "bad-cop's findings). good-cop fixes what was found and gets every "
-            "test green, then stamps VERIFIED:. After good-cop stamps, spawn "
-            "bad-cop again for a final re-check. The loop (bad-cop → good-cop "
-            "→ bad-cop) continues until bad-cop stamps VERIFIED: itself — "
-            "that is the only terminal condition, not good-cop claiming done.\n\n"
-            "Fix any Critical or High bad-cop returns, then finish.\n\n"
+            "bad-cop closes with one of three lines and it decides what you do "
+            "next. VERIFIED: it found nothing, it stamped, the loop ends. "
+            "NITS: every finding was Nit severity, so do NOT spawn good-cop — "
+            "apply those fixes yourself and re-run bad-cop for the stamp. "
+            "HANDOFF: at least one Critical or High, so spawn good-cop next "
+            "(Opus, fresh context, foreground, four things: requirements, "
+            "correctness properties, diff, and bad-cop's findings). good-cop "
+            "fixes what was found and gets every test green, then stamps "
+            "VERIFIED:. After good-cop stamps, spawn bad-cop again for a final "
+            "re-check. The loop (bad-cop → good-cop → bad-cop) continues until "
+            "bad-cop stamps VERIFIED: itself — that is the only terminal "
+            "condition, not good-cop claiming done and not you deciding the "
+            "nits are handled.\n\n"
             "For a quick check that you did what you said you did, rather than "
             "a full adversarial pass, dispatch quick-cop instead. It is not a "
             "verifier, it stamps nothing, and it never satisfies this nudge.",

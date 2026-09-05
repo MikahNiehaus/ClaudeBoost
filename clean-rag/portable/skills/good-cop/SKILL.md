@@ -1,13 +1,19 @@
 ---
 name: good-cop
-description: Spawn good-cop directly, only after /bad-cop found something real. Researches the root cause of bad-cop's findings, fixes it, gets every test green, and stamps the verifier gate with VERIFIED. Skip this entirely if bad-cop found nothing, it already stamped VERIFIED itself.
+description: Spawn good-cop directly, only after /bad-cop found something Critical or High. Researches the root cause of bad-cop's findings, fixes it, gets every test green, and stamps the verifier gate with VERIFIED. Skip this entirely when bad-cop emitted VERIFIED (it found nothing) or NITS (nit severity only, which you fix directly).
 ---
 
 # /good-cop
 
 Direct spawn of the fix half of post write verification. Only runs after
-`/bad-cop` found something real, handed its findings. If bad-cop found
-nothing, it already stamped `VERIFIED:` itself; don't spawn this.
+`/bad-cop` ended with `HANDOFF:`, which it emits only when at least one
+finding is Critical or High.
+
+Two bad-cop outcomes skip this skill entirely. `VERIFIED:` means it found
+nothing and already stamped. `NITS:` means everything it found is Nit
+severity, which is non blocking by definition: apply those fixes yourself,
+then re-run bad-cop for the re-check that earns the stamp. Don't spawn an
+Opus fix pass for polish.
 
 ## What to do
 

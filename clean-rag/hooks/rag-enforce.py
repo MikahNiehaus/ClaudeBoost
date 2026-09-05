@@ -103,8 +103,7 @@ def _registered_projects() -> list[str]:
         # _list_projects() returns {} for the same state. Logging it at ERROR
         # made a clean first prompt indistinguishable from a broken server in
         # state/rag-enforce.log, which is the one place someone greps when the
-        # server is misbehaving. _read_self_heal_stamp() one function over
-        # already draws the line here for the same reason.
+        # server is misbehaving.
         logger.info("No project registry at %s yet.", reg_path)
         return []
     except (OSError, json.JSONDecodeError) as e:
@@ -535,305 +534,6 @@ def _health_check(port: str) -> bool:
         return False
 
 
-# A deliberately stopped server must stay stopped. Without this, killing the
-# server to get the machine back lasts only until the next prompt, because the
-# health check sees it down and restarts it. That is not self healing, it is
-# fighting the user for control of their own machine.
-_STOP_MARKER_NAME = "server-stopped-by-user"
-
-# Restarting cannot fix a deterministic startup failure, so retrying it every
-# prompt just burns the machine. One attempt per this window.
-_SELF_HEAL_COOLDOWN_S = 15 * 60
-_SELF_HEAL_STAMP_NAME = "last-self-heal"
-
-# The cooldown above throttles restarts. It never stops them, so a startup
-# failure a restart cannot fix gets retried every 15 minutes forever. On
-# 2026-08-26 that produced six restarts in three hours, all of the same
-# NotImplementedError from the same model load.
-#
-# So count consecutive restarts that found the SAME reported error and give up
-# after this many. Giving up is the correct answer: the failure is in the
-# process's own startup, and a fresh process runs the same startup.
-_MAX_IDENTICAL_SELF_HEALS = 3
-_SELF_HEAL_FAILURE_NAME = "self-heal-failures.json"
-
-# Longer than the cooldown on purpose. The counter is about "this same thing
-# keeps failing", so it has to outlive several cooldown windows to see the
-# repeat at all. It still expires, because a fault fixed by hand should not
-# leave self healing disabled forever with no way to notice.
-_FAILURE_SIGNATURE_TTL_S = 6 * 60 * 60
-
-
-def _load_write_durably():
-    """Resolve ``server.durable_write.write_durably``, or None if unavailable.
-
-    Imported through CLEAN_RAG_HOME the same way reindex-after-edit.py imports
-    server.project_id: a hook runs as a loose script with no package context.
-    """
-    root = str(_clean_rag_home())
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    try:
-        from server.durable_write import write_durably
-    except ImportError as e:
-        logger.error(
-            "Cannot import server.durable_write from CLEAN_RAG_HOME=%s: %s", root, e
-        )
-        return None
-    return write_durably
-
-
-def _read_self_heal_stamp(stamp) -> float | None:
-    """When the last self-heal ran, in epoch seconds, or None if unknown.
-
-    None means "no usable record", which the caller must treat as no cooldown.
-    A stamp that is missing, empty, truncated mid write, or not a number tells
-    us nothing about when the last restart happened, and inventing a cooldown
-    from it would refuse self healing forever -- a permanent outage is strictly
-    worse than the 15 minute window this is meant to enforce. The next attempt
-    overwrites it with a sane value.
-
-    The recorded timestamp is the authority rather than the file's mtime,
-    because that is the value _record_self_heal_attempt() actually proves it
-    wrote; an mtime can be moved by a copy, a restore, or a sync client that
-    never touched the contents.
-    """
-    try:
-        raw = stamp.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        logger.error("Could not read the self-heal cooldown stamp %s: %s", stamp, e)
-        return None
-
-    try:
-        return float(raw)
-    except ValueError:
-        logger.warning(
-            "Self-heal cooldown stamp %s is not a timestamp (%r); treating it as "
-            "no cooldown so the next attempt rewrites it.", stamp, raw[:40],
-        )
-        return None
-
-
-def _self_heal_suppressed(home) -> str | None:
-    """Return a reason to skip the restart, or None to go ahead."""
-    marker = home / "state" / _STOP_MARKER_NAME
-    if marker.exists():
-        return "server was stopped deliberately (remove state/server-stopped-by-user to re-enable)"
-
-    recorded_at = _read_self_heal_stamp(home / "state" / _SELF_HEAL_STAMP_NAME)
-    if recorded_at is None:
-        return None
-
-    age = time.time() - recorded_at
-    if age < 0:
-        # Dated in the future: clock skew, a restored backup, or a corrupt
-        # number. Left alone it would read as a cooldown that never expires.
-        logger.warning(
-            "Self-heal cooldown stamp is %.0f min in the future; ignoring it.",
-            -age / 60,
-        )
-        return None
-    if age < _SELF_HEAL_COOLDOWN_S:
-        return f"restarted {age / 60:.0f} min ago, cooling down"
-    return None
-
-
-def _record_self_heal_attempt(home) -> bool:
-    """Persist the cooldown stamp. True only if it will still be there next time.
-
-    The stamp is worth exactly as much as its durability, so the write is read
-    back and compared to what was written. Checking that the file merely
-    *exists* afterwards is not the same test and does not catch the fault class
-    that matters here: a write that reports success and leaves the previous
-    stamp in place (an antivirus intercept, a lazy network or synced folder
-    write) passes an existence check while re-arming nothing. Same check, same
-    helper, as cli/server_ctl.py's _mark_stopped_by_user().
-    """
-    write_durably = _load_write_durably()
-    if write_durably is None:
-        return False
-
-    stamp = home / "state" / _SELF_HEAL_STAMP_NAME
-    try:
-        write_durably(stamp, str(time.time()))
-    except OSError as e:
-        logger.error(f"Could not persist the self-heal cooldown stamp: {e}")
-        return False
-    return True
-
-
-def _status_failure_signature(port: str) -> str | None:
-    """The error /status is reporting, or None if there isn't one to compare.
-
-    None covers three different situations and they all mean the same thing
-    here: there is no repeated-error case to count. The server is unreachable
-    (a restart is exactly the right response), or it is healthy, or it answered
-    something unreadable. Only a server that is up and naming its own startup
-    failure gives us a signature worth comparing against the last one.
-    """
-    try:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/status", method="GET"
-        )
-        with urllib.request.urlopen(req, timeout=1) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-
-    if _str_field(data, "status") != "failed":
-        return None
-    return _str_field(data, "last_error") or None
-
-
-def _read_failure_record(home) -> tuple[str, int] | None:
-    """The remembered (signature, count), or None if there is no usable one.
-
-    Unreadable, malformed and expired records all read as None, which means no
-    suppression. Same reasoning as the cooldown stamp: a record we cannot trust
-    must not be able to refuse self healing, because a permanent outage is
-    worse than an extra restart.
-    """
-    path = home / "state" / _SELF_HEAL_FAILURE_NAME
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        logger.error("Could not read the self-heal failure record %s: %s", path, e)
-        return None
-
-    try:
-        data = json.loads(raw)
-    except (ValueError, TypeError):
-        logger.warning(
-            "Self-heal failure record %s is not JSON; ignoring it.", path
-        )
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    signature = data.get("signature")
-    count = data.get("count")
-    recorded_at = data.get("at")
-    if not isinstance(signature, str) or not isinstance(count, int):
-        return None
-    if not isinstance(recorded_at, (int, float)):
-        return None
-
-    age = time.time() - recorded_at
-    # A future date is clock skew or a restored file, not a real record.
-    if age < 0 or age > _FAILURE_SIGNATURE_TTL_S:
-        return None
-    return signature, count
-
-
-def _write_failure_record(home, signature: str, count: int) -> None:
-    """Remember the signature and how many restarts in a row it has survived.
-
-    A failure to write is logged and swallowed. Unlike the cooldown stamp, this
-    record only ever makes self healing MORE conservative, so losing it costs
-    an extra restart attempt rather than a restart storm.
-    """
-    write_durably = _load_write_durably()
-    if write_durably is None:
-        return
-    path = home / "state" / _SELF_HEAL_FAILURE_NAME
-    payload = json.dumps(
-        {"signature": signature, "count": count, "at": time.time()}
-    )
-    try:
-        write_durably(path, payload)
-    except OSError as e:
-        logger.error("Could not persist the self-heal failure record: %s", e)
-
-
-def _clear_failure_record(home) -> None:
-    """Forget the remembered failure. Called when the error changes."""
-    path = home / "state" / _SELF_HEAL_FAILURE_NAME
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        logger.error("Could not clear the self-heal failure record %s: %s", path, e)
-
-
-def _repeated_failure_suppressed(home, port: str) -> str | None:
-    """Return a reason to stop restarting, or None to go ahead.
-
-    Also updates the record, so this is the one place that counts.
-    """
-    signature = _status_failure_signature(port)
-    if signature is None:
-        # No comparable error this time. Whatever we were counting is no longer
-        # what is happening, so the count is meaningless. Start clean.
-        _clear_failure_record(home)
-        return None
-
-    previous = _read_failure_record(home)
-    if previous is not None and previous[0] == signature:
-        count = previous[1] + 1
-    else:
-        count = 1
-
-    _write_failure_record(home, signature, count)
-
-    if count >= _MAX_IDENTICAL_SELF_HEALS:
-        return (
-            f"the same startup error has now survived {count} restarts, so "
-            f"restarting is not going to fix it. Error: {signature[:300]}. "
-            f"Fix the cause, then run cli/server_ctl.py restart by hand, or "
-            f"delete state/{_SELF_HEAL_FAILURE_NAME} to re-arm self healing."
-        )
-    return None
-
-
-def _trigger_self_heal(port: str) -> None:
-    """Attempt to restart RAG server if down, unless suppressed."""
-    home = _clean_rag_home()
-
-    reason = _self_heal_suppressed(home)
-    if reason is not None:
-        logger.info("Self-heal skipped: %s", reason)
-        return
-
-    # Checked after the cooldown, not before, so the counter advances once per
-    # actual restart attempt rather than once per prompt. Counting every prompt
-    # would hit the limit in seconds and never restart anything.
-    reason = _repeated_failure_suppressed(home, port)
-    if reason is not None:
-        logger.error("Self-heal stopped: %s", reason)
-        return
-
-    # Fail closed. Without a stamp on disk there is no cooldown, and this hook
-    # is a fresh process on every prompt, so an in memory throttle would not
-    # survive to see the next call: every prompt would launch another restart
-    # of a server that a restart cannot fix. That storm is strictly worse than
-    # not restarting, and the user can still start the server by hand, so an
-    # unthrottleable restart is the one thing not worth attempting.
-    if not _record_self_heal_attempt(home):
-        logger.error(
-            "Self-heal refused: state/ is not writable, so the %d minute "
-            "cooldown cannot be enforced. Start the server by hand with "
-            "cli/server_ctl.py start once state/ is writable again.",
-            _SELF_HEAL_COOLDOWN_S // 60,
-        )
-        return
-
-    try:
-        subprocess.Popen(
-            [sys.executable, str(home / "cli" / "server_ctl.py"), "restart"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        logger.info("Self-heal restart triggered")
-    except Exception as e:
-        logger.error(f"Self-heal trigger failed: {type(e).__name__}: {e}")
-
-
-
 def _search_rag(
     query: str, port: str, limit: int = 10, retries: int = 2, sources: list[str] | None = None
 ) -> tuple[list[dict], bool, list[dict]]:
@@ -848,7 +548,6 @@ def _search_rag(
     """
     if not _health_check(port):
         logger.error(f"RAG unhealthy before search. query={query!r}")
-        _trigger_self_heal(port)
         return [], False, []
 
     req_data = json.dumps({
@@ -918,7 +617,6 @@ def _search_rag(
                 time.sleep(backoffs[attempt])
 
     logger.error(f"Search exhausted all retries. query={query!r} last_error={last_error}")
-    _trigger_self_heal(port)
     return [], False, []
 
 
@@ -1559,17 +1257,14 @@ def main() -> int:
     )
 
     if not is_healthy:
-        # Says what is true in every case, not just the lucky one. A restart is
-        # skipped when the server was stopped on purpose, when one was tried in
-        # the last 15 minutes, and now when the cooldown cannot be persisted, so
-        # claiming "self healing initiated" here was wrong most of the time.
+        # Nothing restarts the server any more. This hook reports the
+        # outage and gets out of the way; starting it is the user's call.
         print(
             f"\n[WARN] clean-rag did not answer on port {port}.\n"
             "This turn has no injected research context.\n"
-            "A restart runs at most once every 15 minutes and never at all "
-            "if the server was stopped on purpose.\n"
-            "state/rag-enforce.log says which of those happened. To start it "
-            "yourself: python clean-rag/cli/server_ctl.py start\n"
+            "Nothing will restart it for you. state/rag-enforce.log says what "
+            "happened. To start it yourself: "
+            "python clean-rag/cli/server_ctl.py start\n"
         )
         return 0
 

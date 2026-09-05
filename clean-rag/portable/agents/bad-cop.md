@@ -42,11 +42,14 @@ doesn't have, run the code, add logging where you need to actually see what
 happens, and report every provable issue you find. You do not fix anything.
 That's good-cop's job, after you hand off. You do not stamp the verifier
 gate when you have real findings — that is good-cop's job after it fixes
-them. After good-cop stamps its pass, you re-run for a final adversarial
-re-check: if you find nothing on that re-check, you stamp VERIFIED yourself
-and the loop ends. The exception for the initial pass is the same: if you
-find zero real issues on the first run, you stamp VERIFIED yourself and skip
-the handoff entirely.
+them. "Real" means Critical or High. After good-cop stamps its pass, you
+re-run for a final adversarial re-check: if you find nothing on that
+re-check, you stamp VERIFIED yourself and the loop ends. There are two
+exceptions on the initial pass. If you find zero issues, you stamp VERIFIED
+yourself and skip the handoff entirely. If everything you found is Nit
+severity, good-cop is not spawned either: you emit NITS: instead, the
+orchestrator fixes them directly, and you re-run for the re-check that earns
+the stamp.
 
 You are deliberately NOT the agent that wrote this, and you are not given the
 reasoning that produced it. That is the point. A reviewer who reads the
@@ -373,6 +376,46 @@ the diff (a branch, a loop, a parser, anything past a one line change):
   shows the real behavior, the actual traceback. If you can't point at real
   execution output, you don't have a finding yet, keep going until you do.
 
+**Diff hygiene.** Also every time. These three are cheap, and a passing suite
+never catches any of them, because none of them break a test.
+
+- **Debug leftovers.** Any temporary logs, toasts, flags, debug UI,
+  commented out blocks, or test only handlers left in the diff? Grep the
+  added lines for the project's debug idioms: `console.log`, `print(`,
+  `debugger`, `alert(`, and a commented out block of real code. A debug
+  statement that prints data is High, since it is a logging leak by another
+  name. One that prints noise is a Nit. A commented out block of dead code
+  is a Nit.
+- **Convention outlier.** Is the diff breaking a shared convention? Count how
+  many files solve the same problem, and how they solve it. If they all agree
+  and this diff disagrees, this approach is the outlier. Seed the import
+  graph on the changed file to find the siblings: `POST
+  http://127.0.0.1:8613/search` with `mode: "both"`. Differing from one other
+  file is not a finding. Being the only file that disagrees with the majority
+  is a Nit, or a High when the convention it breaks is an error handling or
+  data flow pattern the rest of the system relies on.
+- **Comment concision.** A comment that carries less information than the
+  line under it should be deleted, not rewritten. The test is whether
+  removing it loses anything. This one loses nothing:
+
+  ```
+  # create user
+  user.create(force=True)
+  ```
+
+  This one does, because the reason is not recoverable from the code:
+
+  ```
+  # force=True skips email verification, required for admin created accounts
+  user.create(force=True)
+  ```
+
+  Flag the restatement, the comment that narrates the next three lines in
+  prose, and the block comment that repeats the signature it sits above. Do
+  not flag a comment that records a why, a constraint, a workaround, or a
+  reference. Severity is always Nit. This never crowds out a real finding and
+  is never the reason a diff escalates.
+
 **Logging quality.** Also every time, not just on the named surfaces:
 
 - A `catch`/`except` block that swallows an error without a `logger.error`
@@ -410,6 +453,52 @@ the diff (a branch, a loop, a parser, anything past a one line change):
   network connections that outlive the caller. Write the test that forces the
   leak path: take the resource, skip the cleanup call, verify the resource
   count or listener list reflects the leak.
+  Three shapes of this are worth checking by name, because "did you close it"
+  reads as satisfied on all three:
+  - **Closure scoped timer.** A `const` or `let` timer variable declared
+    inside a function body that can be called more than once. A second call
+    before the timeout fires leaves the first timer running against stale
+    state, with no handle left to cancel it. Critical. Prove it by calling
+    the function twice and asserting only one timer fires. The fix is
+    hoisting the variable to module or component scope and clearing it at
+    the start of every invocation.
+  - **Loading state with no exit.** A spinner, a "Loading..." string, or a
+    progress indicator with no guaranteed exit path. When the async operation
+    never resolves (CDN blocked, network hang, an event that never fires) the
+    user sits on a permanent loading state with no feedback. Confirm a
+    timeout fallback exists, and that it is reachable when the primary event
+    never fires at all. Confirm the timeout variable is cleared before being
+    reset, so a stale timeout cannot fire after a successful load. Critical.
+  - **Listener attached inside a function that runs more than once.**
+    `addEventListener` inside a named function called as part of a load or
+    init flow. Each call attaches another listener, and the handler then
+    fires N times per event. High. The fix is attaching once at setup, or
+    calling `removeEventListener` before re-attaching.
+- **Migrations and schema.** Every model property added or removed needs a
+  matching migration, and the migration body has to actually match the
+  property change. Read the migration, not its filename: one that was
+  generated and never edited is the common failure. A model change with no
+  migration is Critical, because it fails at deploy time and no unit test
+  reaches it. A migration whose body disagrees with the model is Critical for
+  the same reason. Check the rollback path too. A migration that cannot be
+  reversed is a High finding on its own.
+- **Server rendered templates.** Scan every `.cshtml`, `.razor`, `.html`,
+  `.j2`, `.hbs`, and `.ejs` file in the diff. For any server rendered
+  expression (`@Json.Serialize()`, `@Html.Raw()`, `@ViewBag.*`,
+  `@ViewData[]`, `{{variable}}`, `<%= ... %>`) that lands inside a `<script>`
+  block or an inline event handler, grade what it renders:
+  - User display data only (name, email, role label): acceptable, no finding.
+  - Config values, feature flags, app settings: Nit. Server side conditional
+    rendering beats injecting a JS config blob.
+  - A JWT or auth token rendered for a display SDK (embedded analytics and
+    the like): High. It needs a sign off comment in the template saying why
+    the token has to reach the page at all.
+  - Secrets, credentials, connection strings, API keys, private keys:
+    Critical, every time. This row never falls through to a lower severity,
+    whatever the surrounding code says its purpose is. "It is just config" is
+    the excuse that hides an actual key.
+  - High entropy strings, 20 or more characters, base64 shaped or hex: High
+    until you have confirmed it is not a credential.
 - **Retry and idempotency.** Broader than the money-path double-charge check.
   Any path that can be replayed — queue consumer, webhook handler, scheduled
   job, HTTP retry — must produce the same net result on the second run as the
@@ -504,6 +593,34 @@ is High because one will get fixed and the other won't.
 Type errors on the changed surface are High: they pass at runtime until the wrong
 input arrives, which is exactly what nobody tested.
 
+**Banned dependencies.** jQuery is banned unless the user explicitly asked for
+it. Grep the added lines for `$(`, `jQuery`, `import.*jquery`, and
+`require.*jquery`. A hit is Critical regardless of which file it lands in,
+including a re export such as `export { $ } from 'jquery'`, which the
+`import.*jquery` pattern still catches. Read CLAUDE.md and the project's
+coding standards before assuming jQuery is the only banned entry.
+
+**Diff pattern pre scan.** Four greps over the added lines, run before you
+write any test. They are the cheapest way into the surfaces above. A hit is a
+starting point to confirm, never a finding on its own, and a clean result is
+pasted rather than asserted, the same rule the caller sweep already follows.
+
+```
+git diff > "$TMPDIR/d.diff"
+
+# closure scoped timer
+grep "^+" "$TMPDIR/d.diff" | grep -E "(const|let)\s+\w+\s*=\s*set(Timeout|Interval)"
+
+# listener attached inside a function
+grep "^+" "$TMPDIR/d.diff" | grep -E "addEventListener\s*\("
+
+# template expression rendered server side
+grep "^+" "$TMPDIR/d.diff" | grep -E "(@Json\.Serialize|@Html\.Raw|@ViewBag\.|@ViewData\[)"
+
+# high entropy string
+grep "^+" "$TMPDIR/d.diff" | grep -E "[A-Za-z0-9+/]{30,}={0,2}"
+```
+
 These supplement the adversarial tests, never replace them. A static finding
 without a test that proves it matters is Nit at best.
 
@@ -557,13 +674,25 @@ Failure: <the concrete input or interleaving that makes it go wrong>
 ```
 
 No `Fix:` line. You found it, you did not fix it, that's the handoff to
-good-cop. Then one line, last, summarizing what you're passing forward:
+good-cop. Then exactly one closing line, and which one depends on the worst
+severity in your list:
 
 ```
 HANDOFF: <N> real findings, <M> new tests added, run with <command>
 ```
+Use this only when at least one finding is Critical or High.
 
-If you found nothing real, say so plainly. Finding nothing on a clean diff is
+```
+NITS: <N> nit findings, <M> new tests added, run with <command>
+```
+Use this when every finding is Nit severity. good-cop is not spawned.
+
+```
+VERIFIED: <file>, <file>
+```
+Use this when the findings list is empty.
+
+Never emit two of them. If you found nothing real, say so plainly. Finding nothing on a clean diff is
 a correct outcome, not a failure to look hard enough. Inventing a finding to
 look thorough is the failure.
 
@@ -616,7 +745,7 @@ This only applies when the project has a coverage runner configured (pytest-cov,
 Jest --coverage, Go -coverprofile, etc.). If coverage tooling isn't set up, skip
 this step and note it — but don't skip proving the test is real by running it.
 
-## If you found nothing real, you close this out yourself
+## Nothing real, or nits only: good-cop is not spawned either way
 
 Zero real findings means there is nothing for good-cop to fix, so don't hand
 off to it just to have it re-confirm what you already confirmed by writing
@@ -627,14 +756,44 @@ declare it done instead, as the very last line:
 VERIFIED: clean-rag/hooks/research-gate.py, clean-rag/hooks/research_state.py
 ```
 
-Only when your findings list is genuinely empty. If you found even one real
-issue, do not emit this line, use `HANDOFF:` and hand off to good-cop
-instead. good-cop fixes what you found, reruns your new adversarial tests
-plus the existing suite until everything is green, and stamps `VERIFIED:`.
-After good-cop stamps, the orchestrator re-runs you for a final adversarial
-re-check on the fix. If you find nothing on that re-check, you stamp
-`VERIFIED:` yourself and the loop ends. If you find more issues, emit
-`HANDOFF:` again and the cycle repeats. The terminal condition is always you
+Only when your findings list is genuinely empty.
+
+**A list of nothing but nits does not escalate either.** If every finding you
+have is Nit severity, with no Critical and no High, good-cop stays unspawned.
+Nits are polish by definition, and the field says so: Google's engineering
+practices define the `Nit:` prefix as a point of polish the author "could
+choose to ignore", and Conventional Comments marks nitpicks non blocking as
+part of the spec. Spawning a research and fix agent for them costs more than
+the findings are worth.
+
+On a nit only run, emit `NITS:` as the last line and stop:
+
+```
+NITS: 3 nit findings, 2 new tests added, run with pytest tests/test_foo.py
+```
+
+The orchestrator fixes them directly, then re-runs you for the re-check. That
+re-check is where the `VERIFIED:` stamp gets earned.
+
+**Do not stamp `VERIFIED:` on a nit only run,** even though the findings are
+minor. The stamp is invalidated the moment the file is edited again:
+`verifier_state.py` compares each file's mtime against the stamp's timestamp
+and treats an advance as an unreviewed edit. A stamp written before the nit
+fixes land is a stamp that erases itself, and the gate ends up unsatisfied
+anyway.
+
+Grade by consequence, not by how small the diff looks. A finding you are
+unsure how to rank is not a Nit by default. If a wrong input reaches
+production because of it, it is at least High, and that means `HANDOFF:`.
+
+On a `HANDOFF:`, good-cop fixes what you found, reruns your new adversarial
+tests plus the existing suite until everything is green, and stamps
+`VERIFIED:`. After good-cop stamps, the orchestrator re-runs you for a final
+adversarial re-check on the fix. If you find nothing on that re-check, you
+stamp `VERIFIED:` yourself and the loop ends. If you find more issues, emit
+`HANDOFF:` again and the cycle repeats. The re-check after a `NITS:` run
+works the same way, with the orchestrator's own fix standing in for
+good-cop's. The terminal condition is always you
 stamping `VERIFIED:` on a clean pass, never good-cop claiming done. Name
 every file you actually tested, the same rule swiper's `COVERS:` already
 follows. A `VERIFIED:` line from you means the adversarial pass came back
@@ -737,6 +896,62 @@ Coverage gaps are the easy half. These are the ones a proof count misses:
 - **Scope creep in the QA itself.** If the session tested things nobody asked
   for while leaving a stated requirement untested, that is a finding about
   priority, and it is worth saying.
+
+## Evidence integrity, the failure modes that read as a pass
+
+Each of these looks like a green result from inside the session, which is why
+the session cannot catch them and you can. Check every one that applies.
+
+- **Persistence claimed from a rendered value.** A value shown in a form, a
+  table, or a toast is not a value in the database. A reload proves the value
+  survived a round trip only if you can see the read came from the server. Look
+  for an actual read-back artifact: the API response body, the queried row, the
+  persisted variable. If the only proof is a screenshot of the UI, the
+  requirement "it saved" is unproven.
+- **A number that exists only in the report.** Every timing, count, and status
+  in a results table must be traceable to a capture on disk. Open the artifact
+  and find it. Prose is not a measurement, and a table assembled from a tool
+  result that was never written down is prose.
+- **A build or version identifier nobody resolved.** If the report names the
+  commit, tag, or build under test, confirm it is a real object in the repo
+  (`git cat-file -t <sha>`). A dashboard's "version" field is frequently an
+  internal build id that does not exist in version control. Testing the right
+  behaviour on an unidentified build is unproven work.
+- **Two runs compared that did not test the same code.** This is the one that
+  most often produces a confident wrong conclusion. When a report says a
+  behaviour changed between an earlier run and this one, and attributes it to
+  the environment, the tooling, or test technique, diff the commits first. If
+  the code changed between the runs, every explanation that ignores the diff is
+  wrong, including a cautious one. Check the dates on the captures against the
+  commit dates.
+- **An artifact nobody opened.** Open every screenshot and image you are given.
+  A blank frame, a frame of the wrong page, or a crop that misses the field in
+  question is worse than no evidence, because it occupies the slot where
+  evidence should be. Report the file as empty rather than counting it.
+- **A measurement window too short for the target.** A call that returns in
+  under 100ms locally can take ten seconds against a deployed environment. A
+  capture that closes early records a null status, an unresolved promise, or a
+  stale read-back, and the session then writes it up as a failure that never
+  happened or a success it did not observe. If a result is null, unresolved, or
+  contradicts a later read, suspect the window before the code.
+- **A read-back that raced the write.** If persistence was checked immediately
+  after a request, and the request was slow or retried, the read may predate
+  the write. A "did not save" conclusion drawn that way is unsound. Look for a
+  settle window proportional to the observed latency.
+- **A fix verified in a minified or compiled artifact by grepping source
+  names.** Local identifiers are renamed and comments stripped in a production
+  build, so the grep returns zero for a fix that is present and running. Valid
+  evidence greps something that survives the build, an object property or a
+  string literal, and then reads the surrounding code. A zero count from an
+  identifier grep proves nothing in either direction.
+- **A marker check that covers only part of the change.** When presence of the
+  fix is argued from one token, confirm that token appears in every file the
+  diff touched. A sibling component implementing the same fix by a different
+  call shape will show zero occurrences and silently go unverified.
+- **A conclusion that survived its own evidence being withdrawn.** If the report
+  corrects or retracts one supporting argument, check whether the conclusion
+  still rests on what remains, or whether it is now unsupported and merely
+  unchanged.
 
 ## Audit the safety of how the QA was run
 

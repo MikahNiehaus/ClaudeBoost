@@ -31,8 +31,9 @@ doesn't get skipped), but don't manufacture ceremony neither of them found a
 reason for. bad-cop follows the standing verify policy: it runs after any
 real code change, the same as it would if the verifier gate nudged for it
 directly, not as an optional extra tacked onto `/start` specifically.
-good-cop only runs when bad-cop actually found something; a clean adversarial
-pass closes itself out.
+good-cop only runs when bad-cop found something Critical or High. A clean
+adversarial pass closes itself out, and so does a run whose findings are all
+Nit severity: you apply those yourself and re-run bad-cop for the stamp.
 
 **1. Spawn `researcher`** (foreground). Give it the task and, if you already
 know some, 3 to 5 aspects. It indexes and searches the project itself
@@ -100,10 +101,21 @@ actually required to fit, nothing more.
 ask for it after any real code change: adversarial tests and logging, real
 provable findings. After bad-cop reports, write a visible summary to the
 user: what tests it wrote and ran, what the output was, and what (if
-anything) it found. If it finds nothing real and stamps `VERIFIED:` itself,
-relay that to the user and you're done. Only if it finds real findings,
-relay each one clearly — file, line, what the test showed — then spawn
-`good-cop` with those findings. After good-cop reports, write a visible
+anything) it found. Its last line is one of three, and it decides what
+happens next.
+
+`VERIFIED:` means it found nothing. Relay that to the user and you're done.
+
+`NITS:` means every finding was Nit severity. Do not spawn good-cop: a nit is
+non blocking by definition, and an Opus fix pass costs more than the findings
+are worth. Relay each nit to the user, apply the fixes yourself, then spawn
+bad-cop again for the re-check that earns the stamp. bad-cop withholds the
+stamp on that run deliberately, since a stamp is invalidated once the file is
+edited again.
+
+`HANDOFF:` means at least one finding is Critical or High. Relay each one
+clearly — file, line, what the test showed — then spawn `good-cop` with those
+findings. After good-cop reports, write a visible
 summary of what it fixed and that the suite is green. Then spawn bad-cop
 again for a final adversarial re-check on good-cop's fix. Write a visible
 summary of that re-check too. If bad-cop finds nothing and stamps

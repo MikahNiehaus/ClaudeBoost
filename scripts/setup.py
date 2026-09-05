@@ -125,7 +125,7 @@ def preflight() -> bool:
 # ---------------------------------------------------------------------------
 # MCP cleanup: remove rag-server from mcp.json if it was registered by an
 # older version of setup. The RAG server is now a standalone HTTP daemon on
-# port 8612 — no MCP registration needed or wanted.
+# port 8613 — no MCP registration needed or wanted.
 # ---------------------------------------------------------------------------
 def update_mcp_configs() -> None:
     # ~/.claude/mcp.json — remove rag-server if present from old installs
@@ -572,7 +572,9 @@ def _install_all_hooks(settings: dict) -> None:
                 "Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. "
                 "Field: ``mode``. Default CONSULT.\n\n"
                 "If mode=CONSULT, for any architectural decision you MUST:\n"
-                "  1. POST http://127.0.0.1:8612/search (feature keywords) + read 2-3 project files. Cite file:line.\n"
+                "  1. POST http://127.0.0.1:8613/search with "
+                "{\"query\":\"<feature keywords>\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"} "
+                "+ read 2-3 project files. Cite file:line.\n"
                 "  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.\n"
                 "  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.\n"
                 "  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.\n"
@@ -598,21 +600,21 @@ def _install_all_hooks(settings: dict) -> None:
         "matcher": "Always",
         "hooks": [{
             "type": "prompt",
-            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8612. "
+            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8613. "
                        "All RAG access uses HTTP — no MCP tools are needed. "
-                       "Key endpoints: POST /context (load agent context), "
-                       "POST /search (semantic + graph search), "
-                       "GET /status (server health), "
-                       "POST /index (reindex files). "
-                       "When loading context for an agent, POST to /context with "
-                       "{\"agent\":\"...\",\"task_description\":\"...\",\"project_path\":\"...\",\"workspace_path\":\"...\"} "
-                       "where project_path is the primary working directory (enables Tier 4 codebase search + stack detection) "
-                       "and workspace_path is the active workspace directory e.g. $CLAUDEBOOST_HOME/workspace/[task-id] "
-                       "(enables Tier 3c task-specific research). Omit workspace_path only if no workspace exists. "
+                       "Key endpoints: POST /search (vector + import graph search), "
+                       "POST /index-project (index or reindex a project), "
+                       "POST /reindex-file (reindex one file), "
+                       "GET /status (server health), GET /projects (indexed projects), "
+                       "POST /web-search, /github-search, /github-file, "
+                       "/stackoverflow-search (outside sources). "
                        "When searching code, POST to /search with "
-                       "{\"query\":\"...\",\"scope\":\"codebase\",\"project_path\":\"...\"}. "
-                       "If the project has not been indexed, run /index-project first. "
-                       "Use mode=graph for import and dependency chains."),
+                       "{\"query\":\"...\",\"sources\":[\"project:<absolute path>\"],\"mode\":\"both\",\"limit\":8}. "
+                       "sources is a list of project:<absolute path>. There is "
+                       "no scope parameter. mode=both runs vector similarity and "
+                       "the import graph together, and is what you want on any code "
+                       "search, because they surface different files. "
+                       "If the project has not been indexed, run /index-project first."),
             "statusMessage": "Loading RAG HTTP API config...",
         }],
     }, sentinel="RAG HTTP API", label="RAG HTTP API config")
@@ -663,7 +665,7 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- PreToolUse: agent-spawn gate on Task (command-type) ---
     # Lives under clean-rag/hooks/, but enforces
-    # core ClaudeBoost RAG (port 8612) — installed unconditionally here, not
+    # core ClaudeBoost RAG (port 8613) — installed unconditionally here, not
     # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
     # concern even though it's physically colocated with clean-rag's hooks.
     _install_hook(settings, "PreToolUse", {
@@ -692,7 +694,9 @@ def _install_all_hooks(settings: dict) -> None:
             "type": "prompt",
             "prompt": ("WORKSPACE CREATION CHECK: You are creating a workspace directory. "
                        "Before proceeding:\n"
-                       "1. Call POST http://127.0.0.1:8612/search with the task description to find relevant knowledge\n"
+                       "1. Call POST http://127.0.0.1:8613/search with "
+                       "{\"query\":\"<task description>\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"} "
+                       "to find relevant knowledge\n"
                        "2. Ensure you have a task ID and will create context.md after this\n"
                        "This is the start of complex work. RAG should be active."),
             "statusMessage": "Enforcing RAG lookup on workspace creation...",
@@ -774,8 +778,9 @@ def _install_all_hooks(settings: dict) -> None:
             {
                 "type": "prompt",
                 "prompt": ("CONTEXT PRESERVATION — quality-first routing:\n"
-                           "1. Agent spawns: call POST http://127.0.0.1:8612/context (Step 1), route by type "
-                           "(full/standard/lightweight)\n"
+                           "1. Agent spawns: call POST http://127.0.0.1:8613/search with "
+                           "{\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, "
+                           "route by type (full/standard/lightweight)\n"
                            "2. Finding verification: ALWAYS evaluator-agent, never self-verify "
                            "(confirmation bias)\n"
                            "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
@@ -1242,8 +1247,8 @@ def install_rag_server() -> None:
 
 
 # ---------------------------------------------------------------------------
-# RAG session prime: write the sentinel file and call /context so session-
-# primer.py doesn't block the first prompt after setup.
+# RAG session prime: write the sentinel file and run a real /search so
+# session-primer.py doesn't block the first prompt after setup.
 # ---------------------------------------------------------------------------
 def _prime_rag_session() -> None:
     import urllib.request
@@ -1288,8 +1293,8 @@ def _prime_rag_session() -> None:
 
 # ---------------------------------------------------------------------------
 # RAG index seed: index ClaudeBoost knowledge bases after server starts so
-# /context and /search work immediately after install without requiring the
-# user to run /index-boost or /boost first.
+# /search works immediately after install without requiring the user to run
+# /index-boost or /boost first.
 # ---------------------------------------------------------------------------
 def _seed_rag_index() -> None:
     import json as _json
@@ -1323,13 +1328,13 @@ def _seed_rag_index() -> None:
 
 # ---------------------------------------------------------------------------
 # MCP cleanup: remove rag-server from `claude mcp` if it was registered by an
-# older setup. The RAG server is now accessed entirely via HTTP on port 8612.
+# older setup. The RAG server is now accessed entirely via HTTP on port 8613.
 # ---------------------------------------------------------------------------
 def _cleanup_mcp_registration() -> None:
     """Remove the rag-server MCP registration if it still exists.
 
     Idempotent — safe to run multiple times. The RAG server no longer uses MCP;
-    it runs as a standalone HTTP daemon on port 8612.
+    it runs as a standalone HTTP daemon on port 8613.
     """
     # Try `claude mcp list` to see current configs
     rc, out = run_cmd(["claude", "mcp", "list"])
@@ -1909,7 +1914,7 @@ def main() -> int:
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")
-    print( "  RAG HTTP server started on port 8612")
+    print( "  RAG HTTP server started on port 8613")
     print( "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, "
            "PreCompact, UserPromptSubmit, Stop)")
     _say("\nNext steps:", "yellow")

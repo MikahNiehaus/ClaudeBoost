@@ -89,10 +89,19 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   and any agent that wrote or researched the change inherits its own blind spot on
   review). bad-cop writes adversarial tests, runs the code, adds logging, and
   reports the real failures it finds, with actual execution output attached.
-  If it finds nothing real, it stamps `VERIFIED:` itself: no separate
-  `good-cop` run needed to re-confirm a clean adversarial pass. Only when it
-  finds something real, spawn `good-cop` next, same rules, handed bad-cop's
-  findings instead of the requirements alone: it researches the correct fix,
+  Its last line says what happens next, and there are three of them. If it
+  finds nothing, it stamps `VERIFIED:` itself: no separate `good-cop` run
+  needed to re-confirm a clean adversarial pass. If everything it found is
+  Nit severity, it emits `NITS:` instead and good-cop is still not spawned:
+  a nit is non blocking by definition (Google's engineering practices coined
+  the `Nit:` prefix for exactly this, polish the author may ignore), so you
+  apply those fixes directly and re-run bad-cop for the re-check that earns
+  the stamp. bad-cop deliberately does not stamp on a nit only run, because
+  `verifier_state.py` invalidates a stamp once the file's mtime advances
+  past it, so a stamp written before the fixes land erases itself. Only when
+  it emits `HANDOFF:`, meaning at least one finding is Critical or High, do
+  you spawn `good-cop` next, same rules, handed bad-cop's findings instead
+  of the requirements alone: it researches the correct fix,
   applies it, and reruns bad-cop's new tests plus the existing suite until
   everything is actually green, and it is the one that stamps `VERIFIED:` in
   that case. After good-cop stamps, spawn bad-cop again for a final
@@ -177,6 +186,61 @@ surviving mutant is a test that would pass on broken code, so tighten it. When t
 edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
 guessing which inputs to test, which is the weak version the research warned about.
+
+### Every QA session ends with bad-cop judging it. This is not optional
+
+Running `/qa`, or doing any QA by hand, is not finished when the tests are done.
+It is finished when a fresh context has judged the evidence. A QA session cannot
+audit its own artifacts for the same reason you do not self review your own
+diff: it knows what it meant to prove, so it reads its own evidence as proving
+it.
+
+When the testing is done, spawn **`bad-cop` with `MODE: evidence-judge`** and
+hand it exactly three things:
+
+1. The requirements **verbatim**, the pasted ticket or the user's actual words,
+   never your paraphrase of the goal.
+2. Every proof artifact path: logs, captures, screenshots, the report itself.
+3. The tool inventory the QA session had available.
+
+Give it the correctness properties and what to attack. Never give it your
+reasoning about why you think the QA was sufficient, since that reasoning is
+what talks a reviewer into agreeing.
+
+It stamps `FULLY VERIFIED` or `TEST AGAIN` with specific gaps. On `TEST AGAIN`
+you retest those gaps and send it back. **The loop ends only when bad-cop stamps
+`FULLY VERIFIED`, never when the QA session declares itself satisfied.**
+
+Then check bad-cop's own claims the same way you check good-cop's: open the
+artifacts it cites, do not take its summary on trust.
+
+This catches a class of failure green results never surface, because every one
+of these looks like a pass from inside the session:
+
+- **Persistence claimed from a screenshot** with no server read-back. A value
+  rendered in a form is not a value in the database.
+- **Results that exist only as prose** in the report, with no capture on disk.
+  If it is not in an artifact it was not measured, whatever the table says.
+- **A build identifier quoted without resolving it.** Confirm the commit is a
+  real object in the repo. A dashboard's "version" field is often an internal
+  build id and not a commit at all.
+- **Comparing two runs that tested different code.** Before attributing a
+  behaviour change to the environment or to test technique, diff the commits.
+  This is the one that most often produces a confident wrong conclusion.
+- **A blank or mistargeted screenshot** passing as evidence because nobody
+  opened it. Open every image you save.
+- **Measurement windows too short for a deployed backend.** A response under
+  100ms locally can take ten seconds deployed, so a window sized for local turns
+  a success into a phantom failure or an unresolved null.
+- **Verifying a fix in a minified bundle by grepping identifier names.** Local
+  names are renamed and comments stripped, so the grep reads zero for a fix that
+  is present. Grep an object property, which survives, then read the code around
+  it.
+- **A marker check that covers only half the change.** Confirm the marker you
+  chose actually appears in every file the diff touched.
+
+`quick-cop` is the cheap non blocking version for a single "it is done" claim.
+It stamps nothing and never substitutes for bad-cop on a full QA session.
 
 ### Recorded decision: no blocking external model reviewer on Stop
 

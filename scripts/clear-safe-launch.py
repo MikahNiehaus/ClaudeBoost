@@ -23,6 +23,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from workspace_identity import _find_claude_pid_windows  # noqa: E402
+
 
 def read_json(path, default=None):
     try:
@@ -121,11 +124,22 @@ def main() -> int:
     else:
         print(f"Open a new terminal in {cwd} and run: claude '{launch_msg}'")
 
-    # Signal auto-clear.py (Stop hook) to kill the current node.exe after this
+    # Signal auto-clear.py (Stop hook) to kill THIS session after this
     # response, so this tab closes now that the replacement tab is open.
+    #
+    # target_pid is the whole reason this is safe. Without it the signal said
+    # only "some tab should close", and the Stop hook that happened to read it
+    # resolved a target by walking its own process tree, so an unrelated
+    # session that merely finished a response inside the signal's lifetime
+    # killed itself instead. This script runs as a child of the session that
+    # actually asked to close, so the ancestor it finds here is the right one.
+    # Recorded once, at request time, rather than resolved later by whoever
+    # reads the file.
+    target_pid = _find_claude_pid_windows()
     write_json(state / "clear-safe-terminal-signal.json", {
         "cwd": cwd,
         "timestamp": now_unix,
+        "target_pid": target_pid,
     })
 
     print(f"Launched: {args.workspace_id} — new tab opening, this tab will close.")

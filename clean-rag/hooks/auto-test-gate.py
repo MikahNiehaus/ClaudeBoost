@@ -131,13 +131,23 @@ def _block_count(session_id: str) -> int:
         return 0
 
 
-def _bump_block_count(session_id: str) -> None:
+def _bump_block_count(session_id: str) -> bool:
+    """Record one more block for this session. True if it actually persisted.
+
+    The return value matters. If the count cannot be written (the state
+    directory is unwritable, the disk is full, a scanner holds the file), then
+    _block_count reads back 0 forever, MAX_BLOCKS_PER_SESSION is never reached,
+    and blocking anyway would wedge the session shut permanently. That is the
+    exact failure the cap exists to prevent, so the caller declines to block
+    when the budget cannot be tracked.
+    """
     f = BLOCK_DIR / f"{session_id or 'nosession'}.count"
     try:
         BLOCK_DIR.mkdir(parents=True, exist_ok=True)
         f.write_text(str(_block_count(session_id) + 1), encoding="utf-8")
+        return True
     except Exception:
-        pass
+        return False
 
 
 def main() -> int:
@@ -195,7 +205,20 @@ def main() -> int:
         )
         return 0
 
-    _bump_block_count(session_id)
+    if not _bump_block_count(session_id):
+        # The budget could not be recorded, so the cap above can never fire and
+        # every future Stop would block again on the same failure. An uncounted
+        # block is an unbounded one, so this allows instead and says why.
+        print(
+            failures + "\n\n"
+            "Tests are failing. Fix from the actual output above, then finish. "
+            "Do not self review.\n\n"
+            f"[auto-test-gate] Could not record the block budget under {BLOCK_DIR}, "
+            "so the anti loop cap cannot work. Not blocking.",
+            file=sys.stderr,
+        )
+        return 0
+
     print(
         failures + "\n\n"
         "Tests are failing. Fix from the actual output above, then finish. "

@@ -32,6 +32,13 @@ from pathlib import Path
 
 MAX_AGE_SECONDS = 300  # 5 minutes
 
+# The terminal handoff signal gets a much shorter life than the tmux flag.
+# It authorises killing an editor, and the tab it is meant for closes within
+# a second or two of the request. Five minutes was long enough for a signal
+# nobody consumed to still be sitting there when an unrelated session
+# finished a response.
+SIGNAL_MAX_AGE_SECONDS = 30
+
 from workspace_identity import _find_claude_pid_windows
 
 
@@ -62,6 +69,45 @@ def _audit(home: str, message: str) -> None:
         pass
 
 
+def _reset_terminal_modes() -> None:
+    """Turn xterm mouse and focus reporting back off. Never raises.
+
+    Claude Code enables these on start and disables them when it exits. A
+    process killed with TerminateProcess runs no cleanup, so the modes stay on,
+    the terminal keeps sending position reports, and the shell reads them as
+    typed input: bursts of ^[[<35;39;1M at a bare prompt.
+
+    scripts/reset-terminal-modes.ps1 already recovers this from the PowerShell
+    prompt, but only once a prompt is drawn, and only in PowerShell. Sending the
+    sequences here means the terminal is already clean the moment the editor
+    dies, whatever shell is underneath.
+
+    Reset (l) forms, matching reset-terminal-modes.ps1 exactly:
+      ?1000l click tracking     ?1002l drag tracking    ?1003l motion tracking
+      ?1006l SGR coordinates    ?1015l urxvt coordinates ?1004l focus reporting
+    """
+    seq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l"
+    if sys.platform == "win32":
+        try:
+            # The console directly, not stdout. A Stop hook's stdout is captured
+            # by Claude Code, so an escape written there never reaches the
+            # terminal that needs it.
+            with open("CONOUT$", "w", encoding="utf-8") as con:
+                con.write(seq)
+                con.flush()
+            return
+        except Exception:
+            pass
+    try:
+        with open("/dev/tty", "w", encoding="utf-8") as tty:
+            tty.write(seq)
+            tty.flush()
+    except Exception:
+        # No console attached. Nothing to reset, and a Stop hook that raises is
+        # worse than one that skips a cosmetic cleanup.
+        pass
+
+
 def _close_old_clear_safe_tab(home: str) -> bool:
     """Consume /clear-safe's terminal handoff signal and close the old tab.
 
@@ -89,23 +135,54 @@ def _close_old_clear_safe_tab(home: str) -> bool:
     age = time.time() - data.get("timestamp", 0)
     _audit(home, f"signal found, age={age:.1f}s, raw={data!r}")
 
-    if age < MAX_AGE_SECONDS:
-        node_pid = _find_claude_pid_windows()
-        if node_pid:
-            try:
-                os.kill(node_pid, 9)
-                _audit(home, f"KILLED claude pid={node_pid} (SIGKILL)")
-            except Exception as e:
-                # The tab is already gone, or is not ours to kill. Both mean
-                # the job is done, so this stays non fatal. It gets recorded
-                # now rather than swallowed: "the kill failed" and "the kill
-                # never ran" looked identical before, and telling them apart is
-                # the whole reason the log exists.
-                _audit(home, f"kill FAILED pid={node_pid}: {type(e).__name__}: {e}")
-        else:
-            _audit(home, "no claude ancestor pid found, nothing killed")
-    else:
-        _audit(home, f"signal stale ({age:.1f}s > {MAX_AGE_SECONDS}s), not killing")
+    if age >= SIGNAL_MAX_AGE_SECONDS:
+        _audit(home, f"signal stale ({age:.1f}s > {SIGNAL_MAX_AGE_SECONDS}s), not killing")
+        return True
+
+    # Who the signal was actually for. clear-safe-launch.py runs as a child of
+    # the session that asked to close, so it records the right pid at request
+    # time. Reading it here is what makes the kill safe.
+    target_pid = data.get("target_pid")
+    if not isinstance(target_pid, int):
+        # An old format signal, or one written before target_pid existed. There
+        # is no way to tell whose tab it meant, and guessing is what caused
+        # unrelated sessions to kill themselves. Refuse rather than guess.
+        _audit(home, f"signal has no usable target_pid ({target_pid!r}), not killing")
+        return True
+
+    node_pid = _find_claude_pid_windows()
+    if not node_pid:
+        _audit(home, "no claude ancestor pid found, nothing killed")
+        return True
+
+    if node_pid != target_pid:
+        # This is a different session than the one that asked to close. It
+        # picked up a signal that was never meant for it. Leave it alone.
+        _audit(
+            home,
+            f"not our signal: this session is pid={node_pid}, "
+            f"signal targets pid={target_pid}, not killing",
+        )
+        return True
+
+    try:
+        # SIGKILL is TerminateProcess on Windows, so Claude Code never runs its
+        # own exit cleanup and never emits the disable sequences for xterm mouse
+        # reporting. The terminal then streams mouse coordinates at the shell,
+        # which reads them as typed input. Upstream: anthropics/claude-code#59720.
+        # Nothing downstream can undo it once the process is gone, so the reset
+        # goes out here, from the last code that runs while the console is still
+        # attached.
+        _reset_terminal_modes()
+        os.kill(node_pid, 9)
+        _audit(home, f"KILLED claude pid={node_pid} (SIGKILL)")
+    except Exception as e:
+        # The tab is already gone, or is not ours to kill. Both mean
+        # the job is done, so this stays non fatal. It gets recorded
+        # now rather than swallowed: "the kill failed" and "the kill
+        # never ran" looked identical before, and telling them apart is
+        # the whole reason the log exists.
+        _audit(home, f"kill FAILED pid={node_pid}: {type(e).__name__}: {e}")
     return True
 
 
@@ -138,17 +215,30 @@ def main() -> int:
     session_name = flag.get("session_name", "").strip()
 
     if os.environ.get("TMUX"):
-        subprocess.run(["tmux", "send-keys", "/clear", "Enter"], check=False)
+        # check=False covers a non zero exit, not a missing binary. TMUX can be
+        # set in an environment where the tmux client is not on PATH (an
+        # inherited variable, a Windows shell under a leftover WSL env), and
+        # then subprocess raises FileNotFoundError and takes the whole Stop hook
+        # down with it. A Stop hook that crashes is worse than one that skips a
+        # convenience, so every launch here is guarded.
+        try:
+            subprocess.run(["tmux", "send-keys", "/clear", "Enter"], check=False)
+        except OSError as e:
+            _audit(home, f"tmux send-keys unavailable: {type(e).__name__}: {e}")
+            return 0
         if session_name:
             safe_name = session_name.replace("'", "\\'")
             cmd = f"sleep 5 && tmux send-keys '/rename {safe_name}' Enter"
-            subprocess.Popen(
-                ["bash", "-c", cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            try:
+                subprocess.Popen(
+                    ["bash", "-c", cmd],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as e:
+                _audit(home, f"tmux rename launch failed: {type(e).__name__}: {e}")
 
     return 0
 

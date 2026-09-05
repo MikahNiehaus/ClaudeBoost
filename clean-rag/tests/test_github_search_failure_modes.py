@@ -303,7 +303,19 @@ class TestCodeSearchExists:
 class TestFreeFallbackWhenNoToken:
     """GitHub's code search API returns 401 without a token. Refusing outright
     made the free path unavailable, so a swipe check with no token could not
-    look for prior art at all. grep.app needs no key."""
+    look for prior art at all. grep.app needs no key.
+
+    Every test here is about the scraped grep.app path, which is the SECOND
+    keyless probe: github_code_search tries grep_mcp_code_search first. The
+    fixture below stands that first probe down so these tests reach the path
+    they are actually about. Ordering itself is covered in
+    test_grep_mcp_code_search.py::TestFallbackOrder, not here."""
+
+    @pytest.fixture(autouse=True)
+    def _mcp_is_down(self, monkeypatch):
+        monkeypatch.setattr(gs, "grep_mcp_code_search", lambda *a, **k: {
+            "results": [], "total_count": 0, "source": "mcp.grep.app",
+            "error": "mcp is down"})
 
     def test_no_token_falls_back_to_grep_app(self, http, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)

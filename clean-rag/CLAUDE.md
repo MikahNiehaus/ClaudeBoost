@@ -59,9 +59,13 @@ Post write verification is two agents, but good-cop is conditional, not
 always spawned. **`bad-cop`** (Sonnet) runs first: writes adversarial tests,
 runs the code, adds logging, and reports the real, provable failures it
 finds, with actual execution output attached. It never fixes anything. If it
-finds nothing real, it emits the `VERIFIED:` line itself and the pass is
-done, no `good-cop` run needed to re-confirm a clean adversarial pass. Only
-when it finds something real does **`good-cop`** (Opus) run: takes bad-cop's
+finds nothing, it emits the `VERIFIED:` line itself and the pass is done, no
+`good-cop` run needed to re-confirm a clean adversarial pass. If every
+finding it has is Nit severity, it emits `NITS:` and good-cop still does not
+run: nits are non blocking, so the orchestrator applies them directly and
+re-runs bad-cop for the re-check that earns the stamp. Only when bad-cop
+emits `HANDOFF:`, meaning at least one Critical or High finding, does
+**`good-cop`** (Opus) run: takes bad-cop's
 findings, researches the correct fix, applies it, and reruns bad-cop's new
 tests plus the existing suite until everything is actually green, and stamps
 `VERIFIED:`. After good-cop stamps, bad-cop re-runs for a final adversarial
