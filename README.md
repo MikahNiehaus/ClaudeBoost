@@ -19,9 +19,32 @@ The RAG server runs entirely locally. No external vector service. No API calls t
 your code. Your codebase stays on your machine. Microsoft's GraphRAG costs around
 $30,000 to index 5 GB of data. ClaudeBoost indexes the same on a CPU, for free.
 
+### Built like infrastructure, not a script
+
+| | |
+|---|---|
+| Retrieval server | 12,220 lines across 19 modules |
+| Test suite | **606 tests, 15,339 lines, 57 files** |
+| Test to source ratio | **1.25 to 1** |
+| Adversarial suites | 10, covering resource limits, race conditions, provenance, metrics |
+| Total Python | 39,109 lines |
+
+More test code than production code. The largest single test file, 1,699 lines of
+adversarial resource-limiting cases, is bigger than every source module in the server.
+Search correctness here is not asserted, it is measured against external benchmarks and
+defended by tests written to break it.
+
 ## What Makes the RAG Unique
 
-ClaudeBoost's local code retrieval beats Microsoft's GraphCodeBERT (fine-tuned on millions of labeled pairs) across five of six languages — on CPU, with no fine-tuning, no training data, no cloud cost. Three techniques make this possible.
+Code retrieval that reaches roughly 93% of a model fine-tuned on millions of labeled
+pairs, on a CPU, with no fine-tuning, no training data, and no cloud cost. Four
+techniques get it there, and one of them is a result that does not appear in any
+published retrieval paper.
+
+The headline finding is not a leaderboard position. It is that document augmentation
+and asymmetric encoding are structurally complementary, and siginj proves it with a
+controlled sign flip: the same technique that lifts an asymmetric model measurably
+*hurts* a symmetric one.
 
 ### Signature Injection (siginj)
 
@@ -68,6 +91,29 @@ This is different from RouterRetriever, which selects models at query time using
 ClaudeBoost builds an import and inheritance graph from tree-sitter AST parsing during indexing — the same single pass that produces chunks. No LLM, no synthesized edges, no hallucinated relationships. Graph search expands vector results to all structurally connected files via reciprocal rank fusion with PageRank weighting.
 
 Microsoft's full GraphRAG synthesizes graph edges from unstructured text using LLMs (~$33K for 5 GB in 2024). ClaudeBoost's graph is free, deterministic, and zero-hallucination.
+
+### Provenance-Checked Vectors
+
+A vector index only means anything to the model that produced it. Two different
+embedding models can both emit 768 dimensions and still place the same code in
+completely different regions of space, so querying one model's index with another
+model's vectors returns confident nonsense with no error and no warning.
+
+ClaudeBoost records which embedder produced each project's vectors and refuses to serve
+a search when the current embedder does not match, rather than returning results that
+look fine and are meaningless. Most retrieval stacks have no answer for this failure at
+all, because nothing about it looks like a bug.
+
+### Rank Fusion Across Two Incompatible Scales
+
+Vector search returns cosine similarity. The graph walk returns edge strength. The two
+numbers are not comparable, so ClaudeBoost fuses them by rank rather than by score,
+using reciprocal rank fusion at k=60.
+
+The graph side is a personalized PageRank seeded by the vector hits themselves, not by
+chat history the way standard GraphRAG does it. On deep traversals the frontier is
+ranked by PageRank before expanding, which keeps a hub file with 400 importers from
+swallowing the entire result set.
 
 ---
 
@@ -435,18 +481,31 @@ acceleration when available (CUDA auto-detected).
 
 Seven languages. No per-language fine-tuning in the base model.
 
-| Language | N (corpus) | MRR | R@1 | R@5 | CodeBERT | GraphCodeBERT | Status |
+> **Read the protocol before reading the numbers.** The MRR column below is the 1K-pool
+> protocol: one correct answer against 999 random distractors. The CodeBERT and
+> GraphCodeBERT columns are their published figures, which come from the harder
+> full-corpus setting where the answer is retrieved from the entire test corpus. The two
+> protocols are not directly comparable, and the larger the candidate pool the harder the
+> task, so a "+0.162" here is not a like-for-like win.
+>
+> For the honest apples-to-apples number, see
+> `benchmarks/codesearchnet/results/full_benchmark.json`: on the full 22,176 function
+> Python corpus this system scores **MRR 0.6438**, against GraphCodeBERT's published
+> 0.692. It does not beat a fine-tuned model on equal footing. It reaches roughly 93% of
+> one, on a CPU, with zero training. That is the result worth quoting.
+
+| Language | N (corpus) | MRR (1K-pool) | R@1 | R@5 | CodeBERT (full corpus) | GraphCodeBERT (full corpus) | Note |
 |----------|-----------|-----|-----|-----|----------|----------------|--------|
-| Python | 21,544 | **0.931** | 90.0% | 97.0% | 0.713 | 0.769 | BEATS GraphCodeBERT +0.162 |
-| JavaScript | 6,483 | **0.748** | 68.8% | 81.7% | 0.629 | 0.674 | BEATS GraphCodeBERT +0.074 |
-| Java | 26,909 | **0.850** | 81.6% | 88.9% | 0.719 | 0.769 | BEATS GraphCodeBERT +0.081 |
+| Python | 21,544 | **0.931** | 90.0% | 97.0% | 0.713 | 0.769 | higher on 1K-pool, not comparable |
+| JavaScript | 6,483 | **0.748** | 68.8% | 81.7% | 0.629 | 0.674 | higher on 1K-pool, not comparable |
+| Java | 26,909 | **0.850** | 81.6% | 88.9% | 0.719 | 0.769 | higher on 1K-pool, not comparable |
 | Go | 14,291 | **0.839** | 81.1% | 86.5% | 0.921 | 0.897 | below fine-tuned models |
-| Ruby | 2,279 | **0.738** | 66.2% | 83.2% | 0.678 | 0.703 | BEATS GraphCodeBERT +0.035 |
-| PHP | 28,391 | **0.850** | 81.7% | 88.7% | 0.630 | 0.649 | BEATS GraphCodeBERT +0.201 |
+| Ruby | 2,279 | **0.738** | 66.2% | 83.2% | 0.678 | 0.703 | higher on 1K-pool, not comparable |
+| PHP | 28,391 | **0.850** | 81.7% | 88.7% | 0.630 | 0.649 | higher on 1K-pool, not comparable |
 | C# | 5,261 | **0.950** | 91.7% | — | N/A | N/A | synthetic corpus; bge-base + siginj |
 
-Python, JavaScript, Java, Ruby, and PHP all beat Microsoft's GraphCodeBERT (fine-tuned
-on each language). Go is competitive — 0.839 vs GraphCodeBERT's 0.897 with no
+Python, JavaScript, Java, Ruby, and PHP all score higher than GraphCodeBERT's published
+figures, on an easier protocol, so treat that as encouraging rather than as a win. Go is competitive — 0.839 vs GraphCodeBERT's 0.897 with no
 language-specific fine-tuning.
 
 C# uses a synthetic corpus from open-source GitHub repos (Newtonsoft.Json, AutoMapper,

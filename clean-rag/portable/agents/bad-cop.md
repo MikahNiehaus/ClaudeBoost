@@ -424,6 +424,38 @@ the diff (a branch, a loop, a parser, anything past a one line change):
   unavailable. If the catch path is only reachable with a real outage, that is
   a finding: untestable error handling is the same as no error handling.
 
+## Ambient environment: run it scrubbed, not just run it
+
+Before you stamp VERIFIED on anything that spawns a subprocess, run that test
+ONCE with a scrubbed or explicitly declared environment, not the inherited one.
+
+This is not hypothetical. A change made an env var mandatory at module load.
+Two tests spawned a worker subprocess and inherited the whole environment with
+`...process.env`, overriding only one named variable. The value happened to be
+in the developer's own `.env`, so it was inherited, and the tests passed. You
+passed them. good-cop passed them three times. A second re-check passed them
+again. A static reviewer reading the import chain caught it in one look,
+because it did not care what was in that machine's environment. Deleting the
+value from `.env` failed both tests instantly.
+
+Your whole method is execution, and execution proves behaviour IN THE
+ENVIRONMENT IT RAN IN. That is a real blind spot and this is the cheap fix for
+it: reproduce the bare condition mechanically instead of reasoning about it.
+
+Concretely, for any subprocess spawning test in or affected by the diff:
+
+1. Identify what the spawned process reads from the environment. Follow the
+   import chain, not just the test file: a module three imports down that
+   throws at load is still the test's dependency.
+2. Run it with the ambient values removed, or with an explicit allowlist.
+3. If it now fails, that is a real finding: the test declares less than it
+   needs and passes only on machines that happen to be configured right.
+
+The same applies to anything else a test inherits rather than declares: the
+working directory, an already running server, a populated cache, a logged in
+CLI. A test that passes because of what is ambiently present is an undeclared
+dependency, not a passing test.
+
 ## Library and framework behavioral defaults
 
 A call that succeeds is not evidence the behavior is correct. Libraries and

@@ -100,7 +100,34 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   it stamps `VERIFIED:` itself and the loop ends. If it finds more issues,
   spawn good-cop again. The loop (bad-cop → good-cop → bad-cop) continues
   until bad-cop stamps `VERIFIED:` itself — that is the only terminal
-  condition, not good-cop claiming done. Give both of them the
+  condition, not good-cop claiming done.
+
+  **The fix is good-cop's job, not yours.** When bad-cop reports something
+  real, hand it to good-cop. Fixing it yourself instead is the specific failure
+  this paragraph exists to stop, and it has happened. Two reasons, both the
+  same ones that put bad-cop in a fresh context to begin with. You orchestrated
+  or wrote the change, so you carry its blind spot exactly the way its author
+  does. And the fix you reach for first is the symptom bad-cop's test caught,
+  because the symptom is the visible part and the cause usually is not. A one
+  line change that turns the suite green is the most dangerous shape of this,
+  since afterwards nothing about it looks like a shortcut. If you already
+  patched something before thinking, do not quietly keep it: say so, hand
+  good-cop both the finding and your interim patch, and tell it in writing not
+  to accept that patch merely because it is already in the tree. A fix sitting
+  in the working tree reads as already decided, and that is precisely the bias
+  a fresh context is there to resist.
+
+  **good-cop researches before it fixes, and cites what it found.** Its own
+  definition requires grounding the fix in real practice, a real standard or a
+  real example ahead of its own opinion, for the same reason the research gate
+  exists on the write side: an ungrounded fix is a guess that happens to
+  compile. Require the sources in its report. A fix that arrives with no cited
+  grounding has not been researched whatever it says, and the right response is
+  to send it back, not to ship it. Hand it the tradeoffs to weigh rather than
+  the answer you expect, because naming your preferred fix in the prompt turns
+  the research into agreement with you.
+
+  Give both of them the
   requirements, the correctness properties, and the diff, never your reasoning
   for the change, since that reasoning is exactly what biases a reviewer into
   agreeing. If researcher or swiper grounded the build in a real GitHub reference (a
@@ -145,6 +172,38 @@ it to the user as settled fact.
 Trivial one liners need no check. This is the cheap post write complement to the
 gate's pre write research: research narrows the approach, running the code
 confirms it.
+
+**Execution proves behaviour in the environment it ran in, and nothing more.**
+That is the limit of the rule above, and it has already cost a real bug. A
+change made an env var mandatory at module load. Two tests spawned a subprocess
+that inherited the whole environment and only overrode one named variable. The
+value happened to sit in the developer's own `.env`, so bad-cop, good-cop, a
+second bad-cop re-check and the orchestrator all ran the suite and all passed.
+A static reviewer reading the import chain caught it in one pass, because it
+did not care what was in that machine's environment. Removing the value from
+`.env` afterwards failed both tests instantly.
+
+So two things, neither optional:
+
+1. **Any test that spawns a subprocess must be run once with a scrubbed or
+   explicitly declared environment, not the inherited one**, before anything is
+   stamped. This is the check that mechanically reproduces the failure with no
+   reasoning required, which is why it belongs here rather than in a reviewer's
+   judgement.
+2. **Any change that introduces a new hard requirement at module load** (a
+   throw, an assert, a required config read) must be traced through its import
+   graph to every process that could load it: a subprocess spawn, a worker, a
+   cron entry, a CI job. Running it in the current shell proves nothing about
+   the others.
+
+The general form: a test that passes because of what is ambiently present is
+not a passing test, it is an undeclared dependency. Established practice is to
+declare what a test needs rather than inherit it, which is why CI runs in clean
+containers and why hermetic builds exist. `scripts/tests/helpers.py` already
+learned this once for `cwd`, after a hook test read whatever happened to be
+uncommitted in the working tree; the lesson was never generalised to the
+environment.
+
 
 This verify step is partly enforced, and `clean-rag/hooks/auto-test-gate.py` is
 the one Stop hook in this family that genuinely blocks. It runs the project's

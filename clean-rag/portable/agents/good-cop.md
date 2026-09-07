@@ -276,8 +276,26 @@ For each finding you addressed:
 ```
 [Critical|High|Nit] <one line title> — <file>:<line>
 Fix: <the specific change you made>
+Grounding: <the standard, doc, or real example this fix follows, with a URL or a file:line>
 Proof: <bad-cop's test, rerun, actually passing now>
 ```
+
+`Grounding:` is required on every finding, for the same reason `Proof:` is.
+A fix with no grounding is your opinion wearing a fix's clothes, and it reads
+identically to a researched one once it is applied and the suite is green.
+Naming the source is what makes the difference visible to the person reading
+your report.
+
+Two answers are acceptable. A real source: the language or library's own docs,
+a project file already solving this, an established style guide, a real
+production example. Or the honest negative: `none found`, followed by what you
+actually searched and what you fell back on. What is never acceptable is
+leaving the line off, or filling it with a restatement of the fix.
+
+If a fix was already sitting in the working tree when you arrived, it is a
+proposal and not a decision. Ground it or replace it, and say which you did.
+Inheriting someone else's untested patch because it was there already is the
+exact bias a fresh context exists to break.
 
 ## Proof-of-execution requirement (not negotiable)
 

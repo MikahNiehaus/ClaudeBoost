@@ -477,6 +477,7 @@ def _git_project_context(port: str, git_root: str | None) -> str:
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **_no_window(),
         )
         logger.info(f"Queued background indexing for {git_root}")
     except Exception as e:
@@ -790,6 +791,99 @@ def _repeated_failure_suppressed(home, port: str) -> str | None:
     return None
 
 
+def _no_window() -> dict:
+    """Popen kwargs that keep a background helper from flashing a console.
+
+    This hook runs with no console of its own, so on Windows every Popen of a
+    console-subsystem binary (python.exe) allocates a new one. Redirecting
+    stdout and stderr to DEVNULL does not prevent that; only CREATE_NO_WINDOW
+    does. Without it, routine background work (queued indexing, a self heal
+    restart) blinks a console window on the user's desktop every time it fires.
+
+    Empty off Windows, where the flag does not exist.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
+def _server_process_alive(home) -> bool:
+    """Is the recorded server process still running?
+
+    This separates the two failures _health_check collapses into one False.
+    The server being slow to answer /status is not the server being down, and
+    only the second one is worth a restart.
+
+    Why the process and not the socket. The obvious probe is a TCP connect,
+    reading ConnectionRefusedError as "nothing is listening" and a timeout as
+    "listening but slow". Measured on this machine, that does not
+    discriminate: connecting to a port nothing is bound to raises TimeoutError,
+    not ConnectionRefusedError, because a local firewall drops the packet
+    instead of answering RST. Both cases look identical at the socket, so the
+    socket cannot be the signal. The PID can, and no firewall sits in front of
+    it.
+
+    What this fixes, from state/rag-enforce.log on 2026-08-26: /status timed
+    out at 1s against a live server, self heal killed it, the replacement spent
+    14s loading the embedding model, and the next prompt's check timed out
+    against that. Each restart opened a console window, because
+    cli/server_ctl.py starts the server headed, so the visible symptom was
+    consoles opening and closing on every prompt.
+
+    Ambiguity reads as alive, which suppresses the restart. That is the correct
+    direction to fail: the user can always start the server by hand, but a
+    restart storm against a healthy server costs them the machine.
+    """
+    server_json = home / "state" / "server.json"
+    try:
+        pid = json.loads(server_json.read_text(encoding="utf-8")).get("pid")
+    except FileNotFoundError:
+        # No PID file at all. Nothing was started, or a start never got far
+        # enough to record itself, so there is no live process to protect.
+        return False
+    except Exception as e:
+        logger.error(
+            "Cannot read %s, treating the server as alive so self heal does "
+            "not restart something that may be running: %s",
+            server_json,
+            e,
+        )
+        return True
+
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+
+    return _pid_alive(pid)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Is *pid* running? Ambiguity reads as alive.
+
+    Deliberately the same conclusion cli/server_ctl.py's _is_process_alive()
+    reaches, including its reason: PermissionError proves the process exists,
+    since only a live process can deny access. os.kill(pid, 0) sends no signal
+    and does not terminate anything, on Windows included.
+    """
+    try:
+        import psutil  # noqa: PLC0415
+    except ImportError:
+        psutil = None
+
+    if psutil is not None:
+        try:
+            return psutil.pid_exists(pid)
+        except Exception:
+            return True
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+
+
 def _trigger_self_heal(port: str) -> None:
     """Attempt to restart RAG server if down, unless suppressed."""
     home = _clean_rag_home()
@@ -797,6 +891,18 @@ def _trigger_self_heal(port: str) -> None:
     reason = _self_heal_suppressed(home)
     if reason is not None:
         logger.info("Self-heal skipped: %s", reason)
+        return
+
+    # Before anything else. A slow server is not a dead one, and restarting it
+    # is strictly destructive: it throws away a loaded model and guarantees the
+    # next check is slow too. See _server_process_alive.
+    if _server_process_alive(home):
+        logger.info(
+            "Self-heal skipped: the recorded server process is still running, "
+            "so the server is alive and merely slow to answer /status on port "
+            "%s. Not restarting a live server.",
+            port,
+        )
         return
 
     # Checked after the cooldown, not before, so the counter advances once per
@@ -826,7 +932,8 @@ def _trigger_self_heal(port: str) -> None:
         subprocess.Popen(
             [sys.executable, str(home / "cli" / "server_ctl.py"), "restart"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            **_no_window(),
         )
         logger.info("Self-heal restart triggered")
     except Exception as e:
