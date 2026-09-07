@@ -96,7 +96,7 @@ def cmd_start(args):
     server_json = state / "server.json"
 
     # An explicit start is the user changing their mind, so it retires the
-    # stop marker and lets self healing resume.
+    # stop marker.
     _clear_stopped_by_user(state)
 
     port = _port()
@@ -322,9 +322,11 @@ def cmd_stop(args) -> int:
 def cmd_restart(args) -> int:
     """Stop then start.
 
-    This existed as a caller before it existed as a command: rag-enforce.py:157
-    shells out to "server_ctl.py restart" for self healing, and argparse just
-    printed help and exited 0. Self heal had never once worked.
+    This existed as a caller before it existed as a command: rag-enforce.py
+    used to shell out to "server_ctl.py restart" to restart the server behind
+    the user's back, and argparse just printed help and exited 0, so it had
+    never once worked. That automatic restart is gone; restart is now only ever
+    run by hand.
 
     cmd_stop's exit code is deliberately not propagated: a restart clears the
     stop marker two lines later anyway, so failing to write it changes nothing
@@ -415,7 +417,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("start", help="Start the server in its own console window")
     sub.add_parser("stop", help="Stop the server")
-    sub.add_parser("restart", help="Stop then start. Used by hook self healing")
+    sub.add_parser("restart", help="Stop then start")
     sub.add_parser("status", help="Check server status")
 
     args = parser.parse_args()

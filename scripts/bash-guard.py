@@ -15,10 +15,15 @@ Blocked patterns:
   7. $CLAUDEBOOST_HOME in Bash   — triggers simple_expansion prompt; use absolute path
   8. ssh/scp to external hosts   — data exfiltration prevention
   9. nc/netcat to external hosts — reverse shell prevention
+ 10. routed git/gh writes        — xargs/env prefix/alias bypass of the ask rule
 
-Each pattern here trips a Claude Code BUILT-IN scanner that prompts regardless of
-the allow list. We do NOT block `|| echo` style fallbacks: ClaudeBoost's setup
-puts "Bash" as a catch-all allow entry, so sub-commands like echo never prompt.
+Most patterns here trip a Claude Code BUILT-IN scanner that prompts regardless of
+the allow list. check_routed_git_write is the exception: it closes a gap the
+permission engine structurally cannot, since permission rules match the raw
+command string by prefix and a routed write never matches that prefix.
+
+The bare "Bash" catch all allow entry was removed from settings.json, so an
+unlisted sub-command is no longer silently allowed.
 
 Off switch: set CLAUDEBOOST_BASH_GUARD=off (in ~/.claude/settings.json env) to
 disable the guard entirely.
@@ -106,14 +111,27 @@ def check_cd_compound(command: str) -> str | None:
 
 
 def check_coauthor(command: str) -> str | None:
-    """Detect Co-Authored-By Claude attribution trailer in git commit messages."""
-    # Match the actual trailer format: Co-Authored-By: Name <email>
-    # Avoids false positives when the string appears in a commit message body/description.
-    if re.search(r"(?i)co-authored-by:\s*\S+\s*<[^>]+>", command):
-        return (
-            "BLOCKED: Do not add Co-Authored-By lines to commits. "
-            "Remove the Co-Authored-By trailer from the commit message and retry."
-        )
+    """Detect Claude attribution trailers in git commit messages.
+
+    Covers every format Claude Code's own default instructions or a model might
+    reach for: the classic Co-Authored-By trailer, the Claude-Session URL trailer
+    this harness's own commit template suggests, and generic "generated with/by
+    Claude" phrasing. Each pattern is specific enough to avoid false positives
+    against an unrelated commit message body.
+    """
+    patterns = (
+        r"(?i)co-authored-by:\s*\S+\s*<[^>]+>",
+        r"(?i)co-authored-by:\s*claude\b",
+        r"(?i)claude-session:\s*\S+",
+        r"(?i)generated (with|using|by)\s+claude\b",
+    )
+    for pattern in patterns:
+        if re.search(pattern, command):
+            return (
+                "BLOCKED: Do not add Claude attribution to commits (Co-Authored-By, "
+                "Claude-Session, 'Generated with Claude', or similar). Remove the "
+                "attribution line from the commit message and retry."
+            )
     return None
 
 
@@ -563,6 +581,360 @@ def check_backslash_spaces(command: str) -> str | None:
     return None
 
 
+# A git write we care about, in any of the forms that still reach a remote.
+# Written to survive _strip_quoted emptying a quoted path, so -C "..." leaves
+# behind a bare -C with nothing after it.
+_GIT_WRITE_RE = re.compile(
+    r"\bgit(?:\.exe)?\b"
+    r"(?:\s+(?:-C|--git-dir|--work-tree|-c)(?:=|\s*)\S*)*"
+    r"\s+(push|send-pack|http-push|request-pull)\b",
+    re.IGNORECASE,
+)
+
+# gh subcommands that change something on the server. A denylist of verbs, not
+# an allowlist of nouns, so read only calls (view, list, diff, checks, status,
+# clone, download) keep working untouched.
+_GH_WRITE_RE = re.compile(
+    r"\bgh(?:\.exe)?\s+(pr|issue|repo|release|workflow|secret|variable|gist|auth|label|ruleset)"
+    r"\s+(create|edit|merge|close|reopen|review|comment|delete|ready|lock|unlock|"
+    r"pin|unpin|transfer|fork|archive|unarchive|rename|sync|upload|run|enable|"
+    r"disable|set|remove|add|login|logout|refresh|token|setup-git)\b",
+    re.IGNORECASE,
+)
+
+# gh api is denied outright in settings.json, so any route to it is a bypass
+# attempt whatever the method.
+_GH_API_RE = re.compile(r"\bgh(?:\.exe)?\s+api\b", re.IGNORECASE)
+
+# The head of a command whose next argument is itself executed. These matter
+# because _strip_quoted empties quoted text before the scan, which is right for
+# a commit message and wrong here: `bash -c "git push"` really does push, and
+# stripping the quotes deletes the evidence.
+#
+# Only the argument that follows one of these gets scanned raw, never the whole
+# command. Scanning the whole command was the first attempt and it was wrong:
+# an unrelated `bash -c "ls"` earlier in the line made an honest
+# `git commit -m "remember to git push"` look like a routed push and blocked it.
+#
+# The token run between the shell name and its -c absorbs whole flags AND their
+# values, so `bash -o pipefail -c` is caught and not just `bash --login -c`.
+# Absorbing only dash prefixed tokens was not enough: -o takes a bare value, and
+# that value stopped the run before it reached the -c. The negative lookahead
+# keeps the run from swallowing the -c it is looking for, and the bound keeps
+# the alternation from backtracking badly on a long command.
+# Bounded rather than open ended so the alternation cannot backtrack badly, but
+# generous enough that stacking flags is not an escape. Timed linear to 100k
+# characters of input at this bound.
+_EXEC_FLAG_RUN = r"(?:\s+(?!-[a-zA-Z]*c\b)[^\s;&|]+){0,24}"
+
+# A shell. Its argument is shell source, so it gets read the way the top level
+# command is: quote stripped, and a write only counts in command position.
+_SHELL_EXEC_HEAD_RE = re.compile(
+    r"\beval\b"
+    r"|\b(?:ba|z|k|da)?sh" + _EXEC_FLAG_RUN + r"\s+-[a-zA-Z]*c\b"
+    r"|\b(?:ba|z|k|da)?sh" + _EXEC_FLAG_RUN + r"\s*<<<"
+    r"|\b(?:pwsh|powershell)(?:\.exe)?" + _EXEC_FLAG_RUN + r"\s+-(?:c|Command)\b"
+    r"|\bcmd(?:\.exe)?\s+/[ckCK]\b",
+    re.IGNORECASE,
+)
+
+# An interpreter. Its argument is source in another language, where a quoted
+# string is usually the command being run rather than data:
+# `python -c "os.system('git push')"` really pushes. Shell quoting rules do not
+# apply, so the payload is scanned whole rather than stripped and position
+# checked. The cost is that a program legitimately handling the literal text
+# "git push" gets blocked, which is a fair trade for a one line interpreter
+# invocation.
+_INTERPRETER_EXEC_HEAD_RE = re.compile(
+    r"\b(?:python[\d.]*|perl|ruby|node|php|Rscript)\s+-(?:c|e)\b",
+    re.IGNORECASE,
+)
+
+_EXECUTOR_HEAD_RE = re.compile(
+    _SHELL_EXEC_HEAD_RE.pattern + "|" + _INTERPRETER_EXEC_HEAD_RE.pattern,
+    re.IGNORECASE,
+)
+
+# A shell separator ends an unquoted executor argument.
+_ARG_TERMINATOR_RE = re.compile(r"[;&|\n]")
+
+# What may sit between a command separator and the command actually being run.
+# An env assignment, or a runner that hands off to whatever follows it. This is
+# what tells `echo git push` (the words are an argument to echo, nothing pushes)
+# apart from `xargs git push` (xargs runs the push).
+_ROUTER_PREFIX = (
+    r"(?:[A-Za-z_]\w*=\S*"
+    r"|xargs(?:\s+-\S+)*"
+    r"|timeout\s+\S+"
+    r"|env|nohup|sudo|nice|time|command|builtin|exec|then|do|else"
+    r")"
+)
+# `)` is in the separator set for a case branch: `case $1 in prod) git push ;;`
+# runs the push, so the text before it has to read as a command boundary.
+_CMD_START_RE = re.compile(
+    r"(?:^|[;&|\n()`{]|\$\()\s*(?:" + _ROUTER_PREFIX + r"\s+)*$"
+)
+
+# A path leading up to the binary. `\bgit\b` matches the tail of `/usr/bin/git`,
+# so the match lands mid token and the text before it is a directory rather than
+# a command boundary. Without stripping this, `/usr/bin/git push` and `./git push`
+# read as an argument mention and go through unchecked, even though nothing in
+# settings.json prompts on either.
+# The separators are in the class too, so the whole path is consumed in one go.
+# Without them the walk back stops at the last component, leaving `/usr/` in
+# front of the match and still reading as no command boundary.
+_PATH_PREFIX_RE = re.compile(r"[\w.@+~:/\\-]*[/\\]$")
+
+
+def _in_command_position(text: str, index: int) -> bool:
+    """Is the token at `index` the command being run, or just an argument?
+
+    `git push` at the head of a command really pushes. The same two words as an
+    argument to something else do not: `echo git push` prints them, and
+    `grep 'git push' file` searches for them. Without this the check blocks
+    ordinary read only work, which is worse than the bypass it was written for.
+    """
+    head = text[:index]
+    # Step back over a path so the binary is judged where its path begins.
+    # `echo /usr/bin/git push` still reads as an argument, because what remains
+    # after stripping the path is `echo `, not a command boundary.
+    path = _PATH_PREFIX_RE.search(head)
+    if path:
+        head = head[:path.start()]
+    return bool(_CMD_START_RE.search(head))
+
+
+# A heredoc, with the command word that receives it. `python - <<'EOF' ... EOF`
+# feeds the body to python's stdin as data; it is not shell to execute. A body
+# that happens to contain the text of a git command must not be read as one,
+# the same way a commit message is not. The exception is a body fed to a shell
+# (`bash <<EOF`), which really is executed and stays scannable.
+#
+# Anchored on the << itself, with nothing optional or greedy in front of it.
+# An earlier version opened with `(?P<recv>\S+)?[^\n<]*` to capture the
+# receiving command, and those two groups overlap: on a command containing no
+# << at all, the engine tried every split between them at every offset. That
+# measured 6.8 seconds on a 2000 character echo and grew roughly cubically, on
+# a hook that runs before every single Bash call. The receiving command is
+# recovered by looking backward from the match instead, which cannot backtrack.
+_HEREDOC_RE = re.compile(
+    r"<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)"
+    r"\r?\n(?P<body>.*?)(?:^[ \t]*(?P=tag)\b|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+_SHELL_WORD_RE = re.compile(r"(?:^|[/\\])(?:ba|z|k|da)?sh(?:\.exe)?$", re.IGNORECASE)
+
+
+def _heredoc_data_spans(command: str) -> list[tuple[int, int]]:
+    """Spans of heredoc bodies that are data rather than shell source."""
+    spans = []
+    if "<<" not in command:
+        # Cheap reject so the common case never enters the regex at all.
+        return spans
+    for m in _HEREDOC_RE.finditer(command):
+        # The receiving command is whatever sits on the line before the <<.
+        line_start = command.rfind("\n", 0, m.start()) + 1
+        head = command[line_start:m.start()]
+        # If a shell is the thing reading it, the body really is executed.
+        if any(_SHELL_WORD_RE.search(word) for word in head.split()):
+            continue
+        spans.append((m.start("body"), m.end("body")))
+    return spans
+
+
+def _quoted_spans(command: str) -> list[tuple[int, int]]:
+    """Half open (start, end) ranges of the quoted literals in the command.
+
+    Used to ignore an executor name that is only being talked about rather than
+    run: in `echo "bash -c git push"` the whole thing is one string argument to
+    echo, and nothing executes. An unterminated quote yields no span, so the
+    tail stays scannable and the check stays conservative.
+    """
+    spans = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c in ("\"", "'"):
+            j = i + 1
+            while j < n and command[j] != c:
+                j += 2 if (c == "\"" and command[j] == "\\") else 1
+            if j >= n:
+                break
+            spans.append((i, j + 1))
+            i = j + 1
+        else:
+            i += 1
+    return spans
+
+
+def _executor_payloads(command: str, depth: int = 0) -> list[str]:
+    """The argument each executor in the command would actually run.
+
+    Returns only those arguments, quotes intact, never the surrounding command.
+    That containment is the whole point: it is what tells
+    `bash -c "git push"` (a real routed push) apart from
+    `bash -c "ls" ; git commit -m "git push"` (a normal commit that happens to
+    mention one).
+    """
+    payloads = []
+    if depth > 3:
+        # A wrapper nested this deep is pathological. Stop rather than recurse
+        # without bound on a crafted input.
+        return payloads
+    spans = _quoted_spans(command)
+    for head in _EXECUTOR_HEAD_RE.finditer(command):
+        # An executor named inside a string is being quoted, not run.
+        if any(start <= head.start() < end for start, end in spans):
+            continue
+        rest = command[head.end():].lstrip()
+        if not rest:
+            continue
+        payload = _read_executed_argument(rest)
+        if not payload:
+            continue
+        kind = "interpreter" if _INTERPRETER_EXEC_HEAD_RE.match(
+            head.group(0)) else "shell"
+        payloads.append((payload, kind))
+        # A wrapper inside a wrapper still runs what it is given, so
+        # `bash -c "eval 'git push'"` has to reach the inner push.
+        payloads.extend(_executor_payloads(payload, depth + 1))
+    return payloads
+
+
+def _read_executed_argument(rest: str) -> str:
+    """The single argument an executor runs, read off the front of `rest`.
+
+    Adjacent quoted segments are concatenated because the shell concatenates
+    them: `bash -c "git ""push"` is one word, `git push`, and really does push.
+    Reading only as far as the first closing quote saw `git ` and let it
+    through.
+    """
+    if rest[0] not in ("\"", "'"):
+        # Starts bare, so it is an eval style argument that takes everything up
+        # to the next shell separator rather than a single word.
+        stop = _ARG_TERMINATOR_RE.search(rest)
+        return rest[:stop.start()] if stop else rest
+
+    # One shell word, which the shell builds from any run of quoted segments and
+    # bare characters with no whitespace between them. Continuing only while the
+    # next character was itself a quote was not enough: `bash -c "git p"u"sh x"`
+    # really runs `git push x`, and stopping at the bare `u` returned `git p`
+    # and lost the verb entirely.
+    parts = []
+    i, n = 0, len(rest)
+    while i < n:
+        c = rest[i]
+        if c in ("\"", "'"):
+            end = rest.find(c, i + 1)
+            if end == -1:
+                # Unterminated. Take the remainder rather than dropping it, so
+                # an unbalanced quote cannot hide the tail of a command.
+                parts.append(rest[i + 1:])
+                break
+            parts.append(rest[i + 1:end])
+            i = end + 1
+        elif c.isspace() or c in ";&|":
+            # Unquoted whitespace or a separator ends the word.
+            break
+        else:
+            parts.append(c)
+            i += 1
+    return "".join(parts)
+
+# Global git flags that change which repository the command acts on. -C is
+# deliberately absent: settings.json covers it with Bash(git -C ** push **), so
+# a -C push does get a prompt. These three have no rule of any kind, so a write
+# behind one reaches the remote with nothing asking first, even sitting at the
+# start of the command.
+# Case matters here and IGNORECASE would be a bug: git's -C is the directory
+# flag, which settings.json covers, while -c is the config flag, which it does
+# not. Only the long flags are matched case insensitively.
+# `.exe` is in here for the same reason as the flags: settings.json asks on the
+# literal prefix "git push", which `git.exe push` does not start with, so a
+# position 0 match spelled that way still gets no prompt from anyone.
+_UNCOVERED_GIT_FLAG_RE = re.compile(
+    r"(?i:--git-dir|--work-tree|\.exe)|(?<![-\w])-c(?:=|\s)")
+
+
+def check_routed_git_write(command: str) -> str | None:
+    """Block a git or gh write that no permission rule will prompt on.
+
+    Claude Code matches permission rules against the raw command string by
+    prefix, so `Bash(git push **)` catches `git push origin main` but not
+    `xargs git push`, `GIT_SSH_COMMAND=x git push`, `git add . && git push`,
+    or an aliased push. Each of those reaches the same remote while the ask
+    rule never fires. No glob pattern can close that, because the bypass is in
+    the shell semantics the matcher does not parse.
+
+    So: find the write, then allow it through only in the shapes settings.json
+    actually covers, which is the write at the very start of the command, with
+    no global git flag in front of it other than -C. Everything else is routed
+    and gets blocked here, because nothing downstream is going to ask.
+    """
+    # A heredoc body bound for a non shell is data, so it is blanked before any
+    # scanning. Writing a script that mentions `git push` must not read as
+    # running one. Length is preserved so every offset below still lines up.
+    scannable = command
+    for start, end in _heredoc_data_spans(command):
+        scannable = scannable[:start] + (" " * (end - start)) + scannable[end:]
+
+    cleaned = _strip_quoted(scannable)
+
+    _WRITE_PATTERNS = (
+        (_GIT_WRITE_RE, "git write"),
+        (_GH_API_RE, "gh api call"),
+        (_GH_WRITE_RE, "gh write"),
+    )
+
+    # Whatever an executor runs is routed by definition, so those arguments are
+    # checked first. Each is quote stripped the same way the top level command
+    # is, because a payload has its own inner quoting: in
+    # `bash -c "grep 'git push' file"` the push is grep's search string, not a
+    # command. Skipping that strip made the check block ordinary read only work.
+    for payload, kind in _executor_payloads(scannable):
+        # Shell source follows shell quoting, so it is read exactly like the top
+        # level command. Interpreter source does not, and there a quoted string
+        # is normally the thing being run, so it is scanned whole.
+        scanned = payload if kind == "interpreter" else _strip_quoted(payload)
+        for pattern, label in _WRITE_PATTERNS:
+            for match in pattern.finditer(scanned):
+                if kind != "interpreter" and not _in_command_position(
+                        scanned, match.start()):
+                    continue
+                return (
+                    f"BLOCKED: this command reaches a {label} "
+                    f"({match.group(0).strip()!r}) inside a shell that runs it for you "
+                    f"({payload.strip()[:60]!r}) rather than running it directly. "
+                    "Permission rules match the raw command by prefix, so a write "
+                    "wrapped in eval or a -c argument skips the prompt that a direct "
+                    "one gets. Run the git or gh command as its own Bash call so the "
+                    "ask rule applies."
+                )
+
+    for pattern, label in _WRITE_PATTERNS:
+        for match in pattern.finditer(cleaned):
+            # Not the command being run, just words handed to something else.
+            if not _in_command_position(cleaned, match.start()):
+                continue
+
+            matched = match.group(0)
+            # Position 0 plus no uncovered global flag is the one shape a
+            # permission rule can see, so it is left for the prompt to handle.
+            if match.start() == 0 and not _UNCOVERED_GIT_FLAG_RE.search(matched):
+                continue
+
+            prefix = cleaned[:match.start()].strip()
+            via = f"through {prefix!r}" if prefix else "behind a global git flag"
+            return (
+                f"BLOCKED: this command reaches a {label} "
+                f"({matched.strip()!r}) {via} rather than running it "
+                "directly. Permission rules match the raw command by prefix, so a routed "
+                "write skips the prompt that a direct one gets. Run the git or gh command "
+                "as its own Bash call so the ask rule applies."
+            )
+    return None
+
+
 def main() -> int:
     raw = ""
     try:
@@ -585,7 +957,7 @@ def main() -> int:
         return 0
 
     # Run checks in order
-    for check in [check_db_mutation, check_production_environment, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces]:
+    for check in [check_db_mutation, check_production_environment, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces, check_routed_git_write]:
         msg = check(command)
         if msg:
             print(msg, file=sys.stderr)

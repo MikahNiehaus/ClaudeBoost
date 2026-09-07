@@ -1,6 +1,6 @@
 ---
 argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
-description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, and reports what was tested AND what was not
+description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, checks the proof with a subagent before calling it done, and reports what was tested AND what was not. Ends by building a proof deck and a narrated mp4 walkthrough of the evidence.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
 ---
 
@@ -1801,14 +1801,60 @@ the judge can count them itself — that is the point of it counting them itself
 
 ---
 
-### 5d — Adversarial evidence judgment (the loop that actually closes the session)
+### 5d — Evidence check (the step that actually closes the session)
 
-**This is not optional and it does not run once.** A QA session cannot verify
-itself. `/audit` checks that artifacts exist; this step checks whether they prove
-the requirements, and it is a separate context that never sees your reasoning
-about why you think you did enough.
+**This is not optional and it does not run zero times.** A QA session cannot
+verify itself. `/audit` checks that artifacts exist; this step checks whether
+they prove the requirements, and it runs in a separate context that never sees
+your reasoning about why you think you did enough.
 
-#### 5d-i — Assemble what the judge gets
+It runs one of two ways, decided once before either one starts: a single quick
+check for an ordinary session, or the full adversarial loop for a high stakes
+one. Which path ran, and why, goes in the 5e report either way.
+
+#### 5d-0 — Decide: lite check or full loop
+
+Detection is deterministic — the same keyword and path labeler the verifier
+gate already uses on every code change, `high_stakes.scan_diff` in
+`clean-rag/hooks/high_stakes.py`. No LLM judgment call here; that call happens
+inside whichever path runs next, not in choosing between them.
+
+```bash
+python -c "
+import sys, subprocess
+sys.path.insert(0, r'${CLAUDEBOOST_HOME}/clean-rag/hooks')
+import high_stakes
+
+diff = subprocess.run(['git', 'diff', 'HEAD~1'], capture_output=True, text=True).stdout
+added = [l[1:] for l in diff.splitlines() if l.startswith('+') and not l.startswith('+++')]
+paths = subprocess.run(['git', 'diff', 'HEAD~1', '--name-only'], capture_output=True, text=True).stdout.splitlines()
+
+hits = high_stakes.scan_diff(added, paths)
+print(hits)
+"
+```
+
+If `paths` comes back empty (no relevant commit to diff, a long deployed app,
+the first commit in the repo), read `$WORKSPACE_ABS/plan.md`, collect every
+`Code path:` value already recorded per TC, and run the same `scan_diff`
+again with `added = []` and that collected list as `paths` — the path hints
+alone (`auth`, `payment`, `migration`, etc.) still catch a high stakes surface
+even with no diff to scan.
+
+- **Any category comes back non-empty** → `HIGH_STAKES = true`. Run 5d-i
+  through 5d-iv below, unchanged.
+- **Empty dict** → `HIGH_STAKES = false`. Skip 5d-i–iv entirely and run
+  **5d-lite** instead, defined right after 5d-iv. Do not run both.
+
+Print which path was chosen and why:
+```
+Evidence check: [LITE | FULL ADVERSARIAL LOOP]
+Reason: [surfaces detected: auth, money / none detected]
+```
+
+---
+
+#### 5d-i — Assemble what the judge gets (high stakes path only, auth, money, SQL, subprocess, or concurrency detected in 5d-0)
 
 The judge gets three things and nothing else. Do **not** include your own
 assessment, your confidence, or an explanation of why a gap was acceptable.
@@ -1993,6 +2039,60 @@ raised costs a whole extra round.
 
 ---
 
+#### 5d-lite — the quick check (default path, ran instead of 5d-i through 5d-iv when 5d-0 found no high stakes surface)
+
+One pass. Ask the question once and stop. This replaces what used to run
+here for every session regardless of stakes: a real incident recorded in
+project memory found that loop sending a QA session deep into evidence
+hygiene busywork, on a ticket that was already tested enough, because the
+loop had no built in sense of proportion and kept finding smaller and smaller
+process gaps. This path builds proportion in by construction, not by asking
+the agent to restrain itself: it runs once and has no mechanism to restart
+itself.
+
+Spawn `quick-cop`, in the foreground, not backgrounded. Phase 5e needs its
+answer before the session can end:
+
+```
+Agent(subagent_type="quick-cop", run_in_background=false, prompt="""
+A /qa session claims these test cases are proven. Check only for real proof
+gaps: something the requirements ask for that no artifact here actually
+shows. Do not flag style, thoroughness, or anything a reviewer would call
+nice to have, only something that would change whether this counts as
+proven. If there is nothing like that, say so plainly and stop. Do not go
+looking for a smaller thing to raise once the real gaps are covered.
+
+=== THE FULL REQUIREMENTS, VERBATIM ===
+[entire content of requirements.md]
+
+=== PROOF ARTIFACTS (verified to exist on disk) ===
+[the grouped path list, built the same way as 5d-i]
+
+=== TOOL INVENTORY ===
+[the available / not available lists, built the same way as 5d-i]
+
+List what's missing, or say nothing missing. Nothing else.
+""")
+```
+
+Act on the answer:
+
+- **Nothing missing.** Proceed to 5e.
+- **Something missing.** Gather that proof now, the same way 5d-iv gathers
+  proof for a PASS without evidence TC. Update plan.md and report.md's
+  Evidence Index. Then proceed to 5e.
+
+**Do not spawn quick-cop again to check the fix.** One pass finds the gap, one
+pass closes it, the session ends there. Re-checking the fix is the exact
+shape that rabbit-holed before. If the new artifact does not visibly close
+the gap, say so plainly in coverage-gaps.md instead of looping.
+
+If quick-cop's answer reads as a style note or a completeness wish rather
+than something traceable to a specific clause in requirements.md, it is not a
+gap. Do not act on it and do not list it in the report as an open item.
+
+---
+
 ### 5e — Final report to user
 
 Print the complete final output to the user:
@@ -2024,17 +2124,28 @@ Date      : [date]
   Confidence : [HIGH / MEDIUM / LOW]
   Gaps found : [N]  (resolved: [N], unresolvable: [N])
 
-── Adversarial Evidence Judgment (5d) ───────────────────────
+── Evidence Check (5d) ───────────────────────────────────────
+  Path             : [LITE — quick-cop, one pass / FULL — bad-cop adversarial loop]
+  Reason           : [surfaces 5d-0 detected, or "none, ordinary session"]
+
+  If LITE:
+  Result           : [nothing missing / N gap(s) found and closed]
+  Clauses proven   : [N] / [total clauses in requirements.md]
+
+  If FULL:
   Rounds run       : [JUDGE_ROUND]
-  Final verdict    : [FULLY VERIFIED / UNRESOLVED — awaiting your decision]
+  Final verdict    : [FULLY VERIFIED / UNRESOLVED, awaiting your decision]
   Clauses proven   : [N] / [total clauses in requirements.md]
   Clauses unproven : [N]  (each listed under Not Tested below)
   Unverifiable     : [N]  (recorded as post-deploy validation items)
   Gaps per round   : [round 1: N, round 2: N, ...]  (should trend to 0)
 
-If the final verdict is not `FULLY VERIFIED`, say so first and plainly, before
-anything else in this output. A session that ended on an unresolved gap is not a
-passed session, and the round count is not a substitute for a verdict.
+On the FULL path, if the final verdict is not `FULLY VERIFIED`, say so first
+and plainly, before anything else in this output. A session that ended on an
+unresolved gap is not a passed session, and the round count is not a
+substitute for a verdict. On the LITE path, a gap that quick-cop found and
+you could not close is the same kind of unresolved state and gets the same
+plain treatment up front.
 
 ── Failures ─────────────────────────────────────────────────
 [List each FAIL with: TC-ID — what was expected — what was observed]
@@ -2499,13 +2610,13 @@ Charter: Explore [target] With [tools] To discover [problem classes]
 
 **G5b — Proceed to Phase 5.**
 
-Do NOT print the final output yet. General mode runs Phases 5, 6, and 7 exactly like browser mode. The adversarial evidence judgment loop is not browser specific — a code QA session asserts things about behavior just as a browser session does, and it needs the same independent check that the proof supports them.
+Do NOT print the final output yet. General mode runs Phases 5, 6, and 7 exactly like browser mode. The evidence check in 5d is not browser specific, a code QA session asserts things about behavior just as a browser session does, and it needs the same independent check that the proof supports them, lite or full depending on what 5d-0 finds.
 
 Jump to **Phase 5** now. Use `MODE = general` context:
 - Phase 5a: Check debug proof (no screenshots expected — `MODE = general`)
 - Phase 5b: Retry any BLOCKED items
 - Phase 5c: Run the `/audit` checklist on report.md + debug-proof/session-summary.json
-- Phase 5d: **The adversarial evidence judgment loop.** Same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Loop until a fresh judge stamps `FULLY VERIFIED`
+- Phase 5d: **The evidence check.** Run 5d-0 first to pick the path, same as browser mode. Either path gets the same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Lite path stops after one quick-cop pass; full path loops until a fresh bad-cop judge stamps `FULLY VERIFIED`
 - Phase 5e: Print the final output to the user (same format as browser mode, screenshot line shows "N/A — general mode")
 
 Then Phase 6 (log cleanup) and Phase 7 (proof deck). The deck's test case slides carry the debugger's real variable values and test output in place of screenshots — the code proof is the evidence in general mode, so it is what the slides show. Skip the red box guidance in 7d entirely: with no screenshots there is nothing to annotate.
@@ -2574,10 +2685,11 @@ four markdown files. The report says "TC-004 passed"; the deck shows the
 screenshot with the red box on the element, the real variable value from the
 debugger next to it, and the requirement clause it satisfies.
 
-**Entry gate:** Phase 5d must have completed. If the final judge verdict was
-`TEST AGAIN` and the loop exited on an unresolved gap, still build the deck —
-and mark those gaps on their own slides, clearly, as unproven. A deck that hides
-an unresolved gap is worse than no deck.
+**Entry gate:** Phase 5d must have completed, either path. If the full path ran
+and the final judge verdict was `TEST AGAIN` with the loop exited on an
+unresolved gap, or the lite path found a gap that could not be closed, still
+build the deck, and mark those gaps on their own slides, clearly, as unproven.
+A deck that hides an unresolved gap is worse than no deck.
 
 ### 7a — Call the `powerpoint` skill, do not rebuild it
 
@@ -2608,8 +2720,10 @@ enumerated clause table gives you the requirement each TC maps to.
 Slide order:
 
 1. **Title.** Target, task id, date, and the headline numbers: N passed, N
-   failed, N blocked, N unverifiable. Plus the Phase 5d verdict and round count.
-   If the verdict was not `FULLY VERIFIED`, say that on the title slide.
+   failed, N blocked, N unverifiable. Plus the Phase 5d path (lite or full) and
+   its result: the lite path's "nothing missing" or the closed gap count, or
+   the full path's verdict and round count. If either path ended on an
+   unresolved gap, say that on the title slide.
 2. **Requirements coverage.** The clause table from `requirements.md`, each row
    marked proven or unproven, with the TC that proves it. This is the slide
    someone reads to know whether what they asked for actually got verified.
@@ -2732,19 +2846,114 @@ Proof deck built and opened:
   Deck               → $WORKSPACE_ABS/qa-proof-[TASK_ID].pptx
 ```
 
+### 7g — Narrate the deck to an mp4
+
+This runs every session by default, right after the deck is opened. It is not
+the powerpoint skill's own "only when the user asks" gate — a `/qa` session
+exists to produce proof, and the video is the form of that proof someone can
+actually watch end to end without opening four markdown files.
+
+**Check the environment first, and degrade honestly.**
+
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+```
+
+`edge-tts`, `ffmpeg`, and LibreOffice each gate this step. If any is missing:
+skip 7g, tell the user plainly which dependency is missing and the install
+command `doctor` printed, and hand over the pptx alone. Do not fail the whole
+session over a missing narration dependency, and do not silently skip it
+either.
+
+**Write the narration from the same data the slide carries, not a
+re-summary.** Each TC slide already has its speaker notes from 7c: the
+requirement clause, expected versus observed, and what the screenshot and
+debug proof show. Expand that into prose meant to be heard, the way the
+`powerpoint` skill's narration step describes, since a viewer cannot see the
+slide's captions and speaker notes at the same time a presenter would say
+them. One entry per slide, in `plan.md` order, covering the same slide order
+as 7b.
+
+**Keep it proof, not narrative,** the same restraint `pr-mp4` uses for a PR
+walkthrough: say what a slide shows, not what happened while testing it. No
+"this took a few tries," no account of what was blocked and later unblocked,
+no roadmap of what is left. That belongs in `report.md` and `coverage-gaps.md`,
+not in something meant to be watched once and trusted.
+
+**Follow the `powerpoint` skill's mechanics exactly**, do not reinvent them:
+per slide TTS with `edge_tts.Communicate`, silence padding, one concatenated
+audio stream, ffmpeg `xfade` crossfades timed off each slide's own audio
+duration, and the duration assertion. That entire pipeline, including the
+crossfade offset maths, lives in
+`~/.claude/skills/powerpoint/SKILL.md` under "Narrating it to an mp4."
+
+**Render at proof resolution, not the powerpoint skill's default.** A QA deck
+is screenshot-heavy the same way a PR video is, so follow `pr-mp4`'s
+resolution guidance instead of the powerpoint skill's generic 110 dpi: work
+out the needed render dpi from the widest embedded screenshot's native pixel
+width divided by its placed width in inches, render PNG (never JPEG) at or
+above that dpi, then downsample to the 1920 wide encode target with
+`scale=1920:-2:flags=lanczos`. Encode with
+`libx264 -crf 18 -preset slow -tune stillimage` so a still frame does not
+burn bitrate meant for motion, and `aac` audio. A red box baked into a proof
+screenshot that survives a soft render is not proof anyone can actually read.
+
+Write the mp4 to `$WORKSPACE_ABS/qa-proof-[TASK_ID].mp4`.
+
+**Verify before handing it over**, the same three checks `pr-mp4` runs and for
+the same reason, each one catching something the others miss:
+1. Extract a frame from the middle of a transition and confirm two slides are
+   blended, not cut.
+2. Compare the video and audio stream durations with `ffprobe` and assert they
+   agree within a second. Drift means a crossfade offset is wrong.
+3. Read one screenshot slide's frame at full size and confirm you could
+   actually read it. If not, the render dpi was too low and the whole step
+   failed at its only job.
+
+Open it the same way the deck opened:
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-proof-[TASK_ID].mp4"
+```
+
+Print:
+```
+Proof video built and opened:
+  Length             : [N]s  ([N] slides narrated)
+  Resolution          : 1920 wide, rendered at [N] dpi
+  Duration drift       : [N]s  (video vs audio streams, ffprobe)
+  Transition check      : [PASS — frame extracted mid-crossfade / not checked]
+  Video               → $WORKSPACE_ABS/qa-proof-[TASK_ID].mp4
+```
+
+If 7g was skipped for a missing dependency, print that instead, with the
+install command, so the user knows the pptx is what shipped and why.
+
 ---
 
 ## What's Next After /qa
 
-The checklist audit (5c), the adversarial evidence judgment loop (5d), log cleanup (Phase 6), and the proof deck (Phase 7) all ran before you saw this output. 5d is the one that decided whether the session is verified: it retested every gap a fresh judge named and looped until a judge stamped `FULLY VERIFIED` on the artifacts.
+The checklist audit (5c), the evidence check (5d), log cleanup (Phase 6), and
+the proof deck and video (Phase 7) all ran before you saw this output. 5d is
+the one that decided whether the session is verified, either the lite
+quick-cop pass or the full bad-cop adversarial loop, depending on what 5d-0
+found.
 
-| If the Phase 5d verdict was... | Do this |
+| If Phase 5d's result was... | Do this |
 |---------------------------|---------|
-| FULLY VERIFIED — every clause proven by a real artifact | `/done` — run the pre-push checklist and push |
-| UNRESOLVED — the loop exited on a gap that would not close | Read the unresolved gap slides in the deck. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
+| LITE, nothing missing | `/done` — run the pre-push checklist and push |
+| LITE, a gap found and closed | Same as above, plus open the new artifact yourself and confirm it actually shows what was missing before shipping |
+| FULL, FULLY VERIFIED — every clause proven by a real artifact | `/done` — run the pre-push checklist and push |
+| FULL or LITE, unresolved — a gap that would not close | Read the unresolved gap slides in the deck or video. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
 | FULLY VERIFIED but with UNVERIFIABLE items | Ship if the post-deploy validation plan is real and owned. Those clauses are not verified, only scheduled |
-| Failures in the session | Fix them, re-run `/qa quick`. Phase 5d runs again automatically with a fresh judge |
+| Failures in the session | Fix them, re-run `/qa quick`. Phase 5d runs again automatically |
 | Coverage gaps noted | Review `coverage-gaps.md` — decide which to backlog vs. address now |
 | Security concern visible (auth, input, tokens) | `/security-review` — OWASP-focused review of pending changes |
 
-**Never self-verify.** Two separate agents exist for this and neither is the orchestrator. `evaluator-agent` (Phase 3 Close) checks annotation presence, annotation placement, and post-action state on each screenshot. `bad-cop` in evidence-judge mode (Phase 5d) checks whether the proof supports the requirements at all, and it is the only thing that can end the session. The orchestrator produced the evidence, so it cannot objectively answer either question about its own work — and a judge that says `TEST AGAIN` is not overruled by the orchestrator disagreeing.
+**Never self-verify.** Two separate agents exist for this and neither is the
+orchestrator. `evaluator-agent` (Phase 3 Close) checks annotation presence,
+annotation placement, and post-action state on each screenshot. Phase 5d's
+quick-cop or bad-cop, whichever ran, checks whether the proof supports the
+requirements at all, and it is the only thing that can end the session. The
+orchestrator produced the evidence, so it cannot objectively answer either
+question about its own work, and neither a quick-cop finding nor a bad-cop
+`TEST AGAIN` is overruled by the orchestrator disagreeing.

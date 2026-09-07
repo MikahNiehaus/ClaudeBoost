@@ -31,6 +31,12 @@ from research_state import extract_covered_files, file_in_scope  # noqa: E402
 
 VERIFIER_MARKER = "VERIFIED:"
 HANDOFF_MARKER = "HANDOFF:"
+# bad-cop's third closing line. Everything it found was Nit severity, so
+# good-cop is not spawned: the orchestrator applies the fixes and re-runs
+# bad-cop for the stamp. Distinct from HANDOFF: because both leave `covers`
+# empty, and without this the gate cannot tell them apart and nudges for an
+# Opus fix pass over polish.
+NITS_MARKER = "NITS:"
 
 # bad-cop runs in two modes. Mode A reviews a code diff and stamps VERIFIED: or
 # HANDOFF:, which is what this gate is built on. Mode B judges a finished /qa
@@ -68,7 +74,7 @@ def is_evidence_judge_pass(spawn_prompt: str, report: str) -> bool:
     instance) from having its own stamp thrown away.
     """
     lines = list(_stamp_lines(report))
-    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER)) for line in lines):
+    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER, NITS_MARKER)) for line in lines):
         return False
     if JUDGE_MODE_MARKER.upper() in (spawn_prompt or "").upper():
         return True
@@ -115,10 +121,28 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
+def is_nits_only_pass(report: str) -> bool:
+    """Did bad-cop close with NITS:, meaning every finding was Nit severity?
+
+    A real VERIFIED: or HANDOFF: line wins, the same precedence
+    is_evidence_judge_pass uses, so a report that merely discusses the NITS
+    convention does not get read as one.
+    """
+    lines = list(_stamp_lines(report))
+    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER)) for line in lines):
+        return False
+    return any(line.startswith(NITS_MARKER) for line in lines)
+
+
 def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") -> None:
     """Called on PostToolUse after good-cop finishes, or after bad-cop finishes
     having found nothing (it stamps VERIFIED itself in that case, no separate
     good-cop run needed to re-confirm a clean adversarial pass). Appends a stamp.
+
+    A bad-cop stamp also records nits_only, set when the report closed with
+    NITS: instead of HANDOFF:. Both leave `covers` empty, so the flag is the
+    only thing that lets verifier-gate route a nit only run to the
+    orchestrator rather than to good-cop.
 
     Session scoped: unlike research's per-turn record, this file is never reset
     by a new prompt, since the diff it covers spans turns too.
@@ -136,6 +160,7 @@ def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") 
             "at": time.time(),
             "covers": extract_covered_files(report, prefix=VERIFIER_MARKER),
             "verdict": _first_verdict_line(report),
+            "nits_only": is_nits_only_pass(report),
         })
 
         try:

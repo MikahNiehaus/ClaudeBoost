@@ -321,45 +321,17 @@ class TestFreeFallbackWhenNoToken:
     made the free path unavailable, so a swipe check with no token could not
     look for prior art at all. grep.app needs no key.
 
-    Every test below is about the grep.app leg specifically. github_code_search
-    now tries mcp.grep.app first and only falls through to grep.app when that
-    comes back empty, so reaching the leg under test means the MCP probe has to
-    fail deterministically. `mcp_down` does that. Without it these tests were
-    asserting against whichever URL the MCP probe happened to hit, which is how
-    they went stale when that probe was added.
-    """
+    Every test here is about the scraped grep.app path, which is the SECOND
+    keyless probe: github_code_search tries grep_mcp_code_search first. The
+    fixture below stands that first probe down so these tests reach the path
+    they are actually about. Ordering itself is covered in
+    test_grep_mcp_code_search.py::TestFallbackOrder, not here."""
 
     @pytest.fixture(autouse=True)
-    def mcp_down(self, monkeypatch):
-        """Force the mcp.grep.app leg to report no results, so grep.app runs.
-
-        Patched at the function rather than through a queued response, so the
-        queue in `http` belongs entirely to the grep.app request each test is
-        actually making assertions about.
-        """
-        monkeypatch.setattr(
-            gs, "grep_mcp_code_search",
-            lambda *a, **kw: {"results": [], "total_count": 0,
-                              "source": "mcp.grep.app",
-                              "error": "forced down for this test"},
-        )
-
-    def test_the_mcp_leg_is_tried_before_grep_app(self, http, monkeypatch):
-        """Order matters and nothing covered it. mcp.grep.app needs no setup at
-        all, which is what makes a fresh clone useful before anyone configures
-        anything, so it has to come first."""
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        tried = []
-        monkeypatch.setattr(gs, "grep_mcp_code_search",
-                            lambda *a, **kw: tried.append("mcp") or
-                            {"results": [], "total_count": 0,
-                             "source": "mcp.grep.app", "error": "down"})
-        monkeypatch.setattr(gs, "grep_app_code_search",
-                            lambda *a, **kw: tried.append("grep.app") or
-                            {"results": [], "total_count": 0,
-                             "source": "grep.app", "error": "down"})
-        gs.github_code_search("q")
-        assert tried == ["mcp", "grep.app"], tried
+    def _mcp_is_down(self, monkeypatch):
+        monkeypatch.setattr(gs, "grep_mcp_code_search", lambda *a, **k: {
+            "results": [], "total_count": 0, "source": "mcp.grep.app",
+            "error": "mcp is down"})
 
     def test_no_token_falls_back_to_grep_app(self, http, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)

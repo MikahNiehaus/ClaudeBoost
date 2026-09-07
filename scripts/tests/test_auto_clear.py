@@ -322,34 +322,107 @@ class TestClearSafeTerminalSignal:
 class TestClearSafeTerminalSignal:
     FAKE_PID = 987654
 
-    def _write_signal(self, boost_home, age_seconds: float = 0.0):
-        """Write the signal exactly as clear-safe-launch.py writes it."""
+    def _write_signal(self, boost_home, age_seconds: float = 0.0,
+                      target_pid: object = "USE_FAKE_PID"):
+        """Write the signal exactly as clear-safe-launch.py writes it.
+
+        target_pid is what makes the kill safe: the signal names the session
+        that asked to close, recorded at request time by the process that ran
+        under it. Pass None to simulate a signal written before the field
+        existed. Pass another int to simulate a signal meant for someone else.
+        """
         path = boost_home / "state" / "clear-safe-terminal-signal.json"
-        path.write_text(
-            json.dumps({"cwd": "C:/prj/x", "timestamp": time.time() - age_seconds},
-                       indent=2),
-            encoding="utf-8",
-        )
+        payload = {"cwd": "C:/prj/x", "timestamp": time.time() - age_seconds}
+        if target_pid != "USE_FAKE_PID":
+            if target_pid is not None:
+                payload["target_pid"] = target_pid
+        else:
+            payload["target_pid"] = self.FAKE_PID
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return path
 
-    def _run(self, boost_home, monkeypatch, pid, age_seconds=0.0):
-        signal = self._write_signal(boost_home, age_seconds)
+    def _run(self, boost_home, monkeypatch, pid, age_seconds=0.0,
+             target_pid: object = "USE_FAKE_PID"):
+        signal = self._write_signal(boost_home, age_seconds, target_pid)
         mod = _load_auto_clear()
         monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
         monkeypatch.setenv("TMUX", "")
         monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: pid)
+        # The kill path resets the terminal first. There is no console attached
+        # under pytest, so stub it out rather than depend on that failing quietly.
+        monkeypatch.setattr(mod, "_reset_terminal_modes", lambda: None)
 
         killed = []
         monkeypatch.setattr(os, "kill", lambda p, s: killed.append((p, s)))
         rc = mod.main()
         return rc, signal, killed
 
-    def test_fresh_signal_is_consumed_and_kills_the_tab(self, boost_home, monkeypatch):
+    def test_fresh_signal_for_this_session_kills_the_tab(self, boost_home, monkeypatch):
+        """The one case that should kill: the signal names this exact session."""
         rc, signal, killed = self._run(boost_home, monkeypatch, self.FAKE_PID)
 
         assert rc == 0
         assert not signal.exists(), "signal must be one-shot"
         assert killed == [(self.FAKE_PID, 9)]
+
+    def test_signal_meant_for_another_session_does_not_kill_this_one(
+            self, boost_home, monkeypatch):
+        """The bug this pinning exists to stop.
+
+        The signal is fresh and this session's Stop hook is the one that reads
+        it, but it was written for a different tab. Before target_pid the hook
+        resolved a target by walking its own process tree, so it killed itself
+        here, closing a session the user never asked to close and leaving the
+        terminal's mouse reporting on.
+        """
+        rc, signal, killed = self._run(
+            boost_home, monkeypatch, self.FAKE_PID, target_pid=self.FAKE_PID + 1)
+
+        assert rc == 0
+        assert not signal.exists(), "signal must still be one-shot"
+        assert killed == [], "a signal for another session must never kill this one"
+
+    def test_signal_without_a_target_pid_does_not_kill(self, boost_home, monkeypatch):
+        """An old format signal names nobody, and guessing is what caused the
+        bug. Refuse rather than fall back to killing whoever read it.
+
+        The audit line is asserted, not just the absence of a kill. Without it
+        this passes for the wrong reason: the pid comparison below also rejects
+        a None target, so deleting the explicit guard would leave the test green
+        while removing the check that states the intent.
+        """
+        rc, signal, killed = self._run(
+            boost_home, monkeypatch, self.FAKE_PID, target_pid=None)
+
+        assert rc == 0
+        assert not signal.exists()
+        assert killed == []
+
+        log = (boost_home / "state" / "auto-clear.log").read_text(encoding="utf-8")
+        assert "no usable target_pid" in log, (
+            "the signal must be refused for naming nobody, not incidentally by "
+            f"the pid comparison. Log said: {log!r}")
+
+    def test_terminal_modes_are_reset_before_the_kill(self, boost_home, monkeypatch):
+        """SIGKILL is TerminateProcess on Windows, so Claude Code never emits
+        its own mouse mode disable sequences. If the reset does not go out
+        before the kill, the terminal streams mouse coordinates at the shell.
+        Order matters: after the kill there is no process left to send them.
+        """
+        signal = self._write_signal(boost_home)
+        mod = _load_auto_clear()
+        monkeypatch.setenv("CLAUDEBOOST_HOME", str(boost_home))
+        monkeypatch.setenv("TMUX", "")
+        monkeypatch.setattr(mod, "_find_claude_pid_windows", lambda: self.FAKE_PID)
+
+        events = []
+        monkeypatch.setattr(mod, "_reset_terminal_modes",
+                            lambda: events.append("reset"))
+        monkeypatch.setattr(os, "kill", lambda p, s: events.append("kill"))
+
+        assert mod.main() == 0
+        assert events == ["reset", "kill"], (
+            f"reset must run before the kill, got {events}")
 
     def test_stale_signal_is_consumed_without_killing(self, boost_home, monkeypatch):
         # Ten minutes old, past MAX_AGE_SECONDS. Killing on a stale signal would

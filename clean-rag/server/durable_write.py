@@ -1,13 +1,11 @@
 """Write a small state file and prove it actually landed.
 
-Two callers keep a marker file whose entire value is its durability:
+One caller keeps a marker file whose entire value is its durability:
 
   * ``cli/server_ctl.py`` writes ``state/server-stopped-by-user`` so the next
     prompt's health check can tell "the user killed it" from "it died".
-  * ``hooks/rag-enforce.py`` writes ``state/last-self-heal`` so a restart that
-    cannot fix anything is attempted at most once per cooldown window.
 
-Both fail the same way when a write reports success but leaves the old bytes in
+It fails when a write reports success but leaves the old bytes in
 place: an antivirus intercept, a quarantine, or a lazy network / synced folder
 write. ``write_text`` raises for none of those, and ``exists()`` or ``stat()``
 afterwards still finds the *previous* file, so existence proves nothing.

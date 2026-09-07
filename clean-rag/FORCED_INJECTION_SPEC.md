@@ -63,9 +63,9 @@ Background threads are still allowed for **non-injection** side effects (e.g. sp
 
 ### 3. Retry before declaring failure
 A single failed request must not be treated as "server down." Required:
-- Up to 2 retries with a short backoff (e.g. 200ms, 500ms) before falling back to the unavailable/self-heal path
+- Up to 2 retries with a short backoff (e.g. 200ms, 500ms) before declaring the server unavailable
 - Every retry attempt and its outcome logged (exception type + message, not swallowed)
-- Only after all retries fail does the hook print the `[WARN] RAG SERVER UNAVAILABLE` message and trigger self-heal
+- Only after all retries fail does the hook print the `[WARN] RAG SERVER UNAVAILABLE` message. Nothing restarts the server; that is the user's call
 
 ### 4. All failures logged with real detail
 No bare `except Exception: return [], False`. Every except block must log:

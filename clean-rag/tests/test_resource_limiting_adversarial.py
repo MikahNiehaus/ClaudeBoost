@@ -5,7 +5,6 @@
   server/embedding.py    _apply_torch_thread_cap()
   server/auto_reindex.py wait_for_system_headroom(), the overlap guard,
                           _release_project_resources()
-  hooks/rag-enforce.py   _self_heal_suppressed(), stop marker, cooldown
   cli/server_ctl.py      STOP_MARKER_NAME, _mark_stopped_by_user(),
                           _clear_stopped_by_user()
 
@@ -62,12 +61,6 @@ def auto_reindex():
     yield mod
     mod._sweep_in_progress = False
     mod._sweep_started_at = 0.0
-
-
-@pytest.fixture()
-def rag_enforce(tmp_path):
-    mod = _load_module("rag_enforce_under_test", str(CLEAN_RAG / "hooks" / "rag-enforce.py"))
-    return mod
 
 
 @pytest.fixture()
@@ -1500,8 +1493,8 @@ def test_stop_without_pid_file_still_writes_marker(tmp_path, server_ctl, monkeyp
 
 def test_restart_clears_marker_after_writing_it(tmp_path, server_ctl, monkeypatch):
     """cmd_restart = cmd_stop then cmd_start. Confirm start really does clear
-    the marker stop just wrote (this is intended -- restart is not a
-    self-heal call, it's the CLI 'restart' subcommand)."""
+    the marker stop just wrote. That is intended: restart is only ever run by
+    hand from the CLI."""
     monkeypatch.setattr(server_ctl, "_state_dir", lambda: tmp_path)
     monkeypatch.setattr(server_ctl, "_port", lambda: 65432)
     monkeypatch.setattr(server_ctl, "_port_in_use", lambda port: True)  # skip actually spawning
@@ -1597,103 +1590,3 @@ def test_marker_that_does_not_survive_the_write_is_caught(tmp_path, server_ctl, 
         "write_text reported success but wrote nothing, and "
         "_mark_stopped_by_user believed it"
     )
-
-
-# ---------------------------------------------------------------------------
-# rag-enforce.py: _self_heal_suppressed fail-open when state/ is unwritable
-# ---------------------------------------------------------------------------
-
-def test_self_heal_suppressed_by_real_marker(tmp_path, rag_enforce):
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / rag_enforce._STOP_MARKER_NAME).write_text("stopped")
-    reason = rag_enforce._self_heal_suppressed(tmp_path)
-    assert reason is not None
-    assert "stopped deliberately" in reason
-
-
-def test_self_heal_suppressed_by_cooldown(tmp_path, rag_enforce):
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / rag_enforce._SELF_HEAL_STAMP_NAME).write_text(str(time.time()))
-    reason = rag_enforce._self_heal_suppressed(tmp_path)
-    assert reason is not None
-    assert "cooling down" in reason
-
-
-def test_mutant_always_none_is_caught(rag_enforce, tmp_path, monkeypatch):
-    """Mutant 4: make _self_heal_suppressed always return None. Prove
-    _trigger_self_heal actually consults the return value by observing that
-    with a real marker present, no subprocess is launched."""
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / rag_enforce._STOP_MARKER_NAME).write_text("stopped")
-    monkeypatch.setattr(rag_enforce, "_clean_rag_home", lambda: tmp_path)
-
-    with patch.object(rag_enforce.subprocess, "Popen") as popen:
-        rag_enforce._trigger_self_heal("8613")
-
-    popen.assert_not_called()
-
-
-def test_self_heal_refuses_to_restart_when_the_cooldown_cannot_persist(tmp_path, rag_enforce, monkeypatch):
-    """The real attack from the review brief: state/ cannot be written (full
-    disk, permissions, read-only mount).
-
-    With no stamp on disk there is no cooldown, and this hook is a fresh
-    process per prompt, so nothing in memory can throttle the next call either.
-    An unthrottleable restart of a server a restart cannot fix is worse than no
-    restart, so it must fail closed: zero launches, not one per prompt forever.
-    """
-    unwritable_state = tmp_path / "state"
-    # Do NOT create it: mkdir() will raise, simulating "can't write here".
-    monkeypatch.setattr(rag_enforce, "_clean_rag_home", lambda: tmp_path)
-
-    real_mkdir = Path.mkdir
-
-    def boom_mkdir(self, *a, **kw):
-        if self == unwritable_state:
-            raise OSError("simulated: state/ is not writable")
-        return real_mkdir(self, *a, **kw)
-
-    monkeypatch.setattr(Path, "mkdir", boom_mkdir)
-
-    launch_count = {"n": 0}
-
-    def fake_popen(*a, **kw):
-        launch_count["n"] += 1
-        return MagicMock()
-
-    with patch.object(rag_enforce.subprocess, "Popen", side_effect=fake_popen):
-        rag_enforce._trigger_self_heal("8613")
-        rag_enforce._trigger_self_heal("8613")
-        rag_enforce._trigger_self_heal("8613")
-
-    assert launch_count["n"] == 0, (
-        f"{launch_count['n']} restart attempts with no cooldown on disk -- "
-        f"every prompt would launch another server_ctl.py restart, which is "
-        f"the exact storm the cooldown exists to prevent"
-    )
-
-
-def test_self_heal_still_restarts_once_when_state_dir_works(tmp_path, rag_enforce, monkeypatch):
-    """The other half of failing closed: it must not have turned self-heal off
-    altogether. A writable state/ gets exactly one restart, and the persisted
-    stamp suppresses the rest."""
-    monkeypatch.setattr(rag_enforce, "_clean_rag_home", lambda: tmp_path)
-
-    launch_count = {"n": 0}
-
-    def fake_popen(*a, **kw):
-        launch_count["n"] += 1
-        return MagicMock()
-
-    with patch.object(rag_enforce.subprocess, "Popen", side_effect=fake_popen):
-        rag_enforce._trigger_self_heal("8613")
-        rag_enforce._trigger_self_heal("8613")
-        rag_enforce._trigger_self_heal("8613")
-
-    assert launch_count["n"] == 1, (
-        f"expected one restart then a cooldown, got {launch_count['n']}"
-    )
-    assert (tmp_path / "state" / rag_enforce._SELF_HEAL_STAMP_NAME).exists()
