@@ -13,12 +13,11 @@ Groups:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 
 import pytest
 
-from helpers import run_hook, pretooluse
+from helpers import hook_env, run_hook, pretooluse
 
 
 def _bash(command: str) -> dict:
@@ -508,13 +507,11 @@ class TestMainStdinParsing:
         import sys as _sys
         scripts_dir = _Path(__file__).resolve().parent.parent
         script = scripts_dir / "bash-guard.py"
-        env = {**os.environ}
-        # Re-use PYTHONPATH from the test env so sitecustomize picks up coverage
         return subprocess.run(
             [_sys.executable, str(script)],
             input=stdin_bytes,
             capture_output=True,
-            env=env,
+            env=hook_env(),
         )
 
     def test_invalid_json_on_stdin_returns_0(self):

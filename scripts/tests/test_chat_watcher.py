@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from helpers import hook_env
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -140,13 +141,23 @@ class TestMain:
             _mod.main()
 
     def test_main_guard_via_subprocess(self):
-        """Covers line 124 (if __name__ == '__main__': main()) via subprocess."""
+        """Covers line 124 (if __name__ == '__main__': main()) via subprocess.
+
+        PATH is emptied so `claude --version` cannot resolve and main() takes
+        its exit-1 branch instead of entering the 15-minute poll loop. On
+        Windows a real PATH reaches that branch too, because `claude` is a .cmd
+        shim that subprocess cannot exec without a shell — so the empty PATH is
+        what makes this deterministic across platforms, not what makes it pass
+        here.
+        """
         result = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "chat-watcher.py")],
             capture_output=True,
-            env={**os.environ, "PATH": ""},  # no PATH so claude not found
+            env=hook_env({"PATH": ""}),
+            timeout=60,
         )
         assert result.returncode == 1
+        assert b"'claude' CLI not found" in result.stdout
 
 
 class TestAnswerQuestion:

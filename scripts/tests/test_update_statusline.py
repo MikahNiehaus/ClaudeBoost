@@ -8,21 +8,18 @@ from __future__ import annotations
 
 import json
 import sys
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from helpers import SCRIPTS_DIR, COVERAGERC
+from helpers import SCRIPTS_DIR, hook_env
 
 
 def run_update_statusline(settings_path: Path, env_overrides: dict | None = None) -> subprocess.CompletedProcess:
     """Run update-statusline.py with HOME patched to point at a temp dir."""
     script = SCRIPTS_DIR / "update-statusline.py"
-    env = {**os.environ}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env()
 
     # Monkey-patch the script to use our temp settings path by rewriting it in-place
     # is too invasive. Instead we mock via a wrapper that patches Path.home().

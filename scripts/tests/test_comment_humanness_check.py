@@ -242,15 +242,14 @@ def test_structural_uniformity_no_trigger_when_lengths_vary(mod):
 
 # Lines 174-175 — main() except branch: invalid JSON exits 0
 def test_main_returns_0_on_invalid_json():
-    import os
     import subprocess
+    from helpers import hook_env
     script = SCRIPTS_DIR / "comment-humanness-check.py"
-    env = {**os.environ}
     result = subprocess.run(
         [sys.executable, str(script)],
         input=b"not valid json{{{{",
         capture_output=True,
-        env=env,
+        env=hook_env(),
     )
     assert result.returncode == 0
 

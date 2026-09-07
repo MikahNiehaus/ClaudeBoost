@@ -223,12 +223,10 @@ def test_collect_workspace_memo_with_project_registry(boost_home, tmp_path):
 
 def test_no_stdin_flag(boost_home):
     """--no-stdin flag skips stdin read but still fires on clear."""
-    from helpers import SCRIPTS_DIR, COVERAGERC
-    import subprocess, os, sys
+    from helpers import SCRIPTS_DIR, hook_env
+    import subprocess, sys
     script = SCRIPTS_DIR / "session-clear-save.py"
-    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env({"CLAUDEBOOST_HOME": str(boost_home)})
     result = subprocess.run(
         [sys.executable, str(script), "--no-stdin"],
         capture_output=True,
@@ -455,13 +453,11 @@ class TestCollectWorkspaceMemo:
 class TestMainMalformedStdin:
     def test_malformed_json_stdin_exits_0(self, boost_home):
         """Non-JSON stdin falls back to empty dict, fires as session end."""
-        import subprocess, sys, os
+        import subprocess, sys
         from pathlib import Path as P
         SCRIPTS = P(__file__).resolve().parent.parent
-        from helpers import COVERAGERC
-        env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
-        if COVERAGERC.exists():
-            env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+        from helpers import hook_env
+        env = hook_env({"CLAUDEBOOST_HOME": str(boost_home)})
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "session-clear-save.py")],
             input=b"MALFORMED_JSON",

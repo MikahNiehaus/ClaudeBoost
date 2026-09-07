@@ -60,12 +60,13 @@ def test_block_message_mentions_rag(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_blocks_on_empty_input_when_no_sentinel(tmp_path):
-    import subprocess, sys, os
+    import subprocess, sys
+    from helpers import hook_env
     script = SCRIPTS_DIR / "workspace-boost-gate.py"
     result = subprocess.run(
         [sys.executable, str(script)],
         input=b"{}",
         capture_output=True,
-        env={**os.environ, "TEMP": str(tmp_path)},
+        env=hook_env({"TEMP": str(tmp_path)}),
     )
     assert result.returncode == 2

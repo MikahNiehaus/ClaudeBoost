@@ -148,11 +148,12 @@ def test_passes_glob_with_workspace_pattern(boost_home, rag_live):
 
 def test_passes_on_malformed_stdin(boost_home):
     """Malformed JSON on stdin — treated as empty payload, exemption falls through."""
-    import subprocess, sys, os, json as _json
+    import subprocess, sys
     from pathlib import Path as P
+    from helpers import hook_env
     SCRIPTS_DIR = P(__file__).resolve().parent.parent
     script = SCRIPTS_DIR / "rag-read-guard.py"
-    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
+    env = hook_env({"CLAUDEBOOST_HOME": str(boost_home)})
     # Send raw non-JSON bytes as stdin
     result = subprocess.run(
         [sys.executable, str(script)],
@@ -280,19 +281,15 @@ def test_malformed_stdin_via_run_hook_covers_lines_94_95(boost_home):
     """
     import subprocess
     import sys
-    import os
     from pathlib import Path as P
-    from helpers import SCRIPTS_DIR, COVERAGERC
+    from helpers import SCRIPTS_DIR, hook_env
 
     script = SCRIPTS_DIR / "rag-read-guard.py"
-    env = {
-        **os.environ,
+    env = hook_env({
         "CLAUDEBOOST_HOME": str(boost_home),
         "RAG_INDEX_DIR": "",
         "LOCALAPPDATA": "",
-    }
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    })
 
     # Send raw non-JSON bytes — triggers lines 94-95 (except Exception: payload = {})
     result = subprocess.run(

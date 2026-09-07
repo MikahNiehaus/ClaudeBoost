@@ -7,7 +7,6 @@ Always exits 0. Never hard-blocks.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import subprocess
 import time
@@ -16,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from helpers import SCRIPTS_DIR, COVERAGERC
+from helpers import SCRIPTS_DIR, hook_env
 
 
 #: Written by the stub setup.py so a test can prove which script actually ran.
@@ -69,9 +68,7 @@ def _install_stub_setup(tmp_home: Path) -> Path:
 
 def _run_ensure_setup(tmp_home: Path, env_overrides: dict | None = None) -> subprocess.CompletedProcess:
     script = SCRIPTS_DIR / "ensure-setup.py"
-    env = {**os.environ}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env()
 
     # Provide a temp HOME so sentinel and settings.json go there
     env["HOME"] = str(tmp_home)

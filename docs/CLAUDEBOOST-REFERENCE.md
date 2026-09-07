@@ -240,7 +240,7 @@ Reads `settings.json` (user-level) and asserts that the specified hook event is 
 ### 1.13 check-rag-path.py
 
 **File:** `scripts/check-rag-path.py`  
-Prints `rag_server.__file__` — the filesystem path where rag_server is installed. Used to verify correct installation location.
+Prints the filesystem path where rag_server is installed (`__file__`, or the first `__path__` entry when it is a namespace package). Exit 0 means a path was printed; exit 1 means it could not be resolved, with the reason on stderr. Used to verify correct installation location.
 
 ---
 

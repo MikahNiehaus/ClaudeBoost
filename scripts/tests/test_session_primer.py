@@ -851,13 +851,11 @@ class TestConsumeClearPendingUnlinkFails:
 class TestMainMalformedStdin:
     def test_malformed_json_stdin_exits_0(self, boost_home, tmp_path):
         """Malformed JSON on stdin falls back to empty dict — no crash."""
-        import subprocess, sys, os
+        import subprocess, sys
         from pathlib import Path as P
         SCRIPTS = P(__file__).resolve().parent.parent
-        from helpers import COVERAGERC
-        env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home), "TEMP": str(tmp_path)}
-        if COVERAGERC.exists():
-            env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+        from helpers import hook_env
+        env = hook_env({"CLAUDEBOOST_HOME": str(boost_home), "TEMP": str(tmp_path)})
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "session-primer.py")],
             input=b"NOT VALID JSON AT ALL",

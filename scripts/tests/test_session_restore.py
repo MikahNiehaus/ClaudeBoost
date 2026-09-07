@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from helpers import hook_env
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 LEDGER_HOOK = SCRIPTS_DIR / "session-restore-ledger.py"
 RESTORE = SCRIPTS_DIR / "session-restore.py"
@@ -33,10 +35,17 @@ SID_B = "bbbbbbbb-1111-2222-3333-444444444444"
 
 
 def _env(home: Path) -> dict:
-    return {**os.environ, "CLAUDEBOOST_HOME": str(home)}
+    return hook_env({"CLAUDEBOOST_HOME": str(home)})
 
 
-def run_hook(home: Path, payload: dict | str) -> subprocess.CompletedProcess:
+def run_ledger(home: Path, payload: dict | str) -> subprocess.CompletedProcess:
+    """Run the ledger hook in text mode.
+
+    Not helpers.run_hook: these tests feed raw strings (a malformed-JSON case)
+    and read str stdout, where the shared helper json-dumps a dict and returns
+    bytes. The environment still comes from helpers.hook_env, which is the part
+    that must not diverge.
+    """
     raw = payload if isinstance(payload, str) else json.dumps(payload)
     return subprocess.run([sys.executable, str(LEDGER_HOOK)], input=raw, text=True,
                           capture_output=True, env=_env(home), timeout=120)
@@ -67,7 +76,7 @@ def home(tmp_path):
 
 class TestLedgerRoundTrip:
     def test_session_start_records_the_session(self, home):
-        r = run_hook(home, {"hook_event_name": "SessionStart",
+        r = run_ledger(home, {"hook_event_name": "SessionStart",
                             "session_id": SID_A, "cwd": str(home / "ProjA")})
         assert r.returncode == 0
         entry = sessions(home)[SID_A]
@@ -75,9 +84,9 @@ class TestLedgerRoundTrip:
         assert entry["name"]
 
     def test_session_end_removes_it(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
-        r = run_hook(home, {"hook_event_name": "SessionEnd",
+        r = run_ledger(home, {"hook_event_name": "SessionEnd",
                             "session_id": SID_A, "cwd": str(home / "ProjA"),
                             "reason": "logout"})
         assert r.returncode == 0
@@ -85,26 +94,26 @@ class TestLedgerRoundTrip:
 
     def test_a_crash_leaves_the_entry_behind(self, home):
         """The whole point. No SessionEnd means the session was still open."""
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         assert SID_B in sessions(home)
 
     def test_directory_with_spaces_survives(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         assert sessions(home)[SID_B]["cwd"] == str(home / "Proj B With Spaces")
 
     def test_resume_keeps_the_original_started_at(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
         first = sessions(home)[SID_A]["startedAt"]
         time.sleep(0.05)
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
         assert sessions(home)[SID_A]["startedAt"] == first
 
     def test_the_ledger_is_stamped_with_this_machine(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
         assert ledger(home)["machine"]
 
@@ -144,10 +153,10 @@ class TestBadInputNeverBreaksASession:
         "",
     ])
     def test_exits_zero(self, home, payload):
-        assert run_hook(home, payload).returncode == 0
+        assert run_ledger(home, payload).returncode == 0
 
     def test_nonexistent_cwd_is_not_recorded(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart", "session_id": "dead",
+        run_ledger(home, {"hook_event_name": "SessionStart", "session_id": "dead",
                         "cwd": str(home / "does-not-exist")})
         assert "dead" not in sessions(home)
 
@@ -155,7 +164,7 @@ class TestBadInputNeverBreaksASession:
         state = home / "state"
         state.mkdir(parents=True, exist_ok=True)
         (state / "session-restore.json").write_text("{ not json", encoding="utf-8")
-        r = run_hook(home, {"hook_event_name": "SessionStart",
+        r = run_ledger(home, {"hook_event_name": "SessionStart",
                             "session_id": SID_A, "cwd": str(home / "ProjA")})
         assert r.returncode == 0
         assert SID_A in sessions(home)
@@ -163,7 +172,7 @@ class TestBadInputNeverBreaksASession:
 
 class TestStaleSweep:
     def test_old_and_missing_entries_are_dropped(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
         p = home / "state" / "session-restore.json"
         d = json.loads(p.read_text(encoding="utf-8"))
@@ -177,7 +186,7 @@ class TestStaleSweep:
         }
         p.write_text(json.dumps(d), encoding="utf-8")
 
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         s = sessions(home)
         assert "old-one" not in s, "a 40 day old entry should be swept"
@@ -187,7 +196,7 @@ class TestStaleSweep:
 
 class TestRestorePlanning:
     def test_dry_run_opens_nothing(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         r = run_restore(home, "--dry-run", "--force")
         assert r.returncode == 0
@@ -195,7 +204,7 @@ class TestRestorePlanning:
         assert not tabs.exists() or not list(tabs.glob("*.bat"))
 
     def test_dry_run_names_the_resume_flag_and_the_directory(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         r = run_restore(home, "--dry-run", "--force")
         assert "--resume" in r.stdout or "--continue" in r.stdout
@@ -207,7 +216,7 @@ class TestRestorePlanning:
         assert "session-restore.json" in r.stdout
 
     def test_another_machines_ledger_is_refused(self, home):
-        run_hook(home, {"hook_event_name": "SessionStart",
+        run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_A, "cwd": str(home / "ProjA")})
         p = home / "state" / "session-restore.json"
         d = json.loads(p.read_text(encoding="utf-8"))

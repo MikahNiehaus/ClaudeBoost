@@ -262,14 +262,11 @@ def test_handles_invalid_json_stdin():
     Uses run_hook's environment (with COVERAGE_PROCESS_START) so lines 61-62
     (the except clause in the json.loads try/except) are counted as covered.
     """
-    import os as _os
     import subprocess as _sp
-    from helpers import COVERAGERC
+    from helpers import hook_env
 
     script = CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py"
-    env = {**_os.environ}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env()
     result = _sp.run(
         [sys.executable, str(script)],
         input=b"this is not json",
@@ -282,14 +279,11 @@ def test_handles_invalid_json_stdin():
 
 def test_handles_invalid_json_stdin_with_partial_json():
     """Partial/truncated JSON triggers lines 61-62 (except Exception: payload = {})."""
-    import os as _os
     import subprocess as _sp
-    from helpers import COVERAGERC
+    from helpers import hook_env
 
     script = CLEAN_RAG_HOOKS_DIR / "agent-spawn-gate.py"
-    env = {**_os.environ}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env()
     # Truncated JSON object — json.loads raises, so payload becomes {}
     result = _sp.run(
         [sys.executable, str(script)],

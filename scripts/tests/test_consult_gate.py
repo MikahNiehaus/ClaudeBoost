@@ -18,11 +18,10 @@ Block conditions (permissionDecision:"ask", exit 0):
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import pytest
-from helpers import SCRIPTS_DIR, COVERAGERC, run_hook, pretooluse
+from helpers import SCRIPTS_DIR, hook_env, run_hook, pretooluse
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +245,7 @@ def test_defaults_to_consult_when_no_mode_file(boost_home):
 
 def test_invalid_json_input_exits_0(boost_home):
     script = SCRIPTS_DIR / "consult-gate.py"
-    env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
-    if COVERAGERC.exists():
-        env["COVERAGE_PROCESS_START"] = str(COVERAGERC)
+    env = hook_env({"CLAUDEBOOST_HOME": str(boost_home)})
     result = subprocess.run(
         [sys.executable, str(script)],
         input=b"not valid json {{{{",

@@ -327,14 +327,14 @@ class TestMainExceptionPaths:
 
     def test_bad_json_via_subprocess_exits_0(self, boost_home):
         """Lines 63-64: bad JSON stdin via subprocess -> payload = {} -> exits 0."""
-        import subprocess, sys, os
+        import subprocess, sys
+        from helpers import hook_env
         script = SCRIPTS_DIR / "verify-gate-cmd.py"
-        env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
         result = subprocess.run(
             [sys.executable, str(script)],
             input=b"NOT VALID JSON {{{",
             capture_output=True,
-            env=env,
+            env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
         )
         assert result.returncode == 0
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from helpers import SCRIPTS_DIR, run_hook
+from helpers import SCRIPTS_DIR, hook_env, run_hook
 
 
 def _load_hvg():
@@ -233,7 +233,7 @@ class TestMainExceptionPaths:
             [sys.executable, str(SCRIPTS_DIR / "human-voice-guard.py")],
             input=b"THIS IS NOT VALID JSON",
             capture_output=True,
-            env={**os.environ, "CLAUDEBOOST_HOME": str(boost_home)},
+            env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
         )
         assert result.returncode == 0
 

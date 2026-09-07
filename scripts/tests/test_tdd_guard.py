@@ -9,7 +9,6 @@ Exit codes:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -151,8 +150,6 @@ class TestSoftMode:
 
     def test_default_mode_is_soft(self):
         """No env var set means soft mode."""
-        env = dict(os.environ)
-        env.pop("CLAUDEBOOST_TDD_GUARD", None)
         r = run_hook("tdd-guard.py", _edit("/project/src/auth.py"),
                      env_overrides={"CLAUDEBOOST_TDD_GUARD": ""})
         # Empty string should fall back to "soft" default

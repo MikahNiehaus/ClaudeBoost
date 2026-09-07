@@ -222,12 +222,12 @@ class TestMainExceptionPaths:
     def test_invalid_json_stdin_subprocess(self, boost_home):
         """Sending raw invalid JSON directly triggers lines 79-80 (except Exception)."""
         import subprocess as _sp
-        import os
+        from helpers import hook_env
         result = _sp.run(
-            ["python", str(SCRIPTS_DIR / "compaction-save.py")],
+            [sys.executable, str(SCRIPTS_DIR / "compaction-save.py")],
             input=b"INVALID JSON BYTES",
             capture_output=True,
-            env={**os.environ, "CLAUDEBOOST_HOME": str(boost_home)},
+            env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
         )
         assert result.returncode == 0
 

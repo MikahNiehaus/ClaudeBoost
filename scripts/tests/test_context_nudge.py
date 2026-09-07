@@ -721,14 +721,14 @@ class TestAutoSaveHandoffBranches:
 class TestMainBadJsonAndTrackerFailures:
     def test_bad_json_stdin_continues(self, boost_home):
         """Lines 118-119: bad JSON stdin -> payload = {} -> continues without crash."""
-        import subprocess, sys, os
+        import subprocess, sys
+        from helpers import hook_env
         script = SCRIPTS_DIR / "context-nudge.py"
-        env = {**os.environ, "CLAUDEBOOST_HOME": str(boost_home)}
         result = subprocess.run(
             [sys.executable, str(script)],
             input=b"NOT VALID JSON {{{",
             capture_output=True,
-            env=env,
+            env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
         )
         assert result.returncode == 0
 
