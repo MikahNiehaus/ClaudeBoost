@@ -54,11 +54,11 @@ def main() -> int:
         "additionalContext": (
             workspace_line
             + "STANDING ORDERS (re-injected before compaction): "
-            "Search RAG before reading files. "
+            "Search RAG before reading files: POST http://127.0.0.1:8613/search "
+            "with sources: [\"project:<absolute path>\"] and mode: \"both\". "
             "Cite file:line for every finding. "
-            "Spawn evaluator-agent — never self-verify. "
-            "CONSULT before new endpoints/tables/dependencies. "
-            "POST http://127.0.0.1:8612/context first in every agent spawn prompt."
+            "Spawn quick-cop on any finding or completion claim — never self-verify. "
+            "CONSULT before new endpoints/tables/dependencies."
         )
     }))
     sys.exit(0)

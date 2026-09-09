@@ -27,7 +27,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import extract_covered_files, file_in_scope  # noqa: E402
+from research_state import (  # noqa: E402
+    append_stamp,
+    extract_covered_files,
+    file_in_scope,
+)
 
 VERIFIER_MARKER = "VERIFIED:"
 HANDOFF_MARKER = "HANDOFF:"
@@ -101,16 +105,6 @@ def _record_path(session_id: str) -> Path:
     return _state_dir() / f"session-{key}.json"
 
 
-def _write_lock(path: Path):
-    """Best effort cross process lock, same degrade-to-none shape research_state uses."""
-    try:
-        import research_state
-
-        return research_state._write_lock(path)
-    except Exception:
-        import contextlib
-
-        return contextlib.nullcontext()
 
 
 def _first_verdict_line(text: str) -> str:
@@ -149,24 +143,28 @@ def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") 
     """
     path = _record_path(session_id)
 
-    with _write_lock(path):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            record = {"session_id": session_id, "stamps": []}
-
-        record.setdefault("stamps", []).append({
+    # research_state.append_stamp, not a second copy of the same read, modify
+    # and write: it already carries the lock, the atomic write, and the verify
+    # then retry that keeps a stamp from being clobbered when the lock fails
+    # open. A lost stamp here reads back as unverified, so the gate nudges for
+    # a review that already happened.
+    recorded = append_stamp(
+        path,
+        {
             "agent": agent_type,
             "at": time.time(),
             "covers": extract_covered_files(report, prefix=VERIFIER_MARKER),
             "verdict": _first_verdict_line(report),
             "nits_only": is_nits_only_pass(report),
-        })
-
-        try:
-            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        },
+        {"session_id": session_id, "stamps": []},
+    )
+    if not recorded:
+        print(
+            f"[verifier-state] the {agent_type} stamp was not recorded; the "
+            "verifier gate will treat the reviewed files as unverified.",
+            file=sys.stderr,
+        )
 
 
 def check_file_verified(session_id: str, file_path: str) -> tuple[bool, str]:

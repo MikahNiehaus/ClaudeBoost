@@ -63,7 +63,7 @@ when an agent is spawned.
 - **Sonnet**: all others (escalation to Opus available mid-task on LOW confidence or BLOCKED)
 
 **Weight routing:**
-- **Full** (reviewer, security, performance): verify gate + evaluator-agent verification
+- **Full** (reviewer, security, performance): verify gate + quick-cop verification
 - **Standard** (workflow, debug, test, refactor, ui, etc.): no verify gate overhead
 - **Lightweight** (explore, research, docs, estimator, rag-indexing): minimal ceremony
 
@@ -143,7 +143,7 @@ Every finding from a review or audit must be proven from actual code before it r
 the user. The protocol:
 
 - Each finding needs a `file:line` citation
-- A fresh evaluator-agent (Opus) reads only that citation — no session context
+- A fresh quick-cop reads only that citation — no session context
 - UNVERIFIED findings are dropped; only CONFIRMED findings appear in the final report
 - Hooks remind agents and the orchestrator to follow this protocol at every step
 

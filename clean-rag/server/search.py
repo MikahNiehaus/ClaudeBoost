@@ -305,14 +305,50 @@ def _incomplete_index_warning(project_path: str) -> str | None:
     )
 
 
+def _missing_store_reason(project_path: str) -> str | None:
+    """Return a reason if this project has no vector store on disk to query.
+
+    The other two checks read the manifest, and a manifest outlives the
+    collection it describes: a partial disk cleanup, an interrupted move, a bad
+    restore, a project copied off a full disk mid write. The manifest then still
+    says "indexed, by the right model, in full" while ``chroma/`` is gone.
+
+    Both search paths already handled this, and both handled it by returning a
+    bare ``[]``, which is byte for byte what a healthy index with no match
+    returns. Asking here instead means every mode answers the same way, and it
+    is asked once rather than in each path's own early return.
+
+    Returns None when there is a store to query.
+    """
+    project_root = Path(project_path).resolve()
+    chroma_dir = resolve_project_dir(DATABASES_DIR / "_projects", project_root) / "chroma"
+    if chroma_dir.exists():
+        return None
+    return (
+        "index is missing: this project has no vector store on disk, so nothing "
+        "can be searched and an empty result says nothing about whether the code "
+        "exists; run /index-project to build it"
+    )
+
+
 def _check_index_before_search(project_path: str, code_embedder, meta_out: dict | None) -> bool:
     """Record anything the caller must know about this project's index.
 
     Returns False when the index must not be queried at all, True when it is
     safe to query, which may still leave a warning recorded in *meta_out*.
 
-    Two ways an index can be untrustworthy, and they get opposite answers,
-    because one makes the results WRONG and the other only makes them PARTIAL.
+    Three ways an index can be untrustworthy, and they do not get the same
+    answer, because one makes the results WRONG, one makes them PARTIAL, and one
+    means there are no results to have.
+
+    Absent: the store backing the manifest's claim is not on disk. Nothing can
+    be queried, so refuse and say so. This is the one that has to be asked here
+    rather than left to the search paths: both of those already noticed it and
+    both answered with a bare empty list, which is exactly the response a
+    healthy index gives a query that matches nothing. clean-rag/CLAUDE.md's
+    contract is that the two are distinguishable ("zero results plus that field
+    is a broken index, not an empty codebase"), and only a reason on the
+    response can distinguish them.
 
     Wrong: an index built in a different embedding space. Every score is
     confident nonsense and nothing downstream can tell those hits from real
@@ -344,6 +380,12 @@ def _check_index_before_search(project_path: str, code_embedder, meta_out: dict 
                 "reason": reason,
                 "served": served,
             })
+
+    missing_reason = _missing_store_reason(project_path)
+    if missing_reason is not None:
+        logger.warning("No index on disk for %s: %s", project_path, missing_reason)
+        note(missing_reason, served=False)
+        return False
 
     stale_reason = _provenance_mismatch(project_path, code_embedder)
     if stale_reason is not None:

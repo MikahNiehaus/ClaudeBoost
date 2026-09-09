@@ -12,6 +12,8 @@ Usage:
   python clean-rag/cli/clone-reference.py <repo-url> <dest-path> --force
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -79,6 +81,8 @@ def run_git(args: list[str], cwd: str | None = None, timeout: int = 180) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed:\n{result.stderr.strip()}")

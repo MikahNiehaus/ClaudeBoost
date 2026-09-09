@@ -34,6 +34,7 @@ from .file_scan import (
     SKIP_DIRS,
     SKIP_FILES,
     SKIP_SUFFIXES,
+    exclusion_reason,
     scan_project,
 )
 from .store import Chunk, ChromaStore
@@ -68,41 +69,185 @@ def _gc_cleanup(label: str = "") -> None:
 _INDEX_LOCK_PATH = STATE_DIR / "index-lock.json"
 
 
+#: How long an unreadable lock file is treated as "someone is mid-claim" rather
+#: than "corrupt, clear it". A winner of the atomic create below is a few
+#: microseconds away from writing its payload, and during that gap the file is
+#: zero bytes. Without this grace a loser would read those zero bytes, call the
+#: lock corrupt, delete the winner's claim and take the lock itself, which is
+#: the same two holders bug by a different route. A real corrupt lock is cleared
+#: on the next attempt after the grace expires.
+_LOCK_CLAIM_GRACE_S = 10
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Is this PID a running process? True whenever we cannot tell.
+
+    The direction matters. Answering "alive" for a process we cannot inspect
+    keeps a lock that may already be dead, which costs a delayed reindex until
+    the file is cleared by hand. Answering "dead" would break a live holder's
+    lock and put two indexers on one collection, which is the failure the lock
+    exists to prevent. So this fails toward keeping the lock.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        import psutil
+
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+
+    if os.name == "nt":
+        # No os.kill probe here. On Windows os.kill passes any signal other
+        # than CTRL_C_EVENT/CTRL_BREAK_EVENT straight to TerminateProcess, so
+        # the POSIX `os.kill(pid, 0)` liveness idiom does not ask whether the
+        # process is alive, it kills it (python/cpython#70538). Without psutil
+        # there is no safe probe, so report the holder as alive and let the
+        # lock be cleared by hand rather than terminate somebody's process.
+        logger.warning(
+            "psutil is not installed, so the liveness of index lock holder PID "
+            "%d cannot be checked on Windows; treating the lock as held. "
+            "Install psutil, or delete %s if you are sure no indexer is running.",
+            pid, _INDEX_LOCK_PATH,
+        )
+        return True
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Running, owned by another user.
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _break_stale_lock() -> bool:
+    """Clear the lock file if its holder is gone. True if the path is now free.
+
+    Separate from the claim on purpose: this only removes a lock, it never
+    grants one. The caller re-runs the same atomic create afterwards, so two
+    callers that both spot the same dead holder still race for a single winner.
+    """
+    try:
+        raw = _INDEX_LOCK_PATH.read_bytes()
+    except FileNotFoundError:
+        # Released between the failed claim and this read. Free to retry.
+        return True
+    except OSError as e:
+        logger.error("Could not read the index lock at %s: %s", _INDEX_LOCK_PATH, e)
+        return False
+
+    try:
+        lock_data = json.loads(raw.decode("utf-8"))
+        lock_pid = int(lock_data.get("pid", -1))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        try:
+            age_s = time.time() - _INDEX_LOCK_PATH.stat().st_mtime
+        except OSError:
+            return False
+        if age_s < _LOCK_CLAIM_GRACE_S:
+            # Almost certainly a claim in flight, not corruption. Stay out.
+            return False
+        logger.info("Clearing corrupt index lock file at %s", _INDEX_LOCK_PATH)
+    else:
+        if _pid_is_alive(lock_pid):
+            logger.warning(
+                "Index lock held by PID %d (%s), started %s",
+                lock_pid, lock_data.get("operation", "?"), lock_data.get("started", "?"),
+            )
+            return False
+        logger.info("Clearing stale index lock from dead PID %d", lock_pid)
+
+    # Re-read before unlinking. Between the read above and here the dead
+    # holder's lock can have been cleared and a live caller can have claimed it
+    # for real; deleting that would hand the lock to two callers at once.
+    # Identical bytes means it is still the same abandoned claim.
+    try:
+        if _INDEX_LOCK_PATH.read_bytes() != raw:
+            return False
+        _INDEX_LOCK_PATH.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.error("Could not clear the stale index lock at %s: %s", _INDEX_LOCK_PATH, e)
+        return False
+    return True
+
+
 def acquire_index_lock(operation: str = "index") -> bool:
     """Try to acquire the indexing lock. Returns True if acquired, False if busy.
 
-    The lock includes a PID so stale locks from crashed processes are auto-cleared.
-    """
-    if _INDEX_LOCK_PATH.exists():
-        try:
-            lock_data = json.loads(_INDEX_LOCK_PATH.read_text(encoding="utf-8"))
-            lock_pid = lock_data.get("pid", -1)
-            try:
-                import psutil
-                if psutil.pid_exists(lock_pid):
-                    logger.warning(
-                        "Index lock held by PID %d (%s), started %s",
-                        lock_pid, lock_data.get("operation", "?"), lock_data.get("started", "?"),
-                    )
-                    return False
-                else:
-                    logger.info("Clearing stale index lock from dead PID %d", lock_pid)
-            except ImportError:
-                try:
-                    os.kill(lock_pid, 0)
-                    return False
-                except OSError:
-                    logger.info("Clearing stale index lock from dead PID %d", lock_pid)
-        except (json.JSONDecodeError, Exception):
-            logger.info("Clearing corrupt index lock file")
+    The claim is one ``os.open(O_CREAT | O_EXCL)``, not an ``exists()`` check
+    followed by a write. That is the whole lock. The previous form left a gap
+    between the two halves in which every caller saw "not locked", so all of
+    them wrote and all of them believed they held it, and two indexers then
+    wrote the same manifest.json and chroma collection. "Create if absent, else
+    fail" inside O_EXCL is a single kernel operation with no such gap, and it
+    behaves the same on POSIX and on Windows, where CPython maps it to
+    ``CreateFile`` with ``CREATE_NEW``.
 
-    _INDEX_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _INDEX_LOCK_PATH.write_text(json.dumps({
+    Stdlib rather than filelock or portalocker. filelock is only present here
+    transitively (huggingface_hub, torch and transformers each require it) and
+    nothing in requirements.txt declares it, and moving to an OS advisory lock
+    would also replace the PID convention that release_index_lock and
+    cli/reindex_batch.py are both written against. O_EXCL buys the atomicity
+    without taking on either.
+
+    Known limit, inherited from the technique: O_EXCL is not atomic over NFS.
+    The lock lives in the local ``state/`` directory, so this does not apply;
+    a network mounted state directory would need a real lock manager.
+
+    The PID is still recorded, so a crashed holder's lock is cleared rather
+    than wedging indexing forever. See _break_stale_lock for how that stays
+    exclusive.
+    """
+    try:
+        _INDEX_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error(
+            "Could not create the index lock directory %s: %s", _INDEX_LOCK_PATH.parent, e,
+        )
+        return False
+
+    payload = json.dumps({
         "pid": os.getpid(),
         "operation": operation,
         "started": datetime.now(timezone.utc).isoformat(),
-    }), encoding="utf-8")
-    return True
+    }).encode("utf-8")
+
+    # One retry, and only after a stale lock was actually cleared. Looping here
+    # would turn a contended lock into a spin against whoever keeps winning.
+    for attempt in range(2):
+        try:
+            fd = os.open(_INDEX_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            if attempt == 0 and _break_stale_lock():
+                continue
+            return False
+        except OSError as e:
+            logger.error("Could not claim the index lock at %s: %s", _INDEX_LOCK_PATH, e)
+            return False
+
+        # os.write, not fdopen: no newline translation, so the bytes on disk are
+        # identical on Windows and POSIX and _break_stale_lock's byte comparison
+        # means the same thing on both.
+        try:
+            os.write(fd, payload)
+        except OSError as e:
+            # The claim landed but the payload did not. An empty lock file would
+            # park every later caller behind the grace window for no reason, so
+            # hand it straight back.
+            logger.error("Could not write the index lock payload: %s", e)
+            _INDEX_LOCK_PATH.unlink(missing_ok=True)
+            return False
+        finally:
+            os.close(fd)
+        return True
+
+    return False
 
 
 def release_index_lock() -> None:
@@ -1167,14 +1312,16 @@ def reindex_file(
         code_embedder = model_cache
 
     suffix = abs_file.suffix.lower()
-    if suffix not in CODE_EXTENSIONS:
-        return {"skipped": True, "reason": f"Extension {suffix} not indexable"}
 
-    try:
-        if abs_file.stat().st_size > MAX_FILE_SIZE:
-            return {"skipped": True, "reason": "File too large"}
-    except OSError:
-        return {"error": f"Cannot stat {file_path}"}
+    # The same per file rules scan_project applies, from the same function
+    # rather than a second copy. The copy that used to live here checked only
+    # the extension and the size, so every rule added to scan_project since
+    # (the credential config globs, the binary sniff, the credential content
+    # check) was silently not applied on the per edit path, which is the path
+    # that runs most often.
+    reason = exclusion_reason(abs_file)
+    if reason is not None:
+        return {"skipped": True, "reason": reason}
 
     try:
         content = abs_file.read_text(encoding="utf-8")

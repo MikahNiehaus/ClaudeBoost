@@ -1,13 +1,15 @@
 """
 ClaudeBoost workspace primer - SessionStart command hook.
 
-When an active workspace is set in state/active-workspace.json, injects a
-RAG tier briefing into the session: workspace path, project path, full tier
-breakdown with token budgets, and Tier 3c status (EXISTS vs NOT BUILT).
+When an active workspace is set in state/active-workspace.json, injects the
+workspace identity into the session: workspace id, workspace path, and the
+project path with its detected stack.
 
-This gives Claude a clear picture of what context is available before it
-calls POST /context or spawns agents. Tier 3c task research is built
-automatically by the research gate as agents edit code.
+This used to print a RAG context tier breakdown (Tiers 0-4 plus Tier 3c) and
+a POST /context call to fetch them. Both belonged to the retired bundled
+server; /context has no clean-rag equivalent and the knowledge base those
+tiers indexed was deleted, so the briefing described a system that no longer
+exists.
 
 Silent when no workspace is active.
 """
@@ -45,15 +47,6 @@ def _detect_stack(project_path: str) -> str:
     if (p / "pom.xml").exists():
         stacks.append("Java")
     return " · ".join(stacks)
-
-
-def _tier3c_status(workspace_path: str) -> tuple[bool, int]:
-    """Check whether the Tier 3c research index exists and how many files it has."""
-    research_dir = Path(workspace_path) / ".rag-index" / "research"
-    if not research_dir.exists():
-        return False, 0
-    data_files = [f for f in research_dir.rglob("*") if f.is_file()]
-    return True, len(data_files)
 
 
 def main() -> int:
@@ -103,49 +96,15 @@ def main() -> int:
         return 0
 
     stack = _detect_stack(project_path) if project_path else ""
-    tier3_suffix = f" (stack: {stack})" if stack else ""
-
-    t3c_exists, t3c_files = _tier3c_status(workspace_path)
-    if t3c_exists:
-        t3c_line = f"  Tier 3c  Task research           ~400 tok  [EXISTS - {t3c_files} index files]\n"
-        t3c_action = "Tier 3c is ready. Task research auto-loads when workspace_path is in /context.\n"
-    else:
-        t3c_line = "  Tier 3c  Task research           ~400 tok  [NOT BUILT - research gate builds it on code edits]\n"
-        t3c_action = "Tier 3c is NOT BUILT yet. The research gate builds it automatically as agents edit code.\n"
 
     project_info = ""
     if project_path:
         project_info = f"\nProject:          {project_path}" + (f" ({stack})" if stack else "")
 
-    context_body = (
-        '  {\n'
-        '    "agent": "...",\n'
-        '    "task_description": "...",\n'
-    )
-    if project_path:
-        context_body += f'    "project_path": "{project_path}",\n'
-    context_body += f'    "workspace_path": "{workspace_path}"\n'
-    context_body += '  }'
-
     briefing = (
         f"ACTIVE WORKSPACE: {workspace_id}\n"
         f"Workspace path:   {workspace_path}"
         f"{project_info}\n"
-        "\n"
-        "RAG CONTEXT TIERS - include workspace_path in every /context call:\n"
-        "\n"
-        "  POST http://127.0.0.1:8612/context\n"
-        + context_body + "\n"
-        "\n"
-        "Token budget (~6000 tokens total):\n"
-        "  Tier 0   Agent definition        ~200 tok   (always included)\n"
-        "  Tier 1   Guardrails              ~800 tok   (always included)\n"
-        "  Tier 2   Declared knowledge      ~400 tok   (agent-specific)\n"
-        f"  Tier 3   General best practices ~1200 tok  (semantic search{tier3_suffix})\n"
-        + t3c_line
-        + "  Tier 4   Project codebase        ~3000 tok  (requires project_path and indexed project)\n"
-        "\n"
-        + t3c_action
     )
 
     print(json.dumps({"additionalContext": briefing}))

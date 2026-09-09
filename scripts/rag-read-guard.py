@@ -135,9 +135,10 @@ def main() -> int:
 
     print(
         f"BLOCKED -- {reads_since_rag} file searches since last RAG call. "
-        "Call POST http://127.0.0.1:8612/search FIRST before reading more files. "
+        "Call POST http://127.0.0.1:8613/search FIRST before reading more files. "
         "RAG finds the relevant file; Grep/Read reads it -- not the other way around. "
-        "Run: rag_search(scope='codebase', query='<what you are looking for>') "
+        "Send {\"query\": '<what you are looking for>', "
+        "\"sources\": [\"project:<absolute path>\"], \"mode\": \"both\"} "
         "then read only the files RAG identifies as relevant. "
         "Do NOT bypass this by reading files directly.",
         file=sys.stderr,

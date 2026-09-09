@@ -1,6 +1,6 @@
 ---
 name: start
-description: Kick off a new build or feature the deliberate way. Spawns researcher first (codebase structure plus real engineering standards), then swiper informed by that (what can be swiped, never written by swiper itself), then consults the user with real options before any code gets written.
+description: Kick off a new build or feature the deliberate way. Spawns researcher first (codebase structure plus real engineering standards), then swiper informed by that (what can be swiped, never written by swiper itself), then builds a narrated teaching video of the open questions and the architecture, then consults the user with real options before any code gets written.
 ---
 
 # /start
@@ -79,6 +79,56 @@ A consult option you cannot trace to a specific researcher or swiper finding
 is skipped reasoning, not CONSULT. The summary is how you prove you read both
 reports before forming the options. "Based on research findings" is not a
 summary — name the actual findings.
+
+**2c. Build the teaching video before you consult.** Every `/start` produces
+one, including the automatic call from `workspace.md` Phase 6.5. It exists so
+the human learns the architecture and the practice rather than only receiving
+code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
+"Narrating it to an mp4" section. Two sections, in this order:
+
+1. **The questions you are about to ask in step 3**, one slide each, with your
+   recommended answer and the reason behind the recommendation. The user
+   watches this before the consult, so the consult confirms something they
+   already understand instead of being a cold multiple choice.
+2. **The architecture and why.** The high level shape of what is about to be
+   built, the best practices in play, and the reason for each choice. Include
+   the AI-era practice this run is itself demonstrating: why research ran
+   before the edit, why a fresh context reviews the diff instead of the author,
+   why a real reference gets swiped instead of written from memory. The goal is
+   that the human comes out of it a better engineer, not only a better prompter.
+
+Every fact in the deck comes from researcher's or swiper's actual report. Do
+not invent a statistic, a benchmark, or a best practice to fill a slide. That
+is the rule the `powerpoint` skill already states about charts, applied to the
+whole deck.
+
+Run `pptx_env.py doctor` first. Narration needs `edge-tts`, ffmpeg and
+LibreOffice, and the skill degrades one step at a time rather than failing, so
+a missing dependency yields a deck with no video and no error. That silence is
+the failure to avoid: if `doctor` reports one missing, name it and say plainly
+that the mp4 was not produced. Never hand over a silent deck as though it were
+the narrated video.
+
+`doctor` answers whether a dependency is installed, not whether it responds.
+Narration is an outbound call to Microsoft's TTS endpoint once per slide, and
+`edge_tts.Communicate` bounds only the socket (`sock_connect=10`,
+`sock_read=60`) while leaving `total=None`, so an endpoint that stays connected
+without ever finishing never returns on its own. This step runs unattended from
+`workspace.md` Phase 6.5, including under `AUTO_MODE`, so bound each slide's
+synthesis on the wall clock — `asyncio.wait_for(..., timeout=60)` — and on the
+first timeout or error abandon narration rather than paying that bound once per
+slide. Then report it exactly the way a missing dependency is reported: name
+the slide, say the mp4 was not produced and why, and hand over the deck.
+Present but stalled has to end where absent already ends, which takes one more
+step than abandoning does on its own: edge-tts and ffmpeg both stream their
+output to disk, so a run killed at any point leaves a real truncated file. The
+`powerpoint` skill therefore runs the whole narration pipeline inside one
+scratch directory that goes away on every failure path, and only a finished,
+`ffprobe`-checked mp4 gets moved into the workspace.
+
+The deck and the mp4 land in the active workspace (`pptx_env.py workspace`).
+Name the artifact path in the conversation before the consult so the user can
+open it.
 
 **3. Consult before writing anything.** Read both reports and turn them into
 a small set of concrete options: what to swipe from where, what the

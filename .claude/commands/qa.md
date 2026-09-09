@@ -897,9 +897,11 @@ Add a `TC-TICKET-01` test case that directly exercises `ORIGINAL_BUG_DESC`. This
 
 **Write draft plan to disk:** `$WORKSPACE_ABS/plan-draft.md`
 
-**2c — Anti-hallucination evaluator.**
+**2c — Anti-hallucination check on the draft plan.**
 
-Spawn `evaluator-agent` to audit the draft plan. Pass in:
+Spawn `quick-cop` to audit the draft plan. A plan with no gaps is a claim like
+any other, and checking one against the actual code is what quick-cop is for.
+Pass in:
 - The full contents of `plan-draft.md`
 - The flow-map.md journeys
 - The App Map from `context.md`
@@ -1454,9 +1456,9 @@ Protocol:
 
 **Run this pass after ALL TCs complete, before Phase 4.**
 
-Spawn `evaluator-agent` to independently audit every screenshot taken this session. The main orchestrator must NOT self-verify — this is the hallucination guard.
+Spawn `bad-cop` with `MODE: evidence-judge` to independently audit every screenshot taken this session. The main orchestrator must NOT self-verify — this is the hallucination guard. That mode is built for exactly this: it opens the artifacts rather than reading the report's description of them.
 
-**Pass `evaluator-agent` the following:**
+**Pass `bad-cop` the following:**
 
 1. The list of all `TC-NNN-after.png` files saved to `$PROOF_DIR/` this session.
 2. The corresponding TC entry from `plan.md` for each screenshot (TC-ID, description, expected outcome).
@@ -1573,10 +1575,10 @@ Set `DEBUG_ENABLED = false`.
 
 **PHASE 4 ENTRY GATE — runs before any report is written:**
 
-Verify the Phase 3 Close screenshot validation evaluator ran this session. If it did NOT run:
+Verify the Phase 3 Close screenshot validation ran this session. If it did NOT run:
 
-1. Run Phase 3 Close now — spawn `evaluator-agent` for screenshot validation before continuing.
-2. Do NOT write the report until the evaluator has returned its verdict.
+1. Run Phase 3 Close now — spawn `bad-cop` with `MODE: evidence-judge` for screenshot validation before continuing.
+2. Do NOT write the report until it has returned its verdict.
 
 The orchestrator must NOT self-verify screenshots. "I checked them and they look fine" is not a substitute for the evaluator pass. Apply all RETAKE instructions before proceeding.
 
@@ -1916,8 +1918,8 @@ a gap; a tool that was available and skipped is one the judge should ask about.
 
 #### 5d-ii — Spawn the judge
 
-Spawn `bad-cop` with `MODE: evidence-judge`. Use `bad-cop`, not
-`evaluator-agent` and not the agent that ran the QA:
+Spawn `bad-cop` with `MODE: evidence-judge`. Use `bad-cop`, and never the agent
+that ran the QA:
 
 ```
 Agent(subagent_type="bad-cop", run_in_background=false, prompt="""
@@ -2949,9 +2951,10 @@ found.
 | Coverage gaps noted | Review `coverage-gaps.md` — decide which to backlog vs. address now |
 | Security concern visible (auth, input, tokens) | `/security-review` — OWASP-focused review of pending changes |
 
-**Never self-verify.** Two separate agents exist for this and neither is the
-orchestrator. `evaluator-agent` (Phase 3 Close) checks annotation presence,
-annotation placement, and post-action state on each screenshot. Phase 5d's
+**Never self-verify.** Two separate passes exist for this and neither is the
+orchestrator. Phase 3 Close (`bad-cop`, `MODE: evidence-judge`) checks
+annotation presence, annotation placement, and post-action state on each
+screenshot. Phase 5d's
 quick-cop or bad-cop, whichever ran, checks whether the proof supports the
 requirements at all, and it is the only thing that can end the session. The
 orchestrator produced the evidence, so it cannot objectively answer either

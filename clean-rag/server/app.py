@@ -1,18 +1,19 @@
 """HTTP server for clean-rag. Handles project indexing and search.
 
 Standalone mode: runs on port 8613.
-Bundled with ClaudeBoost: routes registered under /clean-rag/* on port 8612.
 """
 
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -759,6 +760,133 @@ async def handle_reindex_file(request: web.Request) -> web.Response:
     return _json_response(result, status)
 
 
+def _normalized_path_key(path: str | Path) -> str:
+    """One spelling of a path, for comparing two of them.
+
+    normcase because Windows is case insensitive and the registry stores
+    whatever spelling the caller first used, so a plain string compare would
+    refuse the same directory written a different way. resolve() because the
+    comparison has to be about the directory itself, not the route taken to it:
+    without it ``<registered>/../../Windows/Temp/evil`` compares as a different
+    string and passes.
+    """
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+#: What a gated route does with the path, quoted back to the caller it refuses.
+#: The gate is the same test either way; a caller is owed the real reason, and
+#: telling one whose /graphrag-build was refused that this route "runs the
+#: project's own test tooling" is simply false.
+_RUNS_PROJECT_TOOLING = (
+    "runs the project's own test tooling, which executes code from that directory"
+)
+_READS_PROJECT_CONTENT = (
+    "reads every source file under that directory and ingests the contents into a "
+    "graph that /graphrag-query then reads back in its answers"
+)
+
+
+def _registered_project_or_error(project_path: str, action: str) -> web.Response | None:
+    """Refuse a path the operator never registered. None means it is allowed.
+
+    ``action`` is one of the two constants above: what this particular route
+    does with the path. It is required rather than defaulted so a new gated
+    route has to say which exposure it is, instead of inheriting a sentence
+    about test tooling that may not be true of it.
+
+    Why this gate exists on the routes that run something. Detecting
+    and running a project's tests means executing code the project supplies:
+    ``npm test`` runs whatever ``scripts.test`` says, ``npx vitest`` runs
+    whatever is in the project's node_modules, and ``pytest`` imports the
+    project's conftest.py. There is no way to run a project's tests without
+    that, so the control cannot be on the command; it has to be on which
+    projects are allowed to supply one.
+
+    Why it also exists on the two routes that only read. /graphrag-build takes
+    project_path from a request body and hands it to the graph service, which
+    walks the directory, reads every source file scan_project accepts, and
+    ingests the contents into a graph under databases/_projects. Nothing from
+    the tree is executed: graphrag_client spawns ``[venv python, graph_service.py]``,
+    the server's own interpreter running the server's own script, and the path
+    travels as data. So the exposure is not code execution, it is an arbitrary
+    directory read whose contents come back out of /graphrag-query as answers.
+    An unregistered path there means one request body can point the reader at
+    ``~`` or at another customer's checkout and the next one asks it what it
+    found. That is the same argument the executing routes are gated on, applied
+    to a read rather than a run, so it takes the same gate.
+
+    Not applied to /graphrag-status. It only reads clean-rag's own
+    progress.json under databases/_projects, never the project directory, and
+    returns build progress. Refusing it would cost the caller the one cheap way
+    to find out a build is not there, and it discloses nothing about a path the
+    caller did not already supply.
+
+    The registry is the operator's own allowlist, and it means "this server
+    indexed this directory" because indexing.py's _update_project_registry is
+    the only thing reachable from a route that writes it. That is the load
+    bearing half, not the membership test.
+
+    Reachable from a route is the exact claim, and it is narrower than "only
+    writer", which would be false. clean-rag/fix_boat_bug.py:120 writes this
+    file too. It is an operator run CLI that only ever removes entries for
+    databases it deleted, it is not imported by the server, and nothing an
+    HTTP caller can send reaches it, so it cannot mint the membership this
+    gate reads. Removing an entry costs a caller capability rather than
+    granting it.
+
+    A /register-project route used to write an entry straight
+    from a request body with no directory check and no index behind it, which
+    made the allowlist self service: one POST added any path, the next POST ran
+    its package.json test script. Registry membership is only worth checking
+    while nothing can mint it for free, so a new writer of state/projects.json
+    reopens this hole no matter what this function does.
+
+    Not applied to /index-project. Registering a new path is the entire purpose
+    of it, so an allowlist there would be circular, and it executes nothing
+    from the tree: indexing reads files and embeds them.
+
+    Exact match, not "under a registered root". A subdirectory match would
+    accept a registered project's own node_modules, which is attacker
+    influenced content in every project that has a lockfile.
+
+    Note what this does not claim. Binding to 127.0.0.1 is not itself a
+    boundary (see local_origin_middleware), and any process already running as
+    this user can do anything this server can. The gate narrows a request body
+    value, which is the part that crosses a trust boundary.
+    """
+    try:
+        wanted = _normalized_path_key(project_path)
+    except (OSError, ValueError) as e:
+        logger.error("Could not resolve project_path %r: %s", project_path, e)
+        return _json_response({"error": "Invalid project_path"}, 400)
+
+    for entry in _list_projects().values():
+        registered = entry.get("project_path")
+        if not registered:
+            continue
+        try:
+            if _normalized_path_key(registered) == wanted:
+                return None
+        except (OSError, ValueError):
+            logger.warning("Registry holds an unusable project_path: %r", registered)
+            continue
+
+    logger.warning(
+        "Refused an unregistered project path (route %s): %s", action, project_path,
+    )
+    return _json_response(
+        {
+            "error": (
+                f"project_path is not a registered project. This route {action}, "
+                "so it only accepts projects the operator registered. "
+                "Index it first with POST /index-project, then retry."
+            ),
+            "project_path": project_path,
+        },
+        403,
+    )
+
+
 def _has_pytest_tests(root: Path) -> bool:
     """True if this looks like a pytest project worth running.
 
@@ -788,6 +916,15 @@ def _run_project_tests(project_path: str) -> dict:
     Command strings are fixed literals run with shell=True so npm/npx/python
     resolve the same way on Windows and posix. project_path is never spliced
     into the command, it's only the cwd, so there's no shell injection surface.
+
+    That last sentence is true and is not a safety claim, so do not read it as
+    one. Every command here hands control to the project anyway: ``npm test``
+    runs whatever ``scripts.test`` says, ``npx`` runs whatever is in the
+    project's node_modules, and ``pytest`` imports the project's conftest.py.
+    Running a project's tests IS executing its code, and dropping shell=True
+    would not change that. The control is on which paths may reach this at all,
+    in _registered_project_or_error; callers must go through a handler that
+    applies it.
     """
     root = Path(project_path)
     cmd = None
@@ -818,7 +955,6 @@ def _run_project_tests(project_path: str) -> dict:
     if cmd is None:
         return {"has_tests": False, "passed": None, "summary": "no test command found"}
 
-    import os
     import subprocess
     # CI=true stops watch mode runners (create-react-app, vitest) from hanging.
     env = {**os.environ, "CI": "true"}
@@ -873,6 +1009,10 @@ async def handle_run_tests(request: web.Request) -> web.Response:
     if not Path(project_path).is_dir():
         return _json_response({"error": f"Project path not found: {project_path}"}, 400)
 
+    refusal = _registered_project_or_error(project_path, _RUNS_PROJECT_TOOLING)
+    if refusal is not None:
+        return refusal
+
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, partial(_run_project_tests, project_path))
     return _json_response(result)
@@ -902,6 +1042,10 @@ async def handle_mutation_test(request: web.Request) -> web.Response:
     if not isinstance(changed_files, list):
         return _json_response({"error": "'changed_files' must be a list"}, 400)
 
+    refusal = _registered_project_or_error(project_path, _RUNS_PROJECT_TOOLING)
+    if refusal is not None:
+        return refusal
+
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         None, partial(run_mutation, project_path, changed_files)
@@ -930,6 +1074,10 @@ async def handle_security_scan(request: web.Request) -> web.Response:
     changed_files = body.get("changed_files") or []
     if not isinstance(changed_files, list):
         return _json_response({"error": "'changed_files' must be a list"}, 400)
+
+    refusal = _registered_project_or_error(project_path, _RUNS_PROJECT_TOOLING)
+    if refusal is not None:
+        return refusal
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
@@ -1131,6 +1279,11 @@ async def handle_graphrag_build(request: web.Request) -> web.Response:
 
     Body: {"project_path": "<abs>"}. Returns immediately; poll /graphrag-status for
     percent. Proxies to the isolated graph service (auto started) in an executor.
+
+    Registered projects only. The build reads every source file under the path
+    and /graphrag-query hands the contents back as answers, so an ungated
+    build is an arbitrary directory read with a readback channel. Not circular:
+    /index-project is what registers a path, and it is a different route.
     """
     try:
         body = await request.json()
@@ -1141,6 +1294,9 @@ async def handle_graphrag_build(request: web.Request) -> web.Response:
         return _json_response({"error": "project_path is required"}, 400)
     if not Path(project_path).is_dir():
         return _json_response({"error": f"Project path not found: {project_path}"}, 400)
+    refusal = _registered_project_or_error(project_path, _READS_PROJECT_CONTENT)
+    if refusal is not None:
+        return refusal
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, partial(graphrag_build, project_path))
     return _json_response(result)
@@ -1151,6 +1307,11 @@ async def handle_graphrag_query(request: web.Request) -> web.Response:
 
     Body: {"project_path": "<abs>", "query": "..."}. The semantic layer, for the
     why and intent a query the import graph cannot answer. Proxied in an executor.
+
+    Gated with the build for the same reason: this is the end of the readback
+    channel, where the ingested file contents come out as an answer. Gating the
+    build alone would still leave a graph built before the gate readable by
+    anyone who can reach the port.
     """
     try:
         body = await request.json()
@@ -1160,6 +1321,9 @@ async def handle_graphrag_query(request: web.Request) -> web.Response:
     q = (body.get("query") or "").strip()
     if not project_path or not q:
         return _json_response({"error": "project_path and query are required"}, 400)
+    refusal = _registered_project_or_error(project_path, _READS_PROJECT_CONTENT)
+    if refusal is not None:
+        return refusal
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, partial(graphrag_query, project_path, q))
     return _json_response(result)
@@ -1185,63 +1349,6 @@ async def handle_projects(request: web.Request) -> web.Response:
     """GET /projects: list indexed projects."""
     projects = _list_projects()
     return _json_response({"projects": projects})
-
-
-async def handle_register_project(request: web.Request) -> web.Response:
-    """POST /register-project: register an externally indexed project.
-
-    Called by /index-project skill after indexing on ClaudeBoost RAG (port 8612)
-    so clean-rag tracks all RAG databases system wide.
-
-    Body fields:
-        project_path (str): absolute path to the project (required)
-        source (str): which RAG system indexed it, e.g. "claudeboost-rag" (required)
-        server (str): base URL of the RAG server, e.g. "http://127.0.0.1:8612"
-        files_indexed (int): number of files indexed
-        chunks_created (int): number of chunks created
-        graph (dict): optional graph stats
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_response({"error": "Invalid JSON body"}, 400)
-
-    project_path = body.get("project_path", "").strip()
-    if not project_path:
-        return _json_response({"error": "Missing 'project_path' field"}, 400)
-
-    source = body.get("source", "").strip()
-    if not source:
-        return _json_response({"error": "Missing 'source' field"}, 400)
-
-    import hashlib
-    from datetime import datetime, timezone
-    norm_path = project_path.replace("\\", "/").rstrip("/").lower()
-    pid = f"ext_{hashlib.md5(norm_path.encode()).hexdigest()[:12]}"
-
-    registry = _list_projects()
-    entry = {
-        "project_path": project_path.replace("\\", "/").rstrip("/"),
-        "source": source,
-        "registered_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if body.get("server"):
-        entry["server"] = body["server"]
-    if body.get("files_indexed") is not None:
-        entry["files_indexed"] = body["files_indexed"]
-    if body.get("chunks_created") is not None:
-        entry["chunks_created"] = body["chunks_created"]
-    if body.get("graph"):
-        entry["graph"] = body["graph"]
-
-    registry[pid] = entry
-
-    registry_path = STATE_DIR / "projects.json"
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-
-    logger.info("Registered external project: %s (source=%s, id=%s)", project_path, source, pid)
-    return _json_response({"registered": pid, "project_path": entry["project_path"], "source": source})
 
 
 # ---------------------------------------------------------------------------
@@ -1282,6 +1389,75 @@ async def _on_shutdown(app: web.Application) -> None:
         _HEARTBEAT_PATH.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+#: Hostnames a request may legitimately name in its Host header. The server
+#: binds 127.0.0.1 (see main), so anything else in Host means the request was
+#: addressed to a name that resolved here rather than to this machine directly,
+#: which is what DNS rebinding looks like.
+_ALLOWED_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _url_hostname(value: str) -> str:
+    """Lowercased hostname from a URL or a bare ``host:port``, brackets stripped.
+
+    urlsplit handles both forms once a scheme is present, and its ``hostname``
+    already lowercases and unwraps the ``[::1]`` IPv6 brackets, which is exactly
+    the parsing that goes wrong when it is done by hand.
+    """
+    candidate = value if "//" in value else f"//{value}"
+    try:
+        return (urlsplit(candidate).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+@web.middleware
+async def local_origin_middleware(request: web.Request, handler) -> web.Response:
+    """Refuse requests that came from a web page rather than a local tool.
+
+    "It only listens on 127.0.0.1" is not a boundary on its own, and this server
+    runs code (/run-tests and /mutation-test execute the project's own test
+    tooling), so the gap matters. Two documented ways a web page reaches a
+    loopback service:
+
+    - Plain CSRF. A page can POST a JSON body cross origin without a preflight,
+      and aiohttp's request.json() parses the body whatever the content type
+      says. The browser attaches an Origin header it cannot forge.
+    - DNS rebinding. A hostname the attacker controls is re-pointed at
+      127.0.0.1, so the request is same origin from the browser's point of view.
+      The Host header still carries the attacker's name. This is the same defect
+      and the same fix as the Model Context Protocol TypeScript SDK advisory
+      GHSA-w48q-cv73-mx4w, which shipped Host validation for HTTP servers on
+      localhost for exactly this reason.
+
+    Deliberately not an authentication scheme. It refuses browsers and allows
+    local tools, which is the split that matters: every real caller here (the
+    hooks via urllib, agents via curl) sends a loopback Host and no Origin, and
+    none of them is affected. A local process running as this user is out of
+    scope, since it can do anything this server can without asking it.
+    """
+    host = (request.headers.get("Host") or "").strip()
+    if host and _url_hostname(host) not in _ALLOWED_HOSTNAMES:
+        logger.warning(
+            "Refused %s %s: Host header %r is not a loopback name, which is "
+            "what a DNS rebinding attempt looks like",
+            request.method, request.path, host,
+        )
+        return _json_response({"error": "Host header must name this loopback server"}, 403)
+
+    origin = (request.headers.get("Origin") or "").strip()
+    # A loopback Origin is allowed: that is a page this server itself served,
+    # not a cross origin one. Only a browser sends Origin at all, so anything
+    # else in it is a page on another site talking to this port.
+    if origin and _url_hostname(origin) not in _ALLOWED_HOSTNAMES:
+        logger.warning(
+            "Refused %s %s: cross origin browser request from %r",
+            request.method, request.path, origin,
+        )
+        return _json_response({"error": "Cross origin requests are not permitted"}, 403)
+
+    return await handler(request)
 
 
 @web.middleware
@@ -1359,7 +1535,7 @@ def create_app() -> web.Application:
         )
         logger.info("Auto reindex loop started")
 
-    app = web.Application(middlewares=[error_middleware])
+    app = web.Application(middlewares=[local_origin_middleware, error_middleware])
     app.router.add_get("/status", handle_status)
     app.router.add_post("/search", handle_search)
     app.router.add_post("/web-search", handle_web_search)
@@ -1381,7 +1557,6 @@ def create_app() -> web.Application:
     app.router.add_post("/mutation-test", handle_mutation_test)
     app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
-    app.router.add_post("/register-project", handle_register_project)
 
     from .kanban import setup_kanban
     setup_kanban(app)

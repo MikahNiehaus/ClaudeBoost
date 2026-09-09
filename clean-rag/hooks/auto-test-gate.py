@@ -24,6 +24,8 @@ before. The rules, in order:
 Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -71,6 +73,7 @@ def _git_root(cwd: str) -> str | None:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=cwd, capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
     except Exception:
         return None
@@ -86,6 +89,7 @@ def _code_changed(root: str) -> bool:
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=root, capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
     except Exception:
         return False

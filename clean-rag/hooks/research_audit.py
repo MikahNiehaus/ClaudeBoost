@@ -28,6 +28,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from research_state import write_lock  # noqa: E402
+
 # The first entry has no parent, so it chains from a fixed root.
 GENESIS = "0" * 64
 
@@ -41,34 +44,6 @@ def clean_rag_home() -> Path:
 
 def audit_path() -> Path:
     return clean_rag_home() / "state" / "research-audit.jsonl"
-
-
-def _boost_home() -> Path:
-    env = os.environ.get("CLAUDEBOOST_HOME")
-    if env:
-        return Path(env)
-    return clean_rag_home().parent
-
-
-def _write_lock(path: Path):
-    """Real cross process lock, same one research_state.py uses.
-
-    Several hook processes can be appending at once, and two appends racing on
-    the tail of the chain would both read the same prev_hash and fork it. A
-    forked chain looks exactly like tampering, so the lock is load bearing here,
-    not hygiene.
-    """
-    try:
-        lock_src = _boost_home() / "mcp-rag-server" / "src"
-        if str(lock_src) not in sys.path:
-            sys.path.insert(0, str(lock_src))
-        from rag_server.core.locking import index_write_lock
-
-        return index_write_lock(path.with_suffix(".jsonl.lock"))
-    except Exception:
-        import contextlib
-
-        return contextlib.nullcontext()
 
 
 def entry_hash(prev_hash: str, entry: dict) -> str:
@@ -128,7 +103,12 @@ def append(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with _write_lock(path):
+        # research_state.write_lock, not a second implementation: several hook
+        # processes can be appending at once, and two appends racing on the tail
+        # of the chain both read the same prev_hash and fork it. A forked chain
+        # looks exactly like tampering, so the lock is load bearing here, not
+        # hygiene, and it has to cover the _last_hash read as well as the write.
+        with write_lock(path) as locked:
             prev = _last_hash(path)
             entry = {
                 "ts": round(time.time(), 3),
@@ -143,6 +123,18 @@ def append(
 
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+
+        if not locked:
+            # write_lock fails open so a wedged lock can never stop an edit from
+            # being recorded, and that choice is unchanged here. Say it out loud
+            # though: this one entry was written without exclusion, so if another
+            # process appended at the same instant `audit.py verify` will report
+            # a chain break that nobody caused.
+            print(
+                f"[research-audit] appended {path.name} without the lock; a "
+                "concurrent append may show as a chain break",
+                file=sys.stderr,
+            )
 
     except Exception as e:
         # Deliberately swallowed. See the docstring: an audit failure must not

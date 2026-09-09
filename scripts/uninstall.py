@@ -19,7 +19,10 @@ Default scope (no --purge) removes only ClaudeBoost's own footprint:
   - the rag-server MCP registration (legacy)
   - stops the running RAG HTTP daemon and clears its temp sentinel
   - the "ClaudeBoost Session Restore" at logon scheduled task (and its Startup
-    folder fallback), the only thing setup registers outside ~/.claude
+    folder fallback)
+  - the terminal mode reset block setup appends to the PowerShell profile
+    (Windows), taken out between its own markers so the rest of the profile
+    is untouched
 
 --purge additionally:
   - pip uninstalls the rag-server package
@@ -44,6 +47,11 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+# Sibling module, the same helper setup.py resolves the CLI with.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from claude_cli import claude_cmd  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Colors, same scheme as setup.py so the two read as a pair.
@@ -269,12 +277,24 @@ def revert_settings() -> None:
 # Step 2, ~/.claude files: symlinks and copied helpers.
 # ---------------------------------------------------------------------------
 def _is_link_into_repo(path: Path) -> bool:
-    """True if path is a symlink/junction that resolves inside the repo."""
+    """True if path is a symlink/junction that resolves inside the repo.
+
+    Containment is checked per path component, not per character. A string
+    prefix has no separator boundary, so a second checkout sitting beside this
+    one — "ClaudeBoostFake", "ClaudeBoost2", "ClaudeBoost-old" — matched the
+    repo name as a prefix and its symlink was classified as ours to remove.
+
+    Path.is_relative_to (3.9+, and setup.py's preflight names 3.9 as the floor)
+    is the containment check that respects components. On Windows it also
+    compares case-insensitively, which a string prefix does not, and it returns
+    False rather than raising when the two paths are on different drives or one
+    is UNC — os.path.commonpath raises ValueError there.
+    """
     try:
         if not (path.is_symlink() or path.resolve(strict=False) != path):
             return False
         resolved = path.resolve(strict=False)
-        return str(resolved).startswith(str(BOOST_HOME))
+        return resolved.is_relative_to(Path(BOOST_HOME).resolve(strict=False))
     except OSError:
         return False
 
@@ -384,14 +404,6 @@ def _run(args: list[str]) -> tuple[int, str]:
         return 127, str(e)
 
 
-def _claude_cmd() -> list[str] | None:
-    for candidate in ("claude", "claude.cmd"):
-        path = shutil.which(candidate)
-        if path:
-            return ["cmd", "/c", path] if candidate.endswith(".cmd") else [path]
-    return None
-
-
 def _strip_mcp_server(path: Path, name: str, label: str) -> None:
     if not path.exists():
         _skip(f"{label} not found")
@@ -429,7 +441,7 @@ def _mcp_remove(claude: list[str] | None, name: str) -> None:
 
 def deregister_mcp() -> None:
     _info("\n[3/5] Deregistering MCP servers...")
-    claude = _claude_cmd()
+    claude = claude_cmd()
 
     # rag-server is ClaudeBoost's own, always remove (legacy stdio entry + CLI reg).
     _strip_mcp_server(MCP_PATH, "rag-server", "~/.claude/mcp.json")
@@ -537,6 +549,37 @@ def remove_session_restore_task() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 4c, the PowerShell profile block setup.py appends. Like the logon task,
+# it lives outside ~/.claude and outside the repo, so nothing else here would
+# reach it. The installer owns both directions so the markers are defined once.
+# ---------------------------------------------------------------------------
+def remove_terminal_mode_reset() -> None:
+    _info("\n[4c/5] Removing the PowerShell terminal mode reset...")
+
+    if not IS_WINDOWS:
+        _skip("terminal mode reset is Windows only")
+        return
+
+    script = BOOST_HOME / "scripts" / "install-terminal-mode-reset.py"
+    if not script.is_file():
+        _warn(f"{script.name} is missing — remove the ClaudeBoost block from your "
+              "PowerShell profile by hand if it is still there")
+        return
+
+    if DRY_RUN:
+        _plan("remove the ClaudeBoost block from the PowerShell profile")
+        return
+
+    rc, out = _run([sys.executable, str(script), "--remove"])
+    for line in (out or "").splitlines():
+        if line.strip():
+            print(f"  {line.rstrip()}")
+    if rc != 0:
+        _warn("could not edit the PowerShell profile, remove the block between "
+              "the ClaudeBoost markers by hand")
+
+
+# ---------------------------------------------------------------------------
 # Step 5, --purge extras: pip package, index dir, ~/.profile PATH line.
 # ---------------------------------------------------------------------------
 def purge_extras() -> None:
@@ -641,6 +684,7 @@ def main() -> int:
     deregister_mcp()
     stop_rag_server()
     remove_session_restore_task()
+    remove_terminal_mode_reset()
     purge_extras()
 
     if DRY_RUN:

@@ -35,7 +35,7 @@ import sys
 
 import pytest
 
-from helpers import run_hook, pretooluse, SCRIPTS_DIR
+from helpers import hook_env, run_hook, pretooluse, SCRIPTS_DIR
 
 
 def _bash(command: str) -> dict:
@@ -203,13 +203,34 @@ class TestNoFalsePositives:
         "python - <<'PYEOF'\ns = \"gh pr merge\"\nPYEOF",
         # `cat > file <<EOF` is deliberately blocked by check_cat_heredoc, a
         # different guard, so this uses the form that guard leaves alone.
-        "cat <<EOF > f.txt\nrun gh pr merge later\nEOF",
+        # The write sits first on the body line on purpose: an earlier version
+        # of this case opened with the word "run", which the command-position
+        # check reads as making the write an argument, so the case passed
+        # while the heredoc classifier below it was broken.
+        "cat <<EOF 2>&1\ngh pr merge\nEOF",
     ])
     def test_a_heredoc_body_for_a_non_shell_is_data(self, command):
         """Found by running the guard against this very repo's own tooling: a
         heredoc writing a Python file that merely quotes these commands was
         blocked as though it ran them."""
         allow(command)
+
+    def test_a_heredoc_with_a_trailing_redirect_is_still_data(self):
+        """`<<tag` is one redirection operator, not the whole line.
+
+        POSIX 2.7.4 puts the body after the next newline, so a second
+        redirection is legal between the tag and that newline: the heredoc
+        feeds cat's stdin while `> f.txt` governs its stdout. Requiring the
+        newline immediately after the tag matched nothing here, and the body
+        was then scanned as command text and refused.
+        """
+        allow("cat <<EOF > f.txt\ngh pr merge\nEOF")
+
+    def test_a_heredoc_piped_to_a_reader_is_still_data(self):
+        """The same operator line, reached through a trailing pipe instead of
+        a trailing redirect. `cat <<EOF | grep x` feeds cat's stdin while grep
+        reads cat's stdout; nothing about the pipe changes what the body is."""
+        allow("cat <<EOF | grep x\ngh pr merge\nEOF")
 
     def test_a_heredoc_line_that_looks_like_a_command_is_still_data(self):
         """Isolates the heredoc blanking specifically.
@@ -371,11 +392,61 @@ class TestExecutorFormsStillUncovered:
         "bash <<'EOF'\ngit push origin main\nEOF",
         "sh <<EOF\ngit push\nEOF",
         "/bin/bash <<'EOF'\ngit push\nEOF",
+        # The shell is named AFTER the tag, so reading only the text before
+        # the << misses it. cat writes the body to stdout and bash runs it.
+        "cat <<'EOF' | bash\ngit push\nEOF",
+        "cat <<'EOF' | /bin/sh\ngit push\nEOF",
+        # A pipe needs no whitespace around it, so splitting the operator line
+        # on whitespace alone reads this as the single word "cat|bash".
+        "cat <<'EOF'|bash\ngit push\nEOF",
+        "cat|bash <<EOF\ngit push\nEOF",
+        # Quotes are removed before the first field becomes the command name
+        # (POSIX 2.6 then 2.9.1), so every one of these runs the body. Testing
+        # the split word with its quotes still attached matches none of them.
+        'cat <<EOF | "ba"sh\ngit push\nEOF',
+        'cat <<EOF | "bash\ngit push\nEOF',
+        # An assignment or a hand-off runner may precede the command name, so
+        # the shell is still what reads the body.
+        'cat <<EOF | VAR=1 "bash"\ngit push\nEOF',
+        'cat <<EOF | xargs "bash"\ngit push\nEOF',
     ])
     def test_a_heredoc_fed_to_a_shell_is_executed(self, command):
         """A shell really does run its heredoc body, so a write in there is
         routed exactly like one behind -c."""
         block(command)
+
+    def test_a_quoted_shell_name_counts_only_at_the_command_name(self):
+        """Pins the quoting asymmetry, which is the whole reason the dequoted
+        check is confined to a command name rather than applied line-wide.
+
+        Both lines contain the characters `"bash"`. In the first it is grep's
+        argument and nothing executes the body, so blanking it is correct. In
+        the second it is the command name and the body really is executed.
+        Dequoting every word on the line collapses the pair and refuses
+        ordinary `grep "bash"` work; dequoting none of it reopens the bypass.
+        """
+        allow('cat <<EOF | grep "bash"\ngit push\nEOF')
+        block('cat <<EOF | "bash"\ngit push\nEOF')
+
+    def test_only_the_shell_in_the_tail_decides_the_pipe_case(self):
+        """Pins WHY `cat <<EOF | bash` is refused, not just that it is.
+
+        Both commands here are the same shape and differ in one word. Before
+        the operator line was read past the tag, neither was recognized as a
+        heredoc at all, so both bodies were scanned raw and both blocked --
+        the refusal below was right by accident and the allow above it was a
+        false positive. Recognizing the heredoc is what splits them: the body
+        is data when a reader follows the pipe and source when a shell does.
+        Any change that stops reading the tail collapses the pair again.
+        """
+        allow("cat <<EOF | grep x\ngit push\nEOF")
+        block("cat <<EOF | bash\ngit push\nEOF")
+
+    def test_a_herestring_is_not_a_heredoc_body(self):
+        """`<<<` is a herestring: the word after it IS the input, and there is
+        no body to blank. Reading it as a heredoc opener lets the rest of the
+        command be blanked as though it were data."""
+        block("cat <<<EOF | grep x\ngit push\nEOF")
 
     @pytest.mark.parametrize("command", [
         # Flags between the shell name and -c.
@@ -539,4 +610,68 @@ class TestNoCatastrophicBacktrackingOnLongInput:
                 f"bash-guard.py hung for over 5s on an {length}-char plain "
                 "echo with no heredoc syntax at all -- catastrophic "
                 "backtracking in _HEREDOC_RE, not an adversarial input."
+            )
+
+    def test_a_long_word_run_beside_a_bare_operator_completes_quickly(self):
+        """The same defect as above, reached through the delimiter instead.
+
+        `echo <N a's> << <N b's>` contains a "<<", so the cheap reject cannot
+        help, and the b-run sits astride the tag and the trailing content.
+        `\\w*` and `[^\\n]*` both match a "b", so with no boundary between them
+        the engine tries every way to split that one run and rescans the tail
+        each time. End to end through the hook, with and without the `\\b`
+        after the tag: 2000 chars 199ms / 439ms, 8000 406ms / 1.2s, 16000
+        295ms / 3.9s, 24000 251ms / 6.8s -- flat against quadratic.
+
+        One length rather than a sweep, and a large one, because a shorter
+        input does not separate the two: at 2000 the broken form still answers
+        in under half a second, so a case at that size passes either way and
+        pins nothing. 32000 puts the broken form at 14.5s against a 5s
+        timeout, while the correct one stays near 400ms.
+        """
+        length = 32000
+        command = "echo " + "a" * length + " << " + "b" * length
+        script = SCRIPTS_DIR / "bash-guard.py"
+        try:
+            subprocess.run(
+                [sys.executable, str(script)],
+                input=json.dumps(pretooluse("Bash", {"command": command})).encode(),
+                capture_output=True,
+                env=hook_env(),
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"bash-guard.py hung for over 5s on a {length}-char word run "
+                "beside a bare '<<' -- the tag and the trailing content are "
+                "backtracking against each other in _HEREDOC_RE."
+            )
+
+    def test_many_quoted_shell_names_on_an_operator_line_stay_linear(self):
+        """The quoted-name check must not judge each candidate against the
+        text to its left.
+
+        Every `"sh"` here dequotes to a real shell name, and none is a command
+        name, so a check that anchors on the text before each one copies a
+        growing prefix per candidate. Measured through the hook: 8000
+        candidates on a 40KB line took 4299ms that way against 96ms
+        segment-locally, and 32000 took 434ms segment-locally while the
+        prefix-copying form was already past the timeout at 16000.
+        """
+        n = 32000
+        command = "cat <<EOF | grep " + '"sh" ' * n + "\ngit push\nEOF"
+        script = SCRIPTS_DIR / "bash-guard.py"
+        try:
+            subprocess.run(
+                [sys.executable, str(script)],
+                input=json.dumps(pretooluse("Bash", {"command": command})).encode(),
+                capture_output=True,
+                env=hook_env(),
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"bash-guard.py hung for over 5s on {n} quoted shell names on "
+                "one operator line -- the command-name check is quadratic in "
+                "the number of candidates."
             )

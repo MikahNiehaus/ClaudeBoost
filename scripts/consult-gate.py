@@ -63,17 +63,34 @@ def file_in_spec(file_path: str, approved_files: list[str]) -> bool:
     return False
 
 
-def get_file_paths(tool_name: str, tool_input: dict) -> list[str]:
-    """Extract target file path(s) from the tool input."""
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits") or []
-        return [
-            e.get("file_path", "").replace("\\", "/")
-            for e in edits
-            if e.get("file_path")
-        ]
-    fp = (tool_input.get("file_path") or tool_input.get("path") or "").replace("\\", "/")
-    return [fp] if fp else []
+def _str_field(source, key: str) -> str:
+    """A string field read out of an untrusted payload object, or "" if it isn't one.
+
+    Stdin is a system boundary. The containing object can be null or a string
+    rather than a dict, and the field itself a number or a list rather than a
+    string; each of those reaches .replace() or Path() and raises. Reading them
+    all as "" routes them to the same path as a genuinely absent field.
+    Borrowed from clean-rag/hooks/research-gate.py:87-100.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def get_file_path(tool_input: dict) -> str:
+    """Extract the target file path, normalized to forward slashes.
+
+    Edit, Write and MultiEdit all carry exactly one top-level "file_path", so
+    there is nothing to branch on. MultiEdit's "edits" items hold only
+    old_string/new_string/replace_all, and its schema sets
+    additionalProperties:false, so a per-edit "file_path" cannot arrive.
+    Reading one yielded no path at all, which skipped this gate for every
+    MultiEdit call.
+
+    Forward slashes matter here: is_exempt() compares against EXEMPT_FRAGMENTS
+    after mapping them to "/", so a Windows path must be mapped too.
+    """
+    fp = _str_field(tool_input, "file_path") or _str_field(tool_input, "path")
+    return fp.replace("\\", "/")
 
 
 def main() -> int:
@@ -97,25 +114,21 @@ def main() -> int:
     if tool_name not in GATED_TOOLS:
         return 0
 
-    file_paths = get_file_paths(tool_name, tool_input)
-    if not file_paths:
+    file_path = get_file_path(tool_input)
+    if not file_path:
         return 0
 
-    def is_exempt(fp: str) -> bool:
-        return any(frag.replace("\\", "/") in fp for frag in EXEMPT_FRAGMENTS)
-
-    if all(is_exempt(fp) for fp in file_paths):
+    if any(frag.replace("\\", "/") in file_path for frag in EXEMPT_FRAGMENTS):
         return 0
 
     # Load the approved spec sheet
     spec_path = Path(home) / "state" / "spec-sheet.json"
     if not spec_path.exists():
-        first = Path(file_paths[0]).name
         print(json.dumps({
             "permissionDecision": "ask",
             "reason": (
                 f"No spec sheet found at state/spec-sheet.json. "
-                f"Before editing '{first}', produce a spec sheet: "
+                f"Before editing '{Path(file_path).name}', produce a spec sheet: "
                 f"a high-level summary of what the task does, then a table listing every "
                 f"file and the specific change planned. Wait for user approval, then write "
                 f"state/spec-sheet.json with the approved_files list."
@@ -127,23 +140,19 @@ def main() -> int:
     approved_files = spec.get("approved_files", [])
     task = spec.get("task", "current task")
 
-    # Block if any target that is not exempt is also not in the approved list
-    for fp in file_paths:
-        if is_exempt(fp):
-            continue
-        if not file_in_spec(fp, approved_files):
-            print(json.dumps({
-                "permissionDecision": "ask",
-                "reason": (
-                    f"'{Path(fp).name}' is not in the approved spec sheet for: {task}. "
-                    f"To change this file, extend the spec sheet with a new entry describing "
-                    f"the specific change, get user approval, then update state/spec-sheet.json "
-                    f"before proceeding."
-                )
-            }))
-            return 0
+    if not file_in_spec(file_path, approved_files):
+        print(json.dumps({
+            "permissionDecision": "ask",
+            "reason": (
+                f"'{Path(file_path).name}' is not in the approved spec sheet for: {task}. "
+                f"To change this file, extend the spec sheet with a new entry describing "
+                f"the specific change, get user approval, then update state/spec-sheet.json "
+                f"before proceeding."
+            )
+        }))
+        return 0
 
-    return 0  # All files approved
+    return 0  # File approved
 
 
 if __name__ == "__main__":

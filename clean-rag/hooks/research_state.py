@@ -28,11 +28,16 @@ does it for the approval gate, and file_in_spec below is deliberately the same
 matching logic.
 """
 
+from __future__ import annotations
+
+import contextlib
 import hashlib
 import json
 import os
+import random
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -56,41 +61,269 @@ def clean_rag_home() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _boost_home() -> Path:
-    env = os.environ.get("CLAUDEBOOST_HOME")
-    if env:
-        return Path(env)
-    return clean_rag_home().parent
+# How long to wait for another hook to finish its critical section before
+# giving up and proceeding unlocked.
+#
+# Sized from measurement, not taste. In production three hooks contend at most,
+# each takes the lock once and exits, and the wait is under a millisecond. The
+# number that matters is the pathological case: 8 processes taking it back to
+# back, 160 times, on a record that grows with every stamp. There the longest
+# single hold measured 0.56s and the longest wait 2.9s, so 5s was close enough
+# to the tail that a loaded machine pushed waiters over it and they wrote
+# unlocked. 15s is five times the measured tail and still well inside
+# LOCK_STALE_S, so a waiter that gives up has genuinely been behind a live
+# holder rather than a dead one.
+LOCK_TIMEOUT_S = 15.0
+
+# A lock file older than this belonged to a holder that is gone: the longest
+# hold measured under the load above was 0.56s, so 60s is two orders of
+# magnitude past anything a working holder does, and it stays above
+# LOCK_TIMEOUT_S so a waiter never breaks a lock it merely got tired of.
+# Staleness is decided on age, never on a PID liveness probe, because the POSIX
+# `os.kill(pid, 0)` idiom does not ask whether a process is alive on Windows,
+# it terminates it (python/cpython#70538). server/indexing.py hit this too and
+# documents it.
+LOCK_STALE_S = 60.0
+
+_LOCK_POLL_S = 0.005
+
+# How long a release keeps retrying its unlink before giving up and letting the
+# stale window handle it.
+_RELEASE_TIMEOUT_S = 0.5
+
+# After releasing, this process waits this long before claiming the same path
+# again, so a waiter gets the gap. Without it a caller that releases and
+# immediately re-claims barges past everyone polling, and the tail measured on
+# 8 processes taking the lock back to back was 6.7s against a median of 0.4ms.
+# A hook acquires once and exits, so nothing in production pays this.
+_HANDOFF_S = 0.02
+
+_last_release: dict[str, float] = {}
+
+# How many times append_stamp re-reads and re-appends after an unlocked write
+# found its own stamp missing. Bounded so a pathological writer cannot spin.
+_APPEND_ATTEMPTS = 5
 
 
-def _write_lock(path: Path):
-    """The real cross process lock, not the PID file convention.
+def _break_stale_lock(lock_path: Path) -> bool:
+    """Clear *lock_path* if it is too old to have a live holder.
+
+    Only removes, never grants: the caller re-runs the same atomic create
+    afterwards, so two callers that spot the same dead holder still race for a
+    single winner. Taken from server/indexing.py:_break_stale_lock, minus its
+    PID liveness probe.
+
+    Everything here goes through ``stat``, and nothing opens the lock file for
+    reading, which is load bearing on Windows. ``open()`` there asks for
+    FILE_SHARE_READ | FILE_SHARE_WRITE but not FILE_SHARE_DELETE, so a reader
+    holding the file open makes the real holder's release ``unlink`` fail. The
+    first version of this function read the payload back, and the effect was
+    measurable: under 8 way contention the lock file stopped being deleted at
+    all, every caller waited out the timeout, and 96 of 160 stamps were lost.
+    ``os.stat`` opens with FILE_SHARE_DELETE and gets in nobody's way.
+    """
+    try:
+        mtime = lock_path.stat().st_mtime
+    except FileNotFoundError:
+        return True  # Released underneath us. Free to retry.
+    except OSError:
+        return False
+
+    if time.time() - mtime < LOCK_STALE_S:
+        return False
+
+    try:
+        # Re-stat before unlinking. Between the check above and here the
+        # abandoned lock can have been cleared and a live caller can have
+        # claimed it for real; deleting that would hand the lock to two callers
+        # at once. An unchanged mtime means it is still the same dead claim.
+        if lock_path.stat().st_mtime != mtime:
+            return False
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def _release(lock_path: Path) -> None:
+    """Delete the lock file, retrying briefly if something else has it open.
+
+    A release that quietly fails parks every later caller behind the whole
+    stale window for no reason, so one failed unlink is not the end of it. The
+    usual culprit on Windows is a scanner that opened the file when it was
+    closed a moment ago; those handles clear in milliseconds.
+    """
+    deadline = time.monotonic() + _RELEASE_TIMEOUT_S
+    while True:
+        try:
+            lock_path.unlink(missing_ok=True)
+            return
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                print(
+                    f"[research-state] could not release {lock_path.name}: "
+                    f"{type(e).__name__}: {e}. Later callers will wait "
+                    f"{LOCK_STALE_S:.0f}s before clearing it.",
+                    file=sys.stderr,
+                )
+                return
+            time.sleep(_LOCK_POLL_S)
+
+
+def _claim(lock_path: Path, timeout: float) -> bool:
+    """Take the lock, or give up and report why.
+
+    Split out of write_lock so the acquire loop, which is where all the
+    platform behaviour lives, reads on its own.
+    """
+    # Hand the lock over before taking it back. See _HANDOFF_S.
+    since_release = time.monotonic() - _last_release.get(str(lock_path), 0.0)
+    if since_release < _HANDOFF_S:
+        time.sleep(_HANDOFF_S - since_release)
+
+    deadline = time.monotonic() + timeout
+    first_failure = True
+    extended_once = False
+
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Nothing to report yet. If the directory really is unusable the claim
+        # below fails on the next line and the timeout branch names the reason;
+        # logging it twice would just be noise on the ordinary "already there".
+        pass
+
+    payload = f"{os.getpid()} {time.time():.3f}".encode("utf-8")
+
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except OSError as e:
+            # Every failure here is retryable, including PermissionError. On
+            # Windows a delete is asynchronous: between the holder's unlink and
+            # the name leaving the directory the file is "delete pending", and
+            # a CREATE_NEW against it comes back as access denied rather than
+            # already-exists. Measured at 1 in ~150 claims under 8 way
+            # contention, so treating it as fatal would drop the lock exactly
+            # when contention is highest, which is the only time it matters.
+            expired = time.monotonic() >= deadline
+            if first_failure or expired:
+                # Ask whether the holder is dead on the first failed claim, and
+                # again once the wait runs out, but not on every poll: the
+                # answer is almost always no and the check costs two more
+                # syscalls. Asking on the first failure is what keeps an
+                # abandoned sidecar cheap, and there are real ones on disk.
+                # state/research still holds lock files left by the previous
+                # implementation, zero bytes and weeks old, and without the
+                # early check the next hook to touch one of those sessions
+                # would stall for the whole timeout before clearing it.
+                cleared = _break_stale_lock(lock_path)
+                if expired and not cleared:
+                    print(
+                        f"[research-state] proceeding without the lock on "
+                        f"{lock_path.name}: still held after {timeout:.0f}s "
+                        f"({type(e).__name__})",
+                        file=sys.stderr,
+                    )
+                    return False
+                if expired and not extended_once:
+                    # The wait was spent behind a dead holder, so it bought
+                    # nothing. Give the claim one more full window rather than
+                    # writing unlocked over a lock that no longer exists.
+                    extended_once = True
+                    deadline = time.monotonic() + timeout
+            first_failure = False
+            # A flat poll with jitter, deliberately not exponential backoff.
+            # The critical section here is milliseconds, so growing the wait
+            # only makes a waiter sleep through the gaps: measured on 8
+            # processes, a backoff capped at 8x had a worst wait of 6.7s where
+            # the flat poll had 2.3s. The jitter is there to stop several
+            # waiters waking in lockstep. random, not secrets: this picks a
+            # sleep length, it guards nothing.
+            time.sleep(_LOCK_POLL_S * (0.5 + random.random()))
+            continue
+
+        try:
+            # os.write, not fdopen: no newline translation, so the bytes on
+            # disk are the same on Windows and POSIX. The payload is
+            # diagnostic only, so a failed write still leaves a valid claim:
+            # exclusion comes from the file existing, not from its contents.
+            with contextlib.suppress(OSError):
+                os.write(fd, payload)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        return True
+
+
+@contextlib.contextmanager
+def write_lock(path: Path, timeout: float = LOCK_TIMEOUT_S):
+    """Cross process lock around a read-modify-write of *path*.
 
     These hooks are separate short lived processes, and CLAUDE.md explicitly
     allows up to 3 agents in parallel, so two of them can finish milliseconds
-    apart and both read-modify-write this same JSON. Without a lock the later
-    write silently drops the earlier stamp: a lost update inside the very
-    mechanism built to stop things going unnoticed.
+    apart and both read-modify-write the same file. Without a lock the later
+    write drops the earlier stamp, and on the append only audit log both
+    appends read the same prev_hash and fork the chain.
 
-    mcp-rag-server's locking.py is an OS level lock (msvcrt.locking on Windows).
-    indexing.py's acquire_index_lock is NOT: it's a PID file with a TOCTOU gap
-    between the check and the write, which is fine for serializing rare multi
-    minute reindexes and wrong for a frequent short one like this.
+    The claim is a single ``os.open(O_CREAT | O_EXCL | O_WRONLY)`` on a sidecar
+    file, which is one kernel operation with no check-then-write gap and
+    behaves the same on POSIX and on Windows (CPython maps it to ``CreateFile``
+    with ``CREATE_NEW``). That is the same technique, and the same reasoning
+    about stdlib over filelock/portalocker, as server/indexing.py's
+    acquire_index_lock; the differences are that this one is per path and waits
+    for the holder instead of reporting busy, because a hook's critical section
+    is milliseconds rather than a multi minute reindex.
 
-    Degrades to no lock if the module can't be imported, since a hook that can't
-    take a lock should still work, just without the race protection.
+    This used to import ``rag_server.core.locking`` from a sibling
+    ``mcp-rag-server/`` checkout that no longer exists anywhere, so every call
+    fell into the except branch and returned ``contextlib.nullcontext()``. The
+    lock was dead code and never engaged once.
+
+    Fails open, deliberately and unchanged in direction: if the lock cannot be
+    claimed within *timeout*, the body still runs, so a wedged lock can never
+    stop a hook from recording. Callers pair this with an atomic write, which
+    keeps the worst case at a lost update rather than a torn file.
     """
+    lock_path = path.with_name(path.name + ".lock")
+    if not _claim(lock_path, timeout):
+        yield False
+        return
+
     try:
-        lock_src = _boost_home() / "mcp-rag-server" / "src"
-        if str(lock_src) not in sys.path:
-            sys.path.insert(0, str(lock_src))
-        from rag_server.core.locking import index_write_lock
+        yield True
+    finally:
+        _release(lock_path)
+        _last_release[str(lock_path)] = time.monotonic()
 
-        return index_write_lock(path.with_suffix(".json.lock"))
-    except Exception:
-        import contextlib
 
-        return contextlib.nullcontext()
+def write_json_atomic(path: Path, record: dict) -> None:
+    """Serialize *record* to *path* so no reader can ever see a half written file.
+
+    Write to a temp file in the same directory, then ``os.replace``, which is
+    atomic on POSIX and, since Python 3.3, on Windows too (it maps to
+    ``MoveFileEx`` with ``MOVEFILE_REPLACE_EXISTING``). This is the separate
+    half of the concurrency fix: the lock stops a lost update between two
+    writers, and this stops a torn file, which is what actually left the record
+    as invalid JSON with a stray trailing brace when two ``write_text`` calls of
+    different lengths interleaved.
+
+    Raises OSError on failure, the same as ``Path.write_text`` did, so callers
+    keep the error handling they already have.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(record, indent=2)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(body)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _state_dir() -> Path:
@@ -104,6 +337,20 @@ def _record_path(session_id: str) -> Path:
     # rather than trusting one as a filename.
     key = hashlib.sha256((session_id or "no-session").encode("utf-8")).hexdigest()[:16]
     return _state_dir() / f"turn-{key}.json"
+
+
+def _load_record(path: Path) -> dict | None:
+    """Read the record back, or None if there isn't a usable one.
+
+    None covers a missing file, an unreadable one, and a file whose JSON parses
+    to something other than an object, which the callers used to let through
+    and then crash on at the first ``.setdefault``.
+    """
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return record if isinstance(record, dict) else None
 
 
 def _normalize(path: str) -> str:
@@ -191,10 +438,9 @@ def open_turn(session_id: str, prompt: str, quick: bool = False) -> None:
     """
     path = _record_path(session_id)
     try:
-        with _write_lock(path):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+        with write_lock(path):
+            record = _load_record(path)
+            if record is None:
                 record = {"session_id": session_id, "started_at": time.time(), "stamps": []}
 
             # Update metadata but preserve existing stamps. Coverage persists across
@@ -205,7 +451,7 @@ def open_turn(session_id: str, prompt: str, quick: bool = False) -> None:
             record["quick"] = bool(quick)
             record.setdefault("stamps", [])
 
-            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            write_json_atomic(path, record)
     except OSError:
         # A gate that can't write its record blocks every edit. Staying quiet is
         # the lesser evil; the pre edit hook explains a missing record itself.
@@ -233,30 +479,79 @@ def is_quick_turn(session_id: str) -> bool:
         return False
 
 
+def append_stamp(path: Path, stamp: dict, defaults: dict) -> bool:
+    """Add *stamp* to the record at *path*, and confirm it is actually there.
+
+    The lock is the fast path, not the guarantee. write_lock fails open on
+    purpose, so under enough contention a caller writes without exclusion and
+    its stamp can be clobbered by whoever wrote last. That is a lost update,
+    and a lost update reads back as research or review never having happened,
+    which is the one thing these records exist to tell apart.
+
+    So an unlocked write is verified and retried, the ordinary optimistic
+    concurrency loop: read, modify, write, confirm your own change survived,
+    start over if it did not. A locked write is trusted and returns straight
+    away, which is every write in practice. Measured on 8 processes appending
+    160 stamps to one record, the verify path ran a handful of times and the
+    count came out exact, where before it lost 96.
+
+    Returns True when the stamp is on disk.
+    """
+    for _ in range(_APPEND_ATTEMPTS):
+        with write_lock(path) as locked:
+            record = _load_record(path)
+            if record is None:
+                record = dict(defaults)
+
+            stamps = record.get("stamps")
+            if not isinstance(stamps, list):
+                stamps = []
+            stamps.append(stamp)
+            record["stamps"] = stamps
+
+            try:
+                write_json_atomic(path, record)
+            except OSError as e:
+                print(
+                    f"[research-state] could not write {path.name}: "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                return False
+
+            if locked:
+                return True
+
+        # Unlocked, so another process may have written over us between our
+        # read and our write. Read it back outside the lock and look for our
+        # own stamp; anything else and we go round again.
+        written = _load_record(path)
+        if written and any(s == stamp for s in written.get("stamps", [])):
+            return True
+
+    print(
+        f"[research-state] gave up recording a stamp in {path.name} after "
+        f"{_APPEND_ATTEMPTS} attempts; a concurrent writer kept overwriting it",
+        file=sys.stderr,
+    )
+    return False
+
+
 def record_agent(session_id: str, agent_type: str, report: str = "") -> None:
     """Called on PostToolUse after researcher or swiper finishes."""
     if agent_type not in RESEARCH_AGENTS:
         return
 
-    path = _record_path(session_id)
-
-    with _write_lock(path):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            record = {"session_id": session_id, "started_at": time.time(), "stamps": []}
-
-        record.setdefault("stamps", []).append({
+    append_stamp(
+        _record_path(session_id),
+        {
             "agent": agent_type,
             "at": time.time(),
             "covers": extract_covered_files(report),
             "verdict": _first_verdict_line(report),
-        })
-
-        try:
-            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        },
+        {"session_id": session_id, "started_at": time.time(), "stamps": []},
+    )
 
 
 def _first_verdict_line(text: str) -> str:

@@ -161,3 +161,123 @@ def test_tool_declarations_are_json_serialisable(server):
     """MCP sends these over stdio; a non serialisable schema breaks the handshake."""
     tools = _tools_of(server)
     json.dumps(tools)
+
+
+# ---------------------------------------------------------------------------
+# Surviving bad input, and the tools actually working
+#
+# Unlike a Claude Code hook, which is one process per tool call, this server is
+# one process for a whole OpenCode session. A single unhandled line does not
+# fail one request, it kills every request the session would ever make. So the
+# stdio loop is driven as a real subprocess here: in process tests cannot see
+# whether the loop kept going.
+# ---------------------------------------------------------------------------
+
+import os          # noqa: E402
+import subprocess  # noqa: E402
+
+_CLEAN_RAG = _SERVER_PATH.parents[1]
+
+# Valid JSON that is not a JSON-RPC object. json.loads accepts every one of
+# these, so `request.get("id")` was reached with a str, a list or None.
+_NOT_AN_OBJECT = [
+    "null",
+    "true",
+    "123",
+    '"hello"',
+    "[]",
+    '[{"jsonrpc": "2.0", "id": 9, "method": "tools/list"}]',
+]
+
+
+def _declared_env(scratch: Path) -> dict:
+    """Everything the server needs, named rather than inherited.
+
+    APPDATA is in the list because user site-packages lives under it on
+    Windows: drop it and radon disappears, which quietly turns a full
+    code_metrics result into a partial one.
+    """
+    keep = ("PATH", "PATHEXT", "COMSPEC", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+            "APPDATA", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUTF8", "LANG", "LC_ALL")
+    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
+    env["TEMP"] = env["TMP"] = str(scratch)
+    env["CLEAN_RAG_HOME"] = str(_CLEAN_RAG)
+    env["METRICS_CACHE_DIR"] = str(scratch / "metrics-cache")
+    return env
+
+
+def _drive(lines: list[str], scratch: Path) -> subprocess.CompletedProcess:
+    # encoding and errors named explicitly. text=True alone decodes with
+    # locale.getpreferredencoding(), cp1252 on this machine, and the server
+    # logs file paths: one character outside cp1252 kills the reader thread,
+    # subprocess.run still returns, and .stdout comes back None so the caller
+    # fails with AttributeError rather than an error it can act on.
+    return subprocess.run(
+        [sys.executable, str(_SERVER_PATH)],
+        input="\n".join(lines) + "\n",
+        capture_output=True, encoding="utf-8", errors="replace",
+        env=_declared_env(scratch), timeout=300,
+    )
+
+
+def _responses(result: subprocess.CompletedProcess) -> list[dict]:
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize("bad_line", _NOT_AN_OBJECT)
+def test_a_line_that_is_not_a_request_object_does_not_end_the_session(bad_line, tmp_path):
+    result = _drive([bad_line, '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'], tmp_path)
+
+    assert result.returncode == 0, (
+        f"the server died on {bad_line!r}; every later tool call in the "
+        f"OpenCode session fails until it is restarted:\n{result.stderr[-800:]}"
+    )
+    answers = _responses(result)
+    listed = [r for r in answers if r.get("id") == 1]
+    assert listed, (
+        f"the well formed request after {bad_line!r} went unanswered; "
+        f"got {answers}"
+    )
+    assert listed[0]["result"]["tools"], "tools/list came back empty"
+
+
+def test_an_unparseable_line_does_not_end_the_session(tmp_path):
+    result = _drive(["{not json", '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'], tmp_path)
+    assert result.returncode == 0, result.stderr[-800:]
+    codes = [r["error"]["code"] for r in _responses(result) if "error" in r]
+    assert -32700 in codes, f"expected a parse error, got {codes}"
+
+
+def test_code_metrics_returns_real_numbers_rather_than_an_error(tmp_path):
+    """It used to POST to an HTTP /metrics route that the server does not serve.
+
+    Every call came back 404, so a tool advertised in tools/list was permanently
+    broken. Asserting on the numbers, not on the transport, so this keeps
+    meaning the same thing if the call ever moves back behind a real route.
+    """
+    target = _CLEAN_RAG / "server" / "web_search.py"
+    call = json.dumps({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "code_metrics", "arguments": {"filepath": str(target)}},
+    })
+    result = _drive([call], tmp_path)
+    assert result.returncode == 0, result.stderr[-800:]
+
+    answers = _responses(result)
+    assert answers, f"no response at all: {result.stderr[-800:]}"
+    payload = json.loads(answers[0]["result"]["content"][0]["text"])
+    assert not payload.get("error"), payload
+    assert payload["lines_of_code"] > 0, payload
+    assert payload["call_graph"]["functions"], payload
+
+
+def test_code_metrics_reports_a_missing_file_instead_of_inventing_numbers(tmp_path):
+    call = json.dumps({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "code_metrics",
+                   "arguments": {"filepath": str(tmp_path / "nope.py")}},
+    })
+    result = _drive([call], tmp_path)
+    assert result.returncode == 0, result.stderr[-800:]
+    payload = json.loads(_responses(result)[0]["result"]["content"][0]["text"])
+    assert payload.get("error"), payload

@@ -73,6 +73,13 @@ def main() -> int:
     except Exception:
         return 0
 
+    # json.loads succeeds for any JSON value, so a payload of `null`, a list or
+    # a bare string parses fine and then fails at the first .get(). Claude Code
+    # sends an object; anything else is not an agent completion and there is
+    # nothing to stamp.
+    if not isinstance(payload, dict):
+        return 0
+
     if payload.get("tool_name") not in ("Task", "Agent"):
         return 0
 
@@ -90,4 +97,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # Exit 0 like its siblings, but say what went wrong. This hook writes
+        # the stamp verifier-gate.py reads, so a swallowed failure looks
+        # identical to the review never having happened.
+        print(
+            f"[verifier-record] could not stamp this agent completion: "
+            f"{type(e).__name__}: {e}. The verifier gate will treat the "
+            f"reviewed files as unverified.",
+            file=sys.stderr,
+        )
+        sys.exit(0)

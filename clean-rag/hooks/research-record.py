@@ -179,6 +179,13 @@ def main() -> int:
     except Exception:
         return 0
 
+    # json.loads succeeds for any JSON value, so a payload of `null`, a list or
+    # a bare string parses fine and then fails at the first .get(). Claude Code
+    # sends an object; anything else is not an agent completion and there is
+    # nothing to stamp.
+    if not isinstance(payload, dict):
+        return 0
+
     if payload.get("tool_name") not in ("Task", "Agent"):
         return 0
 
@@ -215,4 +222,20 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # Exit 0, like every other hook here: any other exit code from
+        # PostToolUse buys nothing but a traceback full of absolute local paths.
+        #
+        # Not silent, though, and that is the difference from the gates. This
+        # hook is how research coverage gets written down, so a swallowed
+        # failure looks identical to research never having run, and the only
+        # symptom would be the gate nudging for work that already happened.
+        print(
+            f"[research-record] could not stamp this agent completion: "
+            f"{type(e).__name__}: {e}. The research gate will treat the edited "
+            f"files as uncovered.",
+            file=sys.stderr,
+        )
+        sys.exit(0)

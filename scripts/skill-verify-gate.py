@@ -1,14 +1,26 @@
 """
 ClaudeBoost skill verify-gate - PreToolUse hook on Skill tool.
 
-Companion to agent-spawn-gate.py. That gate fires on Task (agent spawns) and
-blocks them when needs-verification.json is pending. But it does NOT fire on
-the Skill tool — so if the user invokes /qa or /workspace via Skill right after
-/xray produces findings, the gate is bypassed entirely.
+Companion to agent-spawn-gate.py, which on this branch is a no op stub that
+exits 0. So this hook is the only half of that pair that does anything: it
+fires on the Skill tool, which the Task gate never covered, closing the gap
+where /qa or /workspace invoked right after /xray produced findings skipped
+verification entirely.
 
-This hook closes that gap. It checks the same needs-verification.json flag and
-blocks action skills until the flag is cleared (by running /audit or spawning
-an evaluator-agent via Task, both of which clear the flag).
+It checks needs-verification.json and NUDGES when an action skill is invoked
+with findings still unverified. It does not block.
+
+It used to exit 2 and refuse the skill. That was wrong twice over. The refusal
+told the operator to spawn `evaluator-agent`, which has never existed in this
+repo, and the flag cleared only when a Task description happened to contain the
+literal word "evaluator" or "verdict", so following the instruction verbatim
+could not clear it. Beyond the broken wording, a verifier gate refusing work is
+the enforcement shape this project has already reverted twice; see the recorded
+decision in clean-rag/hooks/verifier-gate.py. Judgement calls nudge, and only
+security guards refuse.
+
+Clearing it is verify-gate-cmd.py's job, which now recognises the real agents
+(quick-cop, bad-cop, good-cop) as well as an /audit batch.
 
 Blocked skills (run code or tests against unverified findings):
   qa, workspace, explore, plan-task, create-prd, done, debug
@@ -21,7 +33,7 @@ Behavior:
   - needs-verification.json absent           -> exit 0 silently
   - audit-in-progress.json present           -> exit 0 silently (batch in flight)
   - skill is pass-through                    -> exit 0 silently
-  - skill is action + flag present           -> exit 2 + stderr (blocked)
+  - skill is action + flag present           -> exit 0 + stderr (nudge only)
 """
 from __future__ import annotations
 import json
@@ -81,7 +93,18 @@ def main() -> int:
     except Exception:
         payload = {}
 
+    # json.loads accepts any JSON value, not only an object. A payload of
+    # `null`, `[]`, `"a string"` or `17` parses fine and then blows up on
+    # .get(). That is an AttributeError at exit 1, and 1 is not a block under
+    # the PreToolUse contract, so it failed open with a traceback on every
+    # Skill call. Same defect class fixed across five clean-rag hooks; this
+    # one sat outside that scope.
+    if not isinstance(payload, dict):
+        payload = {}
+
     tool_input = payload.get("tool_input", {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
     skill_name = str(tool_input.get("skill", "") or "").strip().lower()
 
     # No flag — nothing to enforce
@@ -111,16 +134,26 @@ def main() -> int:
 
     msg = (
         f"[skill-verify-gate] NEEDS_VERIFICATION pending — {flagged_by} produced "
-        f"findings that have not been verified by evaluator-agent yet.\n"
-        f"Run /audit or spawn evaluator-agent to verify the findings before "
-        f"running /{skill_name}. The gate clears automatically when the evaluator runs.\n"
+        f"findings that nothing has checked yet.\n"
+        f"Spawn quick-cop to confirm each finding is real against the actual "
+        f"code, or run /audit, before acting on them in /{skill_name}. "
+        f"Use bad-cop instead when the findings need adversarial testing rather "
+        f"than a claim check.\n"
+        f"This is a nudge, not a block: /{skill_name} runs either way. The flag "
+        f"clears when one of those agents completes.\n"
     )
     if summary:
         msg += f"Finding preview: {summary[:150]}..."
 
     print(msg, file=sys.stderr)
-    return 2
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
+    # Backstop behind the shape checks in main(). This hook only ever nudges,
+    # so any unhandled failure should be silence rather than a traceback on a
+    # tool call the operator did nothing wrong to make.
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(0)

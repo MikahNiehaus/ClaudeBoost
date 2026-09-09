@@ -17,23 +17,21 @@ Boost injection modes (state/boost-injection.json):
 - "true"   — inject always-on rules only, skip RAG verification
 - "verify" — (default) full RAG-gated behavior
 
-Always-on rules (A-H) inject in both "true" and "verify" modes:
+Always-on rules (A-G) inject in both "true" and "verify" modes:
 A. Tasks first — create tasks before multi-step work
 B. Human voice
 C. Code comments, no dashes
 D. Architectural approval before changes
 E. RAG usage when available
 F. Workspace update when one exists
-G. Dynamic RAG tiers — project_path/workspace_path params and what each enables
-H. Irreversible actions — stop and confirm before anything that can't be undone
+G. Irreversible actions — stop and confirm before anything that can't be undone
 
 RAG standing orders (1-8) only inject in "verify" mode when RAG is confirmed online.
 
 Workspace dashboard injects when active-workspace.json resolves to a real path (any mode):
-- Live tier status: codebase index (checked via GET /status) + research index (directory check)
-- REQUIRED directives when indexes are missing, with exact skill to run
-- Exact POST /context params to use this session (including task_description from user message)
-- Self-clearing: once an index is built, its directive disappears automatically
+- Codebase index state for the project, read from GET /status
+- A REQUIRED directive when the project is not indexed, with the exact skill to run
+- Self-clearing: once the index is built, that directive disappears automatically
 """
 from __future__ import annotations
 
@@ -59,11 +57,17 @@ _STOP_WORDS = frozenset({
 })
 
 
+#: clean-rag, the only RAG server. The retired bundled server on 8612 was
+#: named separately at five sites in this file and every one of them went
+#: stale independently, so the address lives in one place now.
+RAG_BASE_URL = "http://127.0.0.1:8613"
+
+
 def _get_rag_status(timeout: float = 0.2) -> dict | None:
     """Quick GET /status. Returns status dict or None if unreachable or slow."""
     import urllib.request
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8612/status", timeout=timeout) as r:
+        with urllib.request.urlopen(f"{RAG_BASE_URL}/status", timeout=timeout) as r:
             return json.loads(r.read())
     except Exception:
         return None
@@ -247,19 +251,27 @@ def _active_workspace_reminder(
     if not ws_path:
         return ''
 
-    # Tier 4: check codebase index via live /status response
+    # Codebase index state, read from the live GET /status response.
+    #
+    # The shape is `projects.entries`, a dict keyed by project id. This used to
+    # read a top level `indexed_projects` list, which is what the retired
+    # bundled server returned; against clean-rag that key is simply absent, so
+    # the lookup missed every time and the dashboard told every session to
+    # reindex a project that was already indexed.
     codebase_ready = False
     codebase_detail = 'unknown (RAG offline)'
     if rag_status is not None and project_path:
-        indexed = rag_status.get('indexed_projects', [])
-        if isinstance(indexed, list):
-            norm = project_path.rstrip('/\\').replace('\\', '/')
-            for p in indexed:
-                p_norm = p.get('project_path', '').rstrip('/\\').replace('\\', '/')
+        entries = rag_status.get('projects', {}).get('entries', {})
+        if isinstance(entries, dict):
+            norm = project_path.rstrip('/\\').replace('\\', '/').lower()
+            for entry in entries.values():
+                if not isinstance(entry, dict):
+                    continue
+                p_norm = entry.get('project_path', '').rstrip('/\\').replace('\\', '/').lower()
                 if p_norm == norm:
                     codebase_ready = True
-                    files = p.get('files', '?')
-                    chunks = p.get('chunks', '?')
+                    files = entry.get('files_indexed', '?')
+                    chunks = entry.get('chunks_created', '?')
                     codebase_detail = f'READY ({files} files / {chunks} chunks)'
                     break
             if not codebase_ready:
@@ -267,31 +279,12 @@ def _active_workspace_reminder(
     elif rag_status is None:
         codebase_detail = 'unknown (RAG offline - run /rag)'
 
-    # Tier 5: research index directory check
-    t3c_exists = (Path(ws_path) / '.rag-index' / 'research').exists()
-    t3c_detail = 'READY' if t3c_exists else 'NOT BUILT'
-
-    # Project KB status — .claudeboost/knowledge/ inside the project
-    project_kb_exists = False
-    project_kb_detail = 'N/A (no project_path)'
-    if project_path:
-        kb_dir = Path(project_path) / '.claudeboost' / 'knowledge'
-        try:
-            kb_files = list(kb_dir.glob('*.md')) if kb_dir.exists() else []
-            if kb_files:
-                project_kb_detail = f'READY ({len(kb_files)} files)'
-                project_kb_exists = True
-            else:
-                project_kb_detail = 'NOT BUILT'
-        except PermissionError:
-            project_kb_detail = 'UNKNOWN (permission error)'
-
     # Required actions for missing indexes — all appends must happen before lines is built
     required_actions = []
     if project_path and not codebase_ready and rag_status is not None:
         required_actions.append(
             f"  [1] CODEBASE NOT INDEXED - run Skill(skill='index-project', args='{project_path}')"
-            f" as your FIRST action. Tiers 3+4 are offline until indexed."
+            f" as your FIRST action. Codebase search returns nothing until it is indexed."
         )
     lines = []
 
@@ -302,8 +295,7 @@ def _active_workspace_reminder(
             marker = '[selected]' if i == 0 else '[other]   '
             lines.append(f'  {marker} {cid} - {csnip[:80]}')
         lines += [
-            'If the selected workspace does not match your question, use the other candidate',
-            'and adjust POST /context params accordingly.',
+            'If the selected workspace does not match your question, use the other candidate.',
             '',
         ]
 
@@ -321,34 +313,20 @@ def _active_workspace_reminder(
 
     lines += [
         '',
-        'RAG TIER STATUS:',
-        f'  Tiers 3+4 (codebase):  {codebase_detail}',
-        f'  Tier 5  (research):    {t3c_detail}',
-        f'  Project KB:            {project_kb_detail}',
+        f'CODEBASE INDEX: {codebase_detail}',
         '',
         'HOW TO USE THIS SESSION:',
     ]
 
-    ctx_desc = task_description[:120].replace('"', "'") if task_description else "[user's current message]"
-    if project_path and ws_path:
+    if project_path:
         lines += [
-            '  Every POST /context call MUST use these exact params:',
-            f'    project_path     = "{project_path}"',
-            f'    workspace_path   = "{ws_path}"',
-            f'    task_description = "{ctx_desc}"',
-        ]
-    elif project_path:  # pragma: no cover
-        lines += [
-            '  Every POST /context call MUST include:',
-            f'    project_path     = "{project_path}"',
-            f'    task_description = "{ctx_desc}"',
+            '  Every codebase search MUST name this project as its source:',
+            f'    sources = ["project:{project_path}"]',
         ]
 
     lines += [
-        "  Always use the user's actual message as task_description - NOT 'session start'.",
-        '  Every agent spawn: call POST /context as FIRST action in the spawn prompt.',
-        '  Codebase search: ALWAYS run BOTH mode=vector AND mode=graph for every codebase query —',
-        '  vector finds semantic matches, graph finds structural neighbours; NEVER run only one.',
+        '  Codebase search: send mode: "both" on every query. It runs vector similarity',
+        '  and the import graph together and merges them; either alone leaves a gap.',
         '  New finding? Update workspace/context.md before moving on.',
     ]
 
@@ -601,21 +579,17 @@ def main() -> int:
         "explicit YES confirmation — not a vague ok or continued conversation. "
         "The user must understand the change before you proceed, not just acknowledge it. "
         "This applies in CONSULT mode (default). In AUTO mode this check is skipped. "
-        "(E) RAG usage — when RAG is available, always call POST http://127.0.0.1:8612/search before reading files or grepping. "
-        "For scope=codebase queries, ALWAYS run BOTH mode=vector AND mode=graph — vector finds semantic matches, graph finds structural neighbours; NEVER run only one. "
+        f"(E) RAG usage — when RAG is available, always call POST {RAG_BASE_URL}/search before reading files or grepping. "
+        "Pass sources: [\"project:<absolute path>\"] and mode: \"both\". "
+        "mode: \"both\" runs vector similarity and the import graph together and merges them; "
+        "vector finds semantic matches, graph finds structural neighbours, and one without the other leaves a gap. "
         "Never substitute grep or Read for RAG when RAG is online. "
         "If RAG is erroring or unavailable, stop and fix it (run /rag to start the server). "
         "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
         "(F) Workspace update — if a workspace context.md exists for the current task, "
         "update it after each meaningful finding or decision. "
         "Do not let findings accumulate in context only. "
-        "(G) Dynamic RAG tiers — POST /context loads knowledge in layers. "
-        "project_path enables Tier 3 stack-boosted knowledge + Tier 4 codebase search. "
-        "workspace_path enables Tier 3c task research. "
-        "Omit a param and that tier is skipped. "
-        "Always pass both when you have them. "
-        "If no workspace exists yet, pass project_path alone to get Tier 3 + Tier 4. "
-        "(H) Irreversible actions — before doing ANYTHING that cannot be undone "
+        "(G) Irreversible actions — before doing ANYTHING that cannot be undone "
         "(deleting files, dropping tables, force-pushing, overwriting data, sending messages, "
         "publishing to external services, running destructive shell commands), STOP. "
         "Tell the user exactly what you are about to do and why it cannot be undone. "
@@ -641,17 +615,18 @@ def main() -> int:
     # The user should not need to run /rag just to receive workflow rules.
     standing_orders = (
         "RAG STANDING ORDERS (non-negotiable): "
-        "(1) RAG before files — POST http://127.0.0.1:8612/search before Read/Grep. "
-        "(2) Health check — at start of any investigation, call GET http://127.0.0.1:8612/status. "
+        f"(1) RAG before files — POST {RAG_BASE_URL}/search before Read/Grep. "
+        f"(2) Health check — at start of any investigation, call GET {RAG_BASE_URL}/status. "
         "If unresolved edges or errors, stop and fix before continuing. "
         "(3) Write findings — after each RAG search or file read that reveals something, "
         "update workspace/[task-id]/context.md with what you found before moving on. "
         "Do not accumulate findings in your head; write them down as you go. "
         "(4) Cite file:line — for every finding. "
-        "(5) Evaluator — spawn evaluator-agent, never self-verify. "
-        "(6) RAG context first — call POST http://127.0.0.1:8612/context as first step in every agent spawn prompt. "
-        "(7) RAG dual-mode — for every scope=codebase query, run BOTH mode=vector (semantic) AND mode=graph (structural neighbours) — never run only one. "
-        "Use /context for knowledge; /search?scope=codebase with both modes for codebase work. "
+        "(5) Check your claims — spawn quick-cop, never self-verify. "
+        "(6) Search contract — /search takes sources: [\"project:<absolute path>\"]. "
+        "A path that was never indexed returns nothing and says nothing, so check GET /status when a search comes back empty. "
+        "(7) RAG dual-mode — send mode: \"both\" on every codebase query. "
+        "It runs vector similarity and the import graph together and merges them; either one alone leaves a gap. "
         "When RAG errors mid-task, fix it (run /rag to start the server) — never skip RAG and "
         "substitute grep or file reads. "
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "

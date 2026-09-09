@@ -126,6 +126,18 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   in the working tree reads as already decided, and that is precisely the bias
   a fresh context is there to resist.
 
+  **good-cop reproduces a finding before it fixes it.** Its opening used to say
+  the opposite, that its job was not to re-litigate whether bad-cop's findings
+  were real, while a passage near the end of the same file told it to disprove
+  false positives. An instruction at the top of a file outweighs one at the
+  bottom, so the contradiction resolved the wrong way. It now runs each repro
+  first and reports one of three outcomes: it reproduces and gets fixed at the
+  root cause, it does not reproduce and is recorded as a false positive with the
+  command and output that show it, or it reproduces for a different reason than
+  bad-cop stated and the real cause gets fixed with the difference named.
+  Require that evidence in its report. What it may never do is dismiss a finding
+  on reading alone: only execution output overturns execution output.
+
   **good-cop researches before it fixes, and cites what it found.** Its own
   definition requires grounding the fix in real practice, a real standard or a
   real example ahead of its own opinion, for the same reason the research gate
@@ -156,6 +168,20 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   `clean-rag/hooks/verifier_state.py`). `clean-rag/hooks/high_stakes.py`
   labels which surface it touched so the review points at the sharpest risk. A
   `/ps` turn skips both, the same quick mode escape that skips the research gate.
+
+**Both cops review the diff by default, and whatever you name instead.** With
+no review scope given, bad-cop resolves the diff itself: the uncommitted working
+tree, or the branch against its merge base when the tree is clean. Anything the
+human names on a `REVIEW SCOPE:` line replaces that, in their own words, with no
+fixed vocabulary. `entire project`, `anything that touches security`, `anything
+that touches OrderService`, `anything around this bug fix`, a bare path, all
+valid. Pass their sentence through verbatim; do not paraphrase it and do not
+resolve it to files yourself. bad-cop resolves it with search and the import
+graph, then prints the resolved file list at the top of its report, which is the
+only place a misread scope gets caught, so read that block first. Copy the same
+`REVIEW SCOPE:` and `RESOLVED:` lines into good-cop's prompt. Both work the same
+surface. That list bounds where a root cause is allowed to live; it does not
+widen what good-cop may change, which stays at what the findings require.
 
 **Check bad-cop and good-cop's actual diff yourself, not their self report.**
 After either stamps or reports done, read the real result: `git diff` on the
@@ -460,6 +486,78 @@ databases behind it, so route codebase understanding tasks to it instead.
 - Context below 50%: up to 3 agents.
 - Context 50 to 75%: up to 2 agents.
 - Context above 75%: 1 agent, sequential.
+
+### Fan-out mode
+
+"Go into fast mode", "use fast mode", or "go quickly" turn on fan-out mode.
+
+**It is not Anthropic's `/fast`.** That toggle speeds up one model's output and
+bills at a premium. This is a different thing on the same model: more agents
+working at once. The words collide, so the first time it comes up in a session,
+say which one you took it to mean.
+
+**What changes: how the work is cut.** Work for `researcher`, `swiper`,
+`bad-cop` and `good-cop` gets decomposed into independent slices, and those
+slices go out as multiple Agent tool calls in a single message so they run
+concurrently. That is Claude Code's own documented mechanic: "When asking
+Claude to run agents 'in parallel', it will send a single message with multiple
+Agent tool calls, launching all of them simultaneously. You should be explicit
+about what should run in parallel vs. what must be sequential."
+
+**What does not change: the Parallel Limits above.** They still bind in fan-out
+mode. Three concurrent agents below 50% context, two from 50 to 75%, one above.
+Fan-out changes the decomposition, not the ceiling. More agents than that is a
+documented failure rather than a speedup: Anthropic's own multi-agent research
+writeup names "spawning excessive subagents (50+) for simple queries" as a real
+cost, alongside parallel workers duplicating each other's work when none of
+them knows what the others are doing.
+
+**Slice by concern, never by file.** This is the part that goes wrong under
+time pressure. `researcher` and `swiper` decompose safely along independent
+aspects, because one aspect's answer does not depend on another's. A reviewer
+does not decompose that way. Split `bad-cop` and `good-cop` by dimension
+(correctness, security, concurrency, error handling, test quality) and hand
+every parallel instance the **full** diff. A bad-cop that sees only file B
+cannot see that a signature change in file A broke it. Cross file bugs are
+invisible to a file sliced reviewer, which is why `.claude/commands/audit.md`
+already fans out by dimension and passes each auditor the entire input verbatim.
+Copy that shape, including how it handles the count: pick the dimensions the
+diff actually earns, then run them in waves the current tier allows. Five
+dimensions under a three agent ceiling is two waves, not one overfull message.
+`audit.md` selects 3 to 6 dimensions and then says "Spawn one agent per
+selected dimension. Wait for each batch to complete before starting the next."
+The ceiling is on how many run at once, never on how many dimensions the diff
+deserves.
+
+**Sequential stays sequential.** `swiper` still runs after `researcher`,
+because it needs those findings to avoid recommending a swipe for something the
+project already has. `good-cop` still runs after `bad-cop`, and the closing
+`bad-cop` re-check still runs after `good-cop`. Fan-out widens each stage. It
+does not collapse the pipeline into one round.
+
+**No lock file is needed, and do not repurpose the one that exists.** The two
+gates this pipeline runs on, `clean-rag/hooks/research-gate.py` and
+`clean-rag/hooks/verifier-gate.py`, return 0 on every path and only write a
+nudge to stderr, so concurrent agents never serialize on them. That is what
+makes fan-out safe here. `state/audit-in-progress.json` is a different thing
+and is still load-bearing: `scripts/skill-verify-gate.py`, a registered
+PreToolUse hook on the Skill tool, exits 2 for an action skill while
+`needs-verification.json` is pending unless that flag is set, and three more
+registered hooks read it: `scripts/verify-gate-cmd.py` (PostToolUse on Task),
+`scripts/context-nudge.py` (PostToolUse on everything) and
+`scripts/rules-compliance-check.py` (Stop). `scripts/action-gate.py` reads the
+flag too, but it is registered nowhere. Its hook registration was removed from
+the installer at the user's own request, recorded in
+`clean-rag/state/proof-log.jsonl` on 2026-07-06, so that branch exists and
+never runs. Do not register it again to make the list tidy.
+`/audit` sets it at its Phase 0 and clears it at Phase 5 precisely because its
+own batch would otherwise be gated agent by agent.
+
+Fan-out mode does not set it. One flag with two writers means whichever batch
+finishes first clears it out from under the other, and a batch that dies
+mid-run leaves all four registered checks suppressed for the rest of the
+session, on disk, with nothing to notice. If fan-out ever trips one of them,
+fix that gate, do not switch it off.
 
 ## Verify Gate (anti hallucination)
 

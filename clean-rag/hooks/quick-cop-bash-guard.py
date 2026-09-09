@@ -22,10 +22,46 @@ quick-cop's report comes back, not at some later point.
 Exit codes: 0 allows, 2 blocks with the stderr message shown to the agent.
 """
 
+from __future__ import annotations
+
 import json
 import re
-import shlex
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from shell_tokens import (  # noqa: E402
+        git_subcommand,
+        pad_shell_operators,
+        split_readings,
+    )
+except ImportError as _exc:
+    # The helper ships in this directory, so this only fires on a broken
+    # install. It still has to be handled rather than left to propagate: an
+    # uncaught ImportError exits 1, and 1 is not a block under this hook
+    # contract, so this read only cage would have allowed the command. Failing
+    # at the point of use instead puts it on the refusal path at the bottom of
+    # this file, which is what "fail closed by design" above means.
+    #
+    # Rebound to a module level name on purpose. Python deletes the `as` target
+    # at the end of the except block (PEP 3110), so a nested function closing
+    # over `_exc` raises NameError instead of the RuntimeError written below.
+    # The refusal still happens either way, but the operator sees the wrong
+    # cause, which is the kind of thing that costs an hour on a broken install.
+    _tokenizer_import_error = _exc
+
+    def pad_shell_operators(command: str) -> str:  # noqa: E402
+        raise RuntimeError(
+            "the shell tokenizer is unavailable") from _tokenizer_import_error
+
+    def split_readings(padded: str) -> tuple:  # noqa: E402
+        raise RuntimeError(
+            "the shell tokenizer is unavailable") from _tokenizer_import_error
+
+    def git_subcommand(parts: list, start: int) -> tuple:  # noqa: E402
+        raise RuntimeError(
+            "the shell tokenizer is unavailable") from _tokenizer_import_error
 
 # Redirection that writes or appends to a file, or pipes into a command that
 # would. A single '>' inside a comparison like 'a > b' in a quoted string is
@@ -106,7 +142,14 @@ def _refuse(reason: str) -> int:
 def _strip_quoted(command: str) -> str:
     """Remove quoted string contents so a '>' or binary name inside a
     quoted argument (a commit message, a grep pattern) isn't mistaken for
-    a real shell construct."""
+    a real shell construct.
+
+    Run on the operator-padded command, never the raw one. Padding has already
+    lifted a command substitution out of the double quotes around it, so a
+    redirection the shell really performs, `echo "$(printf hi > secrets)"`,
+    survives this strip while a literal '>' in `echo "a > b"` still does not.
+    Reading the raw command here let that write through.
+    """
     out = []
     i, n = 0, len(command)
     while i < n:
@@ -141,15 +184,15 @@ def _check_subcommand_chain(parts: list, command: str) -> str | None:
         binary = _binary_name(token)
 
         if binary == "git":
-            sub = None
-            j = i + 1
-            while j < n and parts[j].startswith("-"):
-                j += 1
-            if j < n:
-                sub = parts[j]
+            # git_subcommand is shared with verify-loop-git-guard.py so both
+            # guards read a git invocation the same way. The copy that lived
+            # here skipped tokens starting with '-' but not the separate value
+            # token that -C, -c and --work-tree take, so it read that value as
+            # the subcommand and let `git -c user.name=x push` through.
+            sub, j = git_subcommand(parts, i)
             if sub in _GIT_BLOCKED:
                 return f"git {sub!r} mutates git state, not allowed: {command!r}"
-            i = j + 1
+            i = j
             continue
 
         if binary in _PACKAGE_MUTATIONS:
@@ -177,38 +220,97 @@ def _check_subcommand_chain(parts: list, command: str) -> str | None:
     return None
 
 
+def _bash_command(payload) -> tuple[str, str]:
+    """The Bash command out of a PreToolUse payload, as (command, problem).
+
+    An empty command means there is nothing to judge: not a Bash call, or a
+    Bash call with no command in it. A non-empty problem means the payload's
+    shape could not be read at all, which is a refusal rather than an allow.
+
+    Stdin is a system boundary and every shape handled here is valid JSON: the
+    payload a bare scalar, null, or a list; tool_input null or a string; the
+    command a number or a list. A naive payload.get(...).get(...) chain raises
+    on each of them, and an uncaught exception exits 1 -- neither allow (0) nor
+    block (2) under this hook contract, so the command would run anyway.
+    """
+    if not isinstance(payload, dict):
+        return "", "the tool payload was not a JSON object"
+    if payload.get("tool_name") != "Bash":
+        return "", ""
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return "", "the Bash tool_input was not a JSON object"
+    command = tool_input.get("command")
+    if command is None or command == "":
+        return "", ""
+    if not isinstance(command, str):
+        return "", "the Bash command was not a string"
+    return command.strip(), ""
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
     except Exception:
-        return 0
+        # Fail closed, matching this module's stated contract and the
+        # shlex.split() path below: an unrecognized command is not evidence it
+        # is safe, and neither is an unreadable payload.
+        return _refuse("could not parse the tool payload")
 
-    if payload.get("tool_name") != "Bash":
-        return 0
-
-    command = (payload.get("tool_input", {}).get("command") or "").strip()
+    command, problem = _bash_command(payload)
+    if problem:
+        return _refuse(problem)
     if not command:
         return 0
 
-    stripped = _strip_quoted(command)
-
-    if _WRITE_REDIRECT.search(stripped):
-        return (_refuse(f"file write redirection or a write pipe is not allowed: {command!r}") or 2)
-
+    # Padded first, and both checks below read the padded string: shlex splits
+    # only on whitespace and quotes, so 'pytest;rm -rf x' would otherwise
+    # tokenize as the single word 'pytest;rm' and never match 'rm' in
+    # _BLOCKED_BINARIES below.
     try:
-        parts = shlex.split(command)
+        padded = pad_shell_operators(command)
     except ValueError:
         return _refuse(f"could not parse the command safely: {command!r}")
 
-    if not parts:
+    if _WRITE_REDIRECT.search(_strip_quoted(padded)):
+        return (_refuse(f"file write redirection or a write pipe is not allowed: {command!r}") or 2)
+
+    # Both shlex readings, not just the POSIX one. POSIX mode eats the
+    # backslashes out of `C:\Program Files\Git\bin\git.exe push`, leaving
+    # ['C:Program', 'FilesGitbingit.exe', 'push'] -- no token that
+    # _binary_name can reduce to "git", so a fully qualified path to git.exe,
+    # the ordinary spelling on Windows, walked straight through this cage.
+    # verify-loop-git-guard.py closed the same hole for its own denylist;
+    # split_readings is now the one implementation both guards read a command
+    # through, so they cannot diverge on it again.
+    readings, complete = split_readings(padded)
+
+    if not complete:
+        # A reading that failed is a reading whose evidence is missing, and
+        # "cannot tell" is not "safe" in a cage that fails closed by design.
+        # Stricter than verify-loop-git-guard.py, which refuses an unreadable
+        # command only when it mentions git: that guard exists to keep two
+        # agents off a remote and needs broad Bash for builds either way,
+        # whereas this one is meant to pass nothing but reads.
+        return _refuse(f"could not parse the command safely: {command!r}")
+
+    if not any(readings):
         return 0
 
-    reason = _check_subcommand_chain(parts, command)
-    if reason:
-        return _refuse(reason)
+    for parts in readings:
+        reason = _check_subcommand_chain(parts, command)
+        if reason:
+            return _refuse(reason)
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - last line of the read-only cage
+        # An uncaught exception exits 1, and 1 is not a block under this hook
+        # contract, so a crashing guard has allowed the command. Land on 2.
+        sys.exit(_refuse(f"the guard itself failed ({exc!r})"))

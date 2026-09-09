@@ -1,7 +1,7 @@
 """
 Tests for scripts/workspace-primer.py (SessionStart hook).
 
-Injects RAG tier briefing when active workspace exists. Always exits 0.
+Injects the active workspace's identity and paths. Always exits 0.
 """
 from __future__ import annotations
 
@@ -69,14 +69,20 @@ def test_injects_briefing_when_active_workspace(boost_home, tmp_path):
     assert "ACTIVE WORKSPACE" in ctx
 
 
-def test_briefing_mentions_tier3c_when_missing(boost_home, tmp_path):
-    ws_path = tmp_path / "workspace" / "task-no-research"
+def test_briefing_names_no_retired_route(boost_home, tmp_path):
+    """The briefing must not send the session at /context or port 8612.
+
+    It used to print a POST /context call and a Tier 0-4 token budget. Both
+    belonged to the bundled server that was retired, so a session following
+    the briefing got connection refused and carried on with no context.
+    """
+    ws_path = tmp_path / "workspace" / "task-routes"
     ws_path.mkdir(parents=True)
     (ws_path / "context.md").write_text("# Task\nStatus: active", encoding="utf-8")
 
     aws_file = boost_home / "state" / "active-workspace.json"
     aws_file.write_text(json.dumps({
-        "workspace": "task-no-research",
+        "workspace": "task-routes",
         "workspace_path": str(ws_path),
     }), encoding="utf-8")
 
@@ -86,36 +92,11 @@ def test_briefing_mentions_tier3c_when_missing(boost_home, tmp_path):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
     )
     assert result.returncode == 0
-    if result.stdout.strip():
-        output = json.loads(result.stdout)
-        ctx = output.get("additionalContext", "")
-        # Should mention research is not built
-        assert "NOT BUILT" in ctx or "research" in ctx.lower()
-
-
-def test_briefing_shows_tier3c_ready_when_research_exists(boost_home, tmp_path):
-    ws_path = tmp_path / "workspace" / "task-with-research"
-    research_dir = ws_path / ".rag-index" / "research"
-    research_dir.mkdir(parents=True)
-    (research_dir / "doc.json").write_text('{"chunks": []}', encoding="utf-8")
-    (ws_path / "context.md").write_text("# Task\nStatus: active", encoding="utf-8")
-
-    aws_file = boost_home / "state" / "active-workspace.json"
-    aws_file.write_text(json.dumps({
-        "workspace": "task-with-research",
-        "workspace_path": str(ws_path),
-    }), encoding="utf-8")
-
-    result = run_hook(
-        "workspace-primer.py",
-        _session_start(),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
-    )
-    assert result.returncode == 0
-    if result.stdout.strip():
-        output = json.loads(result.stdout)
-        ctx = output.get("additionalContext", "")
-        assert "EXISTS" in ctx or "READY" in ctx or "research" in ctx.lower()
+    ctx = json.loads(result.stdout).get("additionalContext", "")
+    assert "task-routes" in ctx, ctx
+    assert "8612" not in ctx, ctx
+    assert "/context" not in ctx, ctx
+    assert "Tier" not in ctx, ctx
 
 
 # ---------------------------------------------------------------------------

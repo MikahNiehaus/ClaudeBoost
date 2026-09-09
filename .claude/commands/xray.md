@@ -211,7 +211,7 @@ Verdict: FAIL
 
 ## Evidence Verification
 
-Spawn a single `evaluator-agent`:
+Spawn a single `quick-cop`:
 
 "Verify the review output: (1) every CRITICAL and MAJOR cites a specific file:line, (2) Grade is consistent with issue counts, (3) Verdict matches Grade. Output a table: Claim | Evidence? | CONFIRMED/NEEDS_EVIDENCE. Under 500 tokens."
 

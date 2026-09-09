@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from helpers import run_script
+from helpers import isolate_path_to, run_script
 
 
 class TestBoostRunModeSwitch:
@@ -339,6 +340,42 @@ class TestBoostRunHelpers:
         with patch.object(mod, "_run", return_value=(0, listed)):
             result = mod.step_mcp_debugger()
         assert result == "unhealthy"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="the CLI ships as claude.cmd only on Windows")
+    def test_step_mcp_debugger_reads_the_cli_output_when_it_is_a_cmd_shim(self, tmp_path, monkeypatch):
+        """The health check must actually launch the CLI on Windows.
+
+        npm installs the Claude Code CLI as claude.cmd, and CreateProcess
+        cannot resolve a bare "claude" in an argv list to it. Nothing here is
+        mocked: a real claude.cmd on an isolated PATH prints a real `claude mcp
+        list` transcript, and "connected" can only be reached by running it and
+        parsing what came back.
+        """
+        mod = self._load_mod(tmp_path)
+
+        shim_dir = tmp_path / "fake_bin"
+        shim_dir.mkdir()
+        listed = "\r\n".join(
+            f"echo {name}: npx -y {name} - Connected"
+            for name, _ in mod.MCP_SERVERS_EXPECTED)
+        (shim_dir / "claude.cmd").write_text(
+            f"@echo off\r\n{listed}\r\n", encoding="ascii")
+
+        isolate_path_to(monkeypatch, shim_dir)
+        assert shutil.which("claude") is not None, "test setup failed: shim not resolvable at all"
+
+        assert mod.step_mcp_debugger() == "connected"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="the CLI ships as claude.cmd only on Windows")
+    def test_step_mcp_debugger_is_unknown_when_no_cli_is_on_path(self, tmp_path, monkeypatch):
+        """No CLI is a skipped check, never a crash and never a false verdict."""
+        empty = tmp_path / "empty_bin"
+        empty.mkdir()
+        isolate_path_to(monkeypatch, empty)
+        assert shutil.which("claude") is None, "test setup failed: claude still resolvable"
+
+        mod = self._load_mod(tmp_path)
+        assert mod.step_mcp_debugger() == "unknown"
 
     # ------------------------------------------------------------------
     # main() — full verify flow

@@ -77,6 +77,21 @@ loop (bad-cop → good-cop → bad-cop) continues until bad-cop stamps
 clears the gate. Both are defined in `~/.claude/agents/` the same way swiper
 and researcher are.
 
+**Both cops review the diff by default, and whatever you name instead.** With
+no review scope given, bad-cop resolves the diff itself: the uncommitted working
+tree, or the branch against its merge base when the tree is clean. Anything the
+human names on a `REVIEW SCOPE:` line replaces that, in their own words, with no
+fixed vocabulary. `entire project`, `anything that touches security`, `anything
+that touches OrderService`, `anything around this bug fix`, a bare path, all
+valid. Pass their sentence through verbatim; do not paraphrase it and do not
+resolve it to files yourself. bad-cop resolves it with search and the import
+graph, then prints the resolved file list at the top of its report, which is the
+only place a misread scope gets caught, so read that block first. Copy the same
+`REVIEW SCOPE:` and `RESOLVED:` lines into good-cop's prompt. Both work the same
+surface. That list bounds where a root cause is allowed to live; it does not
+widen what good-cop may change, which stays at what the findings require.
+
+
 ## Search
 
 ```
@@ -171,7 +186,6 @@ Logs stream to the console and to `state/server.log`.
 | `POST /index-project` | Index a project, build its graph |
 | `POST /reindex-file` | Reindex one file |
 | `GET /projects` | The project registry |
-| `POST /register-project` | Register a project indexed by another RAG server |
 
 ## Why the KB is gone
 

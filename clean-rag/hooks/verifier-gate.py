@@ -118,6 +118,7 @@ def _git_root(cwd: str):
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=cwd, capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
     except Exception:
         return None
@@ -148,7 +149,8 @@ def _diff(root: str, files=None):
     for base in (["git", "diff"], ["git", "diff", "--staged"]):
         args = base + (["--", *pathspec] if pathspec else [])
         try:
-            proc = subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=15)
+            proc = subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=15,
+                                  encoding="utf-8", errors="replace")
         except Exception:
             continue
         if proc.returncode != 0:

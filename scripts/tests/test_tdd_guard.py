@@ -26,6 +26,20 @@ def _write(file_path: str, content: str = "") -> dict:
     return pretooluse("Write", {"file_path": file_path, "content": content})
 
 
+def _multi(file_path: str, n_edits: int = 2) -> dict:
+    """A MultiEdit payload in the shape Claude Code actually sends.
+
+    One top-level file_path (MultiEdit edits a single file), and edit items
+    carrying only old_string/new_string. The tool's input schema declares
+    additionalProperties:false on those items, so a per-edit file_path is not
+    a shape the harness can produce.
+    """
+    return pretooluse("MultiEdit", {
+        "file_path": file_path,
+        "edits": [{"old_string": f"a{i}", "new_string": f"b{i}"} for i in range(n_edits)],
+    })
+
+
 # ---------------------------------------------------------------------------
 # EXEMPT: paths that should always pass regardless of TDD state
 # ---------------------------------------------------------------------------
@@ -175,6 +189,108 @@ class TestStrictMode:
         assert r.returncode == 2
         assert b"TDD Guard" in r.stderr
         assert b"Write the failing test FIRST" in r.stderr
+
+
+# ---------------------------------------------------------------------------
+# MULTIEDIT: gated identically to Edit and Write
+# ---------------------------------------------------------------------------
+
+class TestMultiEdit:
+    """MultiEdit is in GATED_TOOLS, so it must reach the same verdict as Edit.
+
+    There was no MultiEdit coverage here at all, and the guard read its target
+    out of the edits list, where the harness never puts one. Every MultiEdit
+    therefore produced no path and returned early, in both modes.
+    """
+
+    def test_strict_blocks_multiedit_on_source_without_test(self, tmp_path):
+        r = run_hook("tdd-guard.py", _multi("/project/src/auth.py"),
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert r.returncode == 2
+        assert b"auth.py" in r.stderr
+
+    def test_soft_warns_on_multiedit_without_test(self, tmp_path):
+        r = run_hook("tdd-guard.py", _multi("/project/src/auth.py"),
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "soft"},
+                     cwd=tmp_path)
+        assert r.returncode == 0
+        assert b"Write the failing test FIRST" in r.stderr
+
+    def test_multiedit_matches_edit_verdict(self, tmp_path):
+        """Same file, both tools, same exit code and same message."""
+        env = {"CLAUDEBOOST_TDD_GUARD": "strict"}
+        target = "/project/src/auth.py"
+        edit = run_hook("tdd-guard.py", _edit(target), env_overrides=env, cwd=tmp_path)
+        multi = run_hook("tdd-guard.py", _multi(target), env_overrides=env, cwd=tmp_path)
+        assert (multi.returncode, multi.stderr) == (edit.returncode, edit.stderr)
+
+    def test_multiedit_on_test_file_allowed(self, tmp_path):
+        r = run_hook("tdd-guard.py", _multi("/project/tests/test_auth.py"),
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert r.returncode == 0
+
+    def test_multiedit_exempt_path_allowed(self, tmp_path):
+        r = run_hook("tdd-guard.py", _multi("/project/docs/README.md"),
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert r.returncode == 0
+
+    def test_multiedit_empty_edits_still_gates_the_file(self, tmp_path):
+        """An empty edits list does not excuse the file from the guard.
+
+        The guard's subject is the file being written, not how many
+        find-and-replace pairs come with it. MultiEdit's schema sets minItems:1
+        on edits, so this payload is malformed rather than routine, and a
+        malformed payload naming a real source file is the last thing that
+        should slip past in strict mode.
+        """
+        fixture = pretooluse("MultiEdit", {"file_path": "/project/src/auth.py", "edits": []})
+        r = run_hook("tdd-guard.py", fixture,
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert r.returncode == 2
+
+    def test_multiedit_without_file_path_allowed(self, tmp_path):
+        """No file_path at all: nothing to judge, so allow rather than block."""
+        fixture = pretooluse("MultiEdit", {"edits": []})
+        r = run_hook("tdd-guard.py", fixture,
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert r.returncode == 0
+        assert r.stderr == b""
+
+
+# ---------------------------------------------------------------------------
+# MALFORMED PAYLOADS: stdin is a system boundary
+# ---------------------------------------------------------------------------
+
+class TestMalformedPayload:
+    """A payload that is valid JSON but the wrong shape must not crash the hook.
+
+    An unhandled exception exits 1, which is neither a clean allow nor a block,
+    and it prints a traceback where the user expects either silence or the
+    guard's own message.
+    """
+
+    @pytest.mark.parametrize("bad_path", [7, ["a"], {"p": "x"}, None])
+    def test_non_string_file_path_allows_without_traceback(self, tmp_path, bad_path):
+        fixture = pretooluse("Edit", {"file_path": bad_path})
+        r = run_hook("tdd-guard.py", fixture,
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert b"Traceback" not in r.stderr
+        assert r.returncode == 0
+
+    def test_non_dict_tool_input_allows_without_traceback(self, tmp_path):
+        fixture = pretooluse("Edit", {})
+        fixture["tool_input"] = "not an object"
+        r = run_hook("tdd-guard.py", fixture,
+                     env_overrides={"CLAUDEBOOST_TDD_GUARD": "strict"},
+                     cwd=tmp_path)
+        assert b"Traceback" not in r.stderr
+        assert r.returncode == 0
 
 
 # ---------------------------------------------------------------------------

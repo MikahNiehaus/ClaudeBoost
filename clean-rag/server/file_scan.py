@@ -9,7 +9,10 @@ site packages skips a single venv leaked 9330 of 9721 scanned files into the ind
 With them, the same tree scans to 391 real source files.
 """
 
+from __future__ import annotations
+
 import logging
+import re
 import subprocess
 from fnmatch import fnmatch
 from pathlib import Path
@@ -270,6 +273,308 @@ def looks_binary(path) -> bool:
     return b"\x00" in chunk
 
 
+#: Credential formats that identify themselves. A string matching one of these
+#: is a credential whatever file it sits in, so these carry no keyword or length
+#: qualifier and no placeholder exemption.
+#:
+#: The AWS pattern is Yelp/detect-secrets' own, verbatim from
+#: detect_secrets/plugins/aws.py (AWSKeyDetector.denylist[0]); the private key
+#: headers follow detect_secrets/plugins/private_key.py. The vendor prefixes are
+#: the issuer assigned ones, which is what makes them unambiguous: a literal
+#: ``ghp_`` or ``xoxb-`` followed by the token body is not something prose
+#: produces by accident.
+_IDENTIFIABLE_SECRET_PATTERNS = (
+    re.compile(r"(?:A3T[A-Z0-9]|ABIA|ACCA|AKIA|ASIA)[0-9A-Z]{16}"),
+    re.compile(r"-----BEGIN\s+(?:[A-Z]+\s+)?PRIVATE KEY(?:\s+BLOCK)?-----"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{32,}"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+)
+
+#: Names that introduce a credential when something is assigned to them. Same
+#: idea as detect_secrets' KeywordDetector: the variable name is the signal,
+#: because a password is not distinguishable from any other short string by
+#: looking at the value alone.
+_SECRET_NAME_RE = re.compile(
+    r"password|passwd|pwd|secret|api[_-]?key|apikey|access[_-]?key"
+    r"|auth[_-]?token|client[_-]?secret|private[_-]?key|connection[_-]?string",
+    re.IGNORECASE,
+)
+
+#: Names that contain a credential word but describe something ABOUT a
+#: credential rather than holding one. Both examples are from real projects:
+#: ``passwordErrorMessage`` holds validation copy shown to a user, and
+#: ``CHANGE_PASSWORD_POLICY_NAME`` holds the name of an Azure B2C policy.
+#: Dropping either from the index protects nothing and loses real code.
+_NOT_THE_SECRET_NAME_RE = re.compile(
+    r"(?:name|message|label|policy|error|hint|prompt|title|description"
+    r"|regex|pattern|length|enabled|required|placeholder|visible)$",
+    re.IGNORECASE,
+)
+
+#: Characters allowed to sit between the name and the assignment operator.
+#: Yelp/detect-secrets' own ``CLOSING`` from detect_secrets/plugins/keyword.py,
+#: verbatim as a character class.
+#:
+#: This is the only reason the rule below reaches JSON. JSON quotes its keys,
+#: so ``{"password": "..."}`` puts a quote immediately after the name, and a
+#: pattern anchored straight to ``[:=]`` cannot fire on any .json file at all,
+#: which is the format that carries the connection strings this module was
+#: written for. detect-secrets has no JSON specific rule either (JSON is absent
+#: from its REGEX_BY_FILETYPE and falls to the default set); quoted keys match
+#: there purely because these three characters are permitted here. The bracket
+#: also picks up ``creds["password"] = "..."``.
+#:
+#: Measured cost of allowing them, re-measured over six real projects, 7846
+#: files scanned: 14 files dropped before, 16 after. Both new drops are false
+#: positives, and both come from the same shape, a name that merely CONTAINS a
+#: keyword sitting behind a quote or a bracket:
+#: ``Headers["X-Secret-Translation-Password"] = "secret-password"`` in a .NET
+#: test fixture, and ``"secretStore": "AzureAppSettings"`` in a generated Azure
+#: service dependency file.
+#:
+#: Read that as a class, not as a list. ``_SECRET_NAME_RE`` below is a bare
+#: ``re.search``, so any bracket indexed name containing a keyword anywhere
+#: qualifies, whatever it describes: ``errors["api_key"] = "missingValueCode"``
+#: (an error catalogue) and ``testCases["apiKeyValidationScenario"] = "..."``
+#: (a fixture table) both match here and neither holds a credential. The two
+#: found in real trees are what that class costs at today's corpus size, not
+#: its ceiling.
+#:
+#: Removing ``]`` would take the bracket half back to zero and still fix JSON,
+#: at the price of never seeing a real ``config["db_password"] = "<live>"``.
+#: Kept, because this module's standing trade is that a credential reaching a
+#: /search result is the worse of the two failures, and over-suppression is the
+#: direction SKIP_NAME_GLOBS and the keyword rule already accepted.
+_CLOSING = r"""[]"']{0,2}"""
+
+#: What a key may be called. Shared by both assignment rules below so the two
+#: cannot disagree about it, which they did: the quoted rule allowed dots and
+#: the environment rule did not, so ``spring.datasource.password=<live value>``
+#: matched neither. That is not a hypothetical key format. It is how every
+#: Spring, Java and .NET hierarchical property is written, and while
+#: ``.properties`` itself is not in CODE_EXTENSIONS, the same block pasted into
+#: a README or a TROUBLESHOOTING.md is, which is precisely the "jotted it into
+#: notes.md for now" case looks_like_secret exists to catch.
+#:
+#: Hyphens come along for the same reason: ``x-api-key`` is a real header name
+#: and a real key name.
+#:
+#: Measured cost of widening the environment rule to this class, over the same
+#: six real projects and 7846 files: zero additional files dropped, and none
+#: lost. That is what one corpus happened to contain, not what the class costs,
+#: and it should be read the way the _CLOSING note above asks to be read: a
+#: floor, not a ceiling.
+#:
+#: The shape it does not cover is a dotted or hyphenated key that CONTAINS a
+#: credential word while naming something ABOUT the credential. These three are
+#: ordinary Spring, .NET and Java config, hold nothing secret, and are all
+#: dropped:
+#:
+#:     app.api-key-rotation-schedule=EVERY_30_DAYS_AT_MIDNIGHT_UTC
+#:     com.example.auth-token-refresh-interval-ms=1800000000000000
+#:     service.client-secret-file-path=/etc/secrets/client.pem
+#:
+#: None of the three existed in the corpus, which is why the measurement is
+#: zero. It is not why the cost is.
+#:
+#: The guards after the name match do not hold that line and cannot: a
+#: schedule, an interval and a file path are all literals longer than
+#: _MIN_SECRET_VALUE_LEN, and none is a placeholder or prose. The only guard
+#: that could is _NOT_THE_SECRET_NAME_RE, and only for the suffixes it lists,
+#: none of which these end in. Kept anyway, for the reason _CLOSING is kept:
+#: dropping a config key costs a search hit, and the other direction puts a
+#: live credential in one.
+_KEY_NAME = r"[A-Za-z_][A-Za-z0-9_.\-]*"
+
+#: A credential assigned as a quoted literal: ``Secret = "whsec_..."``,
+#: ``apiKey: 'key_live_...'``, ``"connectionString": "Server=..."``.
+#:
+#: The value has to be a literal, and that restriction is the whole difference
+#: between a usable rule and an unusable one. Measured on a real .NET project,
+#: accepting an unquoted right hand side dropped 26 files of 1668, and 24 of
+#: those were correct code READING a secret out of config
+#: (``ApiKey = Environment.GetEnvironmentVariable(...)``,
+#: ``password: Input.Password``). That is the pattern you want developers to
+#: use and the code they most need to find, so matching it is worse than
+#: useless. A quoted literal cannot be an expression.
+_QUOTED_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?P<name>" + _KEY_NAME + r")" + _CLOSING + r"\s*[:=]\s*"
+    r"(?P<quote>[\"'])(?P<value>[^\"'\n]+)(?P=quote)",
+)
+
+#: A credential in environment file form: ``DB_PASSWORD=hunter2`` on a line of
+#: its own, optionally exported. The whole line being the assignment is what
+#: makes this safe to accept unquoted: source code assigns with spaces around
+#: the operator and rarely ends the statement there, so the shapes do not
+#: overlap. This is the form a developer uses in the scratch note that
+#: SKIP_NAME_GLOBS never sees, and the form a Spring or Java property block
+#: keeps when it is pasted into one, which is why the name class is shared with
+#: the quoted rule above rather than spelled out again here.
+_ENV_SECRET_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?(?P<name>" + _KEY_NAME + r")="
+    r"(?P<value>[^\s#]+)[ \t]*$",
+    re.MULTILINE,
+)
+
+#: Trailing characters that belong to the surrounding prose, not to the value.
+#: Stripped so a value written at the end of a sentence is judged on the value
+#: itself rather than on the full stop that follows it.
+_VALUE_TRAILING_PUNCTUATION = ".,;:!?)]`"
+
+#: Shortest assigned value treated as a real credential. Real secrets are
+#: comfortably longer than this; doc examples and obvious stand ins are
+#: shorter. The bar exists so a name match alone cannot drop a file, since the
+#: name based rule is the one that can be wrong.
+_MIN_SECRET_VALUE_LEN = 12
+
+#: Values that read as a credential but are placeholders. Substring matched
+#: case insensitively, so ``YOUR_API_KEY_HERE`` and ``replace-with-your-token``
+#: are both covered.
+_PLACEHOLDER_MARKERS = (
+    "example", "placeholder", "your", "yours", "changeme", "change_me",
+    "todo", "tbd", "dummy", "sample", "test", "fake", "redacted", "xxxx",
+    "insert", "replace", "notreal", "n/a", "none", "null", "empty",
+)
+
+
+def _is_prose(value: str) -> bool:
+    """Does this value read as a sentence rather than as a credential?
+
+    Credentials do not contain spaces. Connection strings are the one real
+    exception (``Integrated Security=True``), and they are recognisable by
+    their own delimiters, so they are kept.
+    """
+    if " " not in value:
+        return False
+    return not (";" in value and "=" in value)
+
+
+def _is_placeholder(value: str) -> bool:
+    """Is this assigned value a stand in rather than a live credential?
+
+    The templated shapes are Yelp/detect-secrets'
+    ``filters/heuristic.is_templated_secret``: ``{secret}``, ``<secret>`` and
+    ``${secret}`` are all interpolation syntax, never the secret itself.
+    """
+    if not value:
+        return True
+    if (
+        (value[0] == "{" and value[-1] == "}")
+        or (value[0] == "<" and value[-1] == ">")
+        or (value.startswith("${") and value[-1] == "}")
+        or (value.startswith("%") and value.endswith("%"))
+    ):
+        return True
+    low = value.lower()
+    return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+def looks_like_secret(path) -> bool:
+    """Does this file carry a live credential, judged by content?
+
+    The companion to looks_binary above, and asked the same way: about what is
+    in the file, not what the file is called. SKIP_NAME_GLOBS only knows config
+    file NAMES, so it never sees the case this catches, which is a developer
+    jotting a real value into ``credentials.txt``, ``notes.md`` or ``TODO.md``
+    "for now". Those pass every name and extension filter, get chunked and
+    embedded like ordinary prose, and come back verbatim in a /search hit. This
+    module's own risk statement covers that exactly: "a /search hit can lift a
+    live connection string into an agent's context, and agents send their
+    context onward."
+
+    Two rules, deliberately unequal, because they have very different false
+    positive rates:
+
+    - An identifiable credential (an AWS key id, a PEM private key header, a
+      vendor prefixed token) is decisive on its own. Those formats are issuer
+      assigned and prose does not produce them by accident.
+    - A credential named variable only counts when a literal is assigned to it,
+      that literal is long enough to be real, and it is not a recognisable
+      placeholder. This is the rule that can be wrong, so it is the qualified
+      one: it deliberately does not fire on code that reads a secret from
+      configuration, which is both the correct pattern and the code developers
+      most need to find.
+
+    The cost is the same one SKIP_NAME_GLOBS already accepted and wrote down: a
+    document that quotes a realistic looking credential stops being searchable.
+    A credential surfacing in a search result is the worse of the two failures.
+
+    Errs toward "no secret" on any read error, matching looks_binary: a file we
+    cannot open is left for the indexer to report properly rather than silently
+    dropped.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+    for pattern in _IDENTIFIABLE_SECRET_PATTERNS:
+        if pattern.search(text):
+            return True
+
+    for pattern in (_QUOTED_SECRET_ASSIGNMENT_RE, _ENV_SECRET_ASSIGNMENT_RE):
+        for match in pattern.finditer(text):
+            name = match.group("name")
+            if not _SECRET_NAME_RE.search(name):
+                continue
+            if _NOT_THE_SECRET_NAME_RE.search(name):
+                continue
+            value = match.group("value").strip().rstrip(_VALUE_TRAILING_PUNCTUATION)
+            if len(value) < _MIN_SECRET_VALUE_LEN:
+                continue
+            if _is_placeholder(value) or _is_prose(value):
+                continue
+            return True
+
+    return False
+
+
+def exclusion_reason(path) -> str | None:
+    """Why this one file must not be indexed, or None if it may be.
+
+    Every rule that can be decided from a single file lives here, so both entry
+    points into the index apply the same set. They did not before: scan_project
+    held the full set and reindex_file, the per edit path, carried a reduced
+    copy that checked only the extension and the size. An appsettings.json that
+    scan_project refuses was therefore indexed anyway the moment somebody edited
+    it, which is the same credential exposure SKIP_NAME_GLOBS was added to close,
+    reached through the more common of the two paths.
+
+    Directory level rules (SKIP_DIRS, virtualenv roots, gitignore) are not here.
+    They need the walk that scan_project does and cannot be answered from one
+    path in isolation.
+
+    Ordered cheapest first: name, then extension, then a stat, then the two
+    checks that read the file.
+    """
+    path = Path(path)
+    if path.name in SKIP_FILES:
+        return f"{path.name} is a generated file"
+    if any(path.name.endswith(s) for s in SKIP_SUFFIXES):
+        return f"{path.name} has a generated file suffix"
+    # Lowercased because Windows is case insensitive about filenames and
+    # fnmatch is not: `AppSettings.json` is the same file on this platform
+    # and must not slip past a lowercase glob.
+    if any(fnmatch(path.name.lower(), g) for g in SKIP_NAME_GLOBS):
+        return f"{path.name} is a config file that carries credentials"
+    suffix = path.suffix.lower()
+    if suffix not in CODE_EXTENSIONS:
+        return f"Extension {suffix} not indexable"
+    try:
+        if path.stat().st_size > MAX_FILE_SIZE:
+            return "File too large"
+    except OSError as e:
+        return f"Cannot stat {path}: {e}"
+    if looks_binary(path):
+        return f"{path.name} is binary"
+    if looks_like_secret(path):
+        return f"{path.name} contains what looks like a live credential"
+    return None
+
+
 def scan_project(project_path: str) -> list:
     """Scan a project directory for indexable source files.
 
@@ -289,23 +594,9 @@ def scan_project(project_path: str) -> list:
         # Skip directories in SKIP_DIRS
         if any(part in SKIP_DIRS for part in rel.parts):
             continue
-        if path.name in SKIP_FILES:
-            continue
-        if any(path.name.endswith(s) for s in SKIP_SUFFIXES):
-            continue
-        # Lowercased because Windows is case insensitive about filenames and
-        # fnmatch is not: `AppSettings.json` is the same file on this platform
-        # and must not slip past a lowercase glob.
-        if any(fnmatch(path.name.lower(), g) for g in SKIP_NAME_GLOBS):
-            continue
-        if path.suffix.lower() not in CODE_EXTENSIONS:
-            continue
-        try:
-            if path.stat().st_size > MAX_FILE_SIZE:
-                continue
-        except OSError:
-            continue
-        if looks_binary(path):
+        reason = exclusion_reason(path)
+        if reason is not None:
+            logger.debug("Skipping %s: %s", rel, reason)
             continue
         files.append(str(path))
 

@@ -8,6 +8,8 @@ Provides semantic search, code metrics, web search fallback, and context injecti
 Install: register in OpenCode settings as an MCP server pointing to this script.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -292,21 +294,36 @@ class OpenCodeRAGServer:
             return {"has_tests": False, "passed": None, "error": str(e)}
 
     def code_metrics(self, filepath: str) -> dict:
-        """Get code metrics for a file."""
+        """Get code metrics for a file.
+
+        There is no HTTP /metrics route on the server, the same gap
+        web_search_fallback documents below: this used to POST to one and get a
+        404 back on every single call, so a tool advertised in tools/list only
+        ever returned an error. server/metrics.py's get_metrics() is the real
+        implementation, cache and all, so call it directly in-process the way
+        web_search_fallback calls web_search().
+
+        Imported as ``server.metrics``, not flat off the server directory the
+        way web_search is, because metrics.py does ``from .edge_extraction
+        import get_language`` and a flat import of it raises "attempted
+        relative import with no known parent package".
+
+        METRICS_CACHE_DIR is pinned first because metrics.py reads it at import
+        time and defaults it to the relative path ``state/metrics-cache``. This
+        process starts in whatever directory OpenCode was launched from, so
+        without the pin the cache would land in the user's project tree.
+        """
         try:
-            payload = json.dumps({"file_path": filepath}).encode("utf-8")
-
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{self.rag_port}/metrics",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+            if str(_CLEAN_RAG_HOME) not in sys.path:
+                sys.path.insert(0, str(_CLEAN_RAG_HOME))
+            os.environ.setdefault(
+                "METRICS_CACHE_DIR", str(_CLEAN_RAG_HOME / "state" / "metrics-cache"),
             )
+            from server.metrics import get_metrics
 
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                metrics = json.loads(resp.read().decode("utf-8"))
-                logger.info(f"Metrics for {filepath}: LOC={metrics.get('lines_of_code', '?')}")
-                return metrics
+            metrics = get_metrics(filepath)
+            logger.info(f"Metrics for {filepath}: LOC={metrics.get('lines_of_code', '?')}")
+            return metrics
         except Exception as e:
             logger.error(f"Metrics fetch failed: {e}")
             return {"error": str(e)}
@@ -554,8 +571,11 @@ def main():
     "jsonrpc" field or an initialize handshake, so a real MCP client (OpenCode's
     included) rejected it before ever listing a tool. This handles the full
     handshake: initialize, the notifications/initialized ack, then tools/list and
-    tools/call. Notifications carry no id and get no reply, per JSON-RPC. Anything
-    else comes back as a -32601 method-not-found error.
+    tools/call. Notifications carry no id and get no reply, per JSON-RPC. An
+    unparseable line is a -32700, a line that parses to anything but an object
+    is a -32600, and an object naming a method this server does not implement is
+    a -32601. None of the three ends the loop: this process serves a whole
+    OpenCode session, so one bad line must not take the next good one with it.
     """
     server = OpenCodeRAGServer()
     logger.info("OpenCode RAG MCP Server starting...")
@@ -574,6 +594,17 @@ def main():
             logger.error(f"JSON decode error: {e}")
             # No id to echo, so per spec send a parse error with a null id.
             _send(_error(None, -32700, f"Parse error: {e}"))
+            continue
+
+        if not isinstance(request, dict):
+            # Valid JSON, wrong shape: `null`, a bare string, a number, or a
+            # batch array (which this server does not implement). json.loads
+            # accepts all of them, so the shape check has to be its own step.
+            # This process serves a whole OpenCode session rather than one tool
+            # call, so letting a .get() on anything but an object escape here
+            # killed the server and every later request with it.
+            logger.error(f"Invalid request, expected a JSON object: {type(request).__name__}")
+            _send(_error(None, -32600, "Invalid Request: expected a JSON object"))
             continue
 
         request_id = request.get("id")

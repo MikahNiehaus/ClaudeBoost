@@ -10,15 +10,31 @@ after tests pass, before good-cop fixes anything.
 
 ## What to do
 
-`$ARGUMENTS` is the diff or change to test, or empty to mean "whatever
-changed this session." Spawn `bad-cop` (foreground, `run_in_background:
-false`, never backgrounded). Give it three things and only three: the
-requirements, the correctness properties the change is supposed to satisfy,
-and the actual diff. Not your reasoning for the change, that's exactly what
+`$ARGUMENTS` is the review scope, in the human's own words, and empty means
+the diff. Pass it through verbatim on a `REVIEW SCOPE:` line. Do not
+paraphrase it, do not narrow it to files you think they meant, and do not
+resolve it to a file list yourself: bad-cop resolves it with the import graph
+and search, and prints what it resolved so the human can see what their words
+were taken to mean.
+
+The scope is free text with no fixed vocabulary. `entire project`, `anything
+that touches security`, `anything that touches OrderService`, `anything around
+this bug fix`, `clean-rag/hooks/` are all valid, and so is any other sentence
+describing a surface. Empty is the common case and means the diff: the
+uncommitted working tree, or the branch against its merge base when the tree is
+clean.
+
+Spawn `bad-cop` (foreground, `run_in_background: false`, never backgrounded).
+Give it four things and only four: the review scope, the requirements, the
+correctness properties the change is supposed to satisfy, and the actual diff or
+code under review. Not your reasoning for the change, that's exactly what
 biases a reviewer into agreeing with it.
 
-Wait for it. It writes new tests aimed at breaking the change, runs the
-code, adds temporary logging where it needs to actually see behavior, checks
+Wait for it. Its report opens with the `REVIEW SCOPE:` line and the resolved
+file list. Read that block first: it is where a misread scope shows up, and the
+only place it shows up. Then it writes new tests aimed at breaking the change,
+runs the code, adds temporary logging where it needs to actually see behavior,
+checks
 the diff against `workspace/<task-id>/ticket.md` or `goal.md` if a workspace
 is active (did it actually do what was asked, nothing silently skipped,
 nothing bundled in that wasn't requested), and reports every provable issue

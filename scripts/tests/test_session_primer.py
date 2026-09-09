@@ -327,7 +327,7 @@ def test_auto_mode_skips_consult_standing_orders(boost_home, tmp_path):
 
 
 def test_workspace_dashboard_with_rag_status(boost_home, tmp_path):
-    """When rag is verified and workspace is registered, dashboard shows tier status."""
+    """When rag is verified and a workspace is registered, the hook still exits 0."""
     # Create sentinel
     (tmp_path / "claudeboost_rag_ok").touch()
 
@@ -638,19 +638,32 @@ class TestActiveWorkspaceReminderWithRagStatus:
             encoding="utf-8",
         )
 
+        # The shape GET /status really returns: projects.entries keyed by
+        # project id, with files_indexed/chunks_created per entry.
         proj_norm = str(tmp_path).replace("\\", "/")
         rag_status = {
-            "indexed_projects": [
-                {"project_path": proj_norm, "files": 42, "chunks": 150}
-            ]
+            "projects": {
+                "count": 1,
+                "entries": {
+                    "proj-abc123": {
+                        "project_path": proj_norm,
+                        "files_indexed": 42,
+                        "chunks_created": 150,
+                    }
+                },
+            }
         }
 
         mod = _load_session_primer()
         result = mod._active_workspace_reminder(boost_home, rag_status, "fix the codebase bug")
-        assert "READY" in result or "task-codebase" in result
+        # Assert the rendered line, not "READY or the workspace id". The id is
+        # in the dashboard unconditionally, so the old `or` passed even when
+        # the lookup found nothing.
+        assert "CODEBASE INDEX: READY (42 files / 150 chunks)" in result, result
+        assert "NOT INDEXED" not in result, result
 
     def test_shows_not_indexed_when_project_missing(self, boost_home, tmp_path):
-        """rag_status present but project not in indexed_projects → NOT INDEXED."""
+        """rag_status present but the project is not among the indexed entries."""
         ws = tmp_path / "workspace" / "task-notindexed"
         ws.mkdir(parents=True)
         (ws / "context.md").write_text("# Not indexed\nStatus: in progress", encoding="utf-8")
@@ -667,37 +680,40 @@ class TestActiveWorkspaceReminderWithRagStatus:
             encoding="utf-8",
         )
 
-        rag_status = {"indexed_projects": []}
+        rag_status = {"projects": {"count": 0, "entries": {}}}
 
         mod = _load_session_primer()
         result = mod._active_workspace_reminder(boost_home, rag_status, "fix the not indexed task")
-        assert "NOT INDEXED" in result or "task-notindexed" in result
+        assert "CODEBASE INDEX: NOT INDEXED" in result, result
+        assert "run Skill(skill='index-project'" in result, result
 
-    def test_shows_project_kb_ready_when_knowledge_exists(self, boost_home, tmp_path):
-        """Project KB directory with .md files → shows READY in dashboard."""
-        ws = tmp_path / "workspace" / "task-kb"
+    def test_reports_offline_when_status_is_unavailable(self, boost_home, tmp_path):
+        """No /status response: say the server is offline, do not claim NOT INDEXED.
+
+        Unreachable and indexed-but-empty are different states. Reporting the
+        first as the second sends the session off to run a full reindex when
+        the real problem is that the server is down.
+        """
+        ws = tmp_path / "workspace" / "task-offline"
         ws.mkdir(parents=True)
-        (ws / "context.md").write_text("# KB task\nStatus: in progress", encoding="utf-8")
-
-        kb_dir = tmp_path / ".claudeboost" / "knowledge"
-        kb_dir.mkdir(parents=True)
-        (kb_dir / "api.md").write_text("# API knowledge", encoding="utf-8")
+        (ws / "context.md").write_text("# Offline task\nStatus: in progress", encoding="utf-8")
 
         reg = {
-            "task-kb": {
+            "task-offline": {
                 "workspace_path": str(ws),
                 "project_path": str(tmp_path),
             }
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
         (boost_home / "state" / "active-workspace.json").write_text(
-            json.dumps({"workspace": "task-kb", "workspace_path": str(ws), "project_path": str(tmp_path)}),
+            json.dumps({"workspace": "task-offline", "workspace_path": str(ws), "project_path": str(tmp_path)}),
             encoding="utf-8",
         )
 
         mod = _load_session_primer()
-        result = mod._active_workspace_reminder(boost_home, None, "fix the kb task")
-        assert "task-kb" in result
+        result = mod._active_workspace_reminder(boost_home, None, "fix the offline task")
+        assert "RAG offline" in result, result
+        assert "NOT INDEXED" not in result, result
 
     def test_shows_multiple_candidates_section(self, boost_home, tmp_path):
         """Multiple close-scoring workspaces → WORKSPACE CANDIDATES section shown."""
@@ -752,48 +768,6 @@ class TestGetRagStatus:
             result = mod._get_rag_status(timeout=0.1)
 
         assert result is None
-
-
-class TestActiveWorkspaceReminderPermissionError:
-    """Tests for the PermissionError branch in _active_workspace_reminder (lines 217-218)."""
-
-    def test_shows_unknown_when_kb_glob_raises_permission_error(self, boost_home, tmp_path):
-        """PermissionError on kb_dir.glob() → dashboard shows UNKNOWN (permission error)."""
-        import unittest.mock as mock
-
-        ws = tmp_path / "workspace" / "task-perm"
-        ws.mkdir(parents=True)
-        (ws / "context.md").write_text("# Perm task\nStatus: in progress", encoding="utf-8")
-
-        kb_dir = tmp_path / ".claudeboost" / "knowledge"
-        kb_dir.mkdir(parents=True)
-
-        reg = {
-            "task-perm": {
-                "workspace_path": str(ws),
-                "project_path": str(tmp_path),
-            }
-        }
-        (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
-        (boost_home / "state" / "active-workspace.json").write_text(
-            json.dumps({"workspace": "task-perm", "workspace_path": str(ws), "project_path": str(tmp_path)}),
-            encoding="utf-8",
-        )
-
-        mod = _load_session_primer()
-
-        # Patch Path.glob so that when called on the kb_dir path it raises PermissionError
-        real_glob = mod.Path.glob
-
-        def patched_glob(self, pattern):
-            if ".claudeboost" in str(self) and "knowledge" in str(self):
-                raise PermissionError("Access denied")
-            return real_glob(self, pattern)
-
-        with mock.patch.object(mod.Path, "glob", patched_glob):
-            result = mod._active_workspace_reminder(boost_home, None, "fix the perm task work")
-
-        assert "UNKNOWN (permission error)" in result
 
 
 class TestConsumeClearPendingUnlinkFails:

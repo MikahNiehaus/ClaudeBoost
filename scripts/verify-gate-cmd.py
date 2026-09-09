@@ -52,6 +52,69 @@ FINDING_KEYWORDS = (
     "blocker:", "high:", "medium:",
 )
 
+# Agents whose completion IS the verification step, so their own output must
+# not re-arm the flag. Kept as a set of real agent names; there is no
+# `evaluator-agent` and there never was.
+VERIFIER_AGENTS = frozenset({"quick-cop", "bad-cop", "good-cop"})
+
+# Fallback for a payload that carries no agent type. Substring match on the
+# caller's own description, so it is loose by nature.
+_DESC_MARKERS = ("quick-cop", "quick cop", "bad-cop", "bad cop",
+                 "good-cop", "good cop", "evaluator", "verdict")
+
+
+def _agent_type(tool_input: dict) -> str:
+    """Which agent the Task payload says ran.
+
+    Same resolution order as clean-rag/hooks/research-record.py and
+    verifier-record.py. Kept identical on purpose: three hooks disagreeing
+    about what counts as an agent name is its own class of bug.
+
+    Takes the tool_input rather than the whole payload because main() has
+    already checked that it is a dict, and re-reading it here would be a
+    second place for that check to be missing.
+    """
+    return str(
+        tool_input.get("subagent_type")
+        or tool_input.get("agent_type")
+        or tool_input.get("agent")
+        or ""
+    )
+
+
+def _ran_a_verification(tool_input: dict, desc: str) -> bool:
+    """Whether this Task completion IS the verification step.
+
+    Two ways to recognise one, because the description alone was never enough.
+    This used to match only "evaluator" or "verdict" in the caller's
+    description. Both words were written for `evaluator-agent`, which has never
+    existed in this repo. So the only way to clear the flag was to happen to
+    use one of those two words: a real quick-cop spawn described as "Check the
+    finding" left it set forever.
+
+    The reliable signal is the agent type itself, which the Task payload
+    carries. `_agent_type` is the same resolution order already used by
+    clean-rag/hooks/research-record.py and verifier-record.py, so all three
+    hooks agree on what a payload says the agent was.
+
+    The description match stays as a fallback, but ONLY when the payload
+    carries no agent type at all, which is the single case it was written for.
+    As a free standing disjunct it also matched a payload naming an agent that
+    is not a verifier, so a researcher spawn described as "Research the
+    evaluator pattern used elsewhere" deleted a real pending finding: the
+    description is the caller's own prose and says nothing about which agent
+    ran. Reading it only in the absence of the reliable signal keeps the
+    fallback doing its job and stops it overruling the answer.
+
+    "verdict" is kept in the marker list because a verification pass is often
+    named for its output, e.g. "Opus verdict synthesis"; without it a verifier
+    payload carrying no type re-flags its own findings and loops.
+    """
+    agent_type = _agent_type(tool_input).lower()
+    if agent_type:
+        return agent_type in VERIFIER_AGENTS
+    return any(marker in desc for marker in _DESC_MARKERS)
+
 
 def main() -> int:
     try:
@@ -63,7 +126,19 @@ def main() -> int:
     except Exception:
         payload = {}
 
+    # json.loads accepts any JSON value, not only an object, so `null`, `[]`,
+    # `"a string"` and `17` all parse and then blow up on .get(). That is an
+    # AttributeError at exit 1, and 1 is not a recognized PostToolUse verdict,
+    # so the hook crashed rather than answering. Same defect class already
+    # fixed across five clean-rag hooks and in skill-verify-gate.py, whose
+    # guards this matches; this hook sat outside that scope.
+    if not isinstance(payload, dict):
+        payload = {}
+
     tool_input = payload.get("tool_input", {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
     tool_response = str(payload.get("tool_response", "") or "")
     desc = str(tool_input.get("description", "") or "").lower()
     response_lower = tool_response.lower()
@@ -78,10 +153,10 @@ def main() -> int:
     if any(marker in desc for marker in REVIEW_PASS_MARKERS):
         return 0
 
-    # Suppress after evaluator-agent runs — it IS the verification step.
-    # "verdict" covers evaluator passes named e.g. "Opus verdict synthesis";
-    # without it the gate re-flags the evaluator's own output and loops.
-    if "evaluator" in desc or "verdict" in desc:
+    # Suppress after a verification agent runs — its own findings must not
+    # re-arm the flag against itself. See _ran_a_verification for which signal
+    # settles it and why the description is only a fallback.
+    if _ran_a_verification(tool_input, desc):
         try:
             _FLAG.unlink(missing_ok=True)
         except Exception:
@@ -114,13 +189,26 @@ def main() -> int:
 
     print(
         "[verify-gate nudge] Agent output contains BLOCKER/WARNING findings.\n"
-        "Spawn evaluator-agent to verify — never self-verify (confirmation bias).\n"
-        "Evaluator checks: does each finding cite file:line? Does code show the issue?\n"
-        "Drop false positives. No findings after verify? Present results directly.",
+        "Spawn quick-cop to check them — never self-verify (confirmation bias).\n"
+        "It checks: does each finding cite file:line? Does the code show the issue?\n"
+        "Drop false positives. No findings after the check? Present results directly.\n"
+        "Use bad-cop instead when the findings need adversarial tests run against\n"
+        "real code rather than a read-and-confirm pass.",
         file=sys.stderr,
     )
     return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        # The shape checks in main() are the real fix; this is the backstop the
+        # five clean-rag hooks in this same class already carry and this one
+        # did not. An uncaught exception exits 1, which is not a recognized
+        # PostToolUse verdict, so a crash here reads as a broken hook rather
+        # than as "nothing to say". This hook only ever nudges, so exit 0 is
+        # the honest answer when it cannot form an opinion.
+        sys.exit(0)

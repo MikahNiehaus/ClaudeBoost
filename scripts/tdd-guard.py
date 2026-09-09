@@ -222,17 +222,33 @@ def _has_corresponding_test(source_path: str, changed_files: list[str]) -> bool:
     return False
 
 
-def _get_file_paths(tool_name: str, tool_input: dict) -> list[str]:
-    """Extract file path(s) from tool input. Same pattern as consult-gate.py:66-76."""
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits") or []
-        return [
-            e.get("file_path", "")
-            for e in edits
-            if e.get("file_path")
-        ]
-    fp = tool_input.get("file_path") or tool_input.get("path") or ""
-    return [fp] if fp else []
+def _str_field(source, key: str) -> str:
+    """A string field read out of an untrusted payload object, or "" if it isn't one.
+
+    Stdin is a system boundary. The containing object can be null or a string
+    rather than a dict, and the field itself a number or a list rather than a
+    string; each of those reaches Path() and raises. Reading them all as ""
+    routes them to the same path as a genuinely absent field.
+    Borrowed from clean-rag/hooks/research-gate.py:87-100.
+    """
+    value = source.get(key) if isinstance(source, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _get_file_path(tool_input: dict) -> str:
+    """Extract the target file path. Same contract as consult-gate.py:get_file_path.
+
+    Edit, Write and MultiEdit all carry exactly one top-level "file_path", so
+    there is nothing to branch on. MultiEdit's "edits" items hold only
+    old_string/new_string/replace_all, and its schema sets
+    additionalProperties:false, so a per-edit "file_path" cannot arrive.
+    Reading one yielded no path at all, which skipped this guard for every
+    MultiEdit call.
+
+    No separator normalizing here, unlike consult-gate: _is_exempt() resolves
+    through Path().as_posix() and _is_test_file() maps separators itself.
+    """
+    return _str_field(tool_input, "file_path") or _str_field(tool_input, "path")
 
 
 BLOCK_MESSAGE = """\
@@ -270,8 +286,8 @@ def main() -> int:
     if tool_name not in GATED_TOOLS:
         return 0
 
-    file_paths = _get_file_paths(tool_name, tool_input)
-    if not file_paths:
+    file_path = _get_file_path(tool_input)
+    if not file_path:
         return 0
 
     # Check AUTO mode bypass (same as consult-gate.py:83-86)
@@ -286,31 +302,25 @@ def main() -> int:
 
     changed_files = _get_changed_files()
 
-    for fp in file_paths:
-        if _is_exempt(fp):
-            continue
-        if _is_test_file(fp):
-            continue
-        if _has_corresponding_test(fp, changed_files):
-            continue
+    if _is_exempt(file_path):
+        return 0
+    if _is_test_file(file_path):
+        return 0
+    if _has_corresponding_test(file_path, changed_files):
+        return 0
 
-        # No test found for this source file
-        stem = Path(fp).stem
-        msg = BLOCK_MESSAGE.format(
-            file_name=Path(fp).name,
-            stem=stem,
-            mode=mode,
-        )
+    # No test found for this source file
+    msg = BLOCK_MESSAGE.format(
+        file_name=Path(file_path).name,
+        stem=Path(file_path).stem,
+        mode=mode,
+    )
+    print(msg, file=sys.stderr)
 
-        if mode == "strict":
-            _write_block_telemetry(tool_name, fp, "tdd_guard_no_test")
-            print(msg, file=sys.stderr)
-            return 2
-        else:
-            # Soft mode: warn but allow
-            print(msg, file=sys.stderr)
-            return 0
-
+    if mode == "strict":
+        _write_block_telemetry(tool_name, file_path, "tdd_guard_no_test")
+        return 2
+    # Soft mode: warn but allow
     return 0
 
 

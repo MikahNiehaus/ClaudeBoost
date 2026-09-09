@@ -29,7 +29,19 @@ SAFE_COMMANDS = {"curl", "echo", "cat", "ls", "pwd", "grep", "rg", "head", "tail
 
 # Shell metacharacters that chain a second command onto an allowed one.
 # "curl localhost:8613/search; rm -rf /" must not read as a curl call.
-CHAINING = re.compile(r"[;&|`]|\$\(|>>|>")
+#
+# A literal newline is in this set because POSIX makes it a command separator
+# in its own right, exactly equivalent to ';' (Shell Command Language 2.9.3,
+# where a sequential list is separated by ';' or a newline). The Bash tool's
+# `command` field is a plain string, so a multi-line command reaches the shell
+# with the newline intact and starts a second, unrestricted command. Carriage
+# return is here for the same reason under CRLF line endings on Windows.
+#
+# The cost is that a caged agent cannot send a multi-line command at all,
+# including a pretty-printed JSON body. That is the right trade here: the whole
+# allowlist is curl to one local host plus 'git clone https://', every one of
+# which fits on a line, and _refuse() says so.
+CHAINING = re.compile(r"[;&|`\n\r]|\$\(|>>|>")
 
 
 def _check_git_clone(parts: list, command: str) -> int:
@@ -110,11 +122,41 @@ def _refuse(reason: str) -> int:
         "server, because they read untrusted web content and a compromised one "
         "must not be able to act.\n\n"
         "Allowed: curl to http://127.0.0.1:<port>/... \n"
+        "Put the whole command, including any JSON body, on one line: a "
+        "newline starts a second command and is refused.\n"
         "For anything else use Read, Grep, Glob, WebSearch, or WebFetch. "
         "You cannot write files, and you do not need to.",
         file=sys.stderr,
     )
     return 2
+
+
+def _bash_command(payload) -> tuple[str, str]:
+    """The Bash command out of a PreToolUse payload, as (command, problem).
+
+    An empty command means there is nothing to judge: not a Bash call, or a
+    Bash call with no command in it. A non-empty problem means the payload's
+    shape could not be read at all, which is a refusal rather than an allow.
+
+    Stdin is a system boundary and every shape handled here is valid JSON: the
+    payload a bare scalar, null, or a list; tool_input null or a string; the
+    command a number or a list. A naive payload.get(...).get(...) chain raises
+    on each of them, and an uncaught exception exits 1 -- neither allow (0) nor
+    block (2) under this hook contract, so the command would run anyway.
+    """
+    if not isinstance(payload, dict):
+        return "", "the tool payload was not a JSON object"
+    if payload.get("tool_name") != "Bash":
+        return "", ""
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return "", "the Bash tool_input was not a JSON object"
+    command = tool_input.get("command")
+    if command is None or command == "":
+        return "", ""
+    if not isinstance(command, str):
+        return "", "the Bash command was not a string"
+    return command.strip(), ""
 
 
 def main() -> int:
@@ -126,10 +168,9 @@ def main() -> int:
         # agent running an unvetted command is the thing this exists to stop.
         return _refuse("could not parse the tool payload")
 
-    if payload.get("tool_name") != "Bash":
-        return 0
-
-    command = (payload.get("tool_input", {}).get("command") or "").strip()
+    command, problem = _bash_command(payload)
+    if problem:
+        return _refuse(problem)
     if not command:
         return 0
 
@@ -170,4 +211,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - last line of the cage
+        # An uncaught exception exits 1, and 1 is not a block under this hook
+        # contract, so a crashing guard has allowed the command. Land on 2.
+        sys.exit(_refuse(f"the guard itself failed ({exc!r})"))

@@ -68,7 +68,7 @@ CODE_EMBEDDING_MODEL = os.environ.get(
 # version, the next index_project run forces a rebuild automatically.
 PIPELINE_VERSION = 2
 
-# Server port: 8613 standalone, 8612 routes when bundled with ClaudeBoost
+# Server port. clean-rag is the only RAG server; there is no bundled mode.
 STANDALONE_PORT = int(os.environ.get("CLEAN_RAG_PORT", "8613"))
 
 # Chunking defaults

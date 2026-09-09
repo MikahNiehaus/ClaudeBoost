@@ -440,7 +440,8 @@ Use this catalog to map work types to tools. Select only what the work actually 
 | `compliance-agent` | Standards compliance, rule enforcement, policy and convention checks | Sonnet |
 | `standards-validator-agent` | Coding standards validation, pattern enforcement, lint-like structural review | Sonnet |
 | `estimator-agent` | Story pointing, complexity estimation, effort breakdown | Sonnet |
-| `evaluator-agent` | Verify-gate evaluation — validates findings from other agents, anti-hallucination | Sonnet |
+| `quick-cop` | Verify-gate check — reads the code and says whether a finding or a completion claim is true. Non blocking, stamps nothing | Sonnet |
+| `bad-cop` | Adversarial QA — writes tests aimed at breaking a change and runs them. Also judges a finished QA session's evidence with `MODE: evidence-judge` | Sonnet |
 | `rag-indexing-agent` | RAG index management, knowledge base updates, re-indexing after changes | Sonnet |
 
 #### Skills / Commands
@@ -496,7 +497,7 @@ Use this catalog to map work types to tools. Select only what the work actually 
 
 For each work type, select:
 - **Primary agents** (core work) — with model
-- **Supporting agents** (validation, evaluation) — always include `evaluator-agent` for findings
+- **Supporting agents** (validation, evaluation) — always include `quick-cop` for findings, or `bad-cop` when they need adversarial testing
 - **Skills to invoke** (exact commands)
 - **Knowledge bases** (which to load via `POST http://127.0.0.1:8613/search`)
 

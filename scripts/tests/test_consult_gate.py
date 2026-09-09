@@ -40,9 +40,19 @@ def _write(file_path: str) -> dict:
     return pretooluse("Write", {"file_path": file_path, "content": "hello"})
 
 
-def _multi(file_paths: list[str]) -> dict:
+def _multi(file_path: str, n_edits: int = 2) -> dict:
+    """A MultiEdit payload in the shape Claude Code actually sends.
+
+    One top-level file_path (MultiEdit edits a single file), and edit items
+    carrying only old_string/new_string. The tool's input schema declares
+    additionalProperties:false on those items, so a per-edit file_path is not
+    a shape the harness can produce. The earlier helper here fabricated one,
+    so every MultiEdit test below passed against a gate that read no path at
+    all and waved the real payload straight through.
+    """
     return pretooluse("MultiEdit", {
-        "edits": [{"file_path": fp, "old_string": "a", "new_string": "b"} for fp in file_paths]
+        "file_path": file_path,
+        "edits": [{"old_string": f"a{i}", "new_string": f"b{i}"} for i in range(n_edits)],
     })
 
 
@@ -165,7 +175,8 @@ def test_no_spec_write_blocked(boost_home):
 
 def test_no_spec_multiedit_blocked(boost_home):
     _consult(boost_home)
-    _assert_ask(_run(boost_home, _multi(["/project/src/a.py", "/project/src/b.py"])))
+    out = _assert_ask(_run(boost_home, _multi("/project/src/a.py")))
+    assert "a.py" in out["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +195,10 @@ def test_write_file_in_spec_passes(boost_home):
     _assert_pass(_run(boost_home, _write("/project/src/new_module.py")))
 
 
-def test_multiedit_all_files_in_spec_passes(boost_home):
+def test_multiedit_file_in_spec_passes(boost_home):
     _consult(boost_home)
-    _spec(boost_home, ["src/a.py", "src/b.py"])
-    _assert_pass(_run(boost_home, _multi(["/project/src/a.py", "/project/src/b.py"])))
+    _spec(boost_home, ["src/a.py"])
+    _assert_pass(_run(boost_home, _multi("/project/src/a.py")))
 
 
 # ---------------------------------------------------------------------------
@@ -208,11 +219,29 @@ def test_write_file_not_in_spec_blocked(boost_home):
     assert "new_file.py" in out["reason"]
 
 
-def test_multiedit_one_file_not_in_spec_blocked(boost_home):
-    """MultiEdit where one file is in spec and one isn't blocks on the unlisted one."""
+def test_multiedit_file_not_in_spec_blocked(boost_home):
+    """A MultiEdit at an unlisted file is gated exactly like an Edit at it."""
     _consult(boost_home)
     _spec(boost_home, ["src/a.py"])
-    _assert_ask(_run(boost_home, _multi(["/project/src/a.py", "/project/src/b.py"])))
+    out = _assert_ask(_run(boost_home, _multi("/project/src/b.py")))
+    assert "b.py" in out["reason"]
+
+
+def test_multiedit_gated_identically_to_edit(boost_home):
+    """The three gated tools must agree on the same file. Property: a guard
+    that sees a file for one tool and not another is not a guard."""
+    _consult(boost_home)
+    _spec(boost_home, ["src/other.py"])
+    target = "/project/src/service.py"
+    reasons = {
+        tool: _assert_ask(_run(boost_home, payload))["reason"]
+        for tool, payload in (
+            ("Edit", _edit(target)),
+            ("Write", _write(target)),
+            ("MultiEdit", _multi(target)),
+        )
+    }
+    assert len(set(reasons.values())) == 1, f"tools disagree: {reasons}"
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +271,20 @@ def test_defaults_to_consult_when_no_mode_file(boost_home):
 # ---------------------------------------------------------------------------
 # Invalid JSON on stdin: recovers gracefully, exits 0
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_path", [7, ["a"], {"p": "x"}, None])
+def test_non_string_file_path_passes_without_traceback(boost_home, bad_path):
+    """Valid JSON in the wrong shape must not crash the gate.
+
+    An unhandled exception exits 1 and prints a traceback where Claude Code
+    expects either silence or a permissionDecision object, so the payload is
+    read defensively and an unreadable path is treated as no path.
+    """
+    _consult(boost_home)
+    result = _run(boost_home, pretooluse("Edit", {"file_path": bad_path}))
+    assert b"Traceback" not in result.stderr
+    assert result.returncode == 0
+
 
 def test_invalid_json_input_exits_0(boost_home):
     script = SCRIPTS_DIR / "consult-gate.py"
@@ -277,16 +320,39 @@ def test_spec_with_malformed_json_blocks(boost_home):
 # Edge cases: MultiEdit with empty or all-exempt edits list
 # ---------------------------------------------------------------------------
 
-def test_multiedit_empty_edits_passes(boost_home):
-    """MultiEdit with no edits at all — no file paths to check — passes silently."""
+def test_multiedit_empty_edits_still_gates_the_file(boost_home):
+    """An empty edits list does not excuse the file from the gate.
+
+    The old version of this test asserted the opposite, and passed, because the
+    gate read paths out of the edits list: an empty list meant no path, and no
+    path meant allow. That is the same fail-open branch every real MultiEdit
+    landed in. The gate's subject is the file being written, not how many
+    find-and-replace pairs come with it, so a present file_path is checked
+    whatever "edits" holds. MultiEdit's schema sets minItems:1 on edits, so
+    this payload is malformed rather than routine, and a malformed payload
+    naming a real file is the last thing that should be waved through.
+    """
+    _consult(boost_home)
+    _spec(boost_home, ["src/other.py"])
+    out = _assert_ask(_run(boost_home, pretooluse("MultiEdit", {
+        "file_path": "/project/src/service.py",
+        "edits": [],
+    })))
+    assert "service.py" in out["reason"]
+
+
+def test_multiedit_without_file_path_passes(boost_home):
+    """No file_path at all: nothing to check, so allow.
+
+    Distinct from the case above, which the old empty-edits test conflated with
+    it. consult-gate answers "ask" rather than exiting 2, so its failure
+    direction is deliberately soft; an unreadable payload keeps that posture.
+    """
     _consult(boost_home)
     _assert_pass(_run(boost_home, pretooluse("MultiEdit", {"edits": []})))
 
 
-def test_multiedit_all_files_exempt_passes(boost_home):
-    """MultiEdit where every file is in an exempt path — passes silently even with no spec."""
+def test_multiedit_exempt_path_passes(boost_home):
+    """MultiEdit at an exempt path passes silently even with no spec."""
     _consult(boost_home)
-    _assert_pass(_run(boost_home, _multi([
-        "/project/workspace/task-1/context.md",
-        "/project/state/spec-sheet.json",
-    ])))
+    _assert_pass(_run(boost_home, _multi("/project/workspace/task-1/context.md")))

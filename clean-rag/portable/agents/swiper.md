@@ -207,11 +207,12 @@ STACKOVERFLOW_ANSWER_READ: stackoverflow.com/a/12345678
 with exact path or URL, one per source actually fetched. Then quote it:
 
 *GitHub*: `curl` the local clean-rag server's `github-file` endpoint (already
-allowed on your capped Bash) to get the real file content:
+allowed on your capped Bash) to get the real file content. Keep it on one line;
+your Bash cage refuses a newline, so a backslash-continued command is rejected
+before it runs:
 
 ```
-curl -s -X POST http://127.0.0.1:8613/github-file -H "Content-Type: application/json" \
-  -d '{"owner": "OWNER", "repo": "REPO", "path": "path/to/file.py"}'
+curl -s -X POST http://127.0.0.1:8613/github-file -H "Content-Type: application/json" -d '{"owner": "OWNER", "repo": "REPO", "path": "path/to/file.py"}'
 ```
 
 Add `"ref": "BRANCH"` to pin to a branch or tag. `owner`, `repo`, and `path`
@@ -221,8 +222,7 @@ are all required; a wrong or missing field returns a silent 400.
 structured code blocks from accepted answers, smaller injection surface:
 
 ```
-curl -s -X POST http://127.0.0.1:8613/stackoverflow-search \
-  -H "Content-Type: application/json" -d '{"query": "...", "max_results": 3}'
+curl -s -X POST http://127.0.0.1:8613/stackoverflow-search -H "Content-Type: application/json" -d '{"query": "...", "max_results": 3}'
 ```
 
 If you already have a specific answer URL and need the full page, use your

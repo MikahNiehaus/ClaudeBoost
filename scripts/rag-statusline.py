@@ -30,8 +30,6 @@ BLUE   = "\033[34;1m"
 DIM    = "\033[2m"
 RESET  = "\033[0m"
 
-RAG_HTTP_PORT = 8612  # SHA256("ClaudeBoost-rag-server") % 900 + 8100
-
 
 def _rag_index_dir() -> Path:
     local_appdata = os.environ.get("LOCALAPPDATA", "")

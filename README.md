@@ -285,7 +285,7 @@ parallel review: a deterministic pre-scan (grep patterns for closure-scope timer
 secret rendering, and loading states with no exit) runs first, then 15 passes run in parallel
 (logic, security, performance, test coverage, dead code, debug artifacts, banned patterns,
 project pattern consistency, caller impact, ticket alignment, async pattern audit, and template
-rendering security), then the evaluator-agent (Opus) runs last in a fresh context.
+rendering security), then quick-cop runs last in a fresh context.
 Every finding needs a `file:line` citation or it gets dropped.
 
 Scope flags: `--staged`, `--branch`, `--pr <url>`.
@@ -299,7 +299,7 @@ with `--full` for a whole-project audit.
 
 1. **App discovery** — Playwright snapshot crawl + RAG codebase search to build a
    component registry and app map
-2. **Test plan generation** — equivalence partitioning and boundary values; evaluator-agent
+2. **Test plan generation** — equivalence partitioning and boundary values; quick-cop
    removes unverified test cases; you approve the plan before execution starts
 3. **Test execution** — browser-only tools only (no DB queries, no API bypasses);
    annotated screenshots saved for every PASS; honest FAIL written for every failure
@@ -331,11 +331,14 @@ Every finding from a review or audit agent must be proven from actual code befor
 reaches you. The protocol:
 
 - Each finding needs a `file:line` citation
-- A fresh evaluator-agent reads only that citation — no session context — and returns
+- A fresh quick-cop reads only that citation — no session context — and returns
   CONFIRMED or UNVERIFIED
 - UNVERIFIED findings are dropped before the report is written
-- Hooks nudge the orchestrator to spawn the evaluator; agents self-report confidence
+- Hooks nudge the orchestrator to spawn quick-cop; agents self-report confidence
   levels (HIGH / MEDIUM / LOW) and the orchestrator escalates on LOW
+- Every gate here nudges. None of them refuses the work. The one exception is
+  `auto-test-gate.py`, which blocks on a real test failure, because a failing
+  test is an objective fact and a review verdict is a judgement call
 
 "No issues found" is always a valid outcome. Finding something is not the goal.
 Finding real things is.
@@ -351,81 +354,76 @@ same session.
 `/auto` disables consultation and lets Claude proceed autonomously. `/consult` restores
 the default.
 
-### Knowledge Bases
+### There is no topic knowledge base, and that was deliberate
 
-109 XML files loaded automatically by the RAG server:
+An earlier version of this project shipped a scraped topic knowledge base: dozens
+of documentation sets searchable as one corpus. It was deleted, along with the
+second server that hosted it. Do not rebuild it.
 
-- **55 domain bases**: coding standards, security (OWASP), architecture, debugging,
-  testing, observability, performance, refactoring, API design, context engineering,
-  scope governance, rule enforcement, and more
-- **21 language guides**: Python, TypeScript, C#, Go, SQL, Rust, Swift, Kotlin, Java,
-  PHP, Ruby, and others
-- **33 framework guides**: React, Next.js, ASP.NET Core, FastAPI, Django, Flask,
-  Spring Boot, Rails, Flutter, and others
+It went because **it confidently returned wrong answers and no score threshold
+caught them.** Measured, not guessed:
 
-Language and framework files load automatically when their name appears in a spawn
-prompt. `"fix bug in TypeScript React component"` pulls both `lang-typescript.xml` and
-`fw-react.xml`.
+| Query | What came back | Score |
+|---|---|---|
+| "is it done" | Azure Functions `context.done()` docs | 0.82 |
+| "duck duck go" | react-query docs, then PCMag browser reviews | 0.80 |
+| a function containing a SQL injection | Go stack trace docs | 0.86 |
+| `MAX_RETRIES = 5` | PowerShell retry docs | 0.86 |
 
-### Project Knowledge Base
+`min_score: 0.5` caught none of it. Two things follow, and both were believed
+false until measured. Vector search does not degrade gracefully: a keyword soup
+query embeds into something, and something is always nearby. And embedding
+search retrieves text resembling your query, never a critique of it, so feeding
+it SQL-injecting code returns more SQL code rather than the vulnerability
+warning.
 
-Every project can have a persistent, cumulative knowledge base that lives inside the
-project at `.claudeboost/knowledge/`. Unlike the general knowledge files above, this KB
-is built specifically for your project and grows over time.
+Retrieval therefore moved to the only thing that can write a decent query: a
+reasoning agent. The project index stayed, because a hit there is a real file
+you can open and check.
 
-```
-your-project/
-└── .claudeboost/
-    └── knowledge/
-        ├── architecture.md    # how the project is structured
-        ├── patterns.md        # coding patterns this codebase uses
-        ├── decisions.md       # key architectural decisions and why
-        ├── stack.md           # lang/framework specifics for this project
-        └── gotchas.md         # things that tripped agents up before
-```
+Full reasoning in `clean-rag/CLAUDE.md`, under "Why the KB is gone".
 
-The research gate builds it for you. When an agent is about to edit code, the gate
-fires, the research-agent digs into the technologies and patterns in play, and the
-findings land in these KB files. The triage-agent decides up front whether a change
-even needs research, so trivial edits skip the step. It all happens automatically as
-you work, no separate command to run.
+### Project research notes
 
-KB files are indexed as part of the project codebase. When relevant to a query they
-surface in `POST /context` Tier 4 results alongside source code. Run `/index-project`
-first so they're in the index.
+A project can accumulate research notes under `.claudeboost/knowledge/`, written
+by the research agents as markdown, one file per source they read.
 
-**Enforcement:** The workspace dashboard (injected at the start of every session) shows
-whether a project KB exists. When it's missing, a `REQUIRED` directive appears before
-Claude begins any agent work. Agent spawns are nudged to include the project KB path
-when one is detected.
+These are **notes to read, not a search corpus.** They are not a registered
+project, so a `project:` source naming that directory returns nothing. The
+session primer injects the path for exactly this reason: open the files, do not
+search them.
+
+Two claims that used to appear here and are not true. `research-agent` cannot
+write them: its tools are `WebSearch, WebFetch, Bash, Grep, Glob, Read`, with no
+`Write` and no `Edit`, which is the deliberate defence against a prompt
+injection in the web content it reads. And there is no `triage-agent` deciding
+whether a change needs research; that agent was removed because it made that
+call without reading the code. Skipping research on a genuinely trivial turn is
+the human's call, made with `/ps`.
 
 ## Agents
 
+Six, installed into `~/.claude/agents/` from `clean-rag/portable/agents/`.
+Check with `ls ~/.claude/agents`.
+
 | Agent | Specialty | Model |
 |-------|-----------|-------|
-| architect-agent | System design, SOLID principles, DDD | Opus |
-| reviewer-agent | Code review, verify gate | Opus |
-| ticket-analyst-agent | Requirements analysis | Opus |
-| debug-agent | Root cause analysis, step-through debugging | Sonnet |
-| test-agent | Testing strategy, TDD | Sonnet |
-| security-agent | Security auditing, OWASP | Sonnet |
-| performance-agent | Performance profiling, optimization | Sonnet |
-| refactor-agent | Code refactoring | Sonnet |
-| ui-agent | Frontend, accessibility | Sonnet |
-| docs-agent | Documentation | Sonnet |
-| research-agent | Web and codebase investigation | Sonnet |
-| explore-agent | Code exploration, fast file/symbol search | Sonnet |
-| browser-agent | Playwright browser automation | Sonnet |
-| e2e-agent | Structured E2E testing with screenshot evidence | Sonnet |
-| workflow-agent | Complex multi-step workflows | Sonnet |
-| compliance-agent | Compliance auditing | Sonnet |
-| evaluator-agent | Independent output verification | Sonnet |
-| standards-validator-agent | Standards validation | Sonnet |
-| estimator-agent | Story pointing | Sonnet |
-| devops-agent | CI/CD, Docker, deployment | Sonnet |
-| database-agent | Schema design, queries, migrations | Sonnet |
-| observability-agent | Logging, metrics, alerting | Sonnet |
-| rag-indexing-agent | RAG index health and filtering | Sonnet |
+| researcher | Understands the codebase and the general engineering standard for a change. Runs the project index, vector search and the import graph. No `Write`, no `Edit` | Sonnet |
+| swiper | Finds working code to take instead of writing it: the project, the stdlib, a dependency, GitHub, StackOverflow. Reports it, never writes it | Sonnet |
+| research-agent | Web and codebase investigation. Tools are `WebSearch, WebFetch, Bash, Grep, Glob, Read`; its Bash is caged to the local clean-rag server | Sonnet |
+| bad-cop | Adversarial QA. Writes tests aimed at breaking a change and runs them. Reports only, fixes nothing. Also judges a finished QA session's artifacts with `MODE: evidence-judge` | Sonnet |
+| good-cop | Runs only on a Critical or High from bad-cop. Researches the root cause, applies the fix, gets everything green | Opus |
+| quick-cop | Claim checker. Reads the code and says whether a finding or an "it is done" claim is true. Non blocking, stamps nothing | Sonnet |
+
+Claude Code's own built-ins (`Explore`, `Plan`, `general-purpose`) are available
+alongside these.
+
+**This table used to list 23 agents.** Eighteen of them, including
+`architect-agent`, `reviewer-agent`, `debug-agent`, `security-agent` and
+`evaluator-agent`, have never existed in this repo and cannot be spawned. Read
+any older reference to one of those names as aspirational, not as a feature.
+`docs/CLAUDEBOOST-REFERENCE.md` still describes several as `agents/*.xml`
+files; there is no `agents/` directory and no `.xml` file in the tree.
 
 ## Slash Commands
 
