@@ -209,6 +209,27 @@ class TestTheCloseIsFoundInABlockNotByPosition:
         report = "$ pytest -q\n3 passed\n\nVERIFIED: a.py\nagentId: xyz (use SendMessage)\n"
         assert vs.closing_stamp(report) == vs.VERIFIER_MARKER
 
+    def test_the_wrapper_suffix_is_cut_out_of_the_recorded_covers_list(
+        self, tmp_path, monkeypatch
+    ):
+        """The suffix can land glued onto the stamp line with no newline, and
+        extract_covered_files cuts it case-sensitively. Nothing asserted that
+        the cut still works once covers is read out of the closing block, so a
+        block carrying case-folded lines corrupted the recorded paths while
+        every assertion above still passed."""
+        report = (
+            "$ pytest -q\n3 passed\n\n"
+            "VERIFIED: Src/App.py"
+            "agentId: xyz (use SendMessage with to: xyz, summary: done)\n"
+        )
+        r = run_hook(report, "bad-cop", "wrapper-suffix", str(tmp_path))
+        assert r.returncode == 0
+        assert "not recorded" not in r.stderr, r.stderr
+
+        monkeypatch.setenv("CLEAN_RAG_HOME", str(tmp_path))
+        record = json.loads(gate._record_path("wrapper-suffix").read_text(encoding="utf-8"))
+        assert record["stamps"][-1]["covers"] == ["Src/App.py"]
+
     def test_an_unreadable_close_falls_back_to_the_good_cop_route(self):
         """Two markers in one block is a recap, so no close is found. That
         leaves covers empty, which routes to good-cop rather than ending the

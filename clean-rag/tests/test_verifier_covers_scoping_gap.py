@@ -191,3 +191,60 @@ class TestWhitespaceOnlyLineStillSplitsBlocks:
             "joins the same block as the real HANDOFF: close and the block "
             "is read as unreadable instead of a real close"
         )
+
+
+class TestWrappedFileListStopsAtProse:
+    """The continuation read that lets a wrapped file list record its files
+    (test_verifier_multiline_covers_gap.py) must not also let the prose below a
+    close into the covers list. An entry that is not a real file is not inert:
+    file_in_scope treats a bare "*" as a glob matching every path, so one swept
+    up token can mark the whole tree reviewed and silence the gate for files
+    nobody looked at.
+    """
+
+    def test_a_sentence_below_the_stamp_is_not_recorded_as_a_file(self):
+        block = ["VERIFIED: a.py", "Everything else was already clean."]
+        assert vs.covered_files_in_block(block) == ["a.py"]
+
+    def test_a_glob_in_prose_below_the_stamp_is_not_recorded(self):
+        block = ["VERIFIED: a.py", "I did not review * of the other files."]
+        assert vs.covered_files_in_block(block) == ["a.py"]
+
+    def test_continuation_stops_at_the_first_non_file_line(self):
+        block = ["VERIFIED:", "a.py, b.py", "Notes follow.", "c.py"]
+        assert vs.covered_files_in_block(block) == ["a.py", "b.py"], (
+            "a file list resumed after a prose line must not be picked back "
+            "up; the prose is where the list ended"
+        )
+
+    def test_a_bulleted_wrapped_list_is_read(self):
+        block = ["VERIFIED:", "- clean-rag/hooks/verifier_state.py", "- docs/*.md"]
+        assert vs.covered_files_in_block(block) == [
+            "clean-rag/hooks/verifier_state.py",
+            "docs/*.md",
+        ]
+
+    def test_the_agent_id_wrapper_below_the_stamp_is_not_recorded(self):
+        block = ["VERIFIED: a.py", "agentId: xyz (use SendMessage with to: xyz)"]
+        assert vs.covered_files_in_block(block) == ["a.py"]
+
+    def test_a_wrapped_list_reaches_check_file_verified(self, tmp_path, monkeypatch):
+        """End to end through the real hook: the wrapped names are what
+        check_file_verified matches on, not just what the record shows."""
+        reviewed = tmp_path / "wrapped_target.py"
+        reviewed.write_text("# x\n")
+        time.sleep(0.3)
+
+        report = (
+            "$ python -m pytest -q\n"
+            "5 passed in 0.20s\n\n"
+            "VERIFIED:\n"
+            "wrapped_target.py, other.py\n"
+        )
+        r = run_hook(report, "bad-cop", "wrapped-covers-e2e", str(tmp_path))
+        assert r.returncode == 0
+        assert "not recorded" not in r.stderr, r.stderr
+
+        monkeypatch.setenv("CLEAN_RAG_HOME", str(tmp_path))
+        ok, reason = vs.check_file_verified("wrapped-covers-e2e", str(reviewed))
+        assert ok is True, reason
