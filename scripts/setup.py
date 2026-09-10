@@ -471,6 +471,21 @@ def _clean_stale_hooks(settings: dict) -> None:
 _SUPERSEDED_PROMPT_SENTINELS = (
     "VERIFY GATE: Scan agent output",       # replaced by verify-gate-cmd.py
     "AGENT SPAWN QUALITY ROUTING",          # replaced by agent-spawn-gate.py
+    # Dropped 2026-09-10. Claude Code rejects every prompt-type SessionStart
+    # hook outright: "prompt-type hooks are not supported for SessionStart
+    # events (no conversation context is available)." All three duplicated
+    # content that ~/.claude/CLAUDE.md already loads every session, and the RAG
+    # block is re-injected by the UserPromptSubmit hook on every turn.
+    #
+    # These three match on statusMessage, not prompt text, on purpose. The
+    # installed prompt text has already drifted from what this file writes: a
+    # later plain-writing pass rewrote "Quality-first routing" to "Quality
+    # first routing", the sentinel in _install_hook stopped matching, and the
+    # next setup run appended a SECOND copy of the same hook. statusMessage is
+    # the field that stayed identical across both copies.
+    "Loading ClaudeBoost workflow...",      # workflow routing (installed twice)
+    "Loading CONSULT mode protocol...",     # CONSULT vs AUTO protocol
+    "Loading RAG HTTP API config...",       # RAG HTTP API contract
 )
 
 
@@ -486,8 +501,19 @@ def _remove_superseded_hooks(settings: dict) -> None:
                 continue
             healthy = []
             for h in inner:
-                text = (h.get("prompt", "") or "") if isinstance(h, dict) else ""
-                if text and any(s in text for s in _SUPERSEDED_PROMPT_SENTINELS):
+                # Match on prompt text AND statusMessage, but only for
+                # prompt-type hooks. Prompt text drifts when someone rewrites
+                # the wording; statusMessage does not. Restricting to
+                # prompt-type keeps a command hook that happens to share a
+                # statusMessage from being swept up, which the old
+                # prompt-text-only read guaranteed for free.
+                is_prompt = isinstance(h, dict) and (
+                    h.get("type") == "prompt" or ("type" not in h and "prompt" in h)
+                )
+                text = ""
+                if is_prompt:
+                    text = (h.get("prompt", "") or "") + "\n" + (h.get("statusMessage", "") or "")
+                if text.strip() and any(s in text for s in _SUPERSEDED_PROMPT_SENTINELS):
                     _warn(f"[CLEAN] hooks.{hook_type} - removing superseded prompt hook: {text[:60]}...")
                     removed += 1
                 else:
@@ -565,6 +591,16 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
                 changed = False
                 if "matcher" in entry and e.get("matcher") != entry["matcher"]:
                     e["matcher"] = entry["matcher"]
+                    changed = True
+                elif "matcher" not in entry and "matcher" in e:
+                    # The caller dropped the matcher, so the installed one is
+                    # stale and must go. Without this branch the refresh above
+                    # only ever handles a CHANGED value, never a REMOVED key,
+                    # and a wrong matcher survives every future setup run.
+                    # That is how "matcher": "Always" outlived its own removal
+                    # from this file and silently killed every SessionStart
+                    # hook it was attached to.
+                    del e["matcher"]
                     changed = True
                 # Refresh command path too — handles repo moves.
                 for new_h, old_h in zip(entry["hooks"], e["hooks"]):
@@ -664,82 +700,23 @@ def _install_all_hooks(settings: dict) -> None:
     _remove_superseded_hooks(settings)
     _remove_deleted_script_hooks(settings)
 
-    # --- SessionStart: workflow routing ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("Quality-first routing: Check CLAUDE.md decision flow. For each action, "
-                       "pick the RIGHT approach — not the cheapest, not the most ceremonial. "
-                       "Full ceremony where quality demands it (reviews, security, architecture). "
-                       "Lightweight where it doesn't (explore, research, docs). Always use "
-                       "quick-cop for finding verification — never self-verify findings "
-                       "(confirmation bias). Rework costs more than doing it right."),
-            "statusMessage": "Loading ClaudeBoost workflow...",
-            "timeout": 15,
-        }],
-    }, sentinel="Quality-first routing", label="workflow routing")
+    # SessionStart prompt-type hooks removed 2026-09-10. There were three:
+    # workflow routing, the CONSULT vs AUTO protocol, and the RAG HTTP API
+    # contract. Claude Code refuses to run any of them and says so:
+    #     Failed to run: prompt-type hooks are not supported for SessionStart
+    #     events (no conversation context is available). Use a command-type
+    #     hook instead.
+    # Every one of them duplicated content ~/.claude/CLAUDE.md already loads
+    # on every session, and the RAG block is re-injected by the
+    # UserPromptSubmit hook on every single turn, so nothing was lost.
+    # _SUPERSEDED_PROMPT_SENTINELS strips them from installs that already have
+    # them. If you want context injected at session start, write a command-type
+    # hook that prints {"additionalContext": "..."} on stdout, the way
+    # reindex-check.py does. Do not re-add a prompt-type hook here.
 
-    # --- SessionStart: CONSULT mode protocol ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": (
-                "CLAUDEBOOST MODE — CONSULT vs AUTO:\n\n"
-                "Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. "
-                "Field: ``mode``. Default CONSULT.\n\n"
-                "If mode=CONSULT, for any architectural decision you MUST:\n"
-                "  1. POST http://127.0.0.1:8613/search with "
-                "{\"query\":\"<feature keywords>\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"} "
-                "+ read 2-3 project files. Cite file:line.\n"
-                "  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.\n"
-                "  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.\n"
-                "  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.\n"
-                "  5. Implement. RAG-required standards apply automatically.\n\n"
-                "Architectural = new endpoint, new class/module, new DB table, new dep, new middleware, "
-                "auth/validation/error/logging strategy, new public API, new config surface, "
-                "new concurrency model.\n\n"
-                "NOT architectural = typo, 1-line fix, test, doc, value-only config tweak, "
-                "rename in one file, edits under workspace/ .claude/ knowledge/ plans/ docs/.\n\n"
-                "Consultation is ADDITIVE, not gatekeeping. Present what RAG requires as already-handled; "
-                "invite the user to ADD constraints (size caps, character allowlists, rate limits). "
-                "Do not debate whether to validate.\n\n"
-                "Check session-approvals.json before spawning architect-agent — if this axis was "
-                "already decided, proceed with the approved choice.\n\n"
-                "If mode=AUTO: proceed autonomously, still cite sources."
-            ),
-            "statusMessage": "Loading CONSULT mode protocol...",
-        }],
-    }, sentinel="CONSULT vs AUTO", label="CONSULT protocol")
-
-    # --- SessionStart: codebase RAG reminder ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8613. "
-                       "All RAG access uses HTTP — no MCP tools are needed. "
-                       "Key endpoints: POST /search (vector + import graph search), "
-                       "POST /index-project (index or reindex a project), "
-                       "POST /reindex-file (reindex one file), "
-                       "GET /status (server health), GET /projects (indexed projects), "
-                       "POST /web-search, /github-search, /github-file, "
-                       "/stackoverflow-search (outside sources). "
-                       "When searching code, POST to /search with "
-                       "{\"query\":\"...\",\"sources\":[\"project:<absolute path>\"],\"mode\":\"both\",\"limit\":8}. "
-                       "sources is a list of project:<absolute path>. There is "
-                       "no scope parameter. mode=both runs vector similarity and "
-                       "the import graph together, and is what you want on any code "
-                       "search, because they surface different files. "
-                       "If the project has not been indexed, run /index-project first."),
-            "statusMessage": "Loading RAG HTTP API config...",
-        }],
-    }, sentinel="RAG HTTP API", label="RAG HTTP API config")
 
     # --- SessionStart: compaction restore ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("compaction-restore.py"),
@@ -750,7 +727,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- SessionStart: workspace primer ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("workspace-primer.py"),
@@ -772,7 +748,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- SessionStart: RAG session reset (clears sentinel for fresh session verification) ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("rag-session-reset.py"),
@@ -891,7 +866,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- PreCompact: context preservation + compaction save ---
     _install_hook(settings, "PreCompact", {
-        "matcher": "Always",
         "hooks": [
             {
                 "type": "prompt",
@@ -930,7 +904,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- Telemetry: session lifecycle (SessionStart creates session.json, SessionEnd closes it) ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000,
                    "statusMessage": "Opening telemetry session..."}],
     }, sentinel="telemetry-session.py", label="telemetry session lifecycle")
@@ -1007,7 +980,6 @@ def _install_all_hooks(settings: dict) -> None:
     # SessionStart adds the session, SessionEnd removes it. A reboot never
     # delivers SessionEnd, so whatever is still listed is what was open.
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
                    "timeout": 3000,
                    "statusMessage": "Recording session for restore..."}],

@@ -50,11 +50,51 @@ JUDGE_MODE_MARKER = "MODE: evidence-judge"
 JUDGE_STAMPS = ("FULLY VERIFIED:", "TEST AGAIN:")
 
 
+def _normalize(line: str) -> str:
+    """Normalized the way extract_covered_files does, so a stamp still reads as
+    one when an agent bolds it or makes it a heading."""
+    return line.strip().lstrip("*# ").strip().upper()
+
+
 def _stamp_lines(text: str):
-    """Candidate stamp lines, normalized the way extract_covered_files does, so a
-    stamp still reads as one when an agent bolds it or makes it a heading."""
+    """Every normalized line, for the "does this text mention a stamp anywhere"
+    question. closing_stamp needs a stricter one and does not use this."""
     for line in (text or "").splitlines():
-        yield line.strip().lstrip("*# ").strip().upper()
+        yield _normalize(line)
+
+
+_MARKERS = (VERIFIER_MARKER, HANDOFF_MARKER, NITS_MARKER)
+
+
+def _marker_of(line: str) -> str:
+    for marker in _MARKERS:
+        if line.startswith(marker):
+            return marker
+    return ""
+
+
+def _blocks(text: str) -> list[list[str]]:
+    """Runs of consecutive non-blank normalized lines.
+
+    A block is git's unit for the same problem: git-interpret-trailers finds a
+    commit's trailers in "a group of one or more lines ... preceded by one or
+    more empty (or whitespace only) lines", not by scanning the whole message.
+
+    Fenced code needs no special case. A stamp inside a fence sits between the
+    two delimiter lines, so it is never its block's first or last line and
+    closing_stamp already ignores it.
+    """
+    blocks, current = [], []
+    for raw in (text or "").splitlines():
+        line = _normalize(raw)
+        if line:
+            current.append(line)
+        elif current:
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def is_evidence_judge_pass(spawn_prompt: str, report: str) -> bool:
@@ -115,17 +155,52 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
+def closing_stamp(report: str) -> str:
+    """Which of the three closing markers the report actually closes on, or "".
+
+    Neither "first match wins" nor "last match wins" identifies a close. A
+    report legitimately quotes the convention while explaining it, so an early
+    match may be prose; and a report legitimately adds a footnote or a recap
+    after closing, so a late match may be prose too. Position alone cannot tell
+    them apart, and picking one direction just chooses which report shape
+    breaks.
+
+    So this looks for a stamp the way git-interpret-trailers looks for a
+    commit's trailers: in a block, and only when the block actually looks like a
+    trailer block rather than like prose. Scanning blocks last to first, a block
+    closes the report when both hold:
+
+      - It names exactly one marker. bad-cop emits exactly one closing line, so
+        a block naming two or three of them is reciting the convention.
+      - That marker opens or closes the block. A marker line buried between
+        prose lines is a wrapped sentence, not a stamp.
+
+    Fails toward "" and toward HANDOFF, never toward NITS or VERIFIED, which is
+    the safe direction: "" and HANDOFF both leave covers empty and route the
+    loop to good-cop, so an unreadable close costs an extra fix pass. Guessing
+    NITS tells the orchestrator to hand-polish a Critical finding, and guessing
+    VERIFIED marks files reviewed that nobody reviewed. Both end the loop early
+    on a real bug.
+    """
+    for block in reversed(_blocks(report)):
+        markers = {_marker_of(line) for line in block} - {""}
+        if len(markers) != 1:
+            continue
+        marker = markers.pop()
+        if marker in (_marker_of(block[0]), _marker_of(block[-1])):
+            return marker
+    return ""
+
+
 def is_nits_only_pass(report: str) -> bool:
     """Did bad-cop close with NITS:, meaning every finding was Nit severity?
 
-    A real VERIFIED: or HANDOFF: line wins, the same precedence
-    is_evidence_judge_pass uses, so a report that merely discusses the NITS
-    convention does not get read as one.
+    Keyed on the closing line, so a report that merely discusses the NITS
+    convention is not read as one, and a real NITS close still routes to the
+    orchestrator rather than spending an Opus fix pass on polish when the body
+    happens to quote one of the other two markers.
     """
-    lines = list(_stamp_lines(report))
-    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER)) for line in lines):
-        return False
-    return any(line.startswith(NITS_MARKER) for line in lines)
+    return closing_stamp(report) == NITS_MARKER
 
 
 def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") -> None:
@@ -153,7 +228,15 @@ def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") 
         {
             "agent": agent_type,
             "at": time.time(),
-            "covers": extract_covered_files(report, prefix=VERIFIER_MARKER),
+            # Only a report that closes on VERIFIED: names files. Reading a
+            # VERIFIED: line out of a HANDOFF or NITS report's prose gives the
+            # stamp a file list, and loop_stage keys the whole handoff on that
+            # list being empty.
+            "covers": (
+                extract_covered_files(report, prefix=VERIFIER_MARKER)
+                if closing_stamp(report) == VERIFIER_MARKER
+                else []
+            ),
             "verdict": _first_verdict_line(report),
             "nits_only": is_nits_only_pass(report),
         },

@@ -259,6 +259,44 @@ def _write_tab_script(index: int, entry: dict, claude: str) -> Path:
     return script
 
 
+# Variables that scope a process to ONE live Claude Code session. A tab opened
+# here is a new session, not a child of whoever ran the restore, so it must not
+# inherit any of them.
+#
+# CLAUDE_CODE_CHILD_SESSION is the one that bites. Claude Code sets it so a
+# `claude` launched from inside a session is treated as a child and refuses to
+# write its own transcript. Run this script from a live session (a manual
+# /restore-sessions now) and every reopened tab comes up with "Transcript
+# saving is off", never registers in ~/.claude/sessions, and is therefore
+# invisible to the restore ledger. Measured on 2026-09-10: eight tabs reopened
+# that way sat for 7.5 hours without one of them writing a single byte to its
+# transcript or appearing in the registry.
+#
+# The at-logon scheduled task never had this problem, because Task Scheduler
+# starts it with a clean environment. That is exactly why the bug hid: the path
+# that runs unattended is the path that works.
+_SESSION_SCOPED_VARS = (
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_PID",
+)
+
+
+def _child_env() -> dict:
+    """This process's environment minus anything scoping it to one session.
+
+    Copies os.environ rather than mutating it, the shape chat-watcher.py
+    already uses to drop CLAUDECODE before launching `claude -p`. Popen
+    replaces the child's whole environment when env= is given, so everything
+    else has to be carried across deliberately.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _SESSION_SCOPED_VARS}
+
+
 def _launch(entry: dict, script: Path, kind: str, term: str, first: bool) -> bool:
     """Open one tab. Returns True if the launch was issued."""
     cwd = str(Path(entry["cwd"]))
@@ -281,7 +319,8 @@ def _launch(entry: dict, script: Path, kind: str, term: str, first: bool) -> boo
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
 
     try:
-        subprocess.Popen(argv, creationflags=flags, close_fds=True)
+        subprocess.Popen(argv, creationflags=flags, close_fds=True,
+                         env=_child_env())
     except FileNotFoundError:
         return False
     except Exception as exc:

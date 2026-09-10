@@ -346,6 +346,48 @@ def check_netcat(command: str) -> str | None:
 
 _LOCALHOST_NAMES = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
+# Named test and dev environments this machine is allowed to reach, on top of
+# localhost. Ralph Maestro serves env-a through env-f under vivery-dev.com, and
+# every app on an environment is its own hostname (manager., admin., app., api.,
+# fn., login., mail., sms., sites., widget., link.), so the whole zone is
+# allowed rather than a list that goes stale the first time a new app appears.
+#
+# Every entry MUST start with a dot. The match below is endswith() against that
+# dotted form, and the leading dot is the only thing making it a label boundary
+# rather than a substring: "evil-vivery-dev.com".endswith(".vivery-dev.com") is
+# False because the character before the label is "-". Store "vivery-dev.com"
+# undotted here and that evasion starts working.
+#
+# Do not put an IP range or an IPv6 literal in this set. Suffix matching cannot
+# express either one correctly. Loopback addresses belong in _LOCALHOST_NAMES.
+_ALLOWED_DEV_SUFFIXES = frozenset({".vivery-dev.com", ".local", ".test"})
+
+
+def _host_is_allowed_dev_env(host: str) -> bool:
+    """True when the host sits inside an allowed test or dev domain.
+
+    Three normalisations happen before the comparison, and each one closes a
+    way of writing the same host that would otherwise read as a different one:
+
+    - Case, because DNS is case insensitive and MANAGER.ENV-E is the same host.
+    - A trailing dot, because "manager.env-e.vivery-dev.com." is a valid FQDN
+      naming that host. Without the strip it fails closed rather than open, but
+      the next person to notice would be tempted to loosen the comparison
+      instead of stripping, which is how the boundary check gets lost.
+    - Non ASCII is refused outright. str.lower() does not fold Cyrillic
+      homographs, so an IDN lookalike of a real dev domain would otherwise be
+      compared as if it were a different string that happens to render the
+      same. The exact-set check above never needed this because none of four
+      loopback literals has a plausible homograph; a real corporate domain does.
+    """
+    host = host.lower().rstrip(".")
+    if not host or not host.isascii():
+        return False
+    return any(
+        host == suffix[1:] or host.endswith(suffix)
+        for suffix in _ALLOWED_DEV_SUFFIXES
+    )
+
 # curl flags whose value is request content rather than a destination: a body,
 # a header, a form field, a cookie. A URL sitting in one of those is never
 # connected to, so it must not be read as a target.
@@ -382,7 +424,9 @@ def _url_host_is_local(url: str) -> bool:
         host = parts.hostname
     except ValueError:
         return False
-    return bool(host) and host.lower() in _LOCALHOST_NAMES
+    if not host:
+        return False
+    return host.lower() in _LOCALHOST_NAMES or _host_is_allowed_dev_env(host)
 
 
 _CURL_TOKEN_RE = re.compile(r"\bcurl(?:\.exe)?\b", re.IGNORECASE)
@@ -488,9 +532,10 @@ def check_curl_external(command: str) -> str | None:
     for url in _URL_RE.findall(_CURL_PAYLOAD_FLAG_RE.sub(" ", prose_free)):
         if not _url_host_is_local(url):
             return (
-                "BLOCKED: curl to non-localhost URL is not allowed. "
-                "Only localhost and 127.0.0.1 are permitted. "
-                f"Found: {url}"
+                "BLOCKED: curl to this URL is not allowed. Only localhost "
+                "(localhost, 127.0.0.1, 0.0.0.0, ::1) and named test or dev "
+                "environments (*.vivery-dev.com, *.local, *.test) are "
+                f"permitted. Found: {url}"
             )
     return None
 

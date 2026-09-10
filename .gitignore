@@ -2,6 +2,11 @@ workspace/
 mcp-rag-server/tests/data/
 .playwright-mcp/
 references/
+# Skill reference files are source, not fetched cache. Untracking them is how a
+# patterns.md truncated at 40,000 chars shipped with no history and no diff.
+# Scoped to portable skills on purpose; other references/ dirs stay ignored.
+!clean-rag/portable/skills/**/references/
+!clean-rag/portable/skills/**/references/**
 mcp-rag-server/.rag-index/
 indexes/
 state/

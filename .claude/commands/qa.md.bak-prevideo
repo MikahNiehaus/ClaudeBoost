@@ -1,6 +1,6 @@
 ---
-argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--no-video] [--fresh]
-description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, checks the proof with a subagent before calling it done, and reports what was tested AND what was not. Ends by building a narrated video walkthrough of the session actually doing the work, cut to the test case segments (still-image deck as fallback when nothing could be recorded).
+argument-hint: [url | --code | file-path | workspace-id | "description of what to QA"] [scope — auth | crud | nav | errors | responsive | all] [--no-debug] [--fresh]
+description: Full QA session — works on anything. Browser apps (pass a URL), code changes (--code or file paths), scripts, artifacts, workspace output. Builds inventory from RAG, writes a risk-prioritized test plan, executes with evidence, checks the proof with a subagent before calling it done, and reports what was tested AND what was not. Ends by building a proof deck and a narrated mp4 walkthrough of the evidence.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_select_option, mcp__playwright__browser_wait_for, mcp__playwright__browser_press_key, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_close, mcp__mcp-debugger__create_debug_session, mcp__mcp-debugger__list_debug_sessions, mcp__mcp-debugger__list_supported_languages, mcp__mcp-debugger__set_breakpoint, mcp__mcp-debugger__start_debugging, mcp__mcp-debugger__attach_to_process, mcp__mcp-debugger__detach_from_process, mcp__mcp-debugger__get_stack_trace, mcp__mcp-debugger__list_threads, mcp__mcp-debugger__get_scopes, mcp__mcp-debugger__get_variables, mcp__mcp-debugger__get_local_variables, mcp__mcp-debugger__step_over, mcp__mcp-debugger__step_into, mcp__mcp-debugger__step_out, mcp__mcp-debugger__continue_execution, mcp__mcp-debugger__pause_execution, mcp__mcp-debugger__evaluate_expression, mcp__mcp-debugger__get_source_context, mcp__mcp-debugger__close_debug_session, mcp__mcp-debugger__redefine_classes, mcp__test-coverage__coverage_summary, mcp__test-coverage__coverage_file_summary, mcp__test-coverage__start_recording, mcp__test-coverage__get_diff_since_start, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__performance_analyze_insight, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__lighthouse_audit, mcp__mdb__debugger_status, mcp__mdb__debugger_start, mcp__mdb__debugger_terminate, mcp__mdb__debugger_list_sessions, mcp__mdb__debugger_command, mcp__mdb__lldb_start, mcp__mdb__lldb_terminate, mcp__mdb__lldb_list_sessions, mcp__mdb__lldb_command, mcp__mdb__gdb_start, mcp__mdb__gdb_terminate, mcp__mdb__gdb_list_sessions, mcp__mdb__gdb_command
 ---
 
@@ -60,7 +60,6 @@ Call `GET http://127.0.0.1:8613/status` and check `indexed_projects` for the det
 
 Strip flags from `$ARGUMENTS` before parsing positional tokens:
 - `--no-debug` present → set `NO_DEBUG = true` (skip debugger pre-flight entirely in Phase 3 and G4d)
-- `--no-video` present → set `NO_VIDEO = true` (skip recording pre-flight entirely in Phase 0h; Phase 7 takes its 7f still-image fallback)
 - `--fresh` present → force a new workspace (already handled in 0c)
 - `--code` present → set `CODE_FLAG = true` (used in 0a-i to set MODE = general)
 - Remaining tokens after stripping all flags: first = `TARGET_URL`, second = `SCOPE` (valid: `auth`, `crud`, `nav`, `errors`, `responsive`, `all`; default `all` if omitted)
@@ -364,13 +363,6 @@ $WORKSPACE_ABS/
 │   └── proof-[id]/         (TC pass evidence screenshots)
 │       ├── TC-001-after.png
 │       └── TC-001-before.png
-├── recording/              (the session recording, its timeline and cut report)
-│   ├── session.mp4         (path `window`) or a generated .webm (path `context`)
-│   ├── timeline.tsv        (TC start/end epochs — what Phase 7 cuts on)
-│   ├── stop_epoch          (when recording stopped, written once in Phase 5e)
-│   ├── narration.json      (spoken text per TC, written in Phase 7b)
-│   ├── video-report.json   (per segment in/out points and the skipped list)
-│   └── verify-frames/      (one mid-segment frame per TC — read every one)
 └── debug-proof/            (code step-through logs — one JSON per TC with server hit)
     ├── TC-001-debug.json
     ├── TC-002-debug.json
@@ -518,207 +510,6 @@ If RAG returns no results at all (project not indexed or search errors): note th
 ---
 
 > **General mode only:** If MODE = `general`, skip Phase 1–4 below. Jump directly to the **General Mode** section at the bottom of this file.
-
----
-
-## Phase 0h: Recording Pre-flight (browser mode only — runs before Phase 1)
-
-The primary proof artifact of a browser-mode session is a **video of the session
-actually doing the work**, not a set of stills. Everything in this phase exists
-because both available recording paths fail silently. A session that assumes it
-is recording and is not produces zero video proof and does not find out until
-Phase 7, after the browser has closed and the evidence is unrecoverable.
-
-**`--no-video` skip gate:** if `NO_VIDEO = true` (flag was passed in arguments),
-set `RECORDING = none`, print "Video recording skipped (`--no-video`).
-Screenshots only.", and go to Phase 1. Phase 7 then takes its still-image
-fallback at 7f.
-
-**0h-i — Dependency check.**
-
-```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
-```
-
-`ffmpeg` and `edge-tts` gate this phase. If either is missing: set
-`RECORDING = none`, print which one and the install command doctor gave, and
-continue to Phase 1 without video. Do not fail the session over it.
-
-Set `RECORD_DIR = $WORKSPACE_ABS/recording` and create it.
-
-**0h-ii — Pick the recording path.**
-
-Two exist. Neither is a default you can assume.
-
-| Path | What it films | Cost |
-|---|---|---|
-| `context` (higher fidelity) | the page itself, via Playwright's own `recordVideo` | needs an MCP config change and a session restart |
-| `window` (works immediately) | the browser window as composited on screen, via ffmpeg `gdigrab` | black-frame and occlusion risk |
-
-**Path `context`.** Playwright MCP has no supported video flag. Video is an open
-feature request (microsoft/playwright-mcp#695, where a PR was converted into a
-tracking issue rather than merged), and `--save-video` is reported broken in
-#1134 and #1093. The one configuration that works is undocumented and nested
-(#1506): the documented top-level `saveVideo` property does not map through to
-the browser context at all.
-
-Check whether it is already in effect:
-
-```bash
-python "${CLAUDEBOOST_HOME}/scripts/show-playwright-mcp-config.py"
-```
-
-If no such helper exists, read the `playwright` entry's `args` out of
-`~/.claude.json` with a one-line `python -c` using `json.load`. If the args
-already contain `--config` pointing at a file whose
-`browser.contextOptions.recordVideo.dir` is set, set `RECORDING = context`,
-point that dir at `$RECORD_DIR`, and go to 0h-iii.
-
-If not, write the config file and **hand the change to the user**. This is an
-edit to their MCP server configuration and it needs a session restart to take
-effect, so it is theirs to make. Write:
-
-```json
-{
-  "browser": {
-    "contextOptions": {
-      "recordVideo": { "dir": "<RECORD_DIR>", "size": { "width": 1280, "height": 800 } }
-    }
-  }
-}
-```
-
-to `~/.claude/playwright-mcp-video.json`, then tell them the one line to add to
-the playwright entry's `args` (`"--config", "<that path>"`), that it needs a
-restart, and that until then this session falls back to path `window`. Do not
-edit `~/.claude.json` yourself.
-
-**Three sizes have to agree, or the capture is padded, scaled, or both.** Getting
-any one of them wrong produces a video that is technically valid and unusable,
-and none of the builder's numeric checks can see it:
-
-| Setting | Must be | What goes wrong otherwise |
-|---|---|---|
-| the viewport | the size you want to record | — |
-| `recordVideo.size` | **the same as the viewport** | Left unset it defaults to **800x600**, and a larger page gets squeezed into it: the aspect mismatch letterboxes the frame and the downscale blurs every glyph |
-| the device scale factor | `1` | A display at 125% or 150% Windows scaling gives `devicePixelRatio` 1.25 or 1.5, so Chrome rasterises at that factor and the result is resampled into the video. Force it with the `--force-device-scale-factor=1` browser arg |
-
-Also make the OS window **larger** than the viewport, never smaller. A window
-smaller than the viewport makes Chrome render the page padded inside the capture
-canvas, in a corner, with dead space around it.
-
-Confirm it rather than assuming, once the page is loaded and before the first
-test case:
-
-```javascript
-() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })
-```
-
-and probe the written file's real dimensions with
-`ffprobe -show_entries stream=width,height`. A source that is not the size you
-asked for is the single most likely reason a finished video is unwatchable.
-
-**Path `window`.** Start ffmpeg against the browser window title *after* Phase 1a
-has opened it, not before. The window must exist first. Two failure modes, both
-real, both of which silently produce useless evidence:
-
-- Chrome composites through the GPU, so `gdigrab` window capture often yields
-  **all-black frames**. The 0h-iii probe is the only thing that catches this.
-- Capturing `-i desktop` instead would record everything else on the user's
-  screen, including windows that have nothing to do with this session. Never do
-  that. Window title capture only.
-
-```bash
-ffmpeg -hide_banner -loglevel warning -y \
-  -f gdigrab -framerate 10 -draw_mouse 0 -i title="<exact browser window title>" \
-  -c:v libx264 -crf 20 -preset veryfast -pix_fmt yuv420p \
-  "$RECORD_DIR/session.mp4"
-```
-
-Run it with `run_in_background: true`. Set `RECORDING = window`.
-
-`-draw_mouse 0` is deliberate. The real OS pointer never moves during a driven
-session, so drawing it would film a stationary arrow in one corner and imply the
-session was hand-driven. The cursor that matters is the injected one from 0h-iv.
-
-**0h-iii — Probe that recording is real. Mandatory.**
-
-Run this after Phase 1a's first navigation, before any test case.
-
-- Path `window`: wait 3 seconds, then extract a frame and look at it.
-  ```bash
-  ffmpeg -hide_banner -loglevel error -y -sseof -1 -i "$RECORD_DIR/session.mp4" -frames:v 1 "$RECORD_DIR/probe.png"
-  ```
-  `Read` `probe.png`. If it is black, blank, or not the browser, path `window`
-  has failed. Stop the ffmpeg job, set `RECORDING = none`, and print that video
-  proof is unavailable this session with the reason. Do not carry on as if it
-  were recording.
-- Path `context`: Playwright flushes a `recordVideo` file only when the context
-  closes, so there is nothing on disk to probe mid-session. Confirm instead that
-  the directory exists and is writable, and treat Phase 7a's "no recording file"
-  branch as the real check.
-
-Print one line either way:
-```
-Recording: [context | window | none] → $RECORD_DIR   (probe: [frame OK | black frames | deferred to Phase 7])
-```
-
-**0h-iv — Inject the cursor overlay.**
-
-A driven browser has no visible pointer. Synthetic input does not move the OS
-cursor, so an unmodified recording shows fields filling and buttons depressing
-with nothing pointing at them, which is the exact thing a viewer needs to see.
-
-The overlay tracks real DOM `mousemove` events, which Playwright's own click and
-hover do dispatch. Adapted from `cenfun/mouse-helper` (MIT), reduced to a
-dependency-free snippet. Inject with `browser_evaluate`:
-
-```javascript
-(function(){
-  if (document.getElementById('__e2e_cursor__')) return 'already';
-  var c = document.createElement('div');
-  c.id = '__e2e_cursor__';
-  c.style.cssText = 'position:fixed;top:0;left:0;width:22px;height:22px;'
-    + 'margin:-11px 0 0 -11px;border-radius:50%;z-index:2147483647;'
-    + 'pointer-events:none;background:rgba(255,60,0,.35);'
-    + 'border:2px solid #FF3C00;box-shadow:0 0 0 2px rgba(255,255,255,.9);'
-    + 'transition:transform .06s linear;opacity:0;';
-  document.documentElement.appendChild(c);
-  var raf = null;
-  document.addEventListener('mousemove', function(e){
-    c.style.opacity = '1';
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(function(){
-      c.style.left = e.clientX + 'px';
-      c.style.top  = e.clientY + 'px';
-    });
-  }, true);
-  document.addEventListener('mousedown', function(){
-    c.style.transform = 'scale(0.6)';
-    c.style.background = 'rgba(255,60,0,.75)';
-  }, true);
-  document.addEventListener('mouseup', function(){
-    c.style.transform = 'scale(1)';
-    c.style.background = 'rgba(255,60,0,.35)';
-  }, true);
-  return 'installed';
-})();
-```
-
-**Re inject after every navigation.** MCP exposes no `addInitScript`, only
-`browser_evaluate` against the current document, so a page load destroys the
-overlay. This is the same rule the `walkthrough` skill states for its own badges
-and arrows, and for the same reason. Re inject after any `browser_navigate` and
-after any click that causes a full page load. The snippet returns `'already'`
-when it is still installed, so calling it again costs nothing and is the cheapest
-way to be certain.
-
-**What this cursor does and does not show.** Playwright's `locator.click()` moves
-to the element and clicks, so the overlay **jumps** to each target rather than
-gliding across the page. Do not describe the result as smooth mouse movement. It
-shows where each click landed and that the press happened, which is the part that
-is evidence. To make a jump readable, `browser_hover` the target first and then
-click: the overlay lands, then the press animates.
 
 ---
 
@@ -1410,67 +1201,6 @@ UNVERIFIABLE entry MUST include:
 
 **For each `- [ ] TC-NNN` in `plan.md`, execute this loop:**
 
-**Step 0 — Chapter slate (skip when `RECORDING = none`).**
-
-The recording is one long take. Without markers there is no way to find the
-segment for a given test case, and no way to prove a segment shows the test it is
-captioned with. The slate is both: the cut anchor Phase 7 trims on, and the label
-a viewer reads.
-
-Inject it with `browser_evaluate`, substituting the real TC id and description:
-
-```javascript
-(function(id, desc){
-  var old = document.getElementById('__e2e_slate__');
-  if (old) old.remove();
-  var s = document.createElement('div');
-  s.id = '__e2e_slate__';
-  s.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483646;'
-    + 'background:#12333F;color:#fff;font:600 15px/1.4 system-ui,sans-serif;'
-    + 'padding:10px 16px;pointer-events:none;'
-    + 'box-shadow:0 2px 12px rgba(0,0,0,.35);';
-  s.textContent = id + ' \u2014 ' + desc;
-  document.documentElement.appendChild(s);
-  return s.textContent;
-})('TC-NNN', 'the TC description from plan.md');
-```
-
-Then, in this order:
-
-1. Take the wall clock **immediately**, before waiting (`date +%s.%N`), and
-   append one line to `$RECORD_DIR/timeline.tsv`, tab separated:
-   `TC-NNN` `start` `<epoch seconds>` `<description>`
-
-   The order matters and it is easy to get backwards. The builder opens its cut
-   half a second before this mark, so a mark taken after the hold puts most of
-   the slate ahead of the cut. Measured at the builder's default pad: marking
-   after a 1.5 second hold left 0.45s of slate inside the window and the caption
-   was gone before a viewer could read it. Marking first puts the whole hold
-   inside the cut.
-2. `browser_wait_for` about 1.5 seconds, so the slate is legible in the
-   recording.
-3. Remove the slate before executing any step, so it never covers an element the
-   test needs to reach:
-   ```javascript
-   (function(){ var e=document.getElementById('__e2e_slate__'); if(e)e.remove(); })();
-   ```
-4. Re inject the cursor overlay from 0h-iv if this TC's first step navigates.
-   Step 2 re injects it after every later navigation.
-
-Step 5 writes this TC's matching `end` line when the test case finishes.
-
-`timeline.tsv` is the only thing Phase 7 cuts on. A TC with no `start` line
-cannot appear in the video at all, so write it before the steps run, never after.
-
-**The slate marks the start of what the clip should show, not the start of
-getting ready.** Navigation, waiting for a page to load, and any fixture setup
-belong **before** the slate goes up. Put them after it and they land inside the
-cut window, where a slow deployed backend stretches the segment with dead time:
-one test case ran 48 seconds against 14 seconds of narration, and the frame
-extracted from its middle showed a stale page rather than the thing the test was
-about. If a test case genuinely needs a long setup, do that setup first, then
-slate, then act.
-
 **Step 1 — BEFORE (state-change tests only).**
 For tests that change state (create, delete, update, toggle): call `browser_snapshot` to confirm starting state in text. Take BEFORE screenshot only if the before state matters as evidence.
 Skip BEFORE screenshot for smoke/nav tests.
@@ -1478,14 +1208,6 @@ Skip BEFORE screenshot for smoke/nav tests.
 **Step 2 — Execute steps.**
 Perform every numbered Step from the test case using ONLY `mcp__playwright__*` tools.
 No Bash, no direct API calls, no database reads.
-
-**Re inject the cursor overlay after every navigation in this TC, not just the
-first one (skip when `RECORDING = none`).** Any `browser_navigate`, and any click
-that loads a new page, destroys the overlay. Run 0h-iv's snippet again straight
-after, before the next click, on whichever step navigated. A four step TC that
-navigates on step 3 and does not re inject films the rest of its own evidence
-with no pointer at all. The snippet returns `'already'` when it survived, so
-calling it on every step costs nothing and is the cheapest way to be certain.
 
 **Credential pre-check (applies when a step fills a password or username field):**
 
@@ -1552,12 +1274,6 @@ Call `browser_evaluate` with this check:
 
 Call `browser_take_screenshot` → save as `$PROOF_DIR/TC-NNN-after.png`.
 
-**Then hold the box on screen before removing it (skip when `RECORDING = none`).**
-`browser_wait_for` about 1.5 seconds. The screenshot needs one frame; the
-recording needs long enough for a viewer to actually see what is marked. Removing
-the overlay immediately after the capture leaves the video showing a red box for
-two frames, which reads as a glitch rather than as the point of interest.
-
 Remove overlay:
 ```javascript
 (function(){ const e=document.getElementById('__e2e_ann__'); if(e)e.remove(); })();
@@ -1618,18 +1334,8 @@ This step produces the code-level proof that the server actually executed. Witho
 7. **Remove the breakpoint** before the next TC to avoid it accumulating:
    Call `mcp__mcp-debugger__set_breakpoint` with `enabled=false` (or call the appropriate disable/remove API).
 
-**Step 5 — Console check, then close this TC's timeline window.**
-
-1. Call `browser_console_messages`. Record any errors.
-2. Take the wall clock (`date +%s.%N`) and append the closing line to
-   `$RECORD_DIR/timeline.tsv`, tab separated (skip when `RECORDING = none`):
-   `TC-NNN` `end` `<epoch seconds>` `<result>`
-
-Write it for every TC, whatever the result, and write it here rather than
-remembering to later. A TC with a `start` line and no `end` line is not dropped,
-which would at least be visible. Phase 7 clips it to 1.5 seconds from its slate,
-so a passing 40 second test case ends up in the video as its caption and nothing
-else, listed under "not in the video" as clipped.
+**Step 5 — Console check.**
+Call `browser_console_messages`. Record any errors.
 
 **Step 6 — Self-audit (answer YES to ALL before marking PASS).**
 1. Did I perform EVERY numbered step in the test case — none skipped?
@@ -2466,38 +2172,7 @@ plain treatment up front.
 If there are failures: say what to do next (fix them and re-run `/qa quick` to verify).
 If everything passed: say that and suggest `/done` to ship.
 
-**`STOP_EPOCH` is taken here, once, and nowhere else.** In this order, and the
-order is the whole point:
-
-1. **Take the wall clock first** (`date +%s.%N`) and write it to
-   `$RECORD_DIR/stop_epoch`.
-2. **Then** stop the recording: `browser_close` if `MODE = browser`, and on path
-   `window` stop the background ffmpeg job.
-
-**Read the clock before the thing that stops recording, never after.** On path
-`context`, `browser_close` *is* the stop, and it also flushes and finalises a
-multi megabyte webm, which is not instant. On path `window`, ffmpeg has to write
-its moov atom. A clock read on the far side of either is later than the real end
-of the recording by however long that took, and the builder derives the
-recording's start as `STOP_EPOCH` minus the probed duration, so the error moves
-every cut earlier by the same amount.
-
-Observed, not theorised: a clock taken after `browser_close` on an 11 MB webm
-put the first test case's cut on the sign in page while its narration described
-the settings page. Exit 0, 0.05s a/v drift, no skipped segments, five narrated
-segments, and entirely the wrong footage. Only opening the verify frames caught
-it.
-
-Phase 7a reads that file. It does not take the clock again, on either path.
-
-Write it to disk rather than carrying it in the reply, because Phase 6 runs a
-build and the full test suite between here and Phase 7. A clock read on the far
-side of that is later than the real stop by however long Phase 6 took, and the
-builder derives the recording's start as `STOP_EPOCH` minus the probed duration.
-Measured on a 10 second fixture: a value 3 seconds late moved the only segment
-from `2.50 -> 6.50` to `0.00 -> 3.50` and filmed the loading frame instead of the
-test content, at exit 0, with every printed number still agreeing. Losing
-`STOP_EPOCH` altogether costs the whole video.
+Call `browser_close` if `MODE = browser`.
 
 ---
 
@@ -2946,7 +2621,7 @@ Jump to **Phase 5** now. Use `MODE = general` context:
 - Phase 5d: **The evidence check.** Run 5d-0 first to pick the path, same as browser mode. Either path gets the same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Lite path stops after one quick-cop pass; full path loops until a fresh bad-cop judge stamps `FULLY VERIFIED`
 - Phase 5e: Print the final output to the user (same format as browser mode, screenshot line shows "N/A — general mode")
 
-Then Phase 6 (log cleanup) and Phase 7. **Set `RECORDING = none` before entering Phase 7**: general mode never opened a browser, so Phase 0h did not run and there is no recording to cut. Phase 7 therefore takes its 7f still-image fallback, and 7f's opening line about saying why there is no video is satisfied by naming general mode as the reason. The deck's test case slides carry the debugger's real variable values and test output in place of screenshots — the code proof is the evidence in general mode, so it is what the slides show. Skip 7f's red box guidance entirely: with no screenshots there is nothing to annotate.
+Then Phase 6 (log cleanup) and Phase 7 (proof deck). The deck's test case slides carry the debugger's real variable values and test output in place of screenshots — the code proof is the evidence in general mode, so it is what the slides show. Skip the red box guidance in 7d entirely: with no screenshots there is nothing to annotate.
 
 ---
 
@@ -3001,199 +2676,266 @@ Log cleanup complete:
 
 ---
 
-## Phase 7: Proof Walkthrough Video (MANDATORY — the final stage)
+## Phase 7: Proof Deck (MANDATORY — the final stage)
 
-**This is the last thing the session does.** Assemble the recording from Phase 0h
-into one narrated video that shows the session doing the work, test case by test
-case, then open it.
+**This is the last thing the session does.** Build a PowerPoint of all the proof,
+where every slide explains what it proves, then open it.
 
-This is not a slideshow of stills. The screenshots still exist and three earlier
-gates depend on them: Phase 3 Close's validation pass, Phase 5a's proof
-inventory, and the evidence judge. They remain the still-frame record. The video
-is what a person watches to see the feature work: the cursor landing on each
-control, the field filling, the red box on the element under test, the page
-responding.
+The deck is not a summary of the report. It is the evidence itself, laid out so a
+person can page through it and see what was actually verified without reading
+four markdown files. The report says "TC-004 passed"; the deck shows the
+screenshot with the red box on the element, the real variable value from the
+debugger next to it, and the requirement clause it satisfies.
 
-**Entry gate:** Phase 5d must have completed, either path. If a gap was left
-unresolved, still build the video, and say so in the closing print and in
-`coverage-gaps.md`. A video that hides an unresolved gap is worse than none.
+**Entry gate:** Phase 5d must have completed, either path. If the full path ran
+and the final judge verdict was `TEST AGAIN` with the loop exited on an
+unresolved gap, or the lite path found a gap that could not be closed, still
+build the deck, and mark those gaps on their own slides, clearly, as unproven.
+A deck that hides an unresolved gap is worse than no deck.
 
-**If `RECORDING = none`** (no path worked, or `--no-video` was passed): go
-straight to 7f, the still-image fallback. Do not silently produce nothing.
+### 7a — Call the `powerpoint` skill, do not rebuild it
 
-### 7a — Read back the clock and confirm the recording closed
+`Skill(skill="powerpoint")`. It already carries everything structural: workspace
+resolution, a dependency doctor check, the render-every-slide-and-look-at-it
+verification loop, and opening the file at the end. Follow its process. Do not
+write your own deck builder, and do not reimplement its helpers.
 
-Phase 5e stopped the recorder on both paths and wrote the wall clock to
-`$RECORD_DIR/stop_epoch`. Read that value:
-
-```bash
-STOP_EPOCH=$(cat "$RECORD_DIR/stop_epoch")
-```
-
-**Do not take the clock again here, on either path.** 5e is the only capture.
-The builder derives the recording's start as `STOP_EPOCH` minus the probed
-duration, which is exact and self correcting even if the recorder took a second
-to spin up, but only if that timestamp really is when recording stopped. A second
-reading is later by however long Phase 6 took, which moves every cut by that gap
-while all three of 7d's checks still pass.
-
-If `stop_epoch` is missing, Phase 5e did not run. Say so and go to 7f. Do not
-substitute the current time.
-
-Then confirm the recording is readable. ffmpeg writes its moov atom on exit, so
-a `window` file that was never stopped will not probe. Path `context` lands its
-file in `$RECORD_DIR` as a `.webm` with a generated name.
+The helper CLI it exposes, all confirmed subcommands of
+`~/.claude/skills/powerpoint/scripts/pptx_env.py`:
 
 ```bash
-ls -la "$RECORD_DIR"
-```
-If there is no recording, say so plainly and go to 7f. Never report a video that
-was not captured.
-
-### 7b — Write the narration, one entry per test case
-
-Write `$RECORD_DIR/narration.json`, keyed by TC id:
-
-```json
-{
-  "TC-001": "spoken text for this test case",
-  "TC-002": "..."
-}
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" workspace
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" topdf "<deck.pptx>"
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" pdftoppm
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "<deck.pptx>"
 ```
 
-Each entry says what its segment shows, in the order a viewer sees it: the
-requirement clause the TC proves, the action being performed, the observed
-result. Take the substance from `plan.md`'s Expected and Observed fields and
-`requirements.md`'s clause text.
+Write the deck to `$WORKSPACE_ABS/qa-proof-[TASK_ID].pptx`.
 
-**Keep it proof, not narrative,** the same restraint `pr-mp4` uses. Say what the
-segment shows. No account of what took several tries, nothing about what was
-blocked and later unblocked, no roadmap of what is left. That belongs in
-`report.md` and `coverage-gaps.md`.
+### 7b — The slide manifest is report.md's Evidence Index
 
-Match roughly the segment's own length. The builder pads video to fit longer
-narration by holding the last frame, so an over-long entry stretches a frozen
-frame rather than getting cut off. Two or three sentences per test case is
-usually right.
+Do not invent a new manifest. `report.md` already has an Evidence Index table
+mapping TC-ID to screenshot to debug proof. Walk it. `requirements.md`'s
+enumerated clause table gives you the requirement each TC maps to.
 
-A TC with no entry is narrated from its `timeline.tsv` label, so nothing goes
-silent by accident.
+Slide order:
 
-### 7c — Build it
+1. **Title.** Target, task id, date, and the headline numbers: N passed, N
+   failed, N blocked, N unverifiable. Plus the Phase 5d path (lite or full) and
+   its result: the lite path's "nothing missing" or the closed gap count, or
+   the full path's verdict and round count. If either path ended on an
+   unresolved gap, say that on the title slide.
+2. **Requirements coverage.** The clause table from `requirements.md`, each row
+   marked proven or unproven, with the TC that proves it. This is the slide
+   someone reads to know whether what they asked for actually got verified.
+3. **One slide per test case**, in plan.md order. See 7c.
+4. **Failures**, one slide each, if any. Expected, observed, and the screenshot
+   showing the failure. A failure slide is proof too.
+5. **Not tested.** `coverage-gaps.md`'s "What Was Not Tested" section, verbatim.
+   Do not soften it and do not re-derive it.
+6. **Unresolved gaps**, if the judge loop exited without `FULLY VERIFIED`. One
+   slide per gap: the requirement clause quoted, what was missing, what was
+   tried each round, and what it needs to close.
+7. **Post-deploy validation**, if any UNVERIFIABLE items exist: what to validate,
+   where, and who.
+
+### 7c — Each test case slide explains itself
+
+The self-explaining requirement means the slide stands alone. Someone opening
+the deck cold, with no access to this conversation, understands what they are
+looking at and what it proves.
+
+Per TC slide:
+
+- **Title**: `TC-NNN — [the TC description from plan.md]`
+- **The requirement it proves**, quoted from `requirements.md`. If a TC maps to
+  no clause, say `Exploratory — no stated requirement` rather than leaving it
+  blank.
+- **Expected** and **Observed**, taken from `plan.md`. This text already exists.
+  Use it. Do not write new prose describing what you think happened.
+- **The screenshot**: `$PROOF_DIR/TC-NNN-after.png`, placed with `add_picture`
+  at explicit `Inches()` coordinates.
+- **The code proof**: the real values from `$DEBUG_PROOF_DIR/TC-NNN-debug.json`,
+  rendered as a small table or code block — the variable names and their actual
+  values at the actual breakpoint. This is what separates "the UI said it worked"
+  from "the value that got persisted was correct." If the json says the
+  breakpoint was not hit, show that, do not omit it.
+- **Speaker notes**: the same explanation in full sentences, via
+  `notes_slide.notes_text_frame.text`. The notes are where the reasoning goes,
+  so the slide itself stays readable.
+
+### 7d — Red squares on the points of interest
+
+**Most screenshots already have them.** Phase 3 Step 4 injects a red bordered
+overlay onto the element under test via `browser_evaluate` before capturing, and
+gates the capture on that overlay having a non-zero bounding box. So every
+`TC-NNN-after.png` already has the red box baked into its pixels, on the right
+element, verified at capture time.
+
+**Place those as-is.** Do not draw a second box over them in python-pptx. You do
+not know the element's position on the slide-scaled image well enough to land it
+correctly, and a misplaced red box pointing at the wrong element is worse
+evidence than no box.
+
+**Only add a box post-hoc for screenshots that never got one**: `before-*.png`
+pre-action states, `discovery-*.png` from Phase 1, or any image where the point
+of interest is a region nothing annotated at capture time. For those, use
+python-pptx's shape API with a transparent fill and a red outline:
+
+```python
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+
+# pic is the shape returned by slide.shapes.add_picture(...)
+# rect_frac is the region of interest as fractions of the image: (x, y, w, h)
+def add_red_box(slide, pic, rect_frac):
+    fx, fy, fw, fh = rect_frac
+    box = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        pic.left + int(pic.width * fx),
+        pic.top + int(pic.height * fy),
+        int(pic.width * fw),
+        int(pic.height * fh),
+    )
+    box.fill.background()          # transparent, so the screenshot shows through
+    box.line.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    box.line.width = Pt(2.5)
+    box.shadow.inherit = False
+    return box
+```
+
+Scale off the placed picture's own `left/top/width/height`, never off the raw
+pixel dimensions — the image is resized when it lands on the slide, and using
+pixel coordinates puts the box in the wrong place by exactly that ratio.
+
+If you do not know the region for an unannotated screenshot, add a caption
+naming what to look at instead. A caption that says "the total field, upper
+right" is honest. A red box guessed at a location is a false claim about where
+the evidence is.
+
+### 7e — Render every slide and actually look at it
+
+The `powerpoint` skill requires this and it is not skippable here. QA screenshots
+vary wildly in aspect ratio, so an image overflowing its area or covering its own
+caption is a real and likely outcome.
+
+1. `topdf` the deck via LibreOffice headless.
+2. `pdftoppm -jpeg` the PDF to per-slide images.
+3. `Glob` the rendered JPEGs and `Read` **every one**. Not a sample.
+4. Check each: does the screenshot fit its area, is the caption readable and not
+   overlapped, is the red box visible against the page behind it, is any text
+   clipped, is the debug-proof table legible at slide size.
+5. Fix what you find and re-render. Repeat until every slide is clean.
+
+A deck you did not look at is not verified, and the whole point of this phase is
+that the proof is inspectable.
+
+### 7f — Open it
 
 ```bash
-python "${HOME}/.claude/scripts/qa_walkthrough_video.py" \
-  --record-dir "$RECORD_DIR" \
-  --out "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4" \
-  --stop-epoch "$STOP_EPOCH" \
-  --width 1920
-```
-
-What it does, so you can read its output instead of trusting it: derives the
-recording's t0, turns every `start`/`end` pair in `timeline.tsv` into a cut
-window with half a second of padding either side, re encodes each window,
-synthesises narration per segment with edge-tts, matches each segment's video and
-audio length by holding the last frame or padding with silence, concatenates both
-tracks, and encodes with `libx264 -crf 18 -preset slow`.
-
-Two choices in there are deliberate and should not be "optimised" later. The
-segments are re encoded rather than stream copied because a copy snaps the cut to
-the nearest keyframe and lands it outside the slate. And `-tune stillimage` is
-absent: `pr-mp4` uses it because a slideshow is near-static frames, but this is a
-moving recording and that flag would starve the motion.
-
-It writes `$RECORD_DIR/video-report.json` with every segment's in and out point,
-its rendered length, a `skipped` list, and a `narration_failures` list.
-
-**Read the `skipped` list and act on it.** Three entries mean a real problem:
-- `no start mark` — Phase 3 Step 0 did not run for that TC, so it is absent from
-  the video. Name those TCs in the closing print.
-- `no end mark` — Step 5 did not run for that TC, so it is in the video clipped
-  to 1.5 seconds instead of its real length. Name those TCs too.
-- `falls outside the recording, dropped` — the timeline and the recording are
-  from different runs. If every TC is dropped the builder exits with an error, as
-  it should. Do not work around that by nudging timestamps until something
-  appears.
-
-**Read `narration_failures` as well.** edge-tts stayed down for that segment
-after its retries, so the segment is in the video with silence over it. The video
-is still valid proof and still worth handing over. Name those TCs in the closing
-print rather than letting a viewer wonder why one test case says nothing.
-
-### 7d — Verify it, three checks
-
-Each catches something the others miss. The builder prints all three and exits
-non zero on the drift check.
-
-1. **Cut placement.** `Read` **every** frame in `$RECORD_DIR/verify-frames/`.
-   One is extracted from the middle of each segment. Confirm each frame shows the
-   test case its filename names. A segment cut from the wrong part of the
-   recording is the failure that looks correct in every number and is visible
-   only here.
-2. **Audio and video agree.** The printed `a/v drift` must be under a second.
-   Above that, some segment's audio and video lengths were mismatched.
-3. **It is legible.** Read one frame at full size and confirm you can read the
-   page text and see the red box. If not, the capture size set in Phase 0h was
-   too small, which this step cannot fix.
-
-Then confirm the narration is not silence:
-```bash
-ffmpeg -hide_banner -i "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4" -af volumedetect -f null NUL 2>&1 | grep mean_volume
-```
-Speech reads around -20 dB. A `mean_volume` near -91 dB means the video has no
-narration at all, whatever the file size suggests. Check `narration_failures` in
-`video-report.json` before calling it a mixing fault: if every segment is listed
-there, edge-tts was down for the whole run and the builder already said so.
-
-### 7e — Open it
-
-```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4"
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-proof-[TASK_ID].pptx"
 ```
 
 Print:
 ```
-Proof walkthrough built and opened:
-  Length            : [N]s over [N] test case segments
-  Recording         : [context | window], [N]s captured, [N]s kept
-  Narrated          : [N] / [N] segments   (mean volume [N] dB)
-  A/V drift         : [N]s
-  Cut placement     : [N] / [N] verify frames read and correct
-  Not in the video  : [TC ids and why, or "none"]
-  Video           → $WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4
+Proof deck built and opened:
+  Slides            : [N]  ([N] test cases, [N] failures, [N] gap slides)
+  Screenshots        : [N] placed  ([N] pre-annotated, [N] captioned only)
+  Debug proof shown  : [N] test cases with real variable values
+  Rendered & checked : [N] / [N] slides read
+  Deck               → $WORKSPACE_ABS/qa-proof-[TASK_ID].pptx
 ```
 
-### 7f — Still-image fallback (only when there is no recording)
+### 7g — Narrate the deck to an mp4
 
-Reached when `RECORDING = none`, no recording file was produced, or every test
-case fell outside the recording.
+This runs every session by default, right after the deck is opened. It is not
+the powerpoint skill's own "only when the user asks" gate — a `/qa` session
+exists to produce proof, and the video is the form of that proof someone can
+actually watch end to end without opening four markdown files.
 
-Say plainly, first, that there is no video walkthrough for this session and why.
-Then build the still-image deck so the session still hands over something
-inspectable. Call `Skill(skill="powerpoint")` and follow its process. Walk
-`report.md`'s Evidence Index in `plan.md` order: one slide per test case carrying
-the requirement clause it proves, Expected and Observed from `plan.md`, the
-`TC-NNN-after.png` screenshot placed with `add_picture`, and the real variable
-values from `TC-NNN-debug.json`. Then the failures, the "What Was Not Tested"
-section from `coverage-gaps.md` verbatim, any unresolved-gap slides, and the
-post-deploy items.
+**Check the environment first, and degrade honestly.**
 
-Do not draw a second red box over a screenshot that already carries one from
-Phase 3 Step 4. Those are baked into the pixels on the right element and were
-gated on a real bounding box at capture time. Guessing coordinates on a
-slide-scaled image puts a red box on the wrong element, which is worse evidence
-than no box.
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+```
 
-Render every slide with `topdf` then `pdftoppm -jpeg`, and `Read` every rendered
-image before opening the deck. Write it to
-`$WORKSPACE_ABS/qa-proof-[TASK_ID].pptx`.
+`edge-tts`, `ffmpeg`, and LibreOffice each gate this step. If any is missing:
+skip 7g, tell the user plainly which dependency is missing and the install
+command `doctor` printed, and hand over the pptx alone. Do not fail the whole
+session over a missing narration dependency, and do not silently skip it
+either.
+
+**Write the narration from the same data the slide carries, not a
+re-summary.** Each TC slide already has its speaker notes from 7c: the
+requirement clause, expected versus observed, and what the screenshot and
+debug proof show. Expand that into prose meant to be heard, the way the
+`powerpoint` skill's narration step describes, since a viewer cannot see the
+slide's captions and speaker notes at the same time a presenter would say
+them. One entry per slide, in `plan.md` order, covering the same slide order
+as 7b.
+
+**Keep it proof, not narrative,** the same restraint `pr-mp4` uses for a PR
+walkthrough: say what a slide shows, not what happened while testing it. No
+"this took a few tries," no account of what was blocked and later unblocked,
+no roadmap of what is left. That belongs in `report.md` and `coverage-gaps.md`,
+not in something meant to be watched once and trusted.
+
+**Follow the `powerpoint` skill's mechanics exactly**, do not reinvent them:
+per slide TTS with `edge_tts.Communicate`, silence padding, one concatenated
+audio stream, ffmpeg `xfade` crossfades timed off each slide's own audio
+duration, and the duration assertion. That entire pipeline, including the
+crossfade offset maths, lives in
+`~/.claude/skills/powerpoint/SKILL.md` under "Narrating it to an mp4."
+
+**Render at proof resolution, not the powerpoint skill's default.** A QA deck
+is screenshot-heavy the same way a PR video is, so follow `pr-mp4`'s
+resolution guidance instead of the powerpoint skill's generic 110 dpi: work
+out the needed render dpi from the widest embedded screenshot's native pixel
+width divided by its placed width in inches, render PNG (never JPEG) at or
+above that dpi, then downsample to the 1920 wide encode target with
+`scale=1920:-2:flags=lanczos`. Encode with
+`libx264 -crf 18 -preset slow -tune stillimage` so a still frame does not
+burn bitrate meant for motion, and `aac` audio. A red box baked into a proof
+screenshot that survives a soft render is not proof anyone can actually read.
+
+Write the mp4 to `$WORKSPACE_ABS/qa-proof-[TASK_ID].mp4`.
+
+**Verify before handing it over**, the same three checks `pr-mp4` runs and for
+the same reason, each one catching something the others miss:
+1. Extract a frame from the middle of a transition and confirm two slides are
+   blended, not cut.
+2. Compare the video and audio stream durations with `ffprobe` and assert they
+   agree within a second. Drift means a crossfade offset is wrong.
+3. Read one screenshot slide's frame at full size and confirm you could
+   actually read it. If not, the render dpi was too low and the whole step
+   failed at its only job.
+
+Open it the same way the deck opened:
+```bash
+python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-proof-[TASK_ID].mp4"
+```
+
+Print:
+```
+Proof video built and opened:
+  Length             : [N]s  ([N] slides narrated)
+  Resolution          : 1920 wide, rendered at [N] dpi
+  Duration drift       : [N]s  (video vs audio streams, ffprobe)
+  Transition check      : [PASS — frame extracted mid-crossfade / not checked]
+  Video               → $WORKSPACE_ABS/qa-proof-[TASK_ID].mp4
+```
+
+If 7g was skipped for a missing dependency, print that instead, with the
+install command, so the user knows the pptx is what shipped and why.
 
 ---
 
 ## What's Next After /qa
 
 The checklist audit (5c), the evidence check (5d), log cleanup (Phase 6), and
-the proof walkthrough video (Phase 7) all ran before you saw this output. 5d is
+the proof deck and video (Phase 7) all ran before you saw this output. 5d is
 the one that decided whether the session is verified, either the lite
 quick-cop pass or the full bad-cop adversarial loop, depending on what 5d-0
 found.
@@ -3203,7 +2945,7 @@ found.
 | LITE, nothing missing | `/done` — run the pre-push checklist and push |
 | LITE, a gap found and closed | Same as above, plus open the new artifact yourself and confirm it actually shows what was missing before shipping |
 | FULL, FULLY VERIFIED — every clause proven by a real artifact | `/done` — run the pre-push checklist and push |
-| FULL or LITE, unresolved — a gap that would not close | Read the unresolved gap segments in the video, or the gap slides if 7f's fallback ran. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
+| FULL or LITE, unresolved — a gap that would not close | Read the unresolved gap slides in the deck or video. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
 | FULLY VERIFIED but with UNVERIFIABLE items | Ship if the post-deploy validation plan is real and owned. Those clauses are not verified, only scheduled |
 | Failures in the session | Fix them, re-run `/qa quick`. Phase 5d runs again automatically |
 | Coverage gaps noted | Review `coverage-gaps.md` — decide which to backlog vs. address now |
