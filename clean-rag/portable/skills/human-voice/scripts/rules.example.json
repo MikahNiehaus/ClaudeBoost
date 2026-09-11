@@ -1,0 +1,30 @@
+{
+  "qualifiers": [
+    {"anchor": "70 of the 87", "must_keep": "in 2025", "window": 120,
+     "why": "all time is 33.2 percent, the year is what makes 80.5 percent true"},
+    {"anchor": "0.687", "must_keep": "average", "window": 60,
+     "why": "without it the score reads as true of all 6 languages, not the mean"},
+    {"anchor": "34%", "must_keep": "team median", "window": 160,
+     "why": "alone it reads as a first place claim; he is second of five"},
+    {"anchor": "CoIR", "must_keep": "benchmarked on", "window": 400,
+     "why": "never submitted to: a leaderboard entry is a merged PR anyone can check"},
+    {"anchor": "77,571", "must_keep": "hand written", "window": 160,
+     "why": "excludes generated migrations; the raw number is 569,064"},
+    {"anchor": "3.07", "must_keep": "OpenWebText", "window": 120,
+     "why": "the dataset is what stops it implying a GPT-2 comparison"}
+  ],
+  "banned": [
+    "submitted to the (MTEB|leaderboard)",
+    "beats? GPT-?2",
+    "lower validation loss than",
+    "same (data ?)?(distribution|dataset)",
+    "built NEST",
+    "PlatePlatter",
+    "17,500 lines",
+    "serving 10K[+] users"
+  ],
+  "verbatim": [
+    "| gpt2 | 124M | 3.11 | 3.12 |",
+    "best-effort open reproduction"
+  ]
+}

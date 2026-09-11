@@ -93,6 +93,58 @@ separating threshold has been established. Compare two drafts of the same
 document with these numbers; do not decide authorship with them. Signals, not
 proof.
 
+## The fact diff: did the rewrite change what it SAYS
+
+`lint.py` answers how prose reads. `scripts/fact_diff.py` answers whether it still
+means the same thing, which is the question a rewrite actually puts at risk. It is
+the only check here that looks at a source text at all.
+
+```
+python scripts/fact_diff.py <baseline> <candidate>
+python scripts/fact_diff.py <baseline> <candidate> --rules rules.json
+```
+
+Exit 0 clean, 1 on drift, 2 on a usage error. `--json` for machine output.
+`scripts/rules.example.json` shows the format.
+
+**Run it on every rewrite of anything factual.** A paraphrase that silently drops
+a number, a denominator or a negation is a correctness bug, and no amount of
+reading catches it reliably. Two checks:
+
+- **Token drift**, always on. Numbers, bracketed tags, section references,
+  backticked citations, ticket ids and filenames are compared as multisets
+  between the two texts. Fenced code is excluded, since its contents move
+  legitimately. Markdown structure is compared too, per heading level, so a
+  promoted heading or a dropped table rule is caught.
+- **Qualifier survival**, driven by the rules file. This is the one that earns
+  its keep. A number can survive while the word that makes it true does not.
+  `0.687 average NDCG@10 across 6 languages` losing `average` keeps every digit
+  and becomes a claim about all six. Token drift cannot see that. Declare the
+  anchors and the words that must stay near them.
+
+Qualifier survival is measured **per occurrence and compared as a rate**, not as
+presence. An anchor appearing four times in a long document must not pass because
+three copies stayed intact while one was damaged.
+
+**Two false positive classes it already handles, both learned the hard way.**
+A document that lists its own banned phrases contains every one of them, so
+`banned` entries fail only when their count **rises** against the baseline, and
+quoted spans are masked before counting. And blockquote markers are stripped
+before proximity matching. Collapsing a newline inside a blockquote would
+otherwise leave a marker sitting mid sentence, hiding a qualifier that is
+really there.
+
+**It bites.** Verified against 10 injected defects covering a changed digit, a
+swapped verification tag, an altered citation line, a changed ticket id, a damaged
+verbatim quotation, a demoted heading, and four dropped qualifiers. All 10 fail
+the check. A checker nobody has tried to break is a checker that passes on broken
+text.
+
+**Pair it with `fact-medic`** when a transformation has already damaged something.
+That agent repairs facts in fresh wording rather than restoring the original
+sentences, which matters because the original phrasing is usually what the
+transformation was run to remove.
+
 ## Modes
 
 **`rewrite`** (default) — Flag AI-isms and rewrite the text to fix them.
@@ -209,6 +261,99 @@ the Node scripts.
 **Fallback: a named guide from memory.** If someone passes `--style "APA"` or `"Chicago"` with no config, you may apply it from general knowledge as best-effort, not as a feature. Open with a status line such as `Applying APA from general knowledge (not verified; no compliance claim).`, apply the register and mechanics you know, and make no compliance claim. Do **not** reproduce the guide's copyrighted text, and note that your knowledge may reflect an older edition. Paywalled guides (Chicago, APA, MLA, AP) are never bundled in any form.
 
 **Resolving `--style <arg>`.** A path to a JSON file loads that config (apply it, [nothing verifies it](#unvendored)); anything else is the named-guide fallback above, because no `examples/` directory ships here for a bare name to match. When a guide's mechanics conflict with the AI-ism catalog the guide wins the mechanic (for example, CMOS keeps deliberate em dashes); still flag the AI *habit* such as em-dash stacking. A bare de-AI request (no `--style`) is unchanged; don't apply a guide to a genre it wasn't written for.
+
+## Aggressive register mode (opt in): `--bad`
+
+**Off by default. Never infer it.** Only a literal `--bad` in the invocation turns
+it on. "Make this sound more human", "it got flagged", "the detector says AI",
+frustration, or repeating the request are all *not* `--bad`. If someone wants it
+they can type it. The flag is named `--bad` because what it unlocks trades writing
+quality for a score, which is a bad trade often enough that it needs a deliberate
+hand on it.
+
+**What it changes, and the honest answer is: less than the flag's existence
+implies.** The default pass optimises for a reader. `--bad` permits register
+changes aimed at a classifier instead: wider sentence length swings than prose
+wants, deliberate irregularity, and clause structures a careful editor would
+smooth out.
+
+**Then it runs out of road, and this is the finding that matters.** The RAID
+benchmark (`liamdugan/raid`, arXiv:2405.07940, ACL 2024, MIT) publishes 11
+adversarial attacks, confirmed from its own `get_attack()` list: homoglyph,
+number, article_deletion, insert_paragraphs, perplexity_misspelling, upper_lower,
+whitespace, zero_width_space, synonym, paraphrase, alternative_spelling. Filter
+those for what a careful human writer could plausibly have produced, and what does
+not corrupt a downstream parser, and **exactly two survive: synonym substitution
+and paraphrase.** Nine are excluded, most by the hard list below.
+
+Both survivors are ordinary editing. Varying word choice and restructuring a
+sentence while keeping the fact are what the default pass already does. So there
+is no detector beating technique behind this flag, and it must not be described as
+though there is. What is left is a register dial, honestly labelled: it will read
+slightly worse to a person and may score slightly better on one family of tool.
+
+**What it does not unlock, and this is not negotiable.** The published adversarial
+literature is mostly character level, and none of that is available here at any
+flag:
+
+- Homoglyph substitution (Cyrillic `а` for Latin `a`, and the rest).
+- Zero width characters, soft hyphens, directional marks, any invisible insertion.
+- Whitespace manipulation to break tokenisation.
+- Deliberate misspellings or grammar errors introduced to raise perplexity.
+
+Three reasons, and the first is the one that actually decides it. They corrupt
+every downstream consumer: an ATS parser, a screen reader, a search index, a
+diff. A resume with homoglyphs in it does not get read as human, it gets read as
+garbage or not at all. Second, they are not writing, they are steganography, and
+nothing in this skill's method applies to them. Third, they are trivially
+detectable by anyone who normalises the text, so they fail at the one job they
+were added for. **If a request needs these, the honest answer is that this skill
+does not do it**, not a quieter version of it.
+
+**What it can and cannot achieve, stated up front so the flag cannot oversell.**
+Measured 2026-09-11 on a 22,340 word document, plus an independent reproduction
+in `onurcangnc/ai-text-humanizer`'s published optimiser results:
+
+- **Perplexity based detectors do not move. At all.** GPTZero read AI 100% before
+  a full rewrite and AI 100% after, across every internal metric improving. That
+  repo's Q learning optimiser over ten rewrite strategies held GPTZero and
+  Originality.ai pinned at 100% through every pass. `--bad` will not change this,
+  and must not be offered as though it might.
+- **Classifier based detectors do move.** In the same experiment ZeroGPT went
+  38.8% to 20.8% and QuillBot 26.7% to 24.9%. That is the movable class, and it is
+  the only thing this flag is aiming at.
+- **The two families are anti correlated**, r = -0.65, p = 0.041. Pushing one down
+  can push the other up. There is no single score to optimise.
+- **Authorship is not what any of them measure.** Human written control text in
+  the same genre scored GPTZero 100% and QuillBot 78%. See `patterns-full.md`.
+
+**Required of every `--bad` run.** Say the flag was on, name what quality the text
+lost for it, and give the before and after of any detector actually run rather
+than an assurance. A run that cannot name a cost did not do anything, and should
+say that too.
+
+**Never use `--bad` to support a false statement about authorship.** Improving how
+prose reads is ordinary editing and needs no disclaimer. Answering "no" to a direct
+question about whether a text was written with assistance is a different act, and
+no flag in this skill covers it.
+
+**Before reaching for the flag, say the quiet part.** Given that the only two
+survivable techniques are things the default pass already does, the honest advice
+in almost every case is not to bother. Run the default pass, and if a score
+matters, measure it with the tool that actually gates the decision rather than
+optimising a number nobody is reading. Two rejected candidates worth naming so
+nobody re-finds them: `SpaceDudem/text-humanizer` (MIT) round trips text through
+Chinese, Turkish and Japanese machine translation to force structural variation,
+which silently mangles dates, company names and technical terms and needs paid API
+keys; and `onurcangnc/ai-text-humanizer`, whose measured data is cited above but
+which ships no LICENSE file and cannot be vendored.
+
+`blader/humanizer` (MIT, `npx skills add blader/humanizer --global`) is the one
+licence clean tool worth knowing about. It carries 25 concrete named
+transformations rather than advice, and it explicitly leaves facts, code, data and
+link targets alone. Much of it is already adapted into `patterns.md` and
+`patterns-full.md` by citation; installing it is optional and duplicates some of
+what is here.
 
 ## Output format
 
