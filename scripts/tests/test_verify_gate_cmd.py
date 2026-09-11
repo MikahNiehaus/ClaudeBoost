@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from helpers import SCRIPTS_DIR, run_hook, posttooluse
+from helpers import SCRIPTS_DIR, hook_env, run_hook, posttooluse
 
 # Direct import for unit testing
 _vg_spec = importlib.util.spec_from_file_location("verify_gate_cmd", SCRIPTS_DIR / "verify-gate-cmd.py")
@@ -134,6 +134,91 @@ def test_silent_on_verdict_description_and_clears_flag(boost_home):
     assert result.returncode == 0
     assert result.stderr == b""
     assert not flag.exists(), "flag should be cleared after the verdict run"
+
+
+# ---------------------------------------------------------------------------
+# Who is allowed to clear a pending finding.
+#
+# The flag says a real finding is waiting on a check. Only an agent that
+# performs that check may delete it. The agent type in the payload is the
+# reliable signal; the description is the caller's own prose and a word like
+# "evaluator" or "verdict" lands in it by accident all the time.
+# ---------------------------------------------------------------------------
+
+def _agent_task(subagent_type: str, description: str, response: str) -> dict:
+    return posttooluse(
+        "Task",
+        {"subagent_type": subagent_type, "description": description},
+        tool_response=response,
+    )
+
+
+_REAL_FINDING = '{"severity": "high", "message": "sql injection at foo.py:12"}'
+
+
+@pytest.mark.parametrize("agent", ["quick-cop", "bad-cop", "good-cop"])
+def test_a_verifier_clears_the_flag_whatever_its_description_says(boost_home, agent):
+    """A verifier's own completion IS the check, so its findings must not
+    re-arm the flag against itself and loop."""
+    flag = boost_home / "state" / "needs-verification.json"
+    flag.write_text(_REAL_FINDING, encoding="utf-8")
+
+    result = run_hook(
+        "verify-gate-cmd.py",
+        _agent_task(agent, "Check the finding", _REAL_FINDING),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert not flag.exists(), f"{agent} ran and the flag is still set"
+
+
+@pytest.mark.parametrize(
+    ("agent", "description"),
+    [
+        ("researcher", "Research the evaluator pattern used elsewhere for consistency"),
+        ("swiper", "Swipe a verdict formatter from the stdlib"),
+        ("general-purpose", "Summarise the evaluator module"),
+    ],
+)
+def test_a_non_verifier_cannot_clear_the_flag_by_wording_its_description(
+    boost_home, agent, description
+):
+    """The word "evaluator" or "verdict" in a description is not evidence a
+    check happened. A payload that names the agent settles the question, and
+    these agents do not verify anything."""
+    flag = boost_home / "state" / "needs-verification.json"
+    flag.write_text(_REAL_FINDING, encoding="utf-8")
+
+    result = run_hook(
+        "verify-gate-cmd.py",
+        _agent_task(agent, description, _REAL_FINDING),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert flag.exists(), (
+        f"{agent!r} deleted a pending finding because its description read "
+        f"{description!r}"
+    )
+    assert b"verify-gate nudge" in result.stderr
+
+
+def test_a_payload_with_no_agent_type_still_falls_back_to_the_description(boost_home):
+    """The fallback keeps working for the case it was written for. Without it
+    a verifier spawn that carries no type re-flags its own findings forever."""
+    flag = boost_home / "state" / "needs-verification.json"
+    flag.write_text(_REAL_FINDING, encoding="utf-8")
+
+    result = run_hook(
+        "verify-gate-cmd.py",
+        posttooluse(
+            "Task",
+            {"description": "Opus verdict synthesis"},
+            tool_response=_REAL_FINDING,
+        ),
+        env_overrides={"CLAUDEBOOST_HOME": str(boost_home)},
+    )
+    assert result.returncode == 0
+    assert not flag.exists()
 
 
 def test_silent_during_audit_run(boost_home):
@@ -384,4 +469,61 @@ class TestMainExceptionPaths:
 
         assert rc == 0
         flag_mock.unlink.assert_called_once_with(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Malformed payload shapes — json.loads accepts null, a bare string, a number
+# and a list just as happily as an object. main() reads
+# payload.get("tool_input", {}) at its very first line with no isinstance
+# guard, unlike skill-verify-gate.py's payload/tool_input guards added this
+# same round. An uncaught AttributeError there exits 1, and 1 is not a
+# recognized PostToolUse verdict (0 or 2), which is the same defect class this
+# round already fixed in five other hooks and in skill-verify-gate.py, just
+# not here.
+# ---------------------------------------------------------------------------
+
+MALSHAPED_TOP_LEVEL_PAYLOADS = ["null", "true", "123", '"hello"', "[]", "[1,2,3]"]
+
+
+@pytest.mark.parametrize("raw", MALSHAPED_TOP_LEVEL_PAYLOADS)
+def test_non_dict_top_level_payload_does_not_crash(boost_home, raw):
+    """A non-dict top-level payload must not exit 1. It carries no tool_input
+    to react to, so silent exit 0 is the only sane reading — the same verdict
+    the sibling PostToolUse recording hooks (research-record.py,
+    verifier-record.py) already give this exact input."""
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify-gate-cmd.py")],
+        input=raw.encode(),
+        capture_output=True,
+        env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
+    )
+    assert result.returncode == 0, (
+        f"verify-gate-cmd.py crashed (exit {result.returncode}) on a non-dict "
+        f"top-level payload {raw!r}, instead of exiting 0\n"
+        f"stderr: {result.stderr.decode(errors='replace')}"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_input",
+    [None, "x", [], 123],
+)
+def test_non_dict_tool_input_does_not_crash(boost_home, tool_input):
+    """tool_input itself can be any JSON value too, independent of the
+    top-level payload being a well-formed object."""
+    import subprocess
+
+    raw = json.dumps({"tool_name": "Task", "tool_input": tool_input, "tool_response": "x"})
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify-gate-cmd.py")],
+        input=raw.encode(),
+        capture_output=True,
+        env=hook_env({"CLAUDEBOOST_HOME": str(boost_home)}),
+    )
+    assert result.returncode == 0, (
+        f"verify-gate-cmd.py crashed (exit {result.returncode}) on tool_input="
+        f"{tool_input!r}\nstderr: {result.stderr.decode(errors='replace')}"
+    )
 

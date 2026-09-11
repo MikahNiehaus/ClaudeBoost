@@ -37,6 +37,12 @@ byte with the new block after it, so nothing already in the file is re-encoded.
 That matters here: the profile is on OneDrive and already contains a character
 this machine round trips badly. A .bak copy is written first. Re-running is a
 no op once the block is present.
+
+Who runs this
+-------------
+setup.py's install_terminal_mode_reset() on Windows, and uninstall.py with
+--remove, which takes the block back out between the same two markers. Run it
+by hand with --remove to undo it without uninstalling anything else.
 """
 
 import shutil
@@ -127,7 +133,56 @@ def _profile_path() -> Path | None:
     return Path(path)
 
 
+def remove() -> int:
+    """Strip our own block back out, leaving the rest of the profile untouched.
+
+    The uninstaller calls this, so the profile edit is reversible the same way
+    every other thing setup.py writes outside the repo is. Only the bytes
+    between the two markers go; anything the user wrote around them stays, and
+    a profile without the markers is left exactly as it was.
+    """
+    profile = _profile_path()
+    if profile is None:
+        return 1
+    if not profile.exists():
+        print("No PowerShell profile, nothing to remove")
+        return 0
+
+    existing = profile.read_bytes()
+    begin = MARKER_BEGIN.encode("utf-8")
+    end = MARKER_END.encode("utf-8")
+    start = existing.find(begin)
+    stop = existing.find(end)
+    if start == -1 or stop == -1 or stop < start:
+        print(f"Block not present in {profile}, nothing to remove")
+        return 0
+
+    backup = profile.with_suffix(profile.suffix + ".bak")
+    shutil.copy2(profile, backup)
+
+    stop += len(end)
+    # Take the line ending that followed the end marker with it, so removing
+    # and re-adding the block does not accumulate blank lines.
+    while stop < len(existing) and existing[stop:stop + 1] in (b"\r", b"\n"):
+        stop += 1
+    # BLOCK_TEMPLATE opens with a newline, so install put exactly one line
+    # ending in front of the begin marker. Take exactly that one back, never
+    # more: a blank line beyond it is the user's.
+    head = existing[:start]
+    for eol in (b"\r\n", b"\n"):
+        if head.endswith(eol):
+            head = head[:-len(eol)]
+            break
+
+    profile.write_bytes(head + existing[stop:])
+    print(f"Removed the terminal mode reset from {profile} (backup: {backup})")
+    return 0
+
+
 def main() -> int:
+    if "--remove" in sys.argv[1:]:
+        return remove()
+
     if not RESET_SCRIPT.exists():
         print(f"Missing {RESET_SCRIPT}", file=sys.stderr)
         return 1
@@ -158,13 +213,17 @@ def main() -> int:
     # 5.1 writes a BOM, and appending through the text layer would re-encode
     # what is already in the file. Neither is acceptable for a file we did not
     # write and cannot re-encode safely.
-    if existing and not existing.endswith(b"\n"):
-        existing += b"\r\n"
+    # Appended raw, with no line ending padded in front. BLOCK_TEMPLATE already
+    # opens with a newline, which terminates the user's last line for us when
+    # it had no terminator of its own. Padding one in here looked harmless and
+    # was not: it left two line endings before the marker where a profile
+    # ending in one leaves two as well, so remove() could not tell how many of
+    # them were ours and gave back a file one line longer than it found.
     profile.write_bytes(existing + block.replace("\n", "\r\n").encode("utf-8"))
 
     print(f"Installed the terminal mode reset into {profile}")
-    print("Open a new PowerShell window, or run: . $PROFILE")
-    print(f"To undo: delete the block between {MARKER_BEGIN!r} and {MARKER_END!r}")
+    print("Open a new PowerShell window, or re-source your profile")
+    print(f"To undo: {sys.executable} {Path(__file__).resolve()} --remove")
     return 0
 
 

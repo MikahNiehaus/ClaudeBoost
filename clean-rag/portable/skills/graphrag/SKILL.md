@@ -40,6 +40,17 @@ the background in the isolated graphrag venv and its own model process. It does 
 block. First call also lazily starts the graph service, so the first response can
 take a few seconds.
 
+**The project has to be registered first, or this returns 403.** Register it with
+`POST /index-project {"project_path": "<abs path>"}` and then retry. `/graphrag-query`
+takes the same gate; `/graphrag-status` does not, because it reads only clean-rag's
+own progress file and never the project directory.
+
+The gate is there because this route reads every source file under the path you
+give it and ingests the contents into a graph that `/graphrag-query` reads back in
+its answers. That is a directory read with a channel to read it back out, on a
+server that binds localhost with no auth, so it only accepts paths the operator
+deliberately registered. The 403 body names the remedy.
+
 Then tell the user it's running and that they can walk away: it checkpoints per
 batch and survives a kill. Poll status to report progress; don't sit in a tight
 loop, this can run for hours on CPU.

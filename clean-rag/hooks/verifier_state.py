@@ -16,18 +16,25 @@ a file's mtime advances past its stamp's timestamp, it was edited again after
 being reviewed, and the stamp no longer covers what is on disk now.
 
 Reuses research_state's file_in_scope and extract_covered_files rather than
-forking them; the only real difference is the marker line ("VERIFIED:" instead
-of "COVERS:") and the mtime based invalidation.
+forking them. It differs in the marker line ("VERIFIED:" instead of "COVERS:"),
+the mtime based invalidation, and in reading the file list out of the closing
+block only (see covered_files_in_block), since a verifier report legitimately
+quotes the marker while explaining the loop it is part of.
 """
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from research_state import extract_covered_files, file_in_scope  # noqa: E402
+from research_state import (  # noqa: E402
+    append_stamp,
+    extract_covered_files,
+    file_in_scope,
+)
 
 VERIFIER_MARKER = "VERIFIED:"
 HANDOFF_MARKER = "HANDOFF:"
@@ -46,11 +53,123 @@ JUDGE_MODE_MARKER = "MODE: evidence-judge"
 JUDGE_STAMPS = ("FULLY VERIFIED:", "TEST AGAIN:")
 
 
+def _normalize(line: str) -> str:
+    """Normalized the way extract_covered_files does, so a stamp still reads as
+    one when an agent bolds it or makes it a heading."""
+    return line.strip().lstrip("*# ").strip().upper()
+
+
 def _stamp_lines(text: str):
-    """Candidate stamp lines, normalized the way extract_covered_files does, so a
-    stamp still reads as one when an agent bolds it or makes it a heading."""
+    """Every normalized line, for the "does this text mention a stamp anywhere"
+    question. closing_stamp needs a stricter one and does not use this."""
     for line in (text or "").splitlines():
-        yield line.strip().lstrip("*# ").strip().upper()
+        yield _normalize(line)
+
+
+_MARKERS = (VERIFIER_MARKER, HANDOFF_MARKER, NITS_MARKER)
+
+
+def _marker_of(line: str) -> str:
+    normalized = _normalize(line)
+    for marker in _MARKERS:
+        if normalized.startswith(marker):
+            return marker
+    return ""
+
+
+def _blocks(text: str) -> list[list[str]]:
+    """Runs of consecutive non-blank lines, kept verbatim.
+
+    Verbatim, not normalized, because the block is also what the file list is
+    parsed out of: extract_covered_files matches its "agentId:" suffix cut
+    case-sensitively and the recorded paths should read as the agent wrote them.
+    Blankness is still judged on the normalized line, so a whitespace-only line
+    separates two blocks.
+
+    A block is git's unit for the same problem: git-interpret-trailers finds a
+    commit's trailers in "a group of one or more lines ... preceded by one or
+    more empty (or whitespace only) lines", not by scanning the whole message.
+
+    Fenced code needs no special case. A stamp inside a fence sits between the
+    two delimiter lines, so it is never its block's first or last line and
+    closing_stamp already ignores it.
+    """
+    blocks, current = [], []
+    for raw in (text or "").splitlines():
+        if _normalize(raw):
+            current.append(raw)
+        elif current:
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+# A token that is unambiguously a file reference: no internal whitespace, and
+# either a path separator, a glob, or a short extension suffix. Prose split on
+# commas fails all three, which is what keeps a sentence out of the covers list.
+_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9_+-]{1,10}$")
+
+# Stripped from the front of a continuation line before parsing, so a bulleted
+# file list reads the same as a comma separated one. "*" and "#" match what
+# _normalize already strips from a marker line.
+_LIST_PREFIX = "-*# \t"
+
+
+def _is_file_token(token: str) -> bool:
+    if not token:
+        return False
+    if "*" in token or "/" in token or "\\" in token:
+        return True
+    return bool(_EXTENSION_RE.search(token))
+
+
+def _continuation_files(line: str) -> list[str]:
+    """The file list on a line below the marker, or [] if the line is anything
+    else.
+
+    All or nothing per line: one token that does not read as a file rejects the
+    whole line. That is the deliberate fail direction. An over broad covers list
+    marks files verified that nobody reviewed and the gate then goes silent
+    about them, which is unrecoverable from the record; an entry missed here
+    leaves the file reading as unverified, which keeps nudging until someone
+    looks. Fail toward the loud one.
+    """
+    text = line.strip().lstrip(_LIST_PREFIX).strip().split("agentId:", 1)[0]
+    tokens = [t.strip().strip("`") for t in text.split(",") if t.strip()]
+    if not tokens or not all(_is_file_token(t) for t in tokens):
+        return []
+    return tokens
+
+
+def covered_files_in_block(block: list[str]) -> list[str]:
+    """The VERIFIED file list carried by a closing block, including a list that
+    wrapped onto the lines below the marker.
+
+    extract_covered_files reads the marker line and returns, so a close that
+    puts the marker alone on its own line records nothing. Reading forward is
+    only safe because a block is already bounded by blank lines and already
+    chosen as the close; the same reading applied to a whole report would sweep
+    up whatever prose follows the first marker-shaped line anywhere in it.
+
+    Continuation stops at the first line that is not a file list. git does the
+    same for a folded trailer value ("split over multiple lines with each
+    subsequent line starting with whitespace, like the folding in RFC 822",
+    git-interpret-trailers), but identifies the fold by that leading whitespace.
+    Agent reports wrap without indenting, so the signal here is token shape.
+    """
+    for i, line in enumerate(block):
+        if _marker_of(line) != VERIFIER_MARKER:
+            continue
+        covers = extract_covered_files(line, prefix=VERIFIER_MARKER)
+        for continuation in block[i + 1:]:
+            more = _continuation_files(continuation)
+            if not more:
+                break
+            covers.extend(more)
+        return covers
+    return []
 
 
 def is_evidence_judge_pass(spawn_prompt: str, report: str) -> bool:
@@ -101,16 +220,6 @@ def _record_path(session_id: str) -> Path:
     return _state_dir() / f"session-{key}.json"
 
 
-def _write_lock(path: Path):
-    """Best effort cross process lock, same degrade-to-none shape research_state uses."""
-    try:
-        import research_state
-
-        return research_state._write_lock(path)
-    except Exception:
-        import contextlib
-
-        return contextlib.nullcontext()
 
 
 def _first_verdict_line(text: str) -> str:
@@ -121,17 +230,67 @@ def _first_verdict_line(text: str) -> str:
     return (text or "")[:200]
 
 
+def _closing_block(report: str) -> tuple[str, list[str]]:
+    """The marker the report closes on and the block that carries it, or ("", []).
+
+    Returning the block is what keeps the marker and its file list reading the
+    same lines. git does the same in trailer.c: parse_trailers() finds
+    trailer_block_start once, then splits only from that offset
+    (`strbuf_split_buf(str + trailer_block_start, ...)`) and reads every
+    token and value out of those lines. It never re-scans the whole message for
+    a token once it has chosen the block.
+
+    See closing_stamp for how a block is judged to be the close.
+    """
+    for block in reversed(_blocks(report)):
+        markers = {_marker_of(line) for line in block} - {""}
+        if len(markers) != 1:
+            continue
+        marker = markers.pop()
+        if marker in (_marker_of(block[0]), _marker_of(block[-1])):
+            return marker, block
+    return "", []
+
+
+def closing_stamp(report: str) -> str:
+    """Which of the three closing markers the report actually closes on, or "".
+
+    Neither "first match wins" nor "last match wins" identifies a close. A
+    report legitimately quotes the convention while explaining it, so an early
+    match may be prose; and a report legitimately adds a footnote or a recap
+    after closing, so a late match may be prose too. Position alone cannot tell
+    them apart, and picking one direction just chooses which report shape
+    breaks.
+
+    So this looks for a stamp the way git-interpret-trailers looks for a
+    commit's trailers: in a block, and only when the block actually looks like a
+    trailer block rather than like prose. Scanning blocks last to first, a block
+    closes the report when both hold:
+
+      - It names exactly one marker. bad-cop emits exactly one closing line, so
+        a block naming two or three of them is reciting the convention.
+      - That marker opens or closes the block. A marker line buried between
+        prose lines is a wrapped sentence, not a stamp.
+
+    Fails toward "" and toward HANDOFF, never toward NITS or VERIFIED, which is
+    the safe direction: "" and HANDOFF both leave covers empty and route the
+    loop to good-cop, so an unreadable close costs an extra fix pass. Guessing
+    NITS tells the orchestrator to hand-polish a Critical finding, and guessing
+    VERIFIED marks files reviewed that nobody reviewed. Both end the loop early
+    on a real bug.
+    """
+    return _closing_block(report)[0]
+
+
 def is_nits_only_pass(report: str) -> bool:
     """Did bad-cop close with NITS:, meaning every finding was Nit severity?
 
-    A real VERIFIED: or HANDOFF: line wins, the same precedence
-    is_evidence_judge_pass uses, so a report that merely discusses the NITS
-    convention does not get read as one.
+    Keyed on the closing line, so a report that merely discusses the NITS
+    convention is not read as one, and a real NITS close still routes to the
+    orchestrator rather than spending an Opus fix pass on polish when the body
+    happens to quote one of the other two markers.
     """
-    lines = list(_stamp_lines(report))
-    if any(line.startswith((VERIFIER_MARKER, HANDOFF_MARKER)) for line in lines):
-        return False
-    return any(line.startswith(NITS_MARKER) for line in lines)
+    return closing_stamp(report) == NITS_MARKER
 
 
 def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") -> None:
@@ -149,24 +308,39 @@ def record_verifier(session_id: str, report: str, agent_type: str = "good-cop") 
     """
     path = _record_path(session_id)
 
-    with _write_lock(path):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            record = {"session_id": session_id, "stamps": []}
+    # Only a report that closes on VERIFIED: names files, and only the block it
+    # closed on names them. Scanning the whole report instead hands the covers
+    # slot to the first VERIFIED:-shaped line anywhere above, which a report
+    # explaining this very convention writes as an ordinary quoted example. That
+    # misrecords two ways at once: the file actually reviewed stays unverified,
+    # and whatever the quoted line happened to name is marked reviewed instead.
+    marker, block = _closing_block(report)
+    covers = covered_files_in_block(block) if marker == VERIFIER_MARKER else []
 
-        record.setdefault("stamps", []).append({
+    # research_state.append_stamp, not a second copy of the same read, modify
+    # and write: it already carries the lock, the atomic write, and the verify
+    # then retry that keeps a stamp from being clobbered when the lock fails
+    # open. A lost stamp here reads back as unverified, so the gate nudges for
+    # a review that already happened.
+    recorded = append_stamp(
+        path,
+        {
             "agent": agent_type,
             "at": time.time(),
-            "covers": extract_covered_files(report, prefix=VERIFIER_MARKER),
+            # A HANDOFF or NITS report leaves this empty, and loop_stage keys
+            # the whole handoff on that emptiness.
+            "covers": covers,
             "verdict": _first_verdict_line(report),
             "nits_only": is_nits_only_pass(report),
-        })
-
-        try:
-            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        },
+        {"session_id": session_id, "stamps": []},
+    )
+    if not recorded:
+        print(
+            f"[verifier-state] the {agent_type} stamp was not recorded; the "
+            "verifier gate will treat the reviewed files as unverified.",
+            file=sys.stderr,
+        )
 
 
 def check_file_verified(session_id: str, file_path: str) -> tuple[bool, str]:

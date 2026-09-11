@@ -130,3 +130,128 @@ either way.
   plan (A: gone/rewritten, B: still has its definition).
 - Fresh install dry run: `setup.py` runs without launching 8612 and without
   indexing a now deleted knowledge/.
+
+
+---
+
+# Status, 2026-09-08: the `scripts/` sweep is done
+
+The plan above was written and then not finished. That gap is not a tidiness
+problem, it is where four live defects came from: `session-primer.py` (a
+UserPromptSubmit hook) spent months injecting "call `POST
+http://127.0.0.1:8612/search`", "`GET :8612/status`" and "call `POST
+:8612/context` as first step in every agent spawn prompt" into the model's
+context on **every prompt**. Nothing failed loudly. The calls returned
+connection refused and the session carried on with no context.
+
+Verified before touching anything: `curl http://127.0.0.1:8612/status` is
+connection refused (exit 7); 8613 answers.
+
+## Done
+
+Live code that called the dead port:
+
+- `scripts/session-primer.py` `_get_rag_status()` now GETs 8613. The address is a
+  single `RAG_BASE_URL` constant, because the port was named at five separate
+  sites in that file and each went stale on its own.
+- `scripts/rag-statusline.py` `RAG_HTTP_PORT = 8612` deleted. It was read
+  nowhere in the repo.
+- `scripts/rag-index-safe.py` deleted. Nothing referenced it, it POSTed to
+  `/index` which no longer exists, and its payload carried an unconditional
+  `force: true`. Repointing it would have created a live 30-plus minute reindex
+  entry point that nothing calls.
+
+Instruction text injected into sessions:
+
+- `session-primer.py` rule (E) and standing orders (1), (2), (6), (7): repointed
+  to 8613 and rewritten to the real contract, `sources: ["project:<abs path>"]`
+  with `mode: "both"`. The old text told the model to send `scope=codebase` and
+  to run `mode=vector` and `mode=graph` as two separate calls; `scope` is not a
+  parameter of any clean-rag route, and `mode: "both"` is the documented way to
+  get both walks in one call.
+- `session-primer.py` rule (G) "Dynamic RAG tiers" deleted outright. It described
+  Tier 3/3c/4 loading through `POST /context`. There is no replacement.
+- `session-primer.py` workspace dashboard: the `POST /context` params block and
+  the "RAG TIER STATUS" rows for Tier 5 research and Project KB are gone. Both
+  read directories belonging to the deleted knowledge base.
+- `workspace-primer.py`: the whole tier briefing removed, including the `POST
+  :8612/context` call and the Tier 0-4 token budget. What survives is the part
+  that never depended on that server: which workspace is active and where.
+- `compaction-primer.py`: the `/context` line dropped; the surviving RAG order
+  now names `8613/search` with its real body.
+- `rag-read-guard.py`: repointed, and `rag_search(scope='codebase', ...)`
+  replaced. That named both a tool and a parameter that no longer exist.
+- `reindex-check.py`: `/index` to `/index-project`, which takes the same body.
+
+Stale prose in otherwise-correct modules: `clean-rag/server/app.py` docstring
+(the "/clean-rag/* on port 8612" bundled-mode line) and
+`clean-rag/server/config.py`'s port comment.
+
+## A second defect, found by the same sweep
+
+`session-primer.py`'s dashboard read `rag_status['indexed_projects']`. That key
+belonged to the retired server. clean-rag returns `projects.entries`, keyed by
+project id, with `files_indexed` and `chunks_created`. The lookup therefore
+missed every time, and the hook emitted "REQUIRED BEFORE RESPONDING: CODEBASE
+NOT INDEXED, run index-project as your FIRST action" for projects that were
+fully indexed. Reproduced against the live server with a real 299-file project,
+fixed, and re-run.
+
+Its two tests did not catch it because they asserted `"READY" in result or
+"task-codebase" in result`, and the workspace id is in the dashboard
+unconditionally. They now assert the rendered line.
+
+## Deliberately NOT done, and why
+
+- **`scripts/boost-run.py`** still has `PORT = 8612` (line 38) and prints
+  `--- RAG (port 8612) ---` (line 380). Real debt, left alone on purpose: the
+  file is the subject of a pending human decision in
+  `spec/bloat/scripts-boost-command-surface.md`, and one of its siblings is a
+  live hard-blocking hook.
+- **`scripts/uninstall.py:472`** `stop_rag_server()` silently does nothing. It
+  shells `restart-rag.py`, whose process pattern is `*rag_server*`, but the
+  server runs `clean-rag/server/__main__.py`. Outstanding; owned elsewhere at
+  the time of this sweep.
+- **`scripts/action-gate.py:138`** still describes a "ClaudeBoost KB" tier in its
+  template. The KB was deleted; that prose is stale. Not in this sweep's scope.
+- **Comments and docstrings naming 8612** in `context-nudge.py`,
+  `prompt-rules-injector.py`, `setup.py` and `boost-run.py` are untouched by
+  design. They explain what was removed and why, which is what stops the next
+  reader rebuilding it.
+- **`evaluator-agent`** was named across 25 tracked files including live hook
+  text, and no such agent has ever existed (`bad-cop`, `good-cop`, `quick-cop`,
+  `researcher`, `swiper` do). Same class of defect as this one, larger blast
+  radius. **Swept 2026-09-08.** Every site now names the agent that does that
+  job: `quick-cop` for checking whether a finding or a completion claim is
+  true, `bad-cop` with `MODE: evidence-judge` for judging QA artifacts.
+
+  Two live defects came out of it, neither of which was the name itself:
+
+  - `scripts/skill-verify-gate.py` refused action skills (`exit 2`) and told
+    the operator to spawn the phantom. The flag it waited on cleared only when
+    a Task description happened to contain the literal word "evaluator" or
+    "verdict", so following the instruction verbatim could not clear it. It now
+    nudges rather than refuses, and `verify-gate-cmd.py` recognises real agents
+    by `subagent_type` using the same resolution order as `research-record.py`.
+  - The same hook crashed (`exit 1`, `AttributeError`) on a payload of `null`,
+    `[]`, a bare string or a number, because `json.loads` accepts any JSON
+    value. It had no test file at all; it has one now.
+
+  The detector for this already existed. `scripts/audit-hooks.py` flags any
+  `*-agent` or `*-cop` name in a hook prompt that is not installed, and it
+  found the live site immediately. Nothing had ever run it. That is the real
+  lesson here, and it is the same one as the dead port: the check was not
+  missing, it was unwired.
+
+## What stops this drifting again
+
+`clean-rag/tests/test_skill_rag_routes.py` already failed on any `.claude/commands/`
+file naming a retired port or an unserved route. It now applies the same contract
+to the **runtime string literals** of `scripts/`, `clean-rag/hooks/` and
+`clean-rag/server/`, checked against the live aiohttp router.
+
+Docstrings and comments are exempt by construction: comments never reach the AST,
+and docstrings are skipped by position. So the historical record survives while
+the injected instruction text is held to the real route table. The hostless form
+(`POST /context` with no host on the line, which is how these survived the port
+migration) is checked too.

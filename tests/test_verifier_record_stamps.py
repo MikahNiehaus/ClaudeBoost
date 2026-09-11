@@ -35,7 +35,14 @@ MODE_A_HANDOFF_REPORT = """[High] Off by one in the retry counter — retry.py:4
 HANDOFF: 1 real finding, 2 new tests added, run with python -m pytest tests/
 """
 
+# The two VERIFIED fixtures paste real runner output because verifier-record.py
+# withholds the stamp from a VERIFIED report that shows none, so a fixture that
+# only claims a run would exercise the rejection path instead of the routing
+# these tests are about.
 MODE_A_CLEAN_REPORT = """Ran the suite, everything green.
+
+    $ python -m pytest -q
+    14 passed in 0.42s
 
 VERIFIED: clean-rag/hooks/research-gate.py
 """
@@ -59,6 +66,9 @@ A /qa session has finished and claims it verified this work.
 """
 
 GOOD_COP_REPORT = """Fix: parameterized the query.
+
+    $ python -m pytest tests/test_app.py -q
+    3 passed in 0.11s
 
 VERIFIED: clean-rag/server/app.py
 """
@@ -184,7 +194,7 @@ def test_a_clean_mode_a_pass_verifies_the_file_it_named(monkeypatch, tmp_path):
     it named passes check_file_verified."""
     reviewed = tmp_path / "research-gate.py"
     reviewed.write_text("# reviewed\n", encoding="utf-8")
-    report = f"VERIFIED: {reviewed.as_posix()}\n"
+    report = f"    $ python -m pytest -q\n    2 passed\n\nVERIFIED: {reviewed.as_posix()}\n"
     run_hook("bad-cop", report, monkeypatch=monkeypatch)
 
     ok, reason = verifier_state.check_file_verified(SESSION, str(reviewed))

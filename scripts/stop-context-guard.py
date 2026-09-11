@@ -86,8 +86,9 @@ def main() -> int:
         if flag_data.get("flagged_at"):
             verification_warning = (
                 "\n\nWARNING: NEEDS_VERIFICATION flag is set — a prior agent flagged findings "
-                "that have not been verified by evaluator-agent. Spawn evaluator-agent before "
-                "stopping, or the findings will remain unverified next session."
+                "that nothing has checked. Spawn quick-cop before stopping, or bad-cop if "
+                "they need adversarial testing rather than a claim check, otherwise the "
+                "findings stay unverified into the next session."
             )
 
     reason = (

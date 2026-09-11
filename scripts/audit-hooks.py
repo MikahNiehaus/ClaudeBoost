@@ -257,8 +257,15 @@ def _check_prompt(prompt: str, where: str, agents: set[str],
     # Agents. Only flag a name shaped like an agent that is genuinely absent,
     # so ordinary prose is not dragged in.
     # Zero or more inner hyphens, not one or more. Requiring one missed the
-    # plain single word case, which is most of them: evaluator-agent,
-    # architect-agent, debug-agent.
+    # plain single word case, which is most of them: architect-agent,
+    # debug-agent, research-agent.
+    #
+    # This check works and caught `evaluator-agent` in the live SessionStart
+    # prompt the first time anyone ran it. That is the point worth recording:
+    # the auditor was never wrong, it was never run. Nothing in the test suite
+    # or the installer invokes audit-hooks.py, so a stale agent name sat in
+    # injected session text for months with a working detector sitting beside
+    # it. See docs/FIXING-STALE-HOOKS.md.
     for name in set(re.findall(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-agent\b", prompt)):
         candidate = f"{name}-agent"
         if candidate not in agents:

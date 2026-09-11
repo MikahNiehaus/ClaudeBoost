@@ -39,8 +39,44 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+
+# The value of a message flag is human prose, never a command. A commit or tag
+# message that talks about curling a URL, or that contains a backslash before a
+# space, is text and must not read as an invocation or as a shell-escaped path.
+# Narrower on purpose than _strip_quoted: stripping every quoted span would also
+# hide the real command in `bash -c "curl https://evil.example.com/x"`.
+_MESSAGE_FLAG_RE = re.compile(
+    r"(?:^|\s)(?:-m|--message)(?:\s+|=)(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\S+)"
+)
+
+# Binaries whose -m really is --message. Spelling alone is not enough to know:
+# curl's own -m is --max-time, so a strip that does not check which binary it
+# is reading deletes `curl -m https://evil.example.com/x`'s destination URL and
+# hands the call a clean bill of health.
+_MESSAGE_COMMAND_RE = re.compile(r"\b(?:git|gh|hg|svn|jj|bzr)(?:\.exe)?\b", re.IGNORECASE)
+
+# What ends the command a flag belongs to, for the lookback above. Quoting is
+# not tracked here: a separator inside a quoted message only shortens the
+# lookback, which at worst leaves a message value unstripped.
+_SEPARATOR_SPLIT_RE = re.compile(r"[;&|\n`()]")
+
+
+def _strip_message_values(command: str) -> str:
+    """The command with the value of every -m/--message flag removed.
+
+    Only within a command that has message semantics. Two commands can spell
+    the same flag with different meanings, so the binary in front of the flag
+    decides: git's -m takes prose to discard, curl's -m takes a timeout and the
+    token after it may be the destination itself.
+    """
+    def drop_if_a_message(match: re.Match) -> str:
+        segment = _SEPARATOR_SPLIT_RE.split(command[:match.start()])[-1]
+        return " " if _MESSAGE_COMMAND_RE.search(segment) else match.group(0)
+
+    return _MESSAGE_FLAG_RE.sub(drop_if_a_message, command)
 
 
 def _write_block_telemetry(tool: str, summary: str, reason: str) -> None:
@@ -308,28 +344,200 @@ def check_netcat(command: str) -> str | None:
     return None
 
 
+_LOCALHOST_NAMES = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
+
+# Named test and dev environments this machine is allowed to reach, on top of
+# localhost. Ralph Maestro serves env-a through env-f under vivery-dev.com, and
+# every app on an environment is its own hostname (manager., admin., app., api.,
+# fn., login., mail., sms., sites., widget., link.), so the whole zone is
+# allowed rather than a list that goes stale the first time a new app appears.
+#
+# Every entry MUST start with a dot. The match below is endswith() against that
+# dotted form, and the leading dot is the only thing making it a label boundary
+# rather than a substring: "evil-vivery-dev.com".endswith(".vivery-dev.com") is
+# False because the character before the label is "-". Store "vivery-dev.com"
+# undotted here and that evasion starts working.
+#
+# Do not put an IP range or an IPv6 literal in this set. Suffix matching cannot
+# express either one correctly. Loopback addresses belong in _LOCALHOST_NAMES.
+_ALLOWED_DEV_SUFFIXES = frozenset({".vivery-dev.com", ".local", ".test"})
+
+
+def _host_is_allowed_dev_env(host: str) -> bool:
+    """True when the host sits inside an allowed test or dev domain.
+
+    Three normalisations happen before the comparison, and each one closes a
+    way of writing the same host that would otherwise read as a different one:
+
+    - Case, because DNS is case insensitive and MANAGER.ENV-E is the same host.
+    - A trailing dot, because "manager.env-e.vivery-dev.com." is a valid FQDN
+      naming that host. Without the strip it fails closed rather than open, but
+      the next person to notice would be tempted to loosen the comparison
+      instead of stripping, which is how the boundary check gets lost.
+    - Non ASCII is refused outright. str.lower() does not fold Cyrillic
+      homographs, so an IDN lookalike of a real dev domain would otherwise be
+      compared as if it were a different string that happens to render the
+      same. The exact-set check above never needed this because none of four
+      loopback literals has a plausible homograph; a real corporate domain does.
+    """
+    host = host.lower().rstrip(".")
+    if not host or not host.isascii():
+        return False
+    return any(
+        host == suffix[1:] or host.endswith(suffix)
+        for suffix in _ALLOWED_DEV_SUFFIXES
+    )
+
+# curl flags whose value is request content rather than a destination: a body,
+# a header, a form field, a cookie. A URL sitting in one of those is never
+# connected to, so it must not be read as a target.
+_CURL_PAYLOAD_FLAG_RE = re.compile(
+    r"(?:^|\s)(?:--data-raw|--data-binary|--data-urlencode|--data-ascii|--data|-d"
+    r"|--header|-H|--form-string|--form|-F|--json"
+    r"|--cookie|-b|--user-agent|-A|--referer|-e)"
+    r"(?:\s+|=)(?:'[^']*'|\"[^\"]*\"|\S+)"
+)
+
+_URL_RE = re.compile(r"https?://[^\s'\"`|;&)]+", re.IGNORECASE)
+
+
+def _url_host_is_local(url: str) -> bool:
+    """True only when the URL's destination host is provably this machine.
+
+    An RFC 3986 authority is [userinfo "@"] host [":" port], so reading the
+    host as everything before the first colon returns the *username* for
+    user:pass@host: https://127.0.0.1:secret@evil.example.com/ reads as
+    127.0.0.1 while curl connects to evil.example.com. That is the bug class
+    behind open-webui GHSA-8w7q-q5jp-jvgx. urlsplit() applies the real
+    grammar, so the parse is not hand-rolled here.
+
+    Userinfo is refused outright rather than parsed past, because curl and
+    urlsplit disagree on odd authorities (a backslash ahead of the @, the
+    same advisory's actual payload) and a call to this machine never needs
+    credentials in the URL. An authority urlsplit cannot parse is not local
+    either: unparseable is not evidence of safety.
+    """
+    try:
+        parts = urlsplit(url)
+        if "@" in parts.netloc or "\\" in parts.netloc:
+            return False
+        host = parts.hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    return host.lower() in _LOCALHOST_NAMES or _host_is_allowed_dev_env(host)
+
+
+_CURL_TOKEN_RE = re.compile(r"\bcurl(?:\.exe)?\b", re.IGNORECASE)
+
+# curl flags that decide the TCP endpoint independently of the URL, so the URL
+# in the command can read "localhost" while the bytes go anywhere. --resolve
+# and --connect-to remap host:port to another address; the proxy flags send the
+# whole request somewhere else first. curl's own --help all names them:
+# "--connect-to <HOST1:PORT1:HOST2:PORT2>  Connect to host2 instead of host1"
+# and "--resolve <[+]host:port:addr[,addr]...>  Resolve host+port to address".
+# Refused outright rather than followed: reading the value would mean
+# reimplementing curl's address selection, and nothing in this project uses one.
+_CURL_REMAP_FLAG_RE = re.compile(
+    r"(?:^|\s)(--resolve|--connect-to|--proxy|-x|--preproxy"
+    r"|--socks4|--socks4a|--socks5|--socks5-hostname|--proxy1\.0)(?:[=\s]|$)"
+)
+
+# -K/--config makes curl read further options, the URL included, out of a file.
+# The destination then never appears in the command string at all, so there is
+# nothing here to check and "cannot tell" is not "safe".
+_CURL_CONFIG_FLAG_RE = re.compile(r"(?:^|\s)(--config|-K)(?:[=\s]|$)")
+
+# A shell control operator ends the curl invocation's own arguments.
+_CURL_ARG_END = frozenset(";|&\n`)")
+
+
+def _curl_argument_span(text: str, start: int) -> str:
+    """`text` from `start` up to the first unquoted shell control operator.
+
+    A curl invocation owns only its own arguments. Reading past the separator
+    made an unrelated later command's URL look like curl's destination, and
+    reading a URL from an earlier one was the same mistake in reverse.
+    """
+    quote = None
+    i, n = start, len(text)
+    while i < n:
+        char = text[i]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char in _CURL_ARG_END:
+            return text[start:i]
+        i += 1
+    return text[start:]
+
+
+def _curl_flag_problem(args: str) -> str | None:
+    """Why this curl argument list connects somewhere the URL does not name."""
+    remap = _CURL_REMAP_FLAG_RE.search(args)
+    if remap:
+        return (
+            f"BLOCKED: curl {remap.group(1)} is not allowed. It chooses the address "
+            "curl actually connects to, so the URL in the command stops meaning "
+            "anything: a request reading http://localhost/ can be pointed at any "
+            "host on the internet. Call the local service by its real URL with no "
+            "connection-remapping flag."
+        )
+    config = _CURL_CONFIG_FLAG_RE.search(args)
+    if config:
+        return (
+            f"BLOCKED: curl {config.group(1)} reads its options, the destination URL "
+            "included, from a file this guard cannot see. Pass the URL and flags on "
+            "the command line so the destination is visible."
+        )
+    return None
+
+
 def check_curl_external(command: str) -> str | None:
-    """Block curl to non-localhost URLs.
+    """Block curl reaching anything other than this machine.
 
     Catches curl anywhere in the command — including compound commands like
     `sleep 40 && curl https://external.com` and `curl ... | head`.
+
+    Every destination has to be local, not just one of them: a command that
+    mixes an external URL with a localhost one still reaches the external
+    host. And the destination is not only the URL: the flags in
+    _curl_flag_problem pick the address independently of it.
+
+    The two halves are scoped differently on purpose. Any URL anywhere in the
+    command counts, because narrowing that to one invocation's own arguments
+    loses `URL=https://evil/x ; curl $URL` and `echo "curl https://evil/x" | sh`,
+    where the URL and the fetch are not in the same span. The flags are read
+    per invocation instead, because an unscoped flag denylist blocks grepping
+    for the flag name or writing it in a commit message.
     """
-    if not re.search(r"\bcurl\b", command):
+    prose_free = _strip_message_values(command)
+    if not _CURL_TOKEN_RE.search(prose_free):
         return None
-    # Strip -d / --data / -H values so URLs in request bodies don't trip us up
-    cleaned = re.sub(r'(?:-d|--data|-H)\s+[\'"][^\'"]*[\'"]', "", command)
-    urls = re.findall(r"https?://([^/\s]+)", cleaned)
-    if not urls:
-        return None
-    for url_host in urls:
-        host = url_host.split(":")[0]
-        if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
-            return None
-    return (
-        "BLOCKED: curl to non-localhost URL is not allowed. "
-        f"Only localhost and 127.0.0.1 are permitted. "
-        f"Found: {urls[0]}"
-    )
+
+    for text, kind in [(prose_free, "shell")] + _executor_payloads(prose_free):
+        for match in _CURL_TOKEN_RE.finditer(text):
+            # Interpreter source does not follow shell quoting, so a quoted
+            # string there is normally the command being run. Read whole, the
+            # same way check_routed_git_write reads one.
+            if kind != "interpreter" and not _in_command_position(text, match.start()):
+                continue
+            problem = _curl_flag_problem(_curl_argument_span(text, match.end()))
+            if problem:
+                return problem
+
+    for url in _URL_RE.findall(_CURL_PAYLOAD_FLAG_RE.sub(" ", prose_free)):
+        if not _url_host_is_local(url):
+            return (
+                "BLOCKED: curl to this URL is not allowed. Only localhost "
+                "(localhost, 127.0.0.1, 0.0.0.0, ::1) and named test or dev "
+                "environments (*.vivery-dev.com, *.local, *.test) are "
+                f"permitted. Found: {url}"
+            )
+    return None
 
 
 def check_db_mutation(command: str) -> str | None:
@@ -569,10 +777,16 @@ def check_destructive_delete(command: str) -> str | None:
 
 
 def check_backslash_spaces(command: str) -> str | None:
-    """Detect backslash-escaped spaces in paths."""
+    """Detect backslash-escaped spaces in paths.
+
+    The value of a -m/--message flag is dropped first. The lookbehind below
+    only excludes a match whose single preceding character is a quote, so a
+    backslash-space a few words into an already-quoted commit message reads
+    as an unquoted escaped path when nothing about it needs escaping.
+    """
     # Match backslash-space that looks like path escaping, not inside quotes
     # Common pattern: /some/path/F\ and\ B\ PWA/
-    if re.search(r"(?<![\"'])\b\S+\\ \S+", command):
+    if re.search(r"(?<![\"'])\b\S+\\ \S+", _strip_message_values(command)):
         return (
             "BLOCKED: Do not backslash-escape spaces in paths. "
             "Use double-quoted paths instead: \"/path/F and B PWA/Nectar\". "
@@ -717,26 +931,118 @@ def _in_command_position(text: str, index: int) -> bool:
 # measured 6.8 seconds on a 2000 character echo and grew roughly cubically, on
 # a hook that runs before every single Bash call. The receiving command is
 # recovered by looking backward from the match instead, which cannot backtrack.
+#
+# `<<tag` is a redirection operator, not the whole line. POSIX 2.7.4: the body
+# "shall begin after the next <newline>", so anything else on that line -- a
+# redirect, a pipe, a background '&', a comment, a second heredoc operator --
+# sits legally between the tag and the newline. `tail` absorbs it. Requiring
+# the newline immediately after the tag instead made `cat <<EOF > f.txt` and
+# `cat <<EOF | grep x` match nothing at all, so their bodies were scanned as
+# command text and an ordinary heredoc was refused.
+#
+# `tail` is not skipped over, it is read: a shell named there executes the body
+# just as surely as one named before the << does (`cat <<EOF | bash`), so it
+# joins the head in the shell check below.
+#
+# The lookaround excludes `<<<`, which is a herestring and has no body. Without
+# it the widened tail lets `cat <<<EOF | x` match and blank the rest of the
+# command, which is the allow-more direction.
+#
+# The `\b` after the tag is load bearing, and it is the same defect the
+# paragraph above records, reached a second way. `\w*` and `[^\n]*` both match
+# a plain letter, so once they sit next to each other the engine tries every
+# way to split one word run between them: `echo <n a's> << <n b's>` measured
+# 0.05ms before the tail group and 930ms at n=8000 after it, growing
+# quadratically. A delimiter is one word, so `\b` only ever holds at the end of
+# the maximal run -- the same match the greedy quantifier finds first -- and
+# every shorter split now dies on the boundary instead of rescanning the tail.
+# That restored 930ms to 0.4ms. `\b` rather than `\w*+`, because possessive
+# quantifiers need Python 3.11 and this tree's floor is 3.9.
 _HEREDOC_RE = re.compile(
-    r"<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)"
-    r"\r?\n(?P<body>.*?)(?:^[ \t]*(?P=tag)\b|\Z)",
+    r"(?<!<)<<(?!<)-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)\b(?P=q)"
+    r"(?P<tail>[^\n]*)\r?\n(?P<body>.*?)(?:^[ \t]*(?P=tag)\b|\Z)",
     re.DOTALL | re.MULTILINE,
 )
 _SHELL_WORD_RE = re.compile(r"(?:^|[/\\])(?:ba|z|k|da)?sh(?:\.exe)?$", re.IGNORECASE)
 
+# Word boundaries on the operator line. str.split() breaks on whitespace only,
+# so `cat <<EOF|bash` reads as the single word "cat|bash", which matches no
+# shell name and hands a body that really is executed back as data. A shell
+# delimits on its control operators with no whitespace required (POSIX 2.3
+# Token Recognition). Splitting on them too only ever ADDS candidate words, so
+# this can find a shell the old split missed and never hide one it found.
+_OPERATOR_LINE_SPLIT_RE = re.compile(r"[;|&()<>\s]+")
+
+_QUOTE_CHAR_RE = re.compile(r"['\"]")
+
+# Command boundaries on the operator line, without the whitespace that
+# _OPERATOR_LINE_SPLIT_RE also breaks on. Keeping segments intact is what makes
+# each command name locally identifiable, so deciding whether one is in command
+# position needs no look back at the text in front of it.
+_OPERATOR_SEGMENT_SPLIT_RE = re.compile(r"[;|&()<>]+")
+
+# What may sit in front of a command name without being it: an assignment, a
+# hand-off runner, or a flag belonging to one. This is _ROUTER_PREFIX as whole
+# tokens. That pattern is not reused directly because it is a look behind, and
+# anchoring it per candidate costs a copy of everything to the left -- 8000
+# candidates on a 40KB line measured 4.3s against the hook's 5s bound, the same
+# quadratic shape the two notes on _HEREDOC_RE record.
+_ROUTER_WORD_RE = re.compile(
+    r"[A-Za-z_]\w*=\S*|-\S*"
+    r"|xargs|timeout|env|nohup|sudo|nice|time|command|builtin|exec"
+    r"|then|do|else",
+    re.IGNORECASE,
+)
+
+
+def _shell_reads_body_in_command_position(operator_line: str) -> bool:
+    """Is a shell the command name on this heredoc's operator line?
+
+    Quotes are inert at a command name -- POSIX 2.6 applies quote removal
+    before 2.9.1 takes the first remaining field as the command name -- so
+    `cat <<EOF | "bash"` runs the body exactly as the bare form does.
+
+    Dropping quotes widens what counts as a shell, so only a command name is
+    dequoted. Doing it line-wide would refuse `cat <<EOF | grep "bash"`, where
+    the word is grep's argument and nothing executes the body.
+    """
+    for segment in _OPERATOR_SEGMENT_SPLIT_RE.split(operator_line):
+        for token in segment.split():
+            if _ROUTER_WORD_RE.fullmatch(token):
+                continue
+            # The first token that is not a prefix is the command name; what
+            # follows it are that command's arguments, not another name.
+            if _SHELL_WORD_RE.search(_QUOTE_CHAR_RE.sub("", token)):
+                return True
+            break
+    return False
+
 
 def _heredoc_data_spans(command: str) -> list[tuple[int, int]]:
-    """Spans of heredoc bodies that are data rather than shell source."""
+    """Spans of heredoc bodies that are data rather than shell source.
+
+    Only the first heredoc on an operator line is classified. POSIX 2.7.4 says
+    a second `<<` on the same line takes the body after the first one's
+    terminator, and following that queue is more machinery than the shape is
+    worth; the later bodies stay scannable instead, which refuses more rather
+    than allowing more.
+    """
     spans = []
     if "<<" not in command:
         # Cheap reject so the common case never enters the regex at all.
         return spans
     for m in _HEREDOC_RE.finditer(command):
-        # The receiving command is whatever sits on the line before the <<.
+        # Everything on the operator line except the operator itself: the
+        # receiving command before the <<, and whatever follows the tag.
         line_start = command.rfind("\n", 0, m.start()) + 1
-        head = command[line_start:m.start()]
+        operator_line = command[line_start:m.start()] + " " + m.group("tail")
         # If a shell is the thing reading it, the body really is executed.
-        if any(_SHELL_WORD_RE.search(word) for word in head.split()):
+        if any(_SHELL_WORD_RE.search(word)
+               for word in _OPERATOR_LINE_SPLIT_RE.split(operator_line)):
+            continue
+        # The split above tests words with their quotes still attached, so it
+        # misses `cat <<EOF | "bash"`, which really does execute the body.
+        if _shell_reads_body_in_command_position(operator_line):
             continue
         spans.append((m.start("body"), m.end("body")))
     return spans
@@ -935,6 +1241,21 @@ def check_routed_git_write(command: str) -> str | None:
     return None
 
 
+def _command_from_payload(payload) -> str:
+    """The Bash command out of a PreToolUse payload, or "" if there isn't one.
+
+    Stdin is a system boundary and every shape guarded here is valid JSON: the
+    payload a bare scalar, null, or a list; tool_input null or a string; the
+    command a number or a list. A naive payload.get(...).get(...) chain raises
+    AttributeError or TypeError on each of them, and an uncaught exception
+    exits 1 — which this hook contract reads as neither allow (0) nor block
+    (2), so the command runs anyway with a traceback shown to the user.
+    """
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else ""
+
+
 def main() -> int:
     raw = ""
     try:
@@ -948,7 +1269,7 @@ def main() -> int:
     except Exception:
         return 0
 
-    command = payload.get("tool_input", {}).get("command", "")
+    command = _command_from_payload(payload)
     if not command:
         return 0
 

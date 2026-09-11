@@ -79,7 +79,7 @@ they are re-implemented or repackaged:
 
    (d) Hook-based automatic knowledge routing: PreToolUse and PostToolUse
        hooks that enforce RAG context loading at agent spawn, nudge
-       evaluator-agent spawning after unverified findings, track workspace
+       quick-cop spawning after unverified findings, track workspace
        update frequency, and gate dangerous operations — all without
        requiring the user or the orchestrating model to remember to call
        these steps manually.

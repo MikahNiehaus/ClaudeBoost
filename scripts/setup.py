@@ -36,6 +36,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Sibling module. setup.py always runs out of the repo's own scripts/ dir
+# (install.sh calls "$BOOST_DIR/scripts/setup.py"), so the helper is next to it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from claude_cli import claude_cmd  # noqa: E402
+
+# Windows consoles default to cp1252. run_cmd decodes child output as UTF-8,
+# and relaying it (the ollama pull spinner emits braille) raised
+# UnicodeEncodeError from install_clean_rag, which killed the two install
+# steps after it. Same idiom as prompt-rules-injector.py.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # Colors — ANSI codes work everywhere modern (Windows Terminal, macOS, Linux).
 # Falling back to plain on dumb terminals keeps log files readable.
@@ -98,14 +111,89 @@ def write_json(path: Path, data: Any) -> None:
 # ---------------------------------------------------------------------------
 # Preflight: check required tools on PATH.
 # ---------------------------------------------------------------------------
+
+#: The floor every hook must load under. Hooks are plain scripts run by
+#: whichever interpreter the hook command line resolves, so a syntax or
+#: annotation feature newer than this breaks them at import time, above their
+#: own fail open handlers, and every Edit in the session emits a traceback.
+#: Named here rather than spelled into each message so the check and the label
+#: the user reads cannot drift apart.
+MIN_PYTHON = (3, 9)
+MIN_PYTHON_STR = "{}.{}".format(*MIN_PYTHON)
+
+
+def _interpreter_version(exe: str):
+    """(major, minor) that `exe` reports, or None if it will not tell us.
+
+    None covers a missing binary, a Windows Store alias stub, and anything that
+    prints something unparseable. All of those read as "cannot confirm", which
+    the callers treat as no finding rather than as a failure.
+    """
+    try:
+        proc = subprocess.run(
+            [exe, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    parts = proc.stdout.strip().split(".")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
+def _check_python() -> bool:
+    """Confirm the interpreters that will actually run the hooks meet the floor.
+
+    hook_command() tries $CLAUDEBOOST_PYTHON first, then python3, python, py.
+    write_env() points $CLAUDEBOOST_PYTHON at the interpreter running this
+    script, so that one is required to meet the floor and setup refuses without
+    it: installing hooks that cannot load is worse than not installing them,
+    because the failure surfaces as a traceback on every Edit with nothing
+    naming the cause.
+
+    A PATH fallback below the floor only bites when the env var is missing from
+    the shell, so it warns and lets the install continue.
+    """
+    running = sys.version_info[:2]
+    label = "Python {}+".format(MIN_PYTHON_STR)
+    if running < MIN_PYTHON:
+        _err(
+            "{} required. Setup is running under Python {}.{} ({}). "
+            "Hooks installed by this interpreter would fail to load. "
+            "Re-run setup with Python {} or newer.".format(
+                label, running[0], running[1], sys.executable, MIN_PYTHON_STR)
+        )
+        return False
+    _ok("{} (running {}.{})".format(label, running[0], running[1]))
+
+    for name in ("python3", "python", "py"):
+        path = shutil.which(name)
+        if not path:
+            continue
+        found = _interpreter_version(path)
+        if found is not None and found < MIN_PYTHON:
+            _warn(
+                "`{}` on PATH is Python {}.{}, below {}. Hooks fall back to it "
+                "only when $CLAUDEBOOST_PYTHON is unset in the shell, and would "
+                "not load if they did.".format(
+                    name, found[0], found[1], MIN_PYTHON_STR)
+            )
+    return True
+
+
 def preflight() -> bool:
     _info("Running preflight checks...")
-    ok = True
-    # python may be `python3` on macOS/Linux — accept either.
+    ok = _check_python()
     # pip is checked via `python -m pip` instead of a bare `pip` binary,
     # since macOS commonly ships Python without exposing `pip` on PATH.
     requirements = [
-        ("python", "Python 3.9+", True, lambda: bool(shutil.which("python") or shutil.which("python3"))),
         ("pip",    "pip",          True, lambda: subprocess.run([sys.executable, "-m", "pip", "--version"],
                                                                 capture_output=True).returncode == 0),
         ("claude", "Claude Code CLI", True, lambda: bool(shutil.which("claude"))),
@@ -115,10 +203,10 @@ def preflight() -> bool:
         if check():
             _ok(label)
         elif required:
-            _err(f"{label} not found — install before re-running setup.")
+            _err(f"{label} not found. Install it before re-running setup.")
             ok = False
         else:
-            _warn(f"{label} not found — some features may not work.")
+            _warn(f"{label} not found. Some features may not work.")
     return ok
 
 
@@ -390,6 +478,21 @@ def _clean_stale_hooks(settings: dict) -> None:
 _SUPERSEDED_PROMPT_SENTINELS = (
     "VERIFY GATE: Scan agent output",       # replaced by verify-gate-cmd.py
     "AGENT SPAWN QUALITY ROUTING",          # replaced by agent-spawn-gate.py
+    # Dropped 2026-09-10. Claude Code rejects every prompt-type SessionStart
+    # hook outright: "prompt-type hooks are not supported for SessionStart
+    # events (no conversation context is available)." All three duplicated
+    # content that ~/.claude/CLAUDE.md already loads every session, and the RAG
+    # block is re-injected by the UserPromptSubmit hook on every turn.
+    #
+    # These three match on statusMessage, not prompt text, on purpose. The
+    # installed prompt text has already drifted from what this file writes: a
+    # later plain-writing pass rewrote "Quality-first routing" to "Quality
+    # first routing", the sentinel in _install_hook stopped matching, and the
+    # next setup run appended a SECOND copy of the same hook. statusMessage is
+    # the field that stayed identical across both copies.
+    "Loading ClaudeBoost workflow...",      # workflow routing (installed twice)
+    "Loading CONSULT mode protocol...",     # CONSULT vs AUTO protocol
+    "Loading RAG HTTP API config...",       # RAG HTTP API contract
 )
 
 
@@ -405,8 +508,19 @@ def _remove_superseded_hooks(settings: dict) -> None:
                 continue
             healthy = []
             for h in inner:
-                text = (h.get("prompt", "") or "") if isinstance(h, dict) else ""
-                if text and any(s in text for s in _SUPERSEDED_PROMPT_SENTINELS):
+                # Match on prompt text AND statusMessage, but only for
+                # prompt-type hooks. Prompt text drifts when someone rewrites
+                # the wording; statusMessage does not. Restricting to
+                # prompt-type keeps a command hook that happens to share a
+                # statusMessage from being swept up, which the old
+                # prompt-text-only read guaranteed for free.
+                is_prompt = isinstance(h, dict) and (
+                    h.get("type") == "prompt" or ("type" not in h and "prompt" in h)
+                )
+                text = ""
+                if is_prompt:
+                    text = (h.get("prompt", "") or "") + "\n" + (h.get("statusMessage", "") or "")
+                if text.strip() and any(s in text for s in _SUPERSEDED_PROMPT_SENTINELS):
                     _warn(f"[CLEAN] hooks.{hook_type} - removing superseded prompt hook: {text[:60]}...")
                     removed += 1
                 else:
@@ -485,6 +599,16 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
                 if "matcher" in entry and e.get("matcher") != entry["matcher"]:
                     e["matcher"] = entry["matcher"]
                     changed = True
+                elif "matcher" not in entry and "matcher" in e:
+                    # The caller dropped the matcher, so the installed one is
+                    # stale and must go. Without this branch the refresh above
+                    # only ever handles a CHANGED value, never a REMOVED key,
+                    # and a wrong matcher survives every future setup run.
+                    # That is how "matcher": "Always" outlived its own removal
+                    # from this file and silently killed every SessionStart
+                    # hook it was attached to.
+                    del e["matcher"]
+                    changed = True
                 # Refresh command path too — handles repo moves.
                 for new_h, old_h in zip(entry["hooks"], e["hooks"]):
                     if new_h.get("command") and new_h["command"] != old_h.get("command"):
@@ -537,6 +661,43 @@ def install_clean_rag() -> None:
         _err(f"clean-rag installer exited {code}")
 
 
+# ---------------------------------------------------------------------------
+# Terminal mode reset: recover the shell after Claude Code is killed rather
+# than exited. See scripts/install-terminal-mode-reset.py for the upstream bug
+# (anthropics/claude-code#59720) and why the recovery has to live in the
+# PowerShell prompt function.
+# ---------------------------------------------------------------------------
+def install_terminal_mode_reset() -> None:
+    """Wire the terminal mode reset into the user's PowerShell profile.
+
+    Windows only — the block is PowerShell and the recovery it performs is for
+    a shell left in xterm mouse-tracking mode, which is the Windows Terminal
+    symptom. The installer is marker guarded and append only, backs the profile
+    up first, and re-running it is a no op, so it is safe on every setup run.
+
+    This does edit a file outside the repo. So do the netcoredbg PATH entry
+    (registry on Windows, ~/.profile elsewhere) and the logon scheduled task,
+    and uninstall.py reverses all three.
+    """
+    if not IS_WINDOWS:
+        _skip("terminal mode reset - Windows only")
+        return
+
+    installer = BOOST_HOME / "scripts" / "install-terminal-mode-reset.py"
+    if not installer.is_file():
+        _skip(f"terminal mode reset - {installer.name} not present")
+        return
+
+    code, out = run_cmd([sys.executable, str(installer)])
+    if out:
+        for line in out.splitlines():
+            print(f"    {line}")
+    if code == 0:
+        _ok("terminal mode reset wired into the PowerShell profile")
+    else:
+        _warn(f"terminal mode reset installer exited {code} — profile left unchanged")
+
+
 # Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
 # re-running this script never duplicates an entry that the PowerShell
 # version installed previously.
@@ -546,82 +707,23 @@ def _install_all_hooks(settings: dict) -> None:
     _remove_superseded_hooks(settings)
     _remove_deleted_script_hooks(settings)
 
-    # --- SessionStart: workflow routing ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("Quality-first routing: Check CLAUDE.md decision flow. For each action, "
-                       "pick the RIGHT approach — not the cheapest, not the most ceremonial. "
-                       "Full ceremony where quality demands it (reviews, security, architecture). "
-                       "Lightweight where it doesn't (explore, research, docs). Always use "
-                       "evaluator-agent for finding verification — never self-verify findings "
-                       "(confirmation bias). Rework costs more than doing it right."),
-            "statusMessage": "Loading ClaudeBoost workflow...",
-            "timeout": 15,
-        }],
-    }, sentinel="Quality-first routing", label="workflow routing")
+    # SessionStart prompt-type hooks removed 2026-09-10. There were three:
+    # workflow routing, the CONSULT vs AUTO protocol, and the RAG HTTP API
+    # contract. Claude Code refuses to run any of them and says so:
+    #     Failed to run: prompt-type hooks are not supported for SessionStart
+    #     events (no conversation context is available). Use a command-type
+    #     hook instead.
+    # Every one of them duplicated content ~/.claude/CLAUDE.md already loads
+    # on every session, and the RAG block is re-injected by the
+    # UserPromptSubmit hook on every single turn, so nothing was lost.
+    # _SUPERSEDED_PROMPT_SENTINELS strips them from installs that already have
+    # them. If you want context injected at session start, write a command-type
+    # hook that prints {"additionalContext": "..."} on stdout, the way
+    # reindex-check.py does. Do not re-add a prompt-type hook here.
 
-    # --- SessionStart: CONSULT mode protocol ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": (
-                "CLAUDEBOOST MODE — CONSULT vs AUTO:\n\n"
-                "Read `$CLAUDEBOOST_HOME/state/claudeboost-mode.json at the start of each task. "
-                "Field: ``mode``. Default CONSULT.\n\n"
-                "If mode=CONSULT, for any architectural decision you MUST:\n"
-                "  1. POST http://127.0.0.1:8613/search with "
-                "{\"query\":\"<feature keywords>\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"} "
-                "+ read 2-3 project files. Cite file:line.\n"
-                "  2. Spawn architect-agent (Opus) via Task with ``PROPOSAL_ONLY — citations: ...``.\n"
-                "  3. Present 2-3 options via AskUserQuestion. User picks/edits/adds.\n"
-                "  4. Log approval to `$CLAUDEBOOST_HOME/state/session-approvals.json.\n"
-                "  5. Implement. RAG-required standards apply automatically.\n\n"
-                "Architectural = new endpoint, new class/module, new DB table, new dep, new middleware, "
-                "auth/validation/error/logging strategy, new public API, new config surface, "
-                "new concurrency model.\n\n"
-                "NOT architectural = typo, 1-line fix, test, doc, value-only config tweak, "
-                "rename in one file, edits under workspace/ .claude/ knowledge/ plans/ docs/.\n\n"
-                "Consultation is ADDITIVE, not gatekeeping. Present what RAG requires as already-handled; "
-                "invite the user to ADD constraints (size caps, character allowlists, rate limits). "
-                "Do not debate whether to validate.\n\n"
-                "Check session-approvals.json before spawning architect-agent — if this axis was "
-                "already decided, proceed with the approved choice.\n\n"
-                "If mode=AUTO: proceed autonomously, still cite sources."
-            ),
-            "statusMessage": "Loading CONSULT mode protocol...",
-        }],
-    }, sentinel="CONSULT vs AUTO", label="CONSULT protocol")
-
-    # --- SessionStart: codebase RAG reminder ---
-    _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("RAG HTTP API: The RAG server runs on http://127.0.0.1:8613. "
-                       "All RAG access uses HTTP — no MCP tools are needed. "
-                       "Key endpoints: POST /search (vector + import graph search), "
-                       "POST /index-project (index or reindex a project), "
-                       "POST /reindex-file (reindex one file), "
-                       "GET /status (server health), GET /projects (indexed projects), "
-                       "POST /web-search, /github-search, /github-file, "
-                       "/stackoverflow-search (outside sources). "
-                       "When searching code, POST to /search with "
-                       "{\"query\":\"...\",\"sources\":[\"project:<absolute path>\"],\"mode\":\"both\",\"limit\":8}. "
-                       "sources is a list of project:<absolute path>. There is "
-                       "no scope parameter. mode=both runs vector similarity and "
-                       "the import graph together, and is what you want on any code "
-                       "search, because they surface different files. "
-                       "If the project has not been indexed, run /index-project first."),
-            "statusMessage": "Loading RAG HTTP API config...",
-        }],
-    }, sentinel="RAG HTTP API", label="RAG HTTP API config")
 
     # --- SessionStart: compaction restore ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("compaction-restore.py"),
@@ -632,7 +734,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- SessionStart: workspace primer ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("workspace-primer.py"),
@@ -654,7 +755,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- SessionStart: RAG session reset (clears sentinel for fresh session verification) ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{
             "type": "command",
             "command": _py_cmd("rag-session-reset.py"),
@@ -773,7 +873,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- PreCompact: context preservation + compaction save ---
     _install_hook(settings, "PreCompact", {
-        "matcher": "Always",
         "hooks": [
             {
                 "type": "prompt",
@@ -781,7 +880,7 @@ def _install_all_hooks(settings: dict) -> None:
                            "1. Agent spawns: call POST http://127.0.0.1:8613/search with "
                            "{\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, "
                            "route by type (full/standard/lightweight)\n"
-                           "2. Finding verification: ALWAYS evaluator-agent, never self-verify "
+                           "2. Finding verification: ALWAYS quick-cop, never self-verify "
                            "(confirmation bias)\n"
                            "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
                            "4. Rework costs more than ceremony. Do it right the first time.\n"
@@ -812,7 +911,6 @@ def _install_all_hooks(settings: dict) -> None:
 
     # --- Telemetry: session lifecycle (SessionStart creates session.json, SessionEnd closes it) ---
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000,
                    "statusMessage": "Opening telemetry session..."}],
     }, sentinel="telemetry-session.py", label="telemetry session lifecycle")
@@ -889,7 +987,6 @@ def _install_all_hooks(settings: dict) -> None:
     # SessionStart adds the session, SessionEnd removes it. A reboot never
     # delivers SessionEnd, so whatever is still listed is what was open.
     _install_hook(settings, "SessionStart", {
-        "matcher": "Always",
         "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
                    "timeout": 3000,
                    "statusMessage": "Recording session for restore..."}],
@@ -1107,6 +1204,7 @@ def run_cmd(args: list[str]) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             args, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
         out = (proc.stdout or "") + (proc.stderr or "")
         return proc.returncode, out.strip()
@@ -1163,21 +1261,10 @@ def install_rag_server() -> None:
     else:
         _ok("clean-rag dependencies installed")
 
-    _info("Installing optional graph deps (graspologic + networkx)...")
-    rc_graph, out_graph = _pip_install(["-e", f"{rag_dir}[graph]"])
-    if rc_graph != 0:
-        _warn("graspologic install failed — community detection will be skipped (non-fatal)")
-        _warn("  To install manually: pip install 'rag-server[graph]'")
-    else:
-        _ok("Graph extras installed (graspologic + networkx)")
-
-    _info("Installing optional SCIP deps (scip-python for type-resolved edges)...")
-    rc_scip, out_scip = _pip_install(["-e", f"{rag_dir}[scip]"])
-    if rc_scip != 0:
-        _warn("scip-python install failed — SCIP graph edges will be skipped (non-fatal)")
-        _warn("  To install manually: pip install 'rag-server[scip]'")
-    else:
-        _ok("SCIP extras installed (scip-python)")
+    # The `[graph]` (graspologic) and `[scip]` extras used to be installed here
+    # with `pip install -e clean-rag[...]`. clean-rag has no pyproject.toml and
+    # imports neither package, so both steps failed on every run and printed a
+    # warning for a feature that does not exist. Removed.
 
     _info("Upgrading ML deps (sentence-transformers + transformers + tokenizers)...")
     rc, out = _pip_install([
@@ -1336,10 +1423,15 @@ def _cleanup_mcp_registration() -> None:
     Idempotent — safe to run multiple times. The RAG server no longer uses MCP;
     it runs as a standalone HTTP daemon on port 8613.
     """
-    # Try `claude mcp list` to see current configs
-    rc, out = run_cmd(["claude", "mcp", "list"])
-    if rc != 0:
+    claude = claude_cmd()
+    if claude is None:
         _skip("claude CLI not found — skipping MCP cleanup")
+        return
+
+    # Try `claude mcp list` to see current configs
+    rc, out = run_cmd(claude + ["mcp", "list"])
+    if rc != 0:
+        _skip("claude CLI would not run — skipping MCP cleanup")
         return
 
     if "rag-server" not in out:
@@ -1347,9 +1439,9 @@ def _cleanup_mcp_registration() -> None:
         return
 
     # Remove the rag-server entry (try with scope flag first)
-    rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server", "--scope", "user"])
+    rc_rm, _ = run_cmd(claude + ["mcp", "remove", "rag-server", "--scope", "user"])
     if rc_rm != 0:
-        rc_rm, _ = run_cmd(["claude", "mcp", "remove", "rag-server"])
+        rc_rm, _ = run_cmd(claude + ["mcp", "remove", "rag-server"])
     if rc_rm == 0:
         _ok("MCP config - removed stale rag-server entry (RAG is HTTP-only now)")
     else:
@@ -1361,22 +1453,6 @@ def _cleanup_mcp_registration() -> None:
 # mcp-debugger: register with `claude mcp` at user scope so it's available
 # in every Claude session. Idempotent — skips if already registered.
 # ---------------------------------------------------------------------------
-def _claude_cmd() -> list[str] | None:
-    """Return a subprocess-safe claude invocation, or None if not found.
-
-    On Windows, `claude` installs as `claude.cmd` which subprocess.run can't
-    find without shell=True. We detect the .cmd variant explicitly.
-    """
-    for candidate in ("claude", "claude.cmd"):
-        path = shutil.which(candidate)
-        if path:
-            # On Windows, .cmd files must be run via cmd.exe
-            if candidate.endswith(".cmd"):
-                return ["cmd", "/c", path]
-            return [path]
-    return None
-
-
 # The debugging surface, one row per server. Everything an agent needs to step
 # through code, watch a browser, read coverage, or attach a native debugger is
 # registered from this table. Adding a server means adding a row here AND
@@ -1591,7 +1667,7 @@ def register_mcp_servers() -> None:
     """
     _info("\nVerifying MCP servers...")
 
-    claude = _claude_cmd()
+    claude = claude_cmd()
     if claude is None:
         _skip("claude CLI not found — skipping MCP server registration")
         return
@@ -1910,6 +1986,7 @@ def main() -> int:
     install_mermaid_cli()
     install_netcoredbg()
     install_clean_rag()
+    install_terminal_mode_reset()
     install_session_restore_task()
 
     _info("\n=== Setup Complete ===")

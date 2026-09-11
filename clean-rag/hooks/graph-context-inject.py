@@ -201,13 +201,22 @@ def main() -> int:
     except Exception:
         return 0
 
+    # json.loads succeeds for any JSON value, so a payload of `null`, a list or
+    # a bare string parses fine and then fails at the first .get(). Claude Code
+    # sends an object, but "exit 0 on every payload" is the stated contract and
+    # a traceback here dumps absolute local paths at the user.
+    if not isinstance(payload, dict):
+        return 0
+
     tool_name = payload.get("tool_name", "")
     if tool_name not in ("Edit", "Write", "MultiEdit"):
         return 0
 
-    tool_input = payload.get("tool_input", {}) or {}
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 0
     file_path = tool_input.get("file_path", "")
-    if not file_path:
+    if not file_path or not isinstance(file_path, str):
         return 0
 
     canonical = _canonicalize(file_path)
@@ -245,4 +254,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Same net research-gate.py, verifier-gate.py and record-edit.py all
+        # carry. This hook only informs, so a crash here must not surface as a
+        # traceback on the user's edit.
+        sys.exit(0)

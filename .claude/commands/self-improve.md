@@ -265,7 +265,7 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 
 ## Phase 4: Pre-Fix Gate
 
-For each finding from Phase 2 with a `file:line` citation, spawn a fresh `evaluator-agent` (Sonnet) with ONLY:
+For each finding from Phase 2 with a `file:line` citation, spawn a fresh `quick-cop` with ONLY:
 - The finding text
 - The cited `file:line` reference
 - No other context from this session
@@ -295,10 +295,12 @@ Rules:
 ## Phase 6: Post-Fix Verify
 
 1. Re-run the Phase 3 tests for this mode — all must pass.
-2. Spawn fresh `evaluator-agent` on each changed file:
+2. Spawn fresh `quick-cop` on each changed file:
    - Pass: file path + the change made
-   - Evaluator returns: CORRECT or NEEDS_IMPROVEMENT
-3. If NEEDS_IMPROVEMENT: rework, re-run evaluator.
+   - It returns: CORRECT or NEEDS_IMPROVEMENT
+3. If NEEDS_IMPROVEMENT: rework, then re-run quick-cop.
+   Escalate to `bad-cop` if the change needs adversarial tests run against it
+   rather than a read-and-confirm pass.
 
 ---
 

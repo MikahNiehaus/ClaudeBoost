@@ -7,6 +7,8 @@ code search (mode=graph).
 Ported from ClaudeBoost mcp-rag-server. Fully self-contained, no external imports.
 """
 
+from __future__ import annotations
+
 import logging
 import sqlite3
 import sys

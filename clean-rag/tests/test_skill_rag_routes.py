@@ -29,12 +29,27 @@ this shape for qa.md's step numbers: regex the references out, diff against
 what really exists, assert the stale list is empty, and print the offenders
 with line numbers so the failure is a worklist rather than a puzzle.
 
-Scope: markdown under `.claude/commands/` only. Those files are instructions a
-model follows literally, so a wrong URL there becomes a wrong action. A stale
-port in a Python comment is untidy but inert, and `~/.claude/skills/` lives
-outside the repo where a test cannot reach it.
+Scope: markdown under `.claude/commands/`, plus the runtime string literals of
+the hook scripts. Both are instructions a model follows literally, so a wrong
+URL in either becomes a wrong action.
+
+The Python half was added after four live defects traced to the same removal:
+`session-primer.py` told every session to call `:8612/search`, `:8612/status`
+and `:8612/context`, and `workspace-primer.py` printed a whole `/context` tier
+briefing. Those are not documentation. They are injected into the model's
+context on every prompt, so the original note here that a stale port in Python
+is "untidy but inert" was only ever true of comments.
+
+Which is the line the Python scan draws: **docstrings and comments are exempt,
+runtime string literals are not**. A docstring explaining that 8612 was retired
+is the record and must survive; a string handed to the model naming 8612 is the
+debt. Comments never reach the AST at all, and docstrings are skipped by
+position, so the exemption needs no allowlist to maintain.
+
+`~/.claude/skills/` still lives outside the repo where a test cannot reach it.
 """
 
+import ast
 import bisect
 import re
 import sys
@@ -359,6 +374,212 @@ def test_a_hostless_scope_parameter_line_is_caught(scratch_command_file):
         (2, "/index"),
     ], f"expected only the two scope= lines, got {found}"
     assert mod.references() == [], "no host is named, so no URL should be reported"
+
+
+# --- the same contract, for the hook scripts -------------------------------
+#
+# Command markdown is not the only thing a model reads as an instruction. The
+# primers and guards under scripts/ print strings straight into the session, and
+# those went stale independently of the markdown for months.
+
+#: Roots holding code that talks to, or tells the model to talk to, clean-rag.
+#: Test directories are excluded: their whole job is to exercise retired shapes,
+#: and `test_context_nudge.py` deliberately curls :8612 to prove a dead server
+#: does not reset a counter.
+PY_ROOTS = (REPO / "scripts", CLEAN_RAG / "hooks", CLEAN_RAG / "server")
+
+
+def python_instruction_files() -> list:
+    files = []
+    for root in PY_ROOTS:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            if "tests" in path.parts or "__pycache__" in path.parts:
+                continue
+            files.append(path)
+    return files
+
+
+def _docstring_ids(tree: ast.AST) -> set:
+    """id() of every string node that is a module/class/function docstring.
+
+    Identified by position (first statement of a body), which is what makes the
+    prose exemption self-maintaining: a comment never reaches the AST, and a
+    docstring recording why 8612 was retired is documentation, not an
+    instruction the model will act on.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            out.add(id(body[0].value))
+    return out
+
+
+def _runtime_strings(path: Path) -> list:
+    """(lineno, text) for every non-docstring string literal in the file."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return []
+    skip = _docstring_ids(tree)
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in skip
+    ]
+
+
+def python_url_references() -> list:
+    """(file, lineno, port, route, text) for clean-rag URLs in runtime strings."""
+    rag_ports = RETIRED_RAG_PORTS | {real_port()}
+    found = []
+    for path in python_instruction_files():
+        for lineno, text in _runtime_strings(path):
+            for m in LOCALHOST_URL.finditer(text):
+                port = int(m.group(1))
+                if port not in rag_ports:
+                    continue
+                route = re.sub(r"\s+", "", m.group(2)) or "/"
+                found.append((path.name, lineno, port, route, text.strip()[:100]))
+    return found
+
+
+def python_route_mentions() -> list:
+    """(file, lineno, route, text) for `POST /route` naming no host.
+
+    This is the form that walked past the port migration untouched:
+    `session-primer.py` said "call POST /context as first step in every agent
+    spawn prompt" with no host on the line, so no port-based search could see it.
+    """
+    found = []
+    for path in python_instruction_files():
+        for lineno, text in _runtime_strings(path):
+            for m in ROUTE_MENTION.finditer(text):
+                found.append((path.name, lineno, m.group(1), text.strip()[:100]))
+    return found
+
+
+# --- guards, so a broken walk cannot make the two below pass vacuously -----
+
+def test_python_instruction_files_are_present():
+    files = python_instruction_files()
+    assert len(files) > 50, f"only found {len(files)} python files under {PY_ROOTS}"
+
+
+def test_the_python_scan_matches_something():
+    assert python_url_references(), (
+        "no clean-rag URLs found in any hook string literal; the AST walk or the "
+        "roots moved"
+    )
+
+
+# --- the actual contract ----------------------------------------------------
+
+def test_no_hook_string_sends_the_model_to_a_retired_port():
+    port = real_port()
+    stale = [r for r in python_url_references() if r[2] != port]
+    assert stale == [], (
+        f"These strings are injected into sessions and name a port clean-rag does "
+        f"not serve (live port is {port}):\n"
+        + "\n".join(
+            f"  {name}:{lineno}  port {found}  {text}"
+            for name, lineno, found, _route, text in stale
+        )
+    )
+
+
+def test_no_hook_string_names_a_route_that_does_not_exist():
+    routes = real_routes()
+    port = real_port()
+    stale = [
+        r for r in python_url_references()
+        if r[2] == port and r[3] != "/" and r[3] not in routes
+    ]
+    stale += [
+        (name, lineno, port, route, text)
+        for name, lineno, route, text in python_route_mentions()
+        if route not in routes
+    ]
+    assert stale == [], (
+        "These strings name a route the server does not serve:\n"
+        + "\n".join(
+            f"  {name}:{lineno}  {route}  {text}"
+            for name, lineno, _p, route, text in stale
+        )
+        + "\n\nRoutes that do exist:\n  "
+        + "\n  ".join(sorted(routes))
+    )
+
+
+# --- the exemption, pinned both ways ---------------------------------------
+
+@pytest.fixture
+def scratch_python_file(monkeypatch, tmp_path):
+    """A throwaway .py file, swapped in as the only scanned Python root."""
+    mod = sys.modules[__name__]
+    monkeypatch.setattr(mod, "PY_ROOTS", (tmp_path,))
+
+    def _write(text: str) -> Path:
+        f = tmp_path / "scratch_hook.py"
+        f.write_text(text, encoding="utf-8")
+        return f
+
+    return _write
+
+
+def test_a_retired_port_in_a_runtime_string_is_caught(scratch_python_file):
+    """The failing shape: a hook printing a dead URL into the session."""
+    mod = sys.modules[__name__]
+    scratch_python_file(
+        'def main():\n'
+        '    print("Call POST http://127.0.0.1:8612/context first")\n'
+    )
+    found = mod.python_url_references()
+    assert len(found) == 1, f"expected the injected dead URL, got {found}"
+    _, _, port, route, _ = found[0]
+    assert (port, route) == (8612, "/context")
+
+
+def test_a_hostless_dead_route_in_a_runtime_string_is_caught(scratch_python_file):
+    """`POST /context` with no host still names a route that does not exist."""
+    mod = sys.modules[__name__]
+    scratch_python_file(
+        'ORDERS = "Every agent spawn: call POST /context as your FIRST action."\n'
+    )
+    assert mod.python_url_references() == [], "no host is named, so no URL"
+    routes = [r[2] for r in mod.python_route_mentions()]
+    assert "/context" in routes, f"the hostless dead route was missed: {routes}"
+
+
+def test_a_docstring_recording_the_retirement_is_not_flagged(scratch_python_file):
+    """The record must survive the sweep that removes the debt.
+
+    `context-nudge.py` and `prompt-rules-injector.py` explain in prose why 8612
+    was retired. That is the reason the next reader does not resurrect it, so a
+    guard that forced its deletion would be deleting the wrong thing.
+    """
+    mod = sys.modules[__name__]
+    scratch_python_file(
+        '"""This hook used to POST http://127.0.0.1:8612/context.\n'
+        '\n'
+        'That server was retired; see clean-rag/CLAUDE.md.\n'
+        '"""\n'
+        '\n'
+        '# Also inert here: http://127.0.0.1:8612/context in a comment.\n'
+        'def go():\n'
+        '    """Historically hit http://127.0.0.1:8612/index."""\n'
+        '    return 1\n'
+    )
+    assert mod.python_url_references() == [], (
+        "a docstring or comment explaining the retirement was flagged as debt"
+    )
 
 
 if __name__ == "__main__":

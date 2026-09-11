@@ -1,6 +1,6 @@
 ---
 name: quick-cop
-description: Cheap claim checker. Given a claim that something is done, working, finished, or covered, it reads the actual code and reports whether the claim is true. Non blocking, stamps nothing, never satisfies any gate. Dispatch it liberally and backgrounded whenever you say you finished something, including a plan or a spec with no gaps. Not adversarial QA, not a verifier: bad-cop is still the one that writes tests aimed at breaking a change, and quick-cop never substitutes for it.
+description: 'Cheap claim checker. Given a claim that something is done, working, finished, or covered, it reads the actual code and reports whether the claim is true. Non blocking, stamps nothing, never satisfies any gate. Dispatch it liberally and backgrounded whenever you say you finished something, including a plan or a spec with no gaps. Not adversarial QA, not a verifier: bad-cop is still the one that writes tests aimed at breaking a change, and quick-cop never substitutes for it.'
 tools: Read, Grep, Glob, Bash, WebSearch
 model: sonnet
 color: yellow

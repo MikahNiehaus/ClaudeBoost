@@ -570,24 +570,11 @@ def main():
         print(f"Total size: {size_mb:.1f}MB")
         print(f"Max depth reached: {stats['max_depth_reached']}")
         print(f"Files in KB: {len(list(kb_dir.glob('*.md')))}")
-        print(f"\nIndex into RAG:")
-        print(
-            f'  curl -s -X POST http://127.0.0.1:8612/index '
-            f'-H "Content-Type: application/json" '
-            f"-d '{{\"project_path\":\"{project}\",\"force\":true}}'"
-        )
         return
 
     # ── Layer 4: Queue mode (original behavior) ──
     queue_path = pathlib.Path(args.queue) if args.queue else kb_dir / "pending-urls.json"
     run_queue_mode(queue_path, kb_dir, args.batch_size)
-
-    print(f"\nIndex into RAG:")
-    print(
-        f'  curl -s -X POST http://127.0.0.1:8612/index '
-        f'-H "Content-Type: application/json" '
-        f"-d '{{\"project_path\":\"{project}\",\"force\":true}}'"
-    )
 
 
 if __name__ == "__main__":

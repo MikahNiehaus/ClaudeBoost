@@ -235,13 +235,6 @@ def main():
         for err in stats["errors"]:
             print(f"  {err}")
 
-    print(f"\nIndex into RAG:")
-    print(
-        f'  curl -s -X POST http://127.0.0.1:8612/index '
-        f'-H "Content-Type: application/json" '
-        f'-d \'{{"project_path":"{kb_dir.parent}","force":true}}\''
-    )
-
 
 if __name__ == "__main__":
     main()

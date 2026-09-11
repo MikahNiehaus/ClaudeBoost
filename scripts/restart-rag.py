@@ -1,14 +1,27 @@
 """
-restart-rag.py — Kill the RAG HTTP server process to force a clean restart.
+restart-rag.py — last resort killer for a stuck RAG server process.
 
-The RAG server is a standalone HTTP daemon on port 8612, not an MCP process.
-After killing it, restart with: python scripts/rag-server-start.py
+The RAG server is a standalone HTTP daemon on port 8613, not an MCP process.
 
-Use this when the RAG server is stuck or needs to pick up code changes.
+Use clean-rag/cli/server_ctl.py, or /rag in Claude Code, not this script:
 
-Usage (Claude can call this directly):
+    python clean-rag/cli/server_ctl.py restart
+    python clean-rag/cli/server_ctl.py stop
+    python clean-rag/cli/server_ctl.py start
+
+server_ctl owns the server's lifecycle. It terminates from the recorded PID
+file and sets the "stopped by user" marker, which is what stops the self-heal
+from bringing the server straight back up. A raw SIGTERM from here sets no such
+marker.
+
+Known limitation, do not rely on this script without checking it first: the
+command line match below is '*rag_server*', and the server today runs
+clean-rag/server/__main__.py, which does not contain that string. So this finds
+nothing against a normal clean-rag install and reports "not running" whether or
+not a server is up. scripts/tests/test_restart_rag.py records the same thing.
+
+Usage:
   python scripts/restart-rag.py
-  python scripts/rag-server-start.py
 """
 from __future__ import annotations
 
@@ -78,7 +91,7 @@ def main() -> int:
     new_pids = find_rag_server_pids()
     if not new_pids:
         print("RAG server stopped. Restart with:")
-        print("  python scripts/rag-server-start.py")
+        print("  python clean-rag/cli/server_ctl.py start")
         print("Or run /rag in Claude Code.")
     elif new_pids == pids:
         print("Warning: same PID still running — SIGTERM may have been ignored")

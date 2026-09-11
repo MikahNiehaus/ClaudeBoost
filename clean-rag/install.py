@@ -5,8 +5,15 @@ Usage:
   python clean-rag/install.py                # full install
   python clean-rag/install.py --skip-deps    # skip pip install
 """
+# Required, not stylistic. This file annotates with PEP 604 unions
+# (`list[str] | None` at _claude_cmd, `str | None` at _wrap_command,
+# `Path | None` at _hook_target_script). Those are evaluated at runtime on
+# Python 3.9 and raise TypeError at import, which takes the installer down
+# before it can print its own version message. setup.py documents a 3.9 floor.
+from __future__ import annotations
 
 import argparse
+import difflib
 import importlib.util
 import json
 import os
@@ -52,6 +59,23 @@ def _warn(msg: str) -> None:
 
 def _err(msg: str) -> None:
     print(f"  [ERROR] {msg}")
+
+
+def _differing_lines(src: Path, dst: Path) -> int:
+    """How many lines differ between two text files. -1 when either is unreadable.
+
+    Read as text so a pure CRLF/LF difference counts as zero: a git checkout can
+    flip line endings without anyone having edited anything.
+    """
+    try:
+        a = src.read_text(encoding="utf-8", errors="replace").splitlines()
+        b = dst.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return -1
+    return sum(
+        1 for line in difflib.unified_diff(a, b, n=0)
+        if line[:1] in "+-" and not line.startswith(("+++", "---"))
+    )
 
 
 def read_json(path: Path, default=None):
@@ -123,10 +147,29 @@ def install_user_assets() -> None:
         if not src.is_file():
             _warn(f"missing bundled file: {src.name}")
             return
-        # Don't silently stomp a copy the user edited to be newer than the repo's.
-        # Note it and skip, so a local tweak survives a re-run.
+        # Don't stomp a copy the user edited to be newer than the repo's: skip it
+        # so a local tweak survives a re-run. That direction is deliberate and
+        # stays — the installer preserves the local file and never resolves a
+        # conflict on the user's behalf.
+        #
+        # What mtime cannot say is whether the two actually differ, and it is a
+        # weak freshness signal generally (apenwarr, "mtime comparison
+        # considered harmful"; moby/moby#9391 reached the same conclusion for
+        # ADD cache invalidation). Left at mtime alone the skip reads as a
+        # no-op, which is how ~/.claude/CLAUDE.md drifted hundreds of lines from
+        # the repo copy while every install printed one bland line about it. So
+        # compare content as well: stay quiet when the skip changes nothing, and
+        # when it does, say how far apart they are and how to look.
         if dst.exists() and dst.stat().st_mtime > src.stat().st_mtime:
-            _warn(f"{dst.name} in ~/.claude is newer than the repo copy, leaving it")
+            drift = _differing_lines(src, dst)
+            if drift == 0:
+                return
+            extent = f"{drift} lines differ" if drift > 0 else "content unreadable"
+            _warn(
+                f"{dst.name} in ~/.claude is newer than the repo copy and {extent}, "
+                f"leaving it. Nothing here will overwrite it; reconcile by hand:"
+            )
+            _say(f"diff \"{src}\" \"{dst}\"")
             return
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)

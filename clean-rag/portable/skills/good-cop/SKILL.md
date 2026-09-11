@@ -19,9 +19,17 @@ Opus fix pass for polish.
 
 `$ARGUMENTS` is bad-cop's findings, or empty to mean "whatever bad-cop just
 reported." Spawn `good-cop` (foreground, `run_in_background: false`, never
-backgrounded). Give it four things and only four: the requirements, the
-correctness properties, the diff, and bad-cop's findings with their real
-execution output. Not the original author's reasoning for the change.
+backgrounded). Give it five things and only five: bad-cop's `REVIEW SCOPE:`
+line and resolved file list copied verbatim, the requirements, the correctness
+properties, the diff or code under review, and bad-cop's findings with their
+real execution output. Not the original author's reasoning for the change.
+
+The resolved file list matters and is not optional. good-cop works the same
+surface bad-cop reviewed, and it does not re-derive that list from the human's
+original sentence: two agents resolving the same phrase separately produce two
+different lists, and the fix then lands outside what was reviewed. The list
+bounds where a root cause is allowed to live. It does not widen what good-cop
+may change, which stays at what the findings actually require.
 
 Wait for it. It researches why each finding actually happened, fixes the
 root cause rather than the symptom bad-cop's test caught, and reruns
@@ -37,6 +45,8 @@ that is the only terminal condition, not good-cop claiming done.
 
 ## What this is not
 
-Not a rubber stamp on bad-cop's findings. If a finding turns out not to be
-real on closer inspection, good-cop says so plainly with the evidence that
-disproves it, rather than fixing something that was never actually broken.
+Not a rubber stamp on bad-cop's findings. good-cop reproduces each finding
+before fixing it, quoting the command and output that confirm the failure. A
+finding that does not reproduce is reported as a false positive with the
+evidence that disproves it, never fixed on a guess, and never dismissed on
+reading alone: only execution output overturns execution output.

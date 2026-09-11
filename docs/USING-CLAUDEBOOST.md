@@ -172,7 +172,7 @@ All 24 specialist agents are spawned automatically based on task type. You can r
 | compliance-agent | Standards compliance, rule enforcement | Verifying a feature against regulatory or internal standards | Sonnet |
 | standards-validator-agent | Coding standards validation, pattern enforcement | Checking whether new code follows project conventions | Sonnet |
 | estimator-agent | Story pointing, complexity estimation | Estimating effort for a sprint backlog | Sonnet |
-| evaluator-agent | Verify-gate — validates findings from other agents | Confirming a security or bug finding is real before it reaches you | Sonnet |
+| quick-cop | Verify-gate — validates findings from other agents | Confirming a security or bug finding is real before it reaches you | Sonnet |
 | rag-indexing-agent | RAG index management, re-indexing advice | Diagnosing stale or broken index state | Sonnet |
 | clean-rag-doctor-agent | Diagnoses and repairs the clean-rag research-enforcement server (port 8613) when it's down or erroring | Spawned automatically by the clean-rag health check when a search fails; runs in the background | Sonnet |
 
@@ -292,13 +292,13 @@ Note that non-negotiable standards still apply in AUTO mode. Parameterized queri
 
 ## 8. The verify gate
 
-ClaudeBoost prevents unverified findings from reaching you. When an agent reports a security issue, a bug, or a high-severity finding, that finding has to be backed by actual code evidence — a specific file path and line number — before it shows up in your results. If it isn't, `evaluator-agent` is spawned to independently check it.
+ClaudeBoost prevents unverified findings from reaching you. When an agent reports a security issue, a bug, or a high-severity finding, that finding has to be backed by actual code evidence — a specific file path and line number — before it shows up in your results. If it isn't, `quick-cop` is spawned to independently check it.
 
-This matters because an LLM that found a bug and is then asked "is this bug real?" will often say yes, using the same flawed reasoning that produced the finding in the first place. `evaluator-agent` runs in a completely fresh context with no knowledge of the original finding — it reads only the cited file:line evidence and gives an independent verdict. If it can't confirm the finding from the evidence, the finding is dropped.
+This matters because an LLM that found a bug and is then asked "is this bug real?" will often say yes, using the same flawed reasoning that produced the finding in the first place. `quick-cop` runs in a completely fresh context with no knowledge of the original finding — it reads only the cited file:line evidence and gives an independent verdict. If it can't confirm the finding from the evidence, the finding is dropped.
 
 From your perspective, this means two things. First, findings you see have been verified against actual code. Second, "no issues found" is always a valid outcome. The agents aren't trying to find something impressive — they're trying to find something real. A clean result is a good result.
 
-Every finding in a review, audit, or security scan must include a `file:line` citation before the orchestrator accepts it. Agents that report BLOCKER or HIGH severity findings without citations are blocked — the finding is marked `NEEDS_VERIFICATION` and escalated to `evaluator-agent` before it reaches you.
+Every finding in a review, audit, or security scan must include a `file:line` citation before the orchestrator accepts it. Agents that report BLOCKER or HIGH severity findings without citations are blocked — the finding is marked `NEEDS_VERIFICATION` and escalated to `quick-cop` before it reaches you.
 
 ---
 
@@ -398,7 +398,7 @@ What happens:
 3. **Test plan** — generates test cases from journeys and writes them to `workspace/e2e-.../plan.md` before any test runs. The plan predates execution — this prevents fabricated results.
 4. **Execution** — runs each test using only browser tools. No direct DB queries, no API shortcuts. Each passing test gets a screenshot with a red annotation box on the verified element.
 5. **Debugger step-through** — after each passing UI test, attaches to the running server process and steps through the code path to confirm the server actually hit. Works for .NET (requires `netcoredbg`) and Node.js (built-in inspector). If the server can't be found, tests run UI-only.
-6. **Screenshot audit** — evaluator-agent independently checks every screenshot for annotation presence, correct placement, and post-action state. Flags any that need a retake.
+6. **Screenshot audit** — bad-cop with MODE: evidence-judge independently checks every screenshot for annotation presence, correct placement, and post-action state. Flags any that need a retake.
 
 Scope options: `auth`, `crud`, `nav`, `errors`, `responsive`, or `all` (default).
 
@@ -546,7 +546,7 @@ ClaudeBoost installs several hooks that run automatically in the background. You
 
 **Pre-task hook** - fires before any agent is spawned via the Task tool. It checks that `POST /context` is included in the spawn prompt. If it is not, the spawn is blocked (exit code 2). This enforces the "RAG first" contract that keeps agents from running with empty context.
 
-**Post-task hook** - fires after every agent completes. It nudges the orchestrator to check agent output for unverified BLOCKER/HIGH findings and spawn `evaluator-agent` if needed. It is an LLM nudge, not a mechanical block - the orchestrator has to act on it.
+**Post-task hook** - fires after every agent completes. It nudges the orchestrator to check agent output for unverified BLOCKER/HIGH findings and spawn `quick-cop` if needed. It is an LLM nudge, not a mechanical block - the orchestrator has to act on it.
 
 **Pre-write hook** - fires before Edit or Write tool calls. It checks whether the change qualifies as an architectural decision and reminds the orchestrator to go through the CONSULT protocol if so.
 

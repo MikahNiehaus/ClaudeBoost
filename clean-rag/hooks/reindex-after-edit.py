@@ -13,6 +13,8 @@ Exit codes:
   0 = always (PostToolUse hooks should not block)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -196,13 +198,21 @@ def main() -> int:
     except Exception:
         return 0
 
+    # json.loads succeeds for any JSON value, so a payload of `null`, a list or
+    # a bare string parses fine and then fails at the first .get(). The exit
+    # code table above says 0 always, so shape has to be checked, not assumed.
+    if not isinstance(payload, dict):
+        return 0
+
     tool_name = payload.get("tool_name", "")
     if tool_name not in ("Edit", "Write", "MultiEdit"):
         return 0
 
-    tool_input = payload.get("tool_input", {})
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 0
     file_path = tool_input.get("file_path", "")
-    if not file_path:
+    if not file_path or not isinstance(file_path, str):
         return 0
 
     canonical = str(Path(file_path).resolve())
@@ -237,4 +247,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Same net research-gate.py, verifier-gate.py and record-edit.py carry.
+        # A stale index is recoverable; a traceback on every edit is not.
+        sys.exit(0)

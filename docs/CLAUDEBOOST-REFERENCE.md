@@ -517,7 +517,7 @@ Agent starts execution:
     ▼
 PostToolUse fires after Task completes:
     └── prompt hook: "VERIFY GATE: Scan agent output for BLOCKER/HIGH/MEDIUM findings..."
-        └── If findings exist: spawn evaluator-agent to verify
+        └── If findings exist: spawn quick-cop to verify
 ```
 
 ---
@@ -536,7 +536,7 @@ Orchestrator scans agent output for BLOCKER/HIGH/MEDIUM findings
     │
     ├── No findings → present results directly to user
     │
-    └── Findings present → spawn evaluator-agent:
+    └── Findings present → spawn quick-cop:
         - Receives: specific findings list + cited file:line locations
         - Step 1: rag_context (lightweight)
         - Reads each cited file:line
@@ -771,7 +771,7 @@ Agent reads and internalizes before taking any action
 **Role:** PR review, code quality gate  
 **Key behaviors:**
 - 11-pass trigger-conditional checklist (see pr-review.xml)
-- FULL spawn template — always followed by evaluator-agent for BLOCKER/HIGH findings
+- FULL spawn template — always followed by quick-cop for BLOCKER/HIGH findings
 - Required: Best Practices Assessment (SOLID + GoF + OOP + Clean Code + Metrics)
 - Outputs PASS/PASS_WITH_WARNINGS/FAIL (Best Practices Verdict) with PASS/FAIL/SKIP per self-review pass
 - Knowledge: `pr-review.xml`, `architecture.xml`
@@ -954,17 +954,26 @@ Agent reads and internalizes before taking any action
 
 ---
 
-### 3.17 evaluator-agent
+### 3.17 quick-cop
 
-**File:** `agents/evaluator-agent.xml`  
+**File:** `~/.claude/agents/quick-cop.md` (source: `clean-rag/portable/agents/quick-cop.md`)  
 **Model:** Sonnet  
-**Role:** Output verification, quality gate  
+**Role:** Claim checker. Reads the code and says whether a stated finding or a
+completion claim is true.  
 **Key behaviors:**
-- STANDARD spawn template
-- Receives specific findings + file:line citations
-- Reads actual code at each cited location
+- Receives specific findings plus their `file:line` citations
+- Reads the actual code at each cited location
 - Verdicts: CONFIRMED (keep) / FALSE_POSITIVE (drop)
-- Cost: ~1000-2000 tokens vs ~5000-10000 tokens rework from false findings
+- Non blocking. Stamps nothing and satisfies no gate
+- Cheap enough to dispatch on any "it is done" sentence, and backgrounded
+
+Escalate to `bad-cop` when the finding needs adversarial tests run against real
+code rather than a read-and-confirm pass. bad-cop is the one that stamps
+`VERIFIED:`; quick-cop never substitutes for it.
+
+This section previously described an `evaluator-agent` at
+`agents/evaluator-agent.xml`. Neither the agent nor that file layout has ever
+existed in this repo.
 
 ---
 
@@ -1568,7 +1577,7 @@ Agent reads and internalizes before taking any action
 **Phases:**
 - Phase 0: Parse args, auto-detect URL (context.md Dev URL → port probe → package.json/launchSettings → ask), hard-stop on staging/prod, derive task ID with project slug, create workspace, load RAG knowledge, index project; Phase 0g builds **complete app inventory** via 6 parallel RAG searches (routes, mutations, auth, entities, jobs, integrations) → writes `app-inventory.md`
 - Phase 1: Browser crawl (nav links + snapshot-only); then **inventory cross-reference** — navigates every route in app-inventory.md not yet visited, classifying each as accessible/auth-blocked/broken; builds component registry and App Map
-- Phase 2: Journey-based test plan — derived from app-inventory entities (completeness gate), ticket content, and browser discoveries; risk-scored journeys; flow-map.md written before any TCs; evaluator-agent removes unverified TCs; PAUSE for user approval
+- Phase 2: Journey-based test plan — derived from app-inventory entities (completeness gate), ticket content, and browser discoveries; risk-scored journeys; flow-map.md written before any TCs; quick-cop removes unverified TCs; PAUSE for user approval
 - Phase 3: Test execution — browser MCP tools only; snapshot-first; red-box annotation gate; mcp-debugger step-through; coverage gap analysis (compares executed TCs against inventory — writes `coverage-gaps.md`); screenshot evaluator audit
 - Phase 4: Report with explicit "What Was NOT Tested" and "QA Observations" sections  
 **Key outputs:** `app-inventory.md`, `flow-map.md`, `plan.md`, `coverage-gaps.md`, `report.md`, `screenshots/proof-*/`  
@@ -1871,7 +1880,7 @@ not run in time.
 | `standard` | Included | Same as full |
 | `full` | Included | Same as standard |
 
-Note: In the RAG context builder, `standard` and `full` are treated identically — both include guardrails. The full/standard distinction is at the orchestration layer (evaluator-agent, verify gate), not in `_build_context()`.
+Note: In the RAG context builder, `standard` and `full` are treated identically — both include guardrails. The full/standard distinction is at the orchestration layer (quick-cop, verify gate), not in `_build_context()`.
 
 **Agent routing:**
 - `full`: reviewer-agent, security-agent, performance-agent

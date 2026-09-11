@@ -61,6 +61,28 @@ def hook_env(env_overrides: dict | None = None) -> dict:
     return env
 
 
+def isolate_path_to(monkeypatch, *dirs: Path) -> None:
+    """Point PATH at `dirs` only, plus the minimum the OS needs to spawn.
+
+    For in-process tests, which do not go through hook_env but need the same
+    guarantee: a test that PREPENDS a shim to the real PATH is not isolated.
+    If the tool it shims is also installed for real, lookup order decides which
+    one answers, and the test passes or fails on what the machine happens to
+    have rather than on the code.
+
+    Windows keeps SystemRoot and System32 when the OS names them, so a shim
+    that shells out to a normal system tool still works. They are read from the
+    environment rather than written as a literal: the Windows directory is not
+    always on C:, and a path this file invents is a portability bug waiting for
+    a different machine.
+    """
+    entries = [str(d) for d in dirs]
+    system_root = os.environ.get("SystemRoot") if os.name == "nt" else None
+    if system_root:
+        entries += [system_root, str(Path(system_root) / "System32")]
+    monkeypatch.setenv("PATH", os.pathsep.join(entries))
+
+
 def run_hook(
     script_name: str,
     fixture: dict,

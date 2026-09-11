@@ -59,7 +59,7 @@ also get a fresh context review. Otherwise, just run it.
 
 
 def _is_code_file(file_path: str) -> bool:
-    if not file_path:
+    if not file_path or not isinstance(file_path, str):
         return False
     path = Path(file_path)
     if path.suffix.lower() not in CODE_EXTENSIONS:
@@ -82,14 +82,25 @@ def main() -> int:
     except Exception:
         return 0
 
+    # json.loads succeeds for any JSON value, so a payload of `null`, a list or
+    # a bare string parses fine and then fails at the first .get(). The
+    # docstring above promises exit 0 always, which means checking the shape.
+    if not isinstance(payload, dict):
+        return 0
+
     if payload.get("tool_name") not in ("Edit", "Write", "MultiEdit"):
         return 0
 
-    file_path = payload.get("tool_input", {}).get("file_path", "")
+    tool_input = payload.get("tool_input")
+    file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
     if _is_code_file(file_path):
         print(_REMINDER)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Same net research-gate.py, verifier-gate.py and record-edit.py carry.
+        sys.exit(0)

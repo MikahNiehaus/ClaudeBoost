@@ -391,12 +391,12 @@ def main() -> int:
         else:
             citation_hint = (
                 " No file:line citations found in last agent output — "
-                "go back and extract specific file:line locations before spawning evaluator."
+                "go back and extract specific file:line locations before spawning quick-cop."
             )
         nudges.append(
-            f"EVALUATOR REMINDER ({tasks} agent spawns without evaluator): "
-            "Spawn evaluator-agent on your findings before acting on them. "
-            "Never self-verify — evaluator reads only the cited file:lines."
+            f"CLAIM CHECK REMINDER ({tasks} agent spawns without one): "
+            "Spawn quick-cop on your findings before acting on them. "
+            "Never self-verify — quick-cop reads only the cited file:lines."
             + citation_hint
         )
     elif (
@@ -416,7 +416,7 @@ def main() -> int:
         nudges.append(
             "BEHAVIOR CHECKPOINT — five rules you tend to skip: "
             f"(1) STUCK? -> POST http://127.0.0.1:{_rag_port()}/search before more file reads. "
-            "(2) FINDING? -> cite file:line, then spawn evaluator-agent. "
+            "(2) FINDING? -> cite file:line, then spawn quick-cop. "
             "(3) NEW endpoint/table/dependency? -> CONSULT mode, spawn architect-agent. "
             "(4) COMPLEX task? -> workspace/[task-id]/context.md. "
             f"(5) SPAWNING AGENT? -> give it a POST http://127.0.0.1:{_rag_port()}/search "
