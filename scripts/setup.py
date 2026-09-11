@@ -42,6 +42,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude_cli import claude_cmd  # noqa: E402
 
+# Windows consoles default to cp1252. run_cmd decodes child output as UTF-8,
+# and relaying it (the ollama pull spinner emits braille) raised
+# UnicodeEncodeError from install_clean_rag, which killed the two install
+# steps after it. Same idiom as prompt-rules-injector.py.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # Colors — ANSI codes work everywhere modern (Windows Terminal, macOS, Linux).
 # Falling back to plain on dumb terminals keeps log files readable.
@@ -1254,21 +1261,10 @@ def install_rag_server() -> None:
     else:
         _ok("clean-rag dependencies installed")
 
-    _info("Installing optional graph deps (graspologic + networkx)...")
-    rc_graph, out_graph = _pip_install(["-e", f"{rag_dir}[graph]"])
-    if rc_graph != 0:
-        _warn("graspologic install failed — community detection will be skipped (non-fatal)")
-        _warn("  To install manually: pip install 'rag-server[graph]'")
-    else:
-        _ok("Graph extras installed (graspologic + networkx)")
-
-    _info("Installing optional SCIP deps (scip-python for type-resolved edges)...")
-    rc_scip, out_scip = _pip_install(["-e", f"{rag_dir}[scip]"])
-    if rc_scip != 0:
-        _warn("scip-python install failed — SCIP graph edges will be skipped (non-fatal)")
-        _warn("  To install manually: pip install 'rag-server[scip]'")
-    else:
-        _ok("SCIP extras installed (scip-python)")
+    # The `[graph]` (graspologic) and `[scip]` extras used to be installed here
+    # with `pip install -e clean-rag[...]`. clean-rag has no pyproject.toml and
+    # imports neither package, so both steps failed on every run and printed a
+    # warning for a feature that does not exist. Removed.
 
     _info("Upgrading ML deps (sentence-transformers + transformers + tokenizers)...")
     rc, out = _pip_install([

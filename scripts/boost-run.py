@@ -35,10 +35,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude_cli import claude_cmd  # noqa: E402
 
-PORT = 8612
-BASE = f"http://127.0.0.1:{PORT}"
-
 BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+
+
+def _rag_port() -> int:
+    """The clean-rag port, from clean-rag's own config rather than a literal.
+
+    Same pattern as prompt-rules-injector.py:_rag_port. A hardcoded 8612 here
+    outlived that server and made /boost verify report NOT READY against a
+    healthy 8613 for every run.
+    """
+    try:
+        root = str(BOOST_HOME / "clean-rag")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from server.config import STANDALONE_PORT
+        return int(STANDALONE_PORT)
+    except Exception:
+        return 8613
+
+
+PORT = _rag_port()
+BASE = f"http://127.0.0.1:{PORT}"
 SCRIPTS = BOOST_HOME / "scripts"
 STATE = BOOST_HOME / "state"
 PY = sys.executable
@@ -182,8 +200,9 @@ def step_rag() -> dict:
     # `stale_projects` on a search instead, which names the project and the
     # model it was built with.
     out["healed"] = []
+    # `entries` is a dict keyed by project id, not a list.
     stale = [
-        e for e in status.get("projects", {}).get("entries", [])
+        e for e in status.get("projects", {}).get("entries", {}).values()
         if e.get("incomplete")
     ]
     if stale:
@@ -377,7 +396,7 @@ def main() -> int:
     step_banner()
     print("\n--- privacy ---")
     step_privacy()
-    print("\n--- RAG (port 8612) ---")
+    print(f"\n--- RAG (port {PORT}) ---")
     rag = step_rag()
     print("\n--- hooks ---")
     missing_hooks = step_hooks()
