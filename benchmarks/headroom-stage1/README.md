@@ -34,6 +34,29 @@ whatever projects you had indexed. The scripts and the recorded measurements are
 the committed artifact, the inputs are not — same split as
 `benchmarks/codesearchnet`.
 
+### Choosing which projects to capture
+
+`capture.py` hardcodes no project path — absolute paths are local to whoever ran
+the capture, and this is a public repo. By default it asks the running server for
+its indexed projects and takes the best-indexed `STAGE1_N_PROJECTS` (default 3).
+
+To pin an exact set — needed to reproduce the recorded numbers, since
+auto-discovery follows whatever is largest *now* — pass absolute paths:
+
+```bash
+STAGE1_PROJECTS=/abs/one,/abs/two,/abs/three python3 capture.py
+CLEAN_RAG_URL=http://127.0.0.1:8613 python3 capture.py   # non-default server
+```
+
+The recorded run used three projects whose short names appear in
+`stage1_results.json`: `assets-backend`, `assets-messages` and
+`reputation-ontology`. All five `lossless:table` payloads came from the last of
+those, so a capture without it will not reproduce §7.3's split.
+
+Importing `capture.py` is inert: discovery and the capture loop both run only
+under `__main__`, so no import can hit the network or overwrite a recorded
+capture.
+
 ## Files
 
 | File | Role |
