@@ -1,0 +1,164 @@
+[
+  {
+    "file": "search_assets-backend_0.json",
+    "wire": 3825,
+    "compact_pct": 9.4640522875817,
+    "crush_pct": 10.143790849673202,
+    "crush_on_compact_pct": 0.7507941091539128,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-backend_1.json",
+    "wire": 2491,
+    "compact_pct": 13.568847852268165,
+    "crush_pct": 13.970293054997992,
+    "crush_on_compact_pct": 0.46446818392940087,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-backend_2.json",
+    "wire": 2503,
+    "compact_pct": 14.582500998801438,
+    "crush_pct": 15.101877746703954,
+    "crush_on_compact_pct": 0.608044901777362,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-backend_3.json",
+    "wire": 3099,
+    "compact_pct": 11.713455953533398,
+    "crush_pct": 12.2297515327525,
+    "crush_on_compact_pct": 0.5847953216374269,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-backend_4.json",
+    "wire": 2505,
+    "compact_pct": 13.612774451097803,
+    "crush_pct": 14.451097804391216,
+    "crush_on_compact_pct": 0.9704251386321626,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-backend_5.json",
+    "wire": 4805,
+    "compact_pct": 7.159209157127992,
+    "crush_pct": 7.429760665972945,
+    "crush_on_compact_pct": 0.2914144810580587,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_0.json",
+    "wire": 1745,
+    "compact_pct": 19.598853868194844,
+    "crush_pct": 19.598853868194844,
+    "crush_on_compact_pct": 0.0,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_1.json",
+    "wire": 2313,
+    "compact_pct": 14.613056636402941,
+    "crush_pct": 14.613056636402941,
+    "crush_on_compact_pct": 0.0,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_2.json",
+    "wire": 1706,
+    "compact_pct": 19.988276670574443,
+    "crush_pct": 19.988276670574443,
+    "crush_on_compact_pct": 0.0,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_3.json",
+    "wire": 2105,
+    "compact_pct": 16.104513064133016,
+    "crush_pct": 16.579572446555822,
+    "crush_on_compact_pct": 0.5662514156285391,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_4.json",
+    "wire": 2594,
+    "compact_pct": 13.145720894371626,
+    "crush_pct": 13.261372397841173,
+    "crush_on_compact_pct": 0.13315579227696406,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_assets-messages_5.json",
+    "wire": 3870,
+    "compact_pct": 8.837209302325581,
+    "crush_pct": 8.992248062015504,
+    "crush_on_compact_pct": 0.17006802721088435,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_reputation-ontology_0.json",
+    "wire": 4411,
+    "compact_pct": 7.73067331670823,
+    "crush_pct": 83.94921786442984,
+    "crush_on_compact_pct": 82.6044226044226,
+    "strategy": "lossless:table",
+    "table": true
+  },
+  {
+    "file": "search_reputation-ontology_1.json",
+    "wire": 5108,
+    "compact_pct": 6.63664839467502,
+    "crush_pct": 86.9812059514487,
+    "crush_on_compact_pct": 86.05577689243027,
+    "strategy": "lossless:table",
+    "table": true
+  },
+  {
+    "file": "search_reputation-ontology_2.json",
+    "wire": 2878,
+    "compact_pct": 11.917998610145935,
+    "crush_pct": 11.917998610145935,
+    "crush_on_compact_pct": 0.0,
+    "strategy": "none:adaptive_at_limit",
+    "table": false
+  },
+  {
+    "file": "search_reputation-ontology_3.json",
+    "wire": 3430,
+    "compact_pct": 9.941690962099125,
+    "crush_pct": 78.48396501457727,
+    "crush_on_compact_pct": 76.10877306571706,
+    "strategy": "lossless:table",
+    "table": true
+  },
+  {
+    "file": "search_reputation-ontology_4.json",
+    "wire": 6293,
+    "compact_pct": 5.41871921182266,
+    "crush_pct": 88.1614492293024,
+    "crush_on_compact_pct": 87.48319892473118,
+    "strategy": "lossless:table",
+    "table": true
+  },
+  {
+    "file": "search_reputation-ontology_5.json",
+    "wire": 5151,
+    "compact_pct": 6.639487478159581,
+    "crush_pct": 86.2162686856921,
+    "crush_on_compact_pct": 85.23601580370139,
+    "strategy": "lossless:table",
+    "table": true
+  }
+]
