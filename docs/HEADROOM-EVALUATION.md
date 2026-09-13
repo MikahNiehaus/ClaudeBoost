@@ -4,8 +4,10 @@
 context-compression layer for LLM agents. Library, proxy, MCP server.
 **Evaluated:** 2026-09-12, against `headroom-ai` v0.37.0 (commit `fix(litellm)` 2026-09-12).
 **Verdict:** **Do not adopt.** The proxy is unsafe for our gates (§3); the library
-path was plausible but measured out at +0.4 pts over a one-line change (§7).
-Take the 11.8% available from compacting our own JSON instead.
+path was plausible but measured out with no setting that buys savings and keeps
+the structure — at the default it adds 0.27 points over a one-line change we can
+make ourselves, and the setting that does compress fails the field-retention gate
+on every payload (§7). Take the 11.8% available from compacting our own JSON instead.
 
 ---
 
@@ -224,41 +226,70 @@ stamp-line hazards in §3 can be excluded by a *test*, not by an argument.
 ## 7. Stage 1 result (measured 2026-09-12)
 
 Ran against real data. Harness and recorded output: `benchmarks/headroom-stage1/`.
+Every figure below is produced by a script in there and recorded in
+`stage1_results.json`, `control_results.json` or `hookblock_results.json`;
+`tests/test_headroom_stage1_metrics.py` pins the two together, so a number that
+drifts from the harness fails the suite.
 
 **Setup.** `headroom-ai` 0.37.0 in its own Python 3.13 venv, base + `[code]`
 extras only — no torch, transformers, magika or onnxruntime, confirming §4's
 conclusion that core JSON compression needs none of them. Inputs: 18 real
 `/search` responses (exact wire bytes, `mode: "both"`, 180 results, 200,059
-bytes) across three indexed projects, plus 3 real `rag-enforce.py` injection
-blocks.
+bytes, 60,832 tokens) across three indexed projects, plus 3 real `rag-enforce.py`
+injection blocks.
 
 **All numbers are approximations.** headroom's `AnthropicTokenCounter` counts a
 bare string with tiktoken `cl100k_base` × 1.1, not a real Anthropic tokenizer.
+One tokenizer path is used for every measurement, so they are comparable with
+each other and must not be quoted as exact.
 
 ### 7.1 The hook-injection side is already finished
 
-`rag-enforce.py` emits **1,248 bytes (~310 tokens)**, constant across three
-different prompts, and already internally truncated. That is below every
-headroom threshold (`min_tokens_to_crush` 200 on an array, `min_tokens_to_compress`
-250 per message) and far too small to be worth compressing. The injection-budget
-work already took this win — `session-primer.py` went 5,751 → 729 chars. There is
-nothing left here for compression to get.
+`rag-enforce.py` emits **1,248–1,250 bytes (341–389 tokens)** whatever the prompt.
+`_format_rag_results` formats `results[:3]` with `content[:250]` each, so the size
+is capped in characters and varies only with UTF-8 width. The
+injection-budget work already took this win — `session-primer.py` went 5,751 → 729
+chars.
+
+Run through headroom, all three blocks come back **byte-identical**: SmartCrusher
+reports `passthrough` because it only rewrites arrays of dicts and the block is
+prose, and `compress()`'s router classifies it `protected` and declines. Not a
+threshold effect — the block clears both `min_tokens_to_crush` (200) and
+`min_tokens_to_compress` (250). There is simply nothing here of the shape
+headroom compresses. (An earlier version of this section attributed the no-op to
+those thresholds and quoted a token count below them; both were wrong, and
+`hookblock.py` now measures it instead of arguing it.)
 
 So the target is narrower than §2 assumed: only the `/search` tool-result
 payloads, 5–22KB each.
 
 ### 7.2 Savings and risk live in the same field
 
-Across all 180 results:
+The 200,059 wire bytes across all 180 results, partitioned exhaustively:
 
 | Part of payload | Bytes | Share |
 |---|---:|---:|
-| `content` (the source code) | 145,025 | **78.8%** |
-| all metadata fields | 39,122 | 21.2% |
+| `content` (the source code) | 145,025 | **72.5%** |
+| metadata — every key, every non-`content` value | 36,032 | 18.0% |
+| JSON framing — brackets, commas, `indent=2` whitespace | 19,002 | 9.5% |
 
-Compression that must not touch `content` has a hard ceiling around a fifth of
-the payload. Everything beyond that is bought by altering the code an agent
-quotes — exactly the §3.1 hazard.
+That last row is what plain compaction removes, and it is most of §7.3's free win.
+
+Compression that may not touch `content` is capped at the other two rows. In
+tokens — which is what a context window actually charges — the cap depends on
+whether the code has to stay in the encoding the JSON carries it in:
+
+| Ceiling on safe savings | median payload | pooled |
+|---|---:|---:|
+| `content` kept in wire form (escaped, quoted) | **34.1%** | 30.2% |
+| only the code text has to survive, any encoding | **42.0%** | 40.1% |
+
+So the honest ceiling is between a third and two fifths of the payload, not the
+fifth an earlier version of this table reported. That earlier figure divided the
+content bytes by a re-serialized compacted copy rather than by the bytes the
+server sent, which has ~15KB less framing and so overstated content's share by
+six points. The correction cuts both ways: there is more room above `content`
+than we claimed, and the §7.3 result below does not depend on it.
 
 ### 7.3 The control experiment is the whole answer
 
@@ -272,24 +303,48 @@ line, and needs no dependency. Measured against headroom on identical inputs:
 | SmartCrusher on wire bytes | 14.9% | 7.4% | 88.2% |
 | SmartCrusher *after* compacting | **0.6%** | 0.0% | 87.5% |
 
-The payloads split cleanly into two populations:
+At the default bias the payloads split cleanly into two populations:
 
 | Population | n | headroom saving | compaction alone | headroom's own contribution |
 |---|---:|---:|---:|---:|
-| `none:adaptive_at_limit` | **13** | 14.0% | 13.6% | **+0.4 pts** |
-| `lossless:table` | 5 | 86.2% | 6.6% | +79.6 pts |
+| `none:adaptive_at_limit` | **13** | 14.0% | 13.6% | **+0.27 pts** |
+| `lossless:table` | 5 | 86.2% | 6.6% | +79.58 pts |
 
-On **72% of real payloads headroom adds 0.4 points** over a one-line change we
-can make ourselves. The mechanism is `SmartCrusherConfig.lossless_min_savings_ratio
-= 0.15`: the table transform is only applied when it would clear 15%, and
-otherwise the payload passes through with nothing but JSON compaction. Raising
-`bias` from 1.0 to 50.0 does not change the decision.
+The contribution column is the **median of the per-payload differences**, not the
+difference of the two medians beside it — the comparison is paired, and the median
+does not commute with subtraction. Subtracting the columns gives 0.40, which is
+48% too high and is what an earlier version of this table reported. On 4 of the 13
+the contribution is exactly 0.00; the spread is 0.00 to 0.84.
+
+So on **72% of real payloads headroom adds a quarter of a point** over a one-line
+change we can make ourselves. The mechanism is
+`SmartCrusherConfig.lossless_min_savings_ratio = 0.15`: the table transform is
+only applied when it would clear 15%, and otherwise the payload passes through
+with nothing but JSON compaction.
+
+**Can tuning fix that?** `bias` is a multiplier where `>1` keeps more items and
+`<1` keeps fewer (`headroom/config.py`), so the direction that compresses harder
+is *down*. Swept over headroom's own three named presets:
+
+| preset | bias | median saved | chose `lossless:table` | passes retention | content replaced by CCR pointer |
+|---|---:|---:|---:|---:|---:|
+| `aggressive` | 0.7 | **76.2%** | 18/18 | **0/18** | 18/18 |
+| `moderate` (default) | 1.0 | 14.9% | 5/18 | 13/18 | 5/18 |
+| `conservative` | 1.5 | 13.6% | 2/18 | 16/18 | 2/18 |
+
+That table is the decision. Every point of real saving is bought with the table
+transform, and the table transform fails the retention gate — at the aggressive
+preset, on all 18. There is no setting that compresses this payload shape
+meaningfully and leaves it parseable. (An earlier version of this section swept
+`bias` upward instead and reported that tuning changed nothing; upward is the
+conservative direction, and it does change the decision — downward, to headroom's
+own shipped aggressive profile, changes it completely.)
 
 ### 7.4 Where it does win, it fails the retention gate
 
-The 5 `lossless:table` payloads compress 86% — by rewriting `results` from a JSON
-array of dicts into a **single string** holding a schema header plus CSV rows,
-with every `content` value replaced by a CCR pointer:
+The `lossless:table` payloads compress 78–88% at the default bias — by rewriting
+`results` from a JSON array of dicts into a **single string** holding a schema
+header plus CSV rows, with every `content` value replaced by a CCR pointer:
 
 ```
 {"results":"[10]{content:string,file:string,line_end:int,...}
@@ -307,8 +362,9 @@ Two consequences:
   we deliberately did not install) and chooses to do so.
 
 Against Stage 1's stated non-negotiable gate — every consumer field must survive
-— the result is **FAIL on 5/18, PASS on 13/18**, and the 13 pass only because
-nothing happened to them beyond compaction.
+— the result at the default bias is **FAIL on 5/18, PASS on 13/18**, and the 13
+pass only because nothing happened to them beyond compaction. At the aggressive
+preset it is FAIL on 18/18.
 
 ### 7.5 Verdict: Stage 2 as written is not justified
 
@@ -317,19 +373,21 @@ Take the free win, drop the dependency:
 1. **Do — serve compact JSON from clean-rag.** Median 11.8% (up to 20%) off every
    search payload. Lossless, structure-preserving, one line, no third-party code,
    no new environment, nothing to gate behind a flag.
-2. **Do not — wire headroom into the injection path.** On 72% of real payloads it
-   contributes 0.4 points over item 1. On the 28% where it wins big it destroys
-   the JSON structure and swaps the source code for pointers requiring a component
-   we excluded on security grounds.
+2. **Do not — wire headroom into the injection path.** At the default bias it
+   contributes a quarter of a point over item 1 on 72% of real payloads. Tune it
+   down to the preset that does compress, and it destroys the JSON structure on
+   every payload and swaps the source code for pointers requiring a component we
+   excluded on security grounds. Both ends of that dial are the whole option
+   space, and neither end clears Stage 1's gate.
 3. **Revisit only** if a measured need appears for late-session pressure relief on
-   payloads much larger than these, where an 86% reduction with CCR retrieval
-   would beat truncation. That is a different problem from the injection budget,
+   payloads much larger than these, where the aggressive preset's median 76%
+   reduction with CCR retrieval would beat truncation. That is a different problem from the injection budget,
    and it should be measured on that problem's own payloads.
 
 This supersedes the Stage 2 recommendation in §5. §5's reasoning was sound —
 compress where we own both ends — but it assumed headroom would do meaningful
-work on these payloads. Measured, it mostly does not, and the part it does do
-costs the structure.
+work on these payloads without cost. Measured, at the default it mostly does
+nothing, and every setting that does real work costs the structure.
 
 ---
 
@@ -341,8 +399,9 @@ open, so that damage would arrive as a quietly weaker audit trail rather than a
 visible failure.
 
 And measured (§7), the library path we did like turns out not to earn its keep
-either. On 72% of real clean-rag search payloads headroom adds 0.4 points over
-compacting our own JSON, a one-line change with no dependency; where it does win
-it rewrites `results` into a CSV string and replaces the source code with
-retrieval pointers, failing Stage 1's own retention gate. **Take the 11.8% from
-compact JSON. Do not adopt headroom.**
+either. At its default setting headroom adds a quarter of a point over compacting
+our own JSON — a one-line change with no dependency — on 72% of real clean-rag
+search payloads. Tuned to the setting that does compress, it saves 76% by
+rewriting `results` into a CSV string and replacing the source code with retrieval
+pointers, failing Stage 1's retention gate on every payload. There is no setting
+in between. **Take the 11.8% from compact JSON. Do not adopt headroom.**

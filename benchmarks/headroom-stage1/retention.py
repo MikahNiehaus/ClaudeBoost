@@ -184,6 +184,36 @@ if __name__ == "__main__":
     # therefore reported lost, which is the honest answer for a table shape.
     assert tbl["distinctive_values_total"] == 0, tbl
 
-    print("retention.py self-test: 8/8 PASS (bites on field loss, content "
-          "slicing, text-only output, accidental substring matches, and the "
-          "lossless:table de-structuring)")
+    # Exact equality is the field contract. A value that comes back re-cased,
+    # padded or re-typed has been ALTERED, and for a critical field that is a
+    # loss -- you cannot re-derive which file a result came from once the path
+    # has been rewritten. A checker that normalized before comparing (casefold,
+    # strip, str()) would score every one of these as preserved and report PASS
+    # on a payload that lost the field.
+    cased = {"results": [{"file": "src/Auth/Handler.PY", "content": "def f():\n    return 1",
+                          "line_start": 1, "line_end": 2, "relation": "imports",
+                          "seed_file": "src/Auth/Caller.PY"}]}
+    for field, altered in (("file", "src/auth/handler.py"),       # case-folded
+                           ("file", " src/Auth/Handler.PY "),     # padded, as a CSV round-trip pads
+                           ("line_start", "1")):                  # int arrived back as a string
+        after = {"results": [dict(cased["results"][0], **{field: altered})]}
+        got = check(cased, after)
+        assert got["verdict"] == "FAIL", (field, altered, got)
+        assert {d["field"] for d in got["lost_critical"]} == {field}, (field, altered, got)
+
+    # `results` must be an addressable array of dicts on both sides. A list of
+    # bare strings is not one, and the checker must report that rather than
+    # reaching for .get() on a string and dying with an AttributeError.
+    string_rows = {"results": ["a/b.py", "c/d.py"]}
+    unaddressable = check(string_rows, string_rows)
+    assert unaddressable["verdict"].startswith("FAIL"), unaddressable
+    assert unaddressable["results_before"] == 0, unaddressable
+
+    half_broken = check(good, string_rows)
+    assert half_broken["verdict"].startswith("FAIL"), half_broken
+    assert half_broken["structure_preserved"] is False, half_broken
+
+    print("retention.py self-test: 10/10 PASS (bites on field loss, content "
+          "slicing, text-only output, accidental substring matches, the "
+          "lossless:table de-structuring, normalized field matching, and a "
+          "`results` that is no longer an array of dicts)")

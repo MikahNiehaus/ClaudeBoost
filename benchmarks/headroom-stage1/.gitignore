@@ -1,0 +1,7 @@
+# Real captures, written by capture.py. Never committed: these are verbatim
+# /search responses, so they contain source code from whatever projects the
+# person running the harness had indexed. Same reason
+# benchmarks/codesearchnet/.gitignore keeps its raw dataset out of the repo --
+# the scripts and the recorded measurements are the artifact, the inputs are not.
+payloads_wire/
+payloads/

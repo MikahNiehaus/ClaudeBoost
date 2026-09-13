@@ -1,0 +1,50 @@
+{
+  "model": "claude-sonnet-4-5-20250929",
+  "tokenizer": "tiktoken cl100k_base x1.1 (APPROXIMATE)",
+  "hook": "clean-rag/hooks/rag-enforce.py",
+  "blocks": [
+    {
+      "intent": "bugfix",
+      "prompt": "fix the null reference in the reputation scoring path",
+      "bytes": 1248,
+      "tokens": 389,
+      "crusher_strategy": "passthrough",
+      "crusher_modified": false,
+      "crusher_tokens_after": 389,
+      "compress_transforms": [
+        "router:protected:user_message"
+      ],
+      "compress_tokens_after": 389,
+      "byte_identical": true
+    },
+    {
+      "intent": "newfeature",
+      "prompt": "add an endpoint that returns a project's index status",
+      "bytes": 1250,
+      "tokens": 352,
+      "crusher_strategy": "passthrough",
+      "crusher_modified": false,
+      "crusher_tokens_after": 352,
+      "compress_transforms": [
+        "router:protected:error_output",
+        "router:protected:user_message"
+      ],
+      "compress_tokens_after": 352,
+      "byte_identical": true
+    },
+    {
+      "intent": "refactor",
+      "prompt": "this function is getting too complex, what patterns does our codebase use",
+      "bytes": 1248,
+      "tokens": 341,
+      "crusher_strategy": "passthrough",
+      "crusher_modified": false,
+      "crusher_tokens_after": 341,
+      "compress_transforms": [
+        "router:protected:user_message"
+      ],
+      "compress_tokens_after": 341,
+      "byte_identical": true
+    }
+  ]
+}

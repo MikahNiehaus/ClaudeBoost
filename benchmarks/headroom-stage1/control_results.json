@@ -4,161 +4,647 @@
     "wire": 3825,
     "compact_pct": 9.4640522875817,
     "crush_pct": 10.143790849673202,
+    "headroom_gain_pts": 0.6797385620915026,
     "crush_on_compact_pct": 0.7507941091539128,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 10.143790849673202,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 10.143790849673202,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 81.72549019607843,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 8
+      }
+    }
   },
   {
     "file": "search_assets-backend_1.json",
     "wire": 2491,
     "compact_pct": 13.568847852268165,
     "crush_pct": 13.970293054997992,
+    "headroom_gain_pts": 0.40144520272982653,
     "crush_on_compact_pct": 0.46446818392940087,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 13.970293054997992,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 13.970293054997992,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 74.30750702529106,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      }
+    }
   },
   {
     "file": "search_assets-backend_2.json",
     "wire": 2503,
     "compact_pct": 14.582500998801438,
     "crush_pct": 15.101877746703954,
+    "headroom_gain_pts": 0.5193767479025162,
     "crush_on_compact_pct": 0.608044901777362,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 15.101877746703954,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 15.101877746703954,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 66.91969636436276,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 5
+      }
+    }
   },
   {
     "file": "search_assets-backend_3.json",
     "wire": 3099,
     "compact_pct": 11.713455953533398,
     "crush_pct": 12.2297515327525,
+    "headroom_gain_pts": 0.5162955792191024,
     "crush_on_compact_pct": 0.5847953216374269,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 12.2297515327525,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 12.2297515327525,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 78.1865117779929,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 7
+      }
+    }
   },
   {
     "file": "search_assets-backend_4.json",
     "wire": 2505,
     "compact_pct": 13.612774451097803,
     "crush_pct": 14.451097804391216,
+    "headroom_gain_pts": 0.8383233532934131,
     "crush_on_compact_pct": 0.9704251386321626,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 14.451097804391216,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 14.451097804391216,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 70.65868263473054,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      }
+    }
   },
   {
     "file": "search_assets-backend_5.json",
     "wire": 4805,
     "compact_pct": 7.159209157127992,
     "crush_pct": 7.429760665972945,
+    "headroom_gain_pts": 0.27055150884495305,
     "crush_on_compact_pct": 0.2914144810580587,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 7.429760665972945,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 7.429760665972945,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 87.61706555671176,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      }
+    }
   },
   {
     "file": "search_assets-messages_0.json",
     "wire": 1745,
     "compact_pct": 19.598853868194844,
     "crush_pct": 19.598853868194844,
+    "headroom_gain_pts": 0.0,
     "crush_on_compact_pct": 0.0,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 19.598853868194844,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 19.598853868194844,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 54.72779369627507,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 3
+      }
+    }
   },
   {
     "file": "search_assets-messages_1.json",
     "wire": 2313,
     "compact_pct": 14.613056636402941,
     "crush_pct": 14.613056636402941,
+    "headroom_gain_pts": 0.0,
     "crush_on_compact_pct": 0.0,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 14.613056636402941,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 14.613056636402941,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 71.59533073929961,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      }
+    }
   },
   {
     "file": "search_assets-messages_2.json",
     "wire": 1706,
     "compact_pct": 19.988276670574443,
     "crush_pct": 19.988276670574443,
+    "headroom_gain_pts": 0.0,
     "crush_on_compact_pct": 0.0,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 19.988276670574443,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 19.988276670574443,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 58.49941383352872,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 2
+      }
+    }
   },
   {
     "file": "search_assets-messages_3.json",
     "wire": 2105,
     "compact_pct": 16.104513064133016,
     "crush_pct": 16.579572446555822,
+    "headroom_gain_pts": 0.4750593824228062,
     "crush_on_compact_pct": 0.5662514156285391,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 16.579572446555822,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 16.579572446555822,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 64.03800475059383,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 4
+      }
+    }
   },
   {
     "file": "search_assets-messages_4.json",
     "wire": 2594,
     "compact_pct": 13.145720894371626,
     "crush_pct": 13.261372397841173,
+    "headroom_gain_pts": 0.11565150346954667,
     "crush_on_compact_pct": 0.13315579227696406,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 13.261372397841173,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 13.261372397841173,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 73.36160370084811,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      }
+    }
   },
   {
     "file": "search_assets-messages_5.json",
     "wire": 3870,
     "compact_pct": 8.837209302325581,
     "crush_pct": 8.992248062015504,
+    "headroom_gain_pts": 0.15503875968992276,
     "crush_on_compact_pct": 0.17006802721088435,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 8.992248062015504,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 8.992248062015504,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 80.0,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 5
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_0.json",
     "wire": 4411,
     "compact_pct": 7.73067331670823,
     "crush_pct": 83.94921786442984,
+    "headroom_gain_pts": 76.2185445477216,
     "crush_on_compact_pct": 82.6044226044226,
     "strategy": "lossless:table",
-    "table": true
+    "table": true,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 7.73067331670823,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 83.94921786442984,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 8
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 83.94921786442984,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 8
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_1.json",
     "wire": 5108,
     "compact_pct": 6.63664839467502,
     "crush_pct": 86.9812059514487,
+    "headroom_gain_pts": 80.34455755677368,
     "crush_on_compact_pct": 86.05577689243027,
     "strategy": "lossless:table",
-    "table": true
+    "table": true,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 6.63664839467502,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 86.9812059514487,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 86.9812059514487,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_2.json",
     "wire": 2878,
     "compact_pct": 11.917998610145935,
     "crush_pct": 11.917998610145935,
+    "headroom_gain_pts": 0.0,
     "crush_on_compact_pct": 0.0,
     "strategy": "none:adaptive_at_limit",
-    "table": false
+    "table": false,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 11.917998610145935,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 11.917998610145935,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 73.80125086865878,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 5
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_3.json",
     "wire": 3430,
     "compact_pct": 9.941690962099125,
     "crush_pct": 78.48396501457727,
+    "headroom_gain_pts": 68.54227405247813,
     "crush_on_compact_pct": 76.10877306571706,
     "strategy": "lossless:table",
-    "table": true
+    "table": true,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 9.941690962099125,
+        "strategy": "none:adaptive_at_limit",
+        "retention": "PASS",
+        "structure_preserved": true,
+        "ccr_placeholders": 0
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 78.48396501457727,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 78.48396501457727,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 6
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_4.json",
     "wire": 6293,
     "compact_pct": 5.41871921182266,
     "crush_pct": 88.1614492293024,
+    "headroom_gain_pts": 82.74273001747974,
     "crush_on_compact_pct": 87.48319892473118,
     "strategy": "lossless:table",
-    "table": true
+    "table": true,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 88.1614492293024,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 10
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 88.1614492293024,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 10
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 88.1614492293024,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 10
+      }
+    }
   },
   {
     "file": "search_reputation-ontology_5.json",
     "wire": 5151,
     "compact_pct": 6.639487478159581,
     "crush_pct": 86.2162686856921,
+    "headroom_gain_pts": 79.57678120753252,
     "crush_on_compact_pct": 85.23601580370139,
     "strategy": "lossless:table",
-    "table": true
+    "table": true,
+    "by_preset": {
+      "conservative": {
+        "bias": 1.5,
+        "saved_pct": 86.2162686856921,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      },
+      "moderate": {
+        "bias": 1.0,
+        "saved_pct": 86.2162686856921,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      },
+      "aggressive": {
+        "bias": 0.7,
+        "saved_pct": 86.2162686856921,
+        "strategy": "lossless:table",
+        "retention": "FAIL (structure lost: consumers parse JSON fields)",
+        "structure_preserved": false,
+        "ccr_placeholders": 9
+      }
+    }
   }
 ]

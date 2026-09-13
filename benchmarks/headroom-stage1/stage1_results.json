@@ -6,16 +6,36 @@
     "min_tokens_to_crush": 200,
     "min_tokens_to_compress": 250
   },
+  "totals": {
+    "results": 180,
+    "wire_bytes": 200059,
+    "content_bytes": 145025,
+    "metadata_bytes": 36032,
+    "framing_bytes": 19002,
+    "tokens_before": 60832,
+    "content_tokens_wire_form": 42460,
+    "content_tokens_code_only": 36459,
+    "content_bytes_pct": 72.5,
+    "metadata_bytes_pct": 18.0,
+    "framing_bytes_pct": 9.5,
+    "ceiling_wire_form_pct": 30.2,
+    "ceiling_code_only_pct": 40.1
+  },
   "eligible": [
     {
       "file": "search_assets-backend_0.json",
-      "tokens_before": 3826,
-      "content_tokens": 2328,
-      "total_tokens": 3826,
-      "metadata_tokens": 1498,
-      "safe_ceiling_pct": 39.2,
+      "results": 10,
+      "tokens_before": 3825,
+      "content_tokens_wire_form": 2737,
+      "content_tokens_code_only": 2328,
+      "ceiling_wire_form_pct": 28.4,
+      "ceiling_code_only_pct": 39.1,
+      "wire_bytes": 12055,
+      "content_bytes": 8666,
+      "metadata_bytes": 2275,
+      "framing_bytes": 1114,
       "smartcrusher": {
-        "tokens_after": 3438,
+        "tokens_after": 3437,
         "saved_pct": 10.1,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -30,7 +50,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 3438,
+        "tokens_after": 3437,
         "saved_pct": 10.1,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -45,20 +65,25 @@
           "router:mixed:0.92",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 3536,
-        "lib_tokens_after": 3184,
-        "lib_ratio": 0.0995
+        "lib_tokens_before": 3535,
+        "lib_tokens_after": 3183,
+        "lib_ratio": 0.0996
       }
     },
     {
       "file": "search_assets-backend_1.json",
-      "tokens_before": 2490,
-      "content_tokens": 1342,
-      "total_tokens": 2490,
-      "metadata_tokens": 1148,
-      "safe_ceiling_pct": 46.1,
+      "results": 10,
+      "tokens_before": 2491,
+      "content_tokens_wire_form": 1511,
+      "content_tokens_code_only": 1342,
+      "ceiling_wire_form_pct": 39.3,
+      "ceiling_code_only_pct": 46.1,
+      "wire_bytes": 8103,
+      "content_bytes": 5083,
+      "metadata_bytes": 1976,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 2142,
+        "tokens_after": 2143,
         "saved_pct": 14.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -73,7 +98,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2142,
+        "tokens_after": 2143,
         "saved_pct": 14.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -88,20 +113,25 @@
           "router:mixed:0.90",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 2304,
-        "lib_tokens_after": 1989,
+        "lib_tokens_before": 2305,
+        "lib_tokens_after": 1990,
         "lib_ratio": 0.1367
       }
     },
     {
       "file": "search_assets-backend_2.json",
-      "tokens_before": 2502,
-      "content_tokens": 1255,
-      "total_tokens": 2502,
-      "metadata_tokens": 1247,
-      "safe_ceiling_pct": 49.8,
+      "results": 10,
+      "tokens_before": 2503,
+      "content_tokens_wire_form": 1435,
+      "content_tokens_code_only": 1255,
+      "ceiling_wire_form_pct": 42.7,
+      "ceiling_code_only_pct": 49.9,
+      "wire_bytes": 8195,
+      "content_bytes": 4899,
+      "metadata_bytes": 2182,
+      "framing_bytes": 1114,
       "smartcrusher": {
-        "tokens_after": 2124,
+        "tokens_after": 2125,
         "saved_pct": 15.1,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -116,7 +146,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2124,
+        "tokens_after": 2125,
         "saved_pct": 15.1,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -131,18 +161,23 @@
           "router:mixed:0.89",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 2311,
-        "lib_tokens_after": 1968,
+        "lib_tokens_before": 2312,
+        "lib_tokens_after": 1969,
         "lib_ratio": 0.1484
       }
     },
     {
       "file": "search_assets-backend_3.json",
+      "results": 10,
       "tokens_before": 3099,
-      "content_tokens": 1777,
-      "total_tokens": 3099,
-      "metadata_tokens": 1322,
-      "safe_ceiling_pct": 42.7,
+      "content_tokens_wire_form": 2025,
+      "content_tokens_code_only": 1777,
+      "ceiling_wire_form_pct": 34.7,
+      "ceiling_code_only_pct": 42.7,
+      "wire_bytes": 10287,
+      "content_bytes": 6943,
+      "metadata_bytes": 2230,
+      "framing_bytes": 1114,
       "smartcrusher": {
         "tokens_after": 2720,
         "saved_pct": 12.2,
@@ -181,13 +216,18 @@
     },
     {
       "file": "search_assets-backend_4.json",
-      "tokens_before": 2503,
-      "content_tokens": 1301,
-      "total_tokens": 2503,
-      "metadata_tokens": 1202,
-      "safe_ceiling_pct": 48.0,
+      "results": 10,
+      "tokens_before": 2505,
+      "content_tokens_wire_form": 1477,
+      "content_tokens_code_only": 1301,
+      "ceiling_wire_form_pct": 41.0,
+      "ceiling_code_only_pct": 48.1,
+      "wire_bytes": 8572,
+      "content_bytes": 5485,
+      "metadata_bytes": 2043,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 2141,
+        "tokens_after": 2143,
         "saved_pct": 14.5,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -202,7 +242,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2141,
+        "tokens_after": 2143,
         "saved_pct": 14.5,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -217,18 +257,23 @@
           "router:mixed:0.90",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 2313,
-        "lib_tokens_after": 1985,
-        "lib_ratio": 0.1418
+        "lib_tokens_before": 2315,
+        "lib_tokens_after": 1987,
+        "lib_ratio": 0.1417
       }
     },
     {
       "file": "search_assets-backend_5.json",
+      "results": 10,
       "tokens_before": 4805,
-      "content_tokens": 3441,
-      "total_tokens": 4805,
-      "metadata_tokens": 1364,
-      "safe_ceiling_pct": 28.4,
+      "content_tokens_wire_form": 3849,
+      "content_tokens_code_only": 3441,
+      "ceiling_wire_form_pct": 19.9,
+      "ceiling_code_only_pct": 28.4,
+      "wire_bytes": 15496,
+      "content_bytes": 12580,
+      "metadata_bytes": 1872,
+      "framing_bytes": 1044,
       "smartcrusher": {
         "tokens_after": 4448,
         "saved_pct": 7.4,
@@ -267,13 +312,18 @@
     },
     {
       "file": "search_assets-messages_0.json",
-      "tokens_before": 1744,
-      "content_tokens": 626,
-      "total_tokens": 1744,
-      "metadata_tokens": 1118,
-      "safe_ceiling_pct": 64.1,
+      "results": 10,
+      "tokens_before": 1745,
+      "content_tokens_wire_form": 736,
+      "content_tokens_code_only": 626,
+      "ceiling_wire_form_pct": 57.8,
+      "ceiling_code_only_pct": 64.1,
+      "wire_bytes": 5545,
+      "content_bytes": 2504,
+      "metadata_bytes": 1997,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 1402,
+        "tokens_after": 1403,
         "saved_pct": 19.6,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -288,7 +338,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 1402,
+        "tokens_after": 1403,
         "saved_pct": 19.6,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -303,18 +353,23 @@
           "router:mixed:0.85",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 1633,
-        "lib_tokens_after": 1323,
-        "lib_ratio": 0.1898
+        "lib_tokens_before": 1634,
+        "lib_tokens_after": 1324,
+        "lib_ratio": 0.1897
       }
     },
     {
       "file": "search_assets-messages_1.json",
+      "results": 10,
       "tokens_before": 2313,
-      "content_tokens": 1134,
-      "total_tokens": 2313,
-      "metadata_tokens": 1179,
-      "safe_ceiling_pct": 51.0,
+      "content_tokens_wire_form": 1308,
+      "content_tokens_code_only": 1134,
+      "ceiling_wire_form_pct": 43.5,
+      "ceiling_code_only_pct": 51.0,
+      "wire_bytes": 7013,
+      "content_bytes": 3966,
+      "metadata_bytes": 2003,
+      "framing_bytes": 1044,
       "smartcrusher": {
         "tokens_after": 1975,
         "saved_pct": 14.6,
@@ -353,13 +408,18 @@
     },
     {
       "file": "search_assets-messages_2.json",
-      "tokens_before": 1707,
-      "content_tokens": 581,
-      "total_tokens": 1707,
-      "metadata_tokens": 1126,
-      "safe_ceiling_pct": 66.0,
+      "results": 10,
+      "tokens_before": 1706,
+      "content_tokens_wire_form": 711,
+      "content_tokens_code_only": 581,
+      "ceiling_wire_form_pct": 58.3,
+      "ceiling_code_only_pct": 65.9,
+      "wire_bytes": 5297,
+      "content_bytes": 2292,
+      "metadata_bytes": 1961,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 1366,
+        "tokens_after": 1365,
         "saved_pct": 20.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -374,7 +434,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 1707,
+        "tokens_after": 1706,
         "saved_pct": 0.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -389,20 +449,25 @@
           "router:protected:error_output",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 1591,
-        "lib_tokens_after": 1591,
+        "lib_tokens_before": 1590,
+        "lib_tokens_after": 1590,
         "lib_ratio": 0.0
       }
     },
     {
       "file": "search_assets-messages_3.json",
-      "tokens_before": 2106,
-      "content_tokens": 930,
-      "total_tokens": 2106,
-      "metadata_tokens": 1176,
-      "safe_ceiling_pct": 55.8,
+      "results": 10,
+      "tokens_before": 2105,
+      "content_tokens_wire_form": 1097,
+      "content_tokens_code_only": 930,
+      "ceiling_wire_form_pct": 47.9,
+      "ceiling_code_only_pct": 55.8,
+      "wire_bytes": 6866,
+      "content_bytes": 3774,
+      "metadata_bytes": 2048,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 1757,
+        "tokens_after": 1756,
         "saved_pct": 16.6,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -417,7 +482,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2106,
+        "tokens_after": 2105,
         "saved_pct": 0.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -432,20 +497,25 @@
           "router:protected:error_output",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 1962,
-        "lib_tokens_after": 1962,
+        "lib_tokens_before": 1961,
+        "lib_tokens_after": 1961,
         "lib_ratio": 0.0
       }
     },
     {
       "file": "search_assets-messages_4.json",
-      "tokens_before": 2597,
-      "content_tokens": 1402,
-      "total_tokens": 2597,
-      "metadata_tokens": 1195,
-      "safe_ceiling_pct": 46.0,
+      "results": 10,
+      "tokens_before": 2594,
+      "content_tokens_wire_form": 1603,
+      "content_tokens_code_only": 1402,
+      "ceiling_wire_form_pct": 38.2,
+      "ceiling_code_only_pct": 46.0,
+      "wire_bytes": 8516,
+      "content_bytes": 5526,
+      "metadata_bytes": 1946,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 2252,
+        "tokens_after": 2250,
         "saved_pct": 13.3,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -460,7 +530,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2252,
+        "tokens_after": 2250,
         "saved_pct": 13.3,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -475,20 +545,25 @@
           "router:mixed:0.90",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 2407,
-        "lib_tokens_after": 2095,
-        "lib_ratio": 0.1296
+        "lib_tokens_before": 2405,
+        "lib_tokens_after": 2093,
+        "lib_ratio": 0.1297
       }
     },
     {
       "file": "search_assets-messages_5.json",
-      "tokens_before": 3874,
-      "content_tokens": 2509,
-      "total_tokens": 3874,
-      "metadata_tokens": 1365,
-      "safe_ceiling_pct": 35.2,
+      "results": 10,
+      "tokens_before": 3870,
+      "content_tokens_wire_form": 2909,
+      "content_tokens_code_only": 2509,
+      "ceiling_wire_form_pct": 24.8,
+      "ceiling_code_only_pct": 35.2,
+      "wire_bytes": 12375,
+      "content_bytes": 9442,
+      "metadata_bytes": 1889,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 3525,
+        "tokens_after": 3522,
         "saved_pct": 9.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -503,7 +578,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 3525,
+        "tokens_after": 3522,
         "saved_pct": 9.0,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -518,20 +593,25 @@
           "router:mixed:0.93",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 3553,
-        "lib_tokens_after": 3237,
-        "lib_ratio": 0.0889
+        "lib_tokens_before": 3549,
+        "lib_tokens_after": 3233,
+        "lib_ratio": 0.089
       }
     },
     {
       "file": "search_reputation-ontology_0.json",
-      "tokens_before": 4413,
-      "content_tokens": 2837,
-      "total_tokens": 4413,
-      "metadata_tokens": 1576,
-      "safe_ceiling_pct": 35.7,
+      "results": 10,
+      "tokens_before": 4411,
+      "content_tokens_wire_form": 3380,
+      "content_tokens_code_only": 2837,
+      "ceiling_wire_form_pct": 23.4,
+      "ceiling_code_only_pct": 35.7,
+      "wire_bytes": 14685,
+      "content_bytes": 11694,
+      "metadata_bytes": 1947,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 710,
+        "tokens_after": 708,
         "saved_pct": 83.9,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
@@ -549,7 +629,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 710,
+        "tokens_after": 708,
         "saved_pct": 83.9,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
@@ -567,20 +647,25 @@
           "router:mixed:0.13",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 4079,
-        "lib_tokens_after": 680,
-        "lib_ratio": 0.8333
+        "lib_tokens_before": 4077,
+        "lib_tokens_after": 678,
+        "lib_ratio": 0.8337
       }
     },
     {
       "file": "search_reputation-ontology_1.json",
-      "tokens_before": 5107,
-      "content_tokens": 3495,
-      "total_tokens": 5107,
-      "metadata_tokens": 1612,
-      "safe_ceiling_pct": 31.6,
+      "results": 10,
+      "tokens_before": 5108,
+      "content_tokens_wire_form": 4084,
+      "content_tokens_code_only": 3495,
+      "ceiling_wire_form_pct": 20.0,
+      "ceiling_code_only_pct": 31.6,
+      "wire_bytes": 16438,
+      "content_bytes": 13491,
+      "metadata_bytes": 1903,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 664,
+        "tokens_after": 665,
         "saved_pct": 87.0,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
@@ -598,7 +683,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 664,
+        "tokens_after": 665,
         "saved_pct": 87.0,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
@@ -616,20 +701,25 @@
           "router:mixed:0.10",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 4711,
-        "lib_tokens_after": 636,
-        "lib_ratio": 0.865
+        "lib_tokens_before": 4712,
+        "lib_tokens_after": 637,
+        "lib_ratio": 0.8648
       }
     },
     {
       "file": "search_reputation-ontology_2.json",
-      "tokens_before": 2877,
-      "content_tokens": 1686,
-      "total_tokens": 2877,
-      "metadata_tokens": 1191,
-      "safe_ceiling_pct": 41.4,
+      "results": 10,
+      "tokens_before": 2878,
+      "content_tokens_wire_form": 1915,
+      "content_tokens_code_only": 1686,
+      "ceiling_wire_form_pct": 33.5,
+      "ceiling_code_only_pct": 41.4,
+      "wire_bytes": 9475,
+      "content_bytes": 6646,
+      "metadata_bytes": 1785,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 2534,
+        "tokens_after": 2535,
         "saved_pct": 11.9,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -644,7 +734,7 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 2534,
+        "tokens_after": 2535,
         "saved_pct": 11.9,
         "verdict": "PASS",
         "structure_preserved": true,
@@ -659,21 +749,26 @@
           "router:mixed:0.91",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 2666,
-        "lib_tokens_after": 2356,
-        "lib_ratio": 0.1163
+        "lib_tokens_before": 2667,
+        "lib_tokens_after": 2357,
+        "lib_ratio": 0.1162
       }
     },
     {
       "file": "search_reputation-ontology_3.json",
-      "tokens_before": 3435,
-      "content_tokens": 2101,
-      "total_tokens": 3435,
-      "metadata_tokens": 1334,
-      "safe_ceiling_pct": 38.8,
+      "results": 10,
+      "tokens_before": 3430,
+      "content_tokens_wire_form": 2446,
+      "content_tokens_code_only": 2101,
+      "ceiling_wire_form_pct": 28.7,
+      "ceiling_code_only_pct": 38.7,
+      "wire_bytes": 11574,
+      "content_bytes": 8683,
+      "metadata_bytes": 1847,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 742,
-        "saved_pct": 78.4,
+        "tokens_after": 738,
+        "saved_pct": 78.5,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
         "lost_critical_n": 20,
@@ -690,8 +785,8 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 742,
-        "saved_pct": 78.4,
+        "tokens_after": 738,
+        "saved_pct": 78.5,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
         "lost_critical_n": 20,
@@ -708,21 +803,26 @@
           "router:mixed:0.19",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 3181,
-        "lib_tokens_after": 710,
-        "lib_ratio": 0.7768
+        "lib_tokens_before": 3178,
+        "lib_tokens_after": 707,
+        "lib_ratio": 0.7775
       }
     },
     {
       "file": "search_reputation-ontology_4.json",
-      "tokens_before": 6295,
-      "content_tokens": 4294,
-      "total_tokens": 6295,
-      "metadata_tokens": 2001,
-      "safe_ceiling_pct": 31.8,
+      "results": 10,
+      "tokens_before": 6293,
+      "content_tokens_wire_form": 5156,
+      "content_tokens_code_only": 4294,
+      "ceiling_wire_form_pct": 18.1,
+      "ceiling_code_only_pct": 31.8,
+      "wire_bytes": 21890,
+      "content_bytes": 18725,
+      "metadata_bytes": 2121,
+      "framing_bytes": 1044,
       "smartcrusher": {
-        "tokens_after": 748,
-        "saved_pct": 88.1,
+        "tokens_after": 745,
+        "saved_pct": 88.2,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
         "lost_critical_n": 20,
@@ -739,8 +839,8 @@
         "was_modified": true
       },
       "compress": {
-        "tokens_after": 748,
-        "saved_pct": 88.1,
+        "tokens_after": 745,
+        "saved_pct": 88.2,
         "verdict": "FAIL (structure lost: consumers parse JSON fields)",
         "structure_preserved": false,
         "lost_critical_n": 20,
@@ -757,18 +857,23 @@
           "router:mixed:0.08",
           "router:protected:user_message"
         ],
-        "lib_tokens_before": 5815,
-        "lib_tokens_after": 715,
-        "lib_ratio": 0.877
+        "lib_tokens_before": 5813,
+        "lib_tokens_after": 713,
+        "lib_ratio": 0.8773
       }
     },
     {
       "file": "search_reputation-ontology_5.json",
+      "results": 10,
       "tokens_before": 5151,
-      "content_tokens": 3420,
-      "total_tokens": 5151,
-      "metadata_tokens": 1731,
-      "safe_ceiling_pct": 33.6,
+      "content_tokens_wire_form": 4081,
+      "content_tokens_code_only": 3420,
+      "ceiling_wire_form_pct": 20.8,
+      "ceiling_code_only_pct": 33.6,
+      "wire_bytes": 17677,
+      "content_bytes": 14626,
+      "metadata_bytes": 2007,
+      "framing_bytes": 1044,
       "smartcrusher": {
         "tokens_after": 710,
         "saved_pct": 86.2,
