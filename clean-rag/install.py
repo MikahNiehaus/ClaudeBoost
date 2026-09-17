@@ -986,8 +986,13 @@ def set_env_var() -> None:
     # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
     # Code's own autocompact logic can't see through settings.json.
     env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
+    # Compact at 60% rather than the default, so compaction happens while there
+    # is still room to write a decent summary. setdefault, not assignment: a
+    # number the human has already tuned is theirs to keep.
+    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+    _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")
 
 
 def protect_research_state() -> None:

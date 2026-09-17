@@ -73,3 +73,8 @@ rank-bm25>=0.2.2,<0.3
 tree-sitter>=0.25.2,<0.26
 tree-sitter-language-pack>=0.9,<1.0
 grep-ast>=0.9,<1.0
+
+# The console TUI (cli/console.py). Optional at runtime: the import is guarded
+# so the server, the hooks and the tests never fail on a machine without it.
+# Rich arrives as textual's own dependency, so it is not pinned separately.
+textual>=8.2,<9.0
