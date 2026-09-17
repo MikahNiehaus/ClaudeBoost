@@ -70,7 +70,7 @@ Call `GET http://127.0.0.1:8613/status` before loading any context.
 
 **If `GET http://127.0.0.1:8613/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/workspace $ARGUMENTS`."
+> Tell the user: "RAG server is not responding. Run `/clean-rag-server start`, then retry `/workspace $ARGUMENTS`."
 
 **Step 2 — Load context (only if Step 1 passes):**
 
@@ -78,7 +78,7 @@ Call `POST http://127.0.0.1:8613/search with {"query":"workspace planning: $ARGU
 
 **If `POST http://127.0.0.1:8613/search` returns an "error" key:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG context load failed: [error message]. Run `/rag` to start the server."
+> Tell the user: "RAG context load failed: [error message]. Run `/clean-rag-server start`."
 
 This loads architecture, workflow, orchestration, and model-selection knowledge so the plan is grounded in real ClaudeBoost capabilities.
 
@@ -414,84 +414,53 @@ If multiple work types: run a second search for the secondary type.
 
 ### 3b — Full ClaudeBoost capability catalog
 
-Use this catalog to map work types to tools. Select only what the work actually needs — don't pad the plan.
+Use this catalog to map work types to tools. Select only what the work actually needs, do not pad the plan.
 
 #### Agents
+
 | Agent | Best For | Model |
 |-------|---------|-------|
-| `architect-agent` | New system/module design, SOLID review, architectural decisions requiring Opus reasoning | **Opus** |
-| `reviewer-agent` | Code review, PR review, verify-gate evaluation, quality judgment | **Opus** |
-| `ticket-analyst-agent` | Ticket analysis, requirements extraction, definition of done, open-question surfacing | **Opus** |
-| `debug-agent` | Bug diagnosis, error tracing, root cause analysis, reproduction steps | Sonnet |
-| `refactor-agent` | Code restructuring, cleanup, rename campaigns, simplification | Sonnet |
-| `test-agent` | Writing unit/integration tests, coverage analysis, test strategy design | Sonnet |
-| `e2e-agent` | End-to-end browser test authoring and execution with Playwright | Sonnet |
-| `browser-agent` | Browser automation, UI testing, DOM inspection, web scraping | Sonnet |
-| `ui-agent` | Frontend components, HTML/CSS/JS, React, design systems, accessibility | Sonnet |
-| `security-agent` | Security review, OWASP top 10, auth/authz, injection, secret detection | Sonnet |
-| `performance-agent` | Performance profiling, N+1 detection, caching strategy, bottleneck analysis | Sonnet |
-| `database-agent` | Schema design, migrations, query optimization, indexing, ORMs | Sonnet |
-| `devops-agent` | CI/CD pipelines, Docker, infrastructure, deployment scripts | Sonnet |
-| `observability-agent` | Logging strategy, tracing, metrics, error handling, alerting | Sonnet |
-| `docs-agent` | Documentation, README, API docs, changelogs, inline comments | Sonnet |
-| `research-agent` | Web research, library comparison, technical investigation, fact-checking | Sonnet |
-| `explore-agent` | Codebase discovery, file mapping, dependency tracing, usage search | Sonnet |
-| `workflow-agent` | Multi-step task orchestration, process design, coordination | Sonnet |
-| `compliance-agent` | Standards compliance, rule enforcement, policy and convention checks | Sonnet |
-| `standards-validator-agent` | Coding standards validation, pattern enforcement, lint-like structural review | Sonnet |
-| `estimator-agent` | Story pointing, complexity estimation, effort breakdown | Sonnet |
-| `quick-cop` | Verify-gate check — reads the code and says whether a finding or a completion claim is true. Non blocking, stamps nothing | Sonnet |
-| `bad-cop` | Adversarial QA — writes tests aimed at breaking a change and runs them. Also judges a finished QA session's evidence with `MODE: evidence-judge` | Sonnet |
-| `rag-indexing-agent` | RAG index management, knowledge base updates, re-indexing after changes | Sonnet |
+| `bad-cop` | Adversarial QA. Writes tests aimed at breaking a change and runs them. Also judges a finished QA session's evidence with `MODE: evidence-judge`. Reports only, never fixes. | Sonnet |
+| `good-cop` | Only when bad-cop emitted `HANDOFF:`. Reproduces each finding, researches the fix, applies it, gets the suite green. | **Opus** |
+| `quick-cop` | Cheap claim checker for a single "it is done" sentence. Non blocking, stamps nothing, satisfies no gate. | Sonnet |
+| `research-agent` | Web research on untrusted pages. Cannot write files and its Bash is caged to the local clean-rag server. Does not satisfy the research gate. | Sonnet |
+| `researcher` | Codebase structure through clean-rag's index and import graph, plus the general engineering standard for this class of change. Spawn before swiper on any real build or edit. | Sonnet |
+| `swiper` | Whether the thing already exists, in the project, the stdlib, a dependency, GitHub or StackOverflow. Reports only, never writes to the project. Spawn after researcher. | Sonnet |
 
-#### Skills / Commands
-| Skill | When to Use It |
-|-------|---------------|
-| `/boost` | Start of session — loads RAG; use if session isn't already boosted |
-| `/explore <ticket-or-description>` | Full ticket deep-dive: ticket analysis → project indexing → code exploration → plan |
-| `/audit <input>` | Parallel audit of code, config, URL, claim, or document with Opus verdict |
-| `/review` | Code review — quick A-F grade by default; add `--deep` for full 15-pass parallel review |
-| `/security-review` | Security-focused review of pending branch changes |
-| `/end-to-end-test` | Browser-based E2E test execution with screenshot evidence |
-| `/index-project <path>` | Index project codebase for semantic search via `POST http://127.0.0.1:8613/search` with `{"sources":["project:<path>"],"mode":"both"}` |
-| `/graph <task-id>` | Build a Files in Scope map using both vector and graph RAG seeded from ticket entities — run at task start or any time you need to refresh the scope map |
-| `/visualize` | Interactive architecture board — self-map for ClaudeBoost, project-map for others |
-| `/self-improve` | ClaudeBoost self-improvement audit cycle (meta-work only) |
-| `/done` | Submit completed work to merge queue |
-| `/handoff` | Hand off to a fresh session when context is getting full |
-| `/clear-safe` | Pre-flight save before /clear — preserves active workspace state |
-| `/changes` | Interactive change explorer — review everything changed on this branch |
+That is the whole roster. This table used to name 24 agents and 21 of them did not exist in any directory Claude Code loads agents from, so a plan built on it named agents that could not be spawned.
 
-#### Knowledge Bases (always accessed via RAG — never read directly)
-| Area | File | When Relevant |
-|------|------|--------------|
-| Architecture | `knowledge/architecture.xml` | New systems, modules, design decisions |
-| Testing | `knowledge/testing.xml` | Any code changes, coverage, test strategy |
-| Security | `knowledge/security.xml` | Auth, input validation, data, HTTP endpoints |
-| Performance | `knowledge/performance.xml` | Queries, loops, caching, hot paths |
-| Database | `knowledge/database.xml` | Schema, migrations, queries, indexing |
-| DevOps | `knowledge/devops.xml` | CI/CD, Docker, deployment |
-| UI Implementation | `knowledge/ui-implementation.xml` | Frontend components, accessibility |
-| E2E Testing | `knowledge/e2e-testing.xml` | Browser-level test strategy |
-| Playwright | `knowledge/playwright.xml` | Browser automation specifics |
-| Observability | `knowledge/observability.xml` | Logging, tracing, metrics |
-| Refactoring | `knowledge/refactoring.xml` | Code restructuring patterns |
-| Debugging | `knowledge/debugging.xml` | Root cause analysis, error tracing |
-| Documentation | `knowledge/documentation.xml` | Doc strategy, README, API docs |
-| Research | `knowledge/research.xml` | Investigation methodology |
-| Code Exploration | `knowledge/code-exploration.xml` | Codebase navigation strategy |
-| Workflow | `knowledge/workflow.xml` | Multi-step orchestration |
-| API Design | `knowledge/api-design.xml` | REST/GraphQL API conventions |
-| Coding Standards | `knowledge/coding-standards.xml` | Language/framework conventions |
-| Verify Gate | `knowledge/verify-gate.xml` | Anti-hallucination, finding validation |
-| Consult Mode | `knowledge/consult-mode.xml` | When to consult vs auto-proceed |
-| Ticket Understanding | `knowledge/ticket-understanding.xml` | Requirements parsing, ambiguity resolution |
-| Completion Verification | `knowledge/completion-verification.xml` | Definition of done, exit criteria |
-| Multi-Agent Failures | `knowledge/multi-agent-failures.xml` | Common agent failure modes, recovery |
-| Scope Governance | `knowledge/scope-governance.xml` | Scope creep, change management |
-| Model Selection | `knowledge/model-selection.xml` | When to use Opus vs Sonnet |
-| PR Review | `knowledge/pr-review.xml` | Code review standards |
-| Branching Strategy | `knowledge/branching-strategy.xml` | Git branching, PR workflow |
+#### Commands and skills
+
+Both are invoked with a leading slash, and they live in different places: commands in `.claude/commands/*.md`, skills in `.claude/skills/<name>/`. `/start` and `/ps` are skills, which is why neither has a file in the commands directory. The ones this planning step reaches for most:
+
+| Invoke | When to Use It |
+|---------|---------------|
+| `/start` | New build or feature. Runs researcher, then swiper, then consults you with real options before anything is written |
+| `/index-project <path>` | Index a codebase for search. Query it with `POST http://127.0.0.1:8613/search`, `{"sources":["project:<abs>"],"mode":"both"}` |
+| `/graph <task-id>` | Files in Scope map, vector and graph seeded from the ticket's entities |
+| `/audit <input>` | Parallel audit by dimension, each auditor handed the full input |
+| `/qa` | Full QA session: inventory, risk ranked plan, execution with evidence. Ends with bad-cop in `MODE: evidence-judge` |
+| `/debug` | Focused single bug path |
+| `/security-review` | Security review of pending branch changes |
+| `/changes` | Interactive explorer for everything changed on this branch |
+| `/handoff` | Hand off to a fresh session when context is filling |
+| `/clear-safe` | Pre-flight save before `/clear` |
+| `/ps` | Mark the turn trivial. Skips the research gate and the verifier |
+
+36 commands and 25 skills are installed. `/end-to-end-test` and `/review` were listed here and are neither.
+
+#### Knowledge
+
+There is no topic knowledge base and no `knowledge/*.xml` file. This section used to list 27 of them and the repo contains none; both `knowledge/` directories hold markdown on unrelated subjects. Search runs over indexed projects and live web search only:
+
+| Route | What it searches |
+|-------|------------------|
+| `POST http://127.0.0.1:8613/search` | Your indexed projects. `sources: ["project:<abs path>"]`, `mode: "both"` |
+| `POST http://127.0.0.1:8613/web-search` | DuckDuckGo, source ranked, GitHub and StackOverflow first |
+| `POST http://127.0.0.1:8613/github-search`, `/github-file` | GitHub code and single files |
+| `POST http://127.0.0.1:8613/stackoverflow-search` | StackOverflow |
+
+`clean-rag/CLAUDE.md` has the full route table.
 
 ### 3c — Produce a tool mapping
 
@@ -634,7 +603,7 @@ Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ### Step 1: [Step Name]
 **What**: [what this step accomplishes]
-**Command**: `[exact skill or agent action — e.g., /explore my-workspace-id or "spawn security-agent"]`
+**Command**: `[exact skill or agent action — e.g., /explore my-workspace-id or "spawn bad-cop"]`
 **Agent**: [agent-name (Model)]
 **Knowledge loaded via RAG**: [list knowledge files]
 **Output artifact**: [e.g., workspace/$WORKSPACE_ID/plan.md, tests/feature.spec.ts]

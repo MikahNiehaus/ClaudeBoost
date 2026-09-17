@@ -28,6 +28,28 @@ def _stderr(result) -> str:
     return result.stderr.decode()
 
 
+_stderr_of = _stderr
+
+
+# A git write is now refused by the verb gate, so a test whose subject is
+# something else (message prose, a cd compound, a quoted mention) can no longer
+# expect returncode 0 when its vehicle is `git commit -m "..."`. The bite is
+# unchanged: the refusal must come from the verb gate and not from the check
+# under test, so a curl or backslash false positive still fails the assertion.
+_VERB_GATE_REFUSAL = "read-only allowlist"
+
+
+def allow_except_git_write(command: str):
+    result = run_hook("bash-guard.py", _bash(command))
+    if result.returncode == 0:
+        return
+    stderr = _stderr_of(result)
+    assert _VERB_GATE_REFUSAL in stderr, (
+        f"Expected ALLOW, or a refusal from the git verb gate and nothing else.\n"
+        f"Command: {command!r}\nstderr: {stderr!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers so parametrize IDs stay readable
 # ---------------------------------------------------------------------------
@@ -65,7 +87,7 @@ class TestAllow:
     def test_pipe_or_echo_in_double_quoted_commit_message(self):
         """|| echo inside a git commit -m "..." is just text in the message."""
         cmd = 'git commit -m "fix: handle || echo fallback case"'
-        allow(cmd)
+        allow_except_git_write(cmd)
 
     def test_dollar_var_in_single_quoted_grep_pattern(self):
         """$VAR inside single quotes never expands — scanner shouldn't care."""
@@ -326,7 +348,7 @@ class TestStripQuotedEdgeCases:
     def test_pipe_or_echo_only_inside_double_quoted_commit_message(self):
         """|| echo buried in a double-quoted message — stripped, no block."""
         cmd = 'git commit -m "handle || echo case in parser"'
-        allow(cmd)
+        allow_except_git_write(cmd)
 
 
 # ===========================================================================
@@ -382,7 +404,7 @@ class TestCdCompound:
             "cd /Users/geoff/repo; "
             "git add a.ts b.ts && git commit -m \"fix: thing\""
         )
-        allow(cmd)
+        allow_except_git_write(cmd)
 
     def test_cd_semicolon_then_git_commit_heredoc(self):
         """The reported case: cd ; git add && git commit -m \"$(cat <<'EOF' ...)\"."""
@@ -390,7 +412,7 @@ class TestCdCompound:
             "cd /Users/geoff/repo; git add x.ts && "
             "git commit -m \"$(cat <<'EOF'\nfix: mfa\nEOF\n)\""
         )
-        allow(cmd)
+        allow_except_git_write(cmd)
 
     def test_cd_semicolon_standalone(self):
         """cd /path; git status — cd ended by ; is standalone, no compound."""
@@ -398,7 +420,7 @@ class TestCdCompound:
 
     def test_cd_compound_inside_quoted_message_is_not_a_real_cd(self):
         """`cd /x && y` buried in a commit message must not trip the cd check."""
-        allow('git commit -m "ran cd /tmp && rm -rf x by mistake"')
+        allow_except_git_write('git commit -m "ran cd /tmp && rm -rf x by mistake"')
 
     def test_real_cd_compound_still_blocks(self):
         block("cd /repo && git status", message_contains="git -C")
@@ -683,18 +705,19 @@ class TestCommitMessageProseIsNotACommand:
     """
 
     def test_commit_message_mentioning_a_url_is_not_a_curl_call(self):
-        allow(
+        allow_except_git_write(
             'git commit -m "Document how to curl https://api.example.com/v1/status for health checks"'
         )
 
     def test_commit_message_mentioning_localhost_url_allowed(self):
-        allow('git commit -m "see http://localhost:8613/status for the health check"')
+        allow_except_git_write(
+            'git commit -m "see http://localhost:8613/status for the health check"')
 
     def test_commit_message_with_mid_string_backslash_space_is_plain_prose(self):
-        allow('git commit -m "See notes\\ here for details"')
+        allow_except_git_write('git commit -m "See notes\\ here for details"')
 
     def test_commit_message_backslash_space_right_after_quote_is_allowed(self):
-        allow('git commit -m "\\ leading space case"')
+        allow_except_git_write('git commit -m "\\ leading space case"')
 
     def test_real_escaped_path_outside_a_message_is_still_blocked(self):
         block("ls /some/path/F\\ and\\ B\\ PWA/")
@@ -725,4 +748,5 @@ class TestProductionEnvFalsePositive:
     def test_commit_message_with_leading_words_before_the_variable_is_allowed(self):
         # Contrast case: once something else sits between the quote and the
         # variable name, the anchor no longer fires.
-        allow('git commit -m "note: do not set ASPNETCORE_ENVIRONMENT=Production without approval"')
+        allow_except_git_write(
+            'git commit -m "note: do not set ASPNETCORE_ENVIRONMENT=Production without approval"')

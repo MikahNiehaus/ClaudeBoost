@@ -274,9 +274,9 @@ patterns, utilities, or similar implementations. Prevents duplication.
 and importers. Every agent that touches code knows the blast radius before touching
 anything.
 
-The `reviewer-agent` runs a mandatory Caller Impact pass: it graph-searches every
-changed file and checks each caller for silent breakage. A change that looks clean in
-isolation but breaks a caller is flagged as a BLOCKER.
+`bad-cop` runs a Caller Impact pass: it graph-searches every changed file and
+checks each caller for silent breakage. A change that looks clean in isolation
+but breaks a caller is flagged Critical.
 
 ### Code Review
 
@@ -322,8 +322,9 @@ For step-through debugging, Claude uses the built-in MCP debugger integration (n
 
 This maps to `mcp-debugger` tools — create session, set breakpoint, continue, inspect
 variables, step over/into/out. Works for Python, Node.js, TypeScript, Go, Rust, Java,
-and C#. Spawn `debug-agent` for complex debugging sessions; it has the full workflow
-built in.
+and C#. Run `/debug` for a complex debugging session, and invoke the
+`debugging-methodology` skill when one technique stops producing new
+information.
 
 ### Verify Gate (Anti-Hallucination)
 

@@ -51,7 +51,7 @@ Scan recent commits for agent names:
 git log --oneline -20 2>/dev/null
 ```
 
-Look for patterns like `workflow-agent`, `debug-agent`, etc. in commit messages. Also check if any `workspace/*/context.md` exists and read agent contributions from it. Default attribution is "orchestrator" for anything unattributed.
+Look for patterns like `researcher`, `swiper`, `bad-cop`, etc. in commit messages. Also check if any `workspace/*/context.md` exists and read agent contributions from it. Default attribution is "orchestrator" for anything unattributed.
 
 ## Step 4: Generate Explanations
 

@@ -4,7 +4,7 @@
 // blocked until research has actually covered THAT FILE this session. "Covered"
 // means one of two things:
 //
-//   1. An agent (research-agent or triage-agent) or any tool emitted a
+//   1. Any agent or any tool emitted a
 //      "COVERS: a, b, c" line naming the file (or a glob that matches it). This is
 //      the same protocol the Python gate uses. See extractCoveredFiles below.
 //   2. A rag_search ran this session AND came back with a non zero result. A non

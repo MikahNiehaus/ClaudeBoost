@@ -247,7 +247,7 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 | WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
 | WT-06 | Project RAG indexed (if project path exists) | POST /index output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
 | WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
-| WT-08 | Tests planned → test files exist | If plan includes a test-agent step, at least one test file is present |
+| WT-08 | Tests planned → test files exist | If plan includes a bad-cop step, at least one test file is present |
 
 ### PROJECT mode tests (run all)
 

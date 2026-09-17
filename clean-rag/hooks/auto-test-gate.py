@@ -15,9 +15,9 @@ before. The rules, in order:
   - Block at most twice per session, then always allow. A counter file per
     session under state/. Bounded, so it can never loop.
   - Never block when there is nothing to run, the runner is not installed, or the
-    failure looks like an environment problem (missing binary, connection
-    refused) rather than a real test failure. When unsure, allow. A gate that
-    blocks on something the model cannot fix is the failure mode to avoid.
+    runner never launched and said why (missing binary, missing module). When
+    unsure, allow. A gate that blocks on something the model cannot fix is the
+    failure mode to avoid.
   - Never block on a turn where no code file changed.
   - Any error exits 0 (fail open). A broken gate must not trap the session.
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -66,6 +67,39 @@ ENV_MARKERS = (
     "connection refused",
     "eaddrinuse",
 )
+
+# A runner that got far enough to count tests launched, whatever words appear
+# further down. These are the result lines the runners print once: pytest and
+# jest's tallies, unittest's "Ran N tests", vstest's "Failed: N, Passed: N".
+#
+# The markers above are substrings, and every one of them is also something a
+# test may legitimately assert about. A retry test asserts on "connection
+# refused", a CLI wrapper test on "command not found", an import guard on
+# "No module named". The scan reads the whole failure text, so those read as an
+# unfixable environment and the run they came from was allowed through. The
+# runner's own tally is what separates the two cases: a launch failure never
+# produces one, because nothing ran.
+#
+# "passed", "skipped" and "failed" are counted because only a test runner
+# counts those. An error count is not: a compiler, a bundler and a build system
+# each tally their own errors while failing to launch anything, so webpack's
+# "compiled with 1 error", MSBuild's "1 Error(s)" and cargo's "2 errors
+# emitted" all read as tests having run. A pytest tally of errors alone still
+# counts where it is unambiguous, which is its own summary line, terminated by
+# the run duration ("1 error in 0.27s", or the same wrapped in '=' padding).
+TEST_RESULT_MARKERS = (
+    re.compile(r"\b\d+\s+(passed|failed|skipped)\b", re.I),              # pytest/jest
+    re.compile(r"^=*\s*\d+\s+errors?\b[^\n]*\bin\s+[\d.]+\s*s", re.M),   # pytest summary
+    re.compile(r"^\s*Ran \d+ tests?\b", re.M),                           # unittest
+    re.compile(r"^\s*(Tests|Test Suites):\s+.*\b\d+\s+total\b", re.M),   # jest
+    re.compile(r"\b(Failed|Passed):\s+\d+", re.I),                       # vstest
+    re.compile(r"^\s*(ok|not ok)\s+\d+\b", re.M),                        # TAP
+)
+
+
+def _runner_reported_results(failures: str) -> bool:
+    """Did the runner print a result tally, meaning the tests actually ran?"""
+    return any(rx.search(failures) for rx in TEST_RESULT_MARKERS)
 
 
 def _git_root(cwd: str) -> str | None:
@@ -196,8 +230,8 @@ def main() -> int:
 
     failures = result.get("failures", "") or ""
     low = failures.lower()
-    if any(marker in low for marker in ENV_MARKERS):
-        # Environment problem, not a code bug. Allow.
+    if not _runner_reported_results(failures) and any(m in low for m in ENV_MARKERS):
+        # Nothing ran and the output names an environment problem. Allow.
         return 0
 
     if _block_count(session_id) >= MAX_BLOCKS_PER_SESSION:

@@ -4,11 +4,6 @@
     "allow": [
       "Bash(python *)",
       "Bash(python3 *)",
-      "Bash(python \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(python3 \"$CLAUDEBOOST_HOME/scripts/*.py\"*)",
-      "Bash(sqlite3 */.rag-index/graph.db *)",
-      "Bash(rm -f \"$CLAUDEBOOST_HOME/state/*.json\")",
-      "Bash(rm -f \"$TEMP/claudeboost_*\")",
       "Bash(grep **)",
       "Bash(ls **)",
       "Bash(wc **)",
@@ -17,10 +12,21 @@
       "Bash(cat **)",
       "Bash(find **)",
       "Bash(mkdir **)",
-      "Bash(curl **)",
-      "Bash(echo **)"
+      "Bash(echo **)",
+      "Bash(python \"C:/Development/ClaudeBoost/scripts/*.py\"*)",
+      "Bash(python \"C:/Development/ClaudeBoost/clean-rag/*.py\"*)",
+      "Bash(python \"C:/Users/mniehaus/AppData/Local/Temp/claude/*\")",
+      "Bash(python \"C:/Users/mniehaus/AppData/Local/Temp/claude/*\" *)",
+      "Bash(python -m pytest *)",
+      "Bash(curl -s http://127.0.0.1:8613*)",
+      "Bash(curl -s -X POST http://127.0.0.1:8613*)",
+      "Bash(curl -X POST http://127.0.0.1:8613*)",
+      "Bash(curl http://127.0.0.1:8613*)"
     ],
-    "ask": [],
+    "ask": [
+      "Bash(sqlite3 *)",
+      "Bash(sqlite3)"
+    ],
     "deny": [
       "Bash(rm -rf *)",
       "Bash(git push --force*)"
@@ -32,36 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/rag-session-reset.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/reindex-check.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/compaction-restore.py\"",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/session-primer.py\"",
             "timeout": 10
           }
         ]
@@ -115,15 +92,6 @@
           {
             "type": "command",
             "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/stop-context-guard.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDEBOOST_PYTHON\" \"$CLAUDEBOOST_HOME/scripts/auto-clear.py\"",
             "timeout": 10
           }
         ]

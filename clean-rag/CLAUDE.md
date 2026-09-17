@@ -178,14 +178,69 @@ Logs stream to the console and to `state/server.log`.
 
 ## Endpoints
 
-| Route | What it does |
-|---|---|
-| `GET /status` | Health, model state, every indexed project with its graph stats |
-| `POST /search` | Vector, graph, or both, over `project:` sources |
-| `POST /web-search` | DuckDuckGo, source ranked, sanitized |
-| `POST /index-project` | Index a project, build its graph |
-| `POST /reindex-file` | Reindex one file |
-| `GET /projects` | The project registry |
+All 22 of them, generated from the router rather than kept by hand. `clean-rag/tests/test_skill_rag_routes.py` fails when a skill names a route the server does not serve; it does not notice a route nothing documents, which is how 16 of these went unlisted.
+
+### Your indexed projects
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `POST /search` | Search across indexed projects. | `depth`, `direction`, `limit`, `min_score`, `mode`, `query`, `sources` |
+| `POST /index-project` | Index a project's source code. | `force`, `project_path` |
+| `POST /reindex-file` | Reindex a single changed file within a project. | `file_path`, `project_path` |
+| `GET /projects` | List indexed projects. |  |
+| `GET /status` | Server health, model status, indexed projects. |  |
+
+### Outside sources
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `POST /web-search` | DuckDuckGo search, source ranked and sanitized. | `max_results`, `query`, `timeout` |
+| `POST /github-search` | Search GitHub repositories, best maintained first. | `max_results`, `query`, `sort`, `timeout` |
+| `POST /github-code-search` | Search FILE CONTENTS across public GitHub. | `language`, `max_results`, `query`, `timeout` |
+| `POST /github-file` | Fetch one file's text from a public GitHub repo. | `owner`, `path`, `ref`, `repo` |
+| `POST /stackoverflow-search` | Top accepted StackOverflow answers, with code. | `max_results`, `query`, `timeout` |
+| `POST /wikipedia-search` | Human curated general knowledge, free and keyless. | `max_results`, `query` |
+
+### Running things against a project
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `POST /run-tests` | Detect and run a project's tests, return the real result. | `project_path` |
+| `POST /mutation-test` | Prove the tests bite, by running the mutation tool. | `changed_files`, `project_path` |
+| `POST /security-scan` | Run security tools on changed files. | `changed_files`, `project_path` |
+
+### GraphRAG, the manual deep layer
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `POST /graphrag-build` | Start the GraphRAG build for a project (manual, overnight). | `project_path` |
+| `POST /graphrag-query` | Ask the built semantic graph a cross file question. | `project_path`, `query` |
+| `GET/POST /graphrag-status` | Build progress. Takes `project_path` as a query string on GET or in the body on POST. | `project_path` |
+
+### Docs ingest
+
+A persistent topic scoped document pipeline, backed by `server/docs_store.py`. That is the same shape as the topic knowledge base described in the next section, which was deleted on measured evidence. Whether it should exist is an open decision, recorded at `spec/architecture-changes/server-docs-ingest-topic-kb-reincarnation.md`.
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `POST /docs-ingest` | Fetch, chunk, citation tag, and store official document sources under a persistent topic. Searchable afterward through `POST /search` with `sources: ["docs:<topic>"]`. | `force`, `sources`, `topic` |
+| `GET/POST /docs-status` | What's been ingested for a docs topic. | `topic` |
+
+### Kanban board
+
+A browser view, not a search route. `/kanban/events` is Server Sent Events.
+
+| Route | What it does | Body keys |
+|---|---|---|
+| `GET /kanban` | Serve the kanban board HTML. |  |
+| `GET /kanban/tasks` | Return JSON snapshot of all current tasks. |  |
+| `GET /kanban/events` | SSE endpoint for real time task updates. |  |
+
+Every body key above is read by that route's own handler.
+
+`POST /search` is the one to reach for on a code question: pass `sources` as a list of `project:<absolute path>` and `mode` as `"both"`, because vector and graph surface different files.
+
+`sources` takes two prefixes, not one. `project:<absolute path>` is the code index. `docs:<topic>` reads what `/docs-ingest` stored, and goes through a separate prose embedder (`app.py:369`) rather than the code one. Read the note above that section before reaching for it.
 
 ## Why the KB is gone
 

@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Understands the codebase and the general engineering standard for a change before anyone touches it. Runs clean-rag's own index, vector search, and import graph (triggering /index-project itself when a project is stale or missing), plus the manual GraphRAG layer for deeper cross file questions, and researches what good code for this class of change actually looks like. Not the existence or swipe check, that's swiper's job, informed by this report. Spawn before swiper on any real build or edit.
-tools: Read, Grep, Glob, Bash, WebSearch
+tools: Read, Grep, Glob, Bash, WebSearch, mcp__context7__resolve-library-id, mcp__context7__query-docs
 model: sonnet
 effort: medium
 skills:

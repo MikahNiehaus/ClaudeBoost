@@ -6,7 +6,10 @@ Registers three things into OpenCode's global config at ~/.config/opencode:
   1. The clean-rag MCP server (type local) so OpenCode gets rag_search, code
      metrics, web search, and full context injection as tools.
   2. The research gate plugin, which blocks code edits until rag_search has run.
-  3. The research and triage subagents, ported to OpenCode's agent format.
+  3. The research subagent, ported to OpenCode's agent format. The triage
+     subagent was removed: it decided whether a change needed research
+     without reading the code, and that guess was wrong often enough to be
+     worse than useless. The human makes that call now.
 
 Idempotent: safe to run repeatedly. It merges the MCP entry into whatever config
 already exists rather than overwriting, and it will not clobber a plugin or agent

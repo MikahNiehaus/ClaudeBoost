@@ -70,11 +70,39 @@ class _CachedConnection:
     """
 
     conn: sqlite3.Connection
-    #: Serializes writes on this handle so last_insert_rowid() cannot return
-    #: another thread's rowid, and so _ensure_vec_table cannot race between
-    #: checking for its table and creating it. It lives in the same record as
-    #: the connection it guards, which is what stops the lock and the handle
-    #: from ever being paired with two different underlying connections.
+    #: Serializes EVERY use of this handle, reads included, despite the name.
+    #:
+    #: It began as a write lock: so last_insert_rowid() cannot return another
+    #: thread's rowid, and so _ensure_vec_table cannot race between checking
+    #: for its table and creating it. It lives in the same record as the
+    #: connection it guards, which is what stops the lock and the handle from
+    #: ever being paired with two different underlying connections.
+    #:
+    #: Reads were added on 2026-09-17. A live /search returned 500 with
+    #: `InterfaceError: bad parameter or other API misuse` on a bind that could
+    #: not fail, because the reads took no lock at all. `_open_connection`
+    #: passes check_same_thread=False, which turns off Python's own guard and
+    #: makes all coordination the caller's job; from CPython 3.12 one
+    #: Connection driven from two threads can raise exactly that, return short
+    #: rows, or read inside another thread's transaction. WAL does not cover
+    #: it, because WAL governs separate connections to a file and this is one
+    #: connection shared between threads.
+    #:
+    #: The cost is real and was taken deliberately: concurrent searches now
+    #: serialize behind each other and behind writes. Per-thread connections
+    #: would restore that parallelism and reintroduce the check-then-create
+    #: race described above, which this class already fixed once by going to a
+    #: single shared handle.
+    #:
+    #: The name is kept because it is referenced widely. Treat it as "the
+    #: handle's lock". Every statement run on `self._conn` runs under it, taken
+    #: either by the method itself or by its caller, and the helpers relying on
+    #: the caller say so in their own docstrings. A source scan in
+    #: `tests/test_store_concurrent_read_write.py` fails on an access doing
+    #: neither, so a method added later is covered without listing it there. It
+    #: checks that docstring against the real call sites rather than believing
+    #: it, and refuses any copy of `self._conn` into a name, an argument or a
+    #: return, because a copy is where the lock stops applying unnoticed.
     write_lock: threading.Lock
     #: Live ChromaStore instances still holding this handle.
     holders: int = 0
@@ -351,18 +379,24 @@ class ChromaStore:
         Returns True if VACUUM actually ran, False otherwise.  Used after
         incremental reindexes to prevent unbounded freelist growth without
         the cost of vacuuming on every single file edit.
+
+        The gate reads hold the lock only for themselves. vacuum() acquires it
+        again, and write_lock is not reentrant, so one section around the whole
+        method deadlocks. A write landing in the gap only makes the ratio
+        slightly stale, and VACUUM is safe to run either way.
         """
         if self._conn is None:
             return False
         try:
-            freelist = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
-            if freelist < 100:
-                return False
-            page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
-            if page_count == 0:
-                return False
-            if (freelist / page_count) < threshold:
-                return False
+            with self._write_lock:
+                freelist = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
+                if freelist < 100:
+                    return False
+                page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
+                if page_count == 0:
+                    return False
+                if (freelist / page_count) < threshold:
+                    return False
         except Exception:
             return False
         logger.info(
@@ -436,10 +470,11 @@ class ChromaStore:
 
     def collection_exists(self, collection: str) -> bool:
         safe = _safe_name(collection)
-        row = self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (f"chunks_{safe}",),
-        ).fetchone()
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (f"chunks_{safe}",),
+            ).fetchone()
         return row is not None
 
     def delete_collection(self, collection: str) -> bool:
@@ -549,28 +584,33 @@ class ChromaStore:
         tbl = f"chunks_{safe}"
         vec = f"vec_{safe}"
 
-        if not self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (vec,),
-        ).fetchone():
-            return []
-
         # Over-fetch: min_score filtering is post-filter in Python because
         # vec0 does not support WHERE distance < threshold in KNN queries.
         fetch_limit = max(limit * 3, 20)
 
+        # One acquisition covers the existence check AND the query. Two would
+        # leave a window where delete_collection drops the table between them,
+        # turning a missing table from the empty list below into an exception.
+        # Decoding rows needs no connection, so it stays outside.
         try:
-            rows = self._conn.execute(
-                f"""
-                SELECT v.rowid, v.distance, c.content, c.metadata
-                FROM {vec} v
-                INNER JOIN {tbl} c ON c.rowid = v.rowid
-                WHERE v.embedding MATCH ?
-                AND k = ?
-                ORDER BY v.distance
-                """,
-                (_serialize_f32(query_embedding), fetch_limit),
-            ).fetchall()
+            with self._write_lock:
+                if not self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (vec,),
+                ).fetchone():
+                    return []
+
+                rows = self._conn.execute(
+                    f"""
+                    SELECT v.rowid, v.distance, c.content, c.metadata
+                    FROM {vec} v
+                    INNER JOIN {tbl} c ON c.rowid = v.rowid
+                    WHERE v.embedding MATCH ?
+                    AND k = ?
+                    ORDER BY v.distance
+                    """,
+                    (_serialize_f32(query_embedding), fetch_limit),
+                ).fetchall()
         except Exception as e:
             logger.warning("search(%r) failed: %s", collection, e)
             return []
@@ -601,10 +641,11 @@ class ChromaStore:
         """
         safe = _safe_name(collection)
         tbl = f"chunks_{safe}"
-        rows = self._conn.execute(
-            f"SELECT content, metadata FROM {tbl} WHERE source_file = ? LIMIT ?",
-            (source_file, limit),
-        ).fetchall()
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT content, metadata FROM {tbl} WHERE source_file = ? LIMIT ?",
+                (source_file, limit),
+            ).fetchall()
         return [
             SearchResult(
                 content=row[0],
@@ -618,9 +659,10 @@ class ChromaStore:
         """Return the embedding dimension from the first stored chunk, or None."""
         safe = _safe_name(collection)
         try:
-            row = self._conn.execute(
-                f"SELECT embedding FROM chunks_{safe} LIMIT 1"
-            ).fetchone()
+            with self._write_lock:
+                row = self._conn.execute(
+                    f"SELECT embedding FROM chunks_{safe} LIMIT 1"
+                ).fetchone()
             if row and row[0]:
                 return len(row[0]) // 4  # float32 = 4 bytes each
         except Exception:
@@ -630,9 +672,10 @@ class ChromaStore:
     def count(self, collection: str) -> int:
         safe = _safe_name(collection)
         try:
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM chunks_{safe}"
-            ).fetchone()
+            with self._write_lock:
+                row = self._conn.execute(
+                    f"SELECT COUNT(*) FROM chunks_{safe}"
+                ).fetchone()
             return row[0] if row else 0
         except Exception:
             return 0
@@ -641,16 +684,18 @@ class ChromaStore:
         """Count distinct source files in a collection."""
         safe = _safe_name(collection)
         try:
-            row = self._conn.execute(
-                f"SELECT COUNT(DISTINCT source_file) FROM chunks_{safe}"
-            ).fetchone()
+            with self._write_lock:
+                row = self._conn.execute(
+                    f"SELECT COUNT(DISTINCT source_file) FROM chunks_{safe}"
+                ).fetchone()
             return row[0] if row else 0
         except Exception:
             return 0
 
     def list_sources(self, collection: str) -> list[str]:
         safe = _safe_name(collection)
-        rows = self._conn.execute(
-            f"SELECT DISTINCT source_file FROM chunks_{safe} ORDER BY source_file"
-        ).fetchall()
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT DISTINCT source_file FROM chunks_{safe} ORDER BY source_file"
+            ).fetchall()
         return [r[0] for r in rows]

@@ -217,7 +217,13 @@ def main() -> int:
         return 0
 
     session_id = payload.get("session_id", "")
-    record_verifier(session_id=session_id, report=report, agent_type=agent_type)
+    record_verifier(
+        session_id=session_id,
+        report=report,
+        agent_type=agent_type,
+        # Resolves a relative covers entry to the file whose contents get hashed.
+        cwd=payload.get("cwd") or "",
+    )
     return 0
 
 
