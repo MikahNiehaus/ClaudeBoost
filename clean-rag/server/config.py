@@ -1,7 +1,11 @@
 """Configuration for the clean-rag server."""
 
+import logging
 import os
+import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _MODULE_DIR = Path(__file__).resolve().parent          # clean-rag/server/
 
@@ -99,10 +103,84 @@ def _detect_device() -> str:
             return "mps"
     except ImportError:
         pass
+    except Exception:
+        # A torch that imports but cannot probe, such as a CUDA DLL that fails
+        # to load, resolves to CPU instead of propagating. An unresolved probe
+        # is re-run by every later caller at about 4.7s each, and the model load
+        # that follows raises the same error where it can be acted on.
+        logger.warning("Device probe failed, using CPU", exc_info=True)
     return "cpu"
 
 
-DEVICE: str = _detect_device()
+# The resolved device, published once under _device_lock. None means unresolved.
+_device = None
+_device_lock = threading.Lock()
+
+
+def get_device() -> str:
+    """The compute device, resolved on first use instead of at import.
+
+    This was `DEVICE = _detect_device()` at module scope, which cost about 4.7
+    seconds per `import server.config` because the probe imports torch to check
+    CUDA. Measured against a 0.06s bare interpreter start. Four hooks import
+    this module to read `STANDALONE_PORT`, an integer, and two of them run on
+    every prompt and every edit: an edit turn spent about 18.4 seconds in hooks,
+    13.5 of it here.
+
+    Locked rather than `functools.cache`, which does not hold its lock across
+    the wrapped call. "Call-once behavior is not guaranteed because locks are
+    not held during the function call" (docs.python.org/3/library/functools),
+    so concurrent first callers each ran the whole probe. Double checked the
+    same way embedding.py loads a model.
+
+    A probe that raises is not published, so a transient failure cannot pin the
+    process to a wrong device for the rest of its life. The lock bounds what
+    that costs: retries queue instead of running at once, and the first success
+    answers everyone waiting behind it.
+    """
+    global _device
+    device = _device
+    if device is None:
+        with _device_lock:
+            if _device is None:
+                _device = _detect_device()
+            device = _device
+    return device
+
+
+def _clear_device_cache() -> None:
+    """Drop the resolved device so the next call probes again.
+
+    Named for what `functools.cache` exposed, because the tests that vary
+    CLEAN_RAG_DEVICE call it between cases.
+    """
+    global _device
+    with _device_lock:
+        _device = None
+
+
+get_device.cache_clear = _clear_device_cache
+
+
+def __getattr__(name: str) -> str:
+    """Keep `DEVICE` working for any caller this change missed.
+
+    PEP 562 runs this for `from server.config import DEVICE` too, so an older
+    import still resolves and still gets the lazy path. Prefer `get_device()`.
+
+    `from server.config import *` will not see DEVICE: a star import reads
+    __dict__, and a lazily resolved attribute is by definition not in it. Only
+    __all__ covers that case, and declaring one here would cap every other name
+    this module exports.
+    """
+    if name == "DEVICE":
+        return get_device()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include DEVICE, which __getattr__ serves and so is absent from __dict__."""
+    return sorted([*globals(), "DEVICE"])
 
 # ---------------------------------------------------------------------------
 # CPU budget

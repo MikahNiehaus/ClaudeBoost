@@ -68,6 +68,13 @@ except ImportError as _exc:
 # git subcommands that change history, the working tree beyond the current
 # file edit, or a remote. Anything not on this list is read only or scoped
 # to the index (git add), neither of which commits or pushes anything.
+#
+# checkout and switch sit here because restore does. Git 2.23 split checkout's
+# two jobs into the two newer names (git-switch(1), git-restore(1)), so the
+# three spell one operation between them: `git checkout -- <path>` discards
+# uncommitted work exactly as `git restore <path>` does, and `git checkout
+# <ref>` replaces the working tree as `git switch` does. Blocking one name and
+# allowing the other two enforces half a rule.
 _BLOCKED_SUBCOMMANDS = {
     "commit",
     "push",
@@ -75,6 +82,8 @@ _BLOCKED_SUBCOMMANDS = {
     "rebase",
     "reset",
     "restore",
+    "checkout",
+    "switch",
     "clean",
     "cherry-pick",
     "revert",
@@ -95,9 +104,25 @@ _BLOCKED_SUBCOMMANDS = {
 # the old class, since every character that class listed is punctuation.
 _GIT_TOKEN_RE = re.compile(r"\bgit(?:\.exe)?\b", re.IGNORECASE)
 
-_BRANCH_DELETE = re.compile(r"\bbranch\b[^|;&]*\s-[dD]\b")
-_TAG_DELETE = re.compile(r"\btag\b[^|;&]*\s-d\b")
-_STASH_DESTRUCTIVE = re.compile(r"\bstash\b[^|;&]*\b(drop|clear|pop)\b")
+# branch, tag and stash are read only until an argument makes them otherwise,
+# so each is judged on its arguments rather than on its name.
+#
+# The letters are git's own, from git-branch(1) `git branch (-d|-D) [-r]
+# <branch-name>...` and git-tag(1) `git tag -d <tagname>...`. Neither
+# subcommand spells any other short option with 'd', so a grouped cluster
+# (`-dr`) means delete and nothing else.
+_DELETE_LETTERS = {"branch": ("d", "D"), "tag": ("d",)}
+_DELETE_LONG = "--delete"
+_STASH_DESTRUCTIVE_ARGS = frozenset({"drop", "clear", "pop"})
+
+# A run of only these characters is a shell operator that ended the command,
+# not an argument to it. Same set shell_tokens.py pads on, and padding is what
+# makes each one its own token.
+_OPERATOR_CHARS = frozenset(";|&()`\n")
+
+# A group of short options, as git's parse-options reads one. Letters only, so
+# a glob or a pattern that merely starts with a dash is not read as flags.
+_SHORT_OPTION_GROUP = re.compile(r"-[A-Za-z]+$")
 
 
 def _refuse(reason: str) -> int:
@@ -163,11 +188,79 @@ def _bash_command(payload) -> tuple[str, str]:
     return command.strip(), ""
 
 
-def _find_blocked_subcommand(tokenizations: list[list[str]]) -> str | None:
-    """The first blocked git subcommand any tokenizing of the command reveals.
+def _arguments(parts: list[str], start: int) -> list[str]:
+    """The argument tokens of the command beginning before `start`.
+
+    Stops at the next shell operator, so the arguments of a later command in a
+    chain are never read as this one's: `git branch --list; ls -ld .` must not
+    see `-ld` as a flag to branch.
+    """
+    args = []
+    for token in parts[start:]:
+        if token and all(char in _OPERATOR_CHARS for char in token):
+            break
+        args.append(token)
+    return args
+
+
+def _is_delete_long_option(token: str) -> bool:
+    """True for every long spelling git resolves to --delete on these subcommands.
+
+    git's parse-options accepts any unambiguous prefix of a long option, and
+    --delete is the only long option starting with 'd' on either branch or tag
+    (git 2.55 `git branch -h`, `git tag -h`), so --d through --delet all delete.
+    Measured: each reaches ref lookup and reports "not found", while a
+    non-prefix such as --dx exits 129 at parse time.
+
+    Matching the full spelling alone is the hole GHSA-2f96-g7mh-g2hx closed in
+    GitPython, and rejecting a prefix of the blocked name is that advisory's own
+    remediation. Prefixes of --delete are the complete set of spellings that
+    reach it, so no per-version option table is needed. The trailing startswith
+    keeps a --delete-<something> a later git may add.
+    """
+    name = token.split("=", 1)[0]
+    if len(name) < 3 or not name.startswith("--"):
+        return False
+    return _DELETE_LONG.startswith(name) or name.startswith(_DELETE_LONG)
+
+
+def _deletes_a_ref(sub: str, args: list[str]) -> bool:
+    """True when these arguments turn `git branch` or `git tag` into a delete."""
+    letters = _DELETE_LETTERS[sub]
+    for token in args:
+        if _is_delete_long_option(token):
+            return True
+        if _SHORT_OPTION_GROUP.match(token) and any(c in token[1:] for c in letters):
+            return True
+    return False
+
+
+def _destructive_stash(args: list[str]) -> bool:
+    """True for `git stash drop|clear|pop`, false for a stash that only saves.
+
+    git-stash(1) puts its own subcommand first, so only the first non-flag
+    argument decides: `git stash push -m "drop this"` saves work rather than
+    dropping any.
+    """
+    for token in args:
+        if not token.startswith("-"):
+            return token in _STASH_DESTRUCTIVE_ARGS
+    return False
+
+
+def _blocked_git_write(tokenizations: list[list[str]]) -> str | None:
+    """The first git write any tokenizing of the command reveals, described.
 
     Every token is checked, not just the first: these agents chain commands
     (a && b, a; b, a | b), so git can sit anywhere in the stream.
+
+    Flags are read from the same tokens the subcommand is, rather than from the
+    raw command text. Quoting is the reason. shlex removes a quote a shell
+    would remove, so `git branch "-d" x` yields the token `-d`, while a regex
+    over the raw string sees `"-d"` and matches neither spelling. It cuts the
+    other way too: text inside quotes stays one argument, so a search whose
+    pattern happens to contain `branch -d` is an argument to grep and not a
+    flag to git.
     """
     for parts in tokenizations:
         for i, token in enumerate(parts):
@@ -176,9 +269,14 @@ def _find_blocked_subcommand(tokenizations: list[list[str]]) -> str | None:
                 binary = binary[:-4]
             if binary != "git":
                 continue
-            sub, _ = git_subcommand(parts, i)
+            sub, after = git_subcommand(parts, i)
             if sub in _BLOCKED_SUBCOMMANDS:
-                return sub
+                return f"git {sub!r}"
+            args = _arguments(parts, after)
+            if sub in _DELETE_LETTERS and _deletes_a_ref(sub, args):
+                return f"git {sub} delete"
+            if sub == "stash" and _destructive_stash(args):
+                return "destructive git stash op"
     return None
 
 
@@ -204,18 +302,9 @@ def main() -> int:
     # Whatever any reading does reveal is judged first, so a blocked write that
     # is plainly visible gets named in the refusal instead of the vaguer
     # "could not parse" below.
-    blocked = _find_blocked_subcommand(tokenizations)
+    blocked = _blocked_git_write(tokenizations)
     if blocked:
-        return _refuse(f"git {blocked!r} is not allowed for this agent: {command!r}")
-
-    # These three read the raw command and need no tokenizer at all, so they
-    # run whether or not the parse was complete.
-    if _BRANCH_DELETE.search(command):
-        return _refuse(f"git branch delete is not allowed for this agent: {command!r}")
-    if _TAG_DELETE.search(command):
-        return _refuse(f"git tag delete is not allowed for this agent: {command!r}")
-    if _STASH_DESTRUCTIVE.search(command):
-        return _refuse(f"destructive git stash op is not allowed for this agent: {command!r}")
+        return _refuse(f"{blocked} is not allowed for this agent: {command!r}")
 
     if not complete:
         # Some reading of the command failed, so "no blocked subcommand found"

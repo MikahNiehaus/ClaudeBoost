@@ -17,11 +17,11 @@ Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RA
 Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
-Call `GET http://127.0.0.1:8613/status` and check that the detected path appears in the indexed projects.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "<project_path>"}` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/clean-rag-server start`.
 
 ---
 
@@ -408,9 +408,9 @@ body { background: #020617; color: #f1f5f9; font-family: -apple-system, BlinkMac
       <div class="cards" style="align-items:flex-start">
         <div class="col-group">
           <div class="col-label">Opus — Strategic</div>
-          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('architect')">
-            <div class="card-title">architect-agent</div>
-            <div class="card-sub">System design, SOLID review</div>
+          <div class="card" style="border-left-color:#22c55e" onclick="showDetail('good-cop')">
+            <div class="card-title">good-cop</div>
+            <div class="card-sub">Reproduces, researches, fixes, reruns</div>
           </div>
           <!-- more cards in column -->
         </div>
@@ -1179,6 +1179,6 @@ Tell the user:
 | Something complex enough to plan out | `/workspace` — creates a structured implementation plan for the work |
 | A dependency you want to trace deeply | `/graph [workspace-id]` — maps callers, importers, and structural neighbours |
 | A security-relevant flow (auth, data, tokens) | `/security-review` — OWASP-aware review of pending changes |
-| A performance bottleneck | Spawn `performance-agent` to profile and recommend fixes |
+| A performance bottleneck | Spawn `researcher` for the approach, then `bad-cop` to measure it |
 | Something you want to build | Describe it to Claude — if it's a big feature, use `/workspace` first |
 | Want an editable whiteboard version | `/visualize --excalidraw [topic]` — generates an Excalidraw file you can drag, reshape, annotate |

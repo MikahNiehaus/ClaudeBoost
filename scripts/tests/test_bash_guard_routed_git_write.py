@@ -50,6 +50,29 @@ def allow(command: str):
     )
 
 
+def _stderr_of(result) -> str:
+    return result.stderr.decode()
+
+
+# A git write is now refused by the verb gate, so a test whose subject is
+# something else (message prose, a cd compound, a quoted mention) can no longer
+# expect returncode 0 when its vehicle is `git commit -m "..."`. The bite is
+# unchanged: the refusal must come from the verb gate and not from the check
+# under test, so a curl or backslash false positive still fails the assertion.
+_VERB_GATE_REFUSAL = "read-only allowlist"
+
+
+def allow_except_git_write(command: str):
+    result = run_hook("bash-guard.py", _bash(command))
+    if result.returncode == 0:
+        return
+    stderr = _stderr_of(result)
+    assert _VERB_GATE_REFUSAL in stderr, (
+        f"Expected ALLOW, or a refusal from the git verb gate and nothing else.\n"
+        f"Command: {command!r}\nstderr: {stderr!r}"
+    )
+
+
 def block(command: str):
     result = run_hook("bash-guard.py", _bash(command))
     assert result.returncode == 2, (
@@ -124,7 +147,7 @@ class TestRoutedWritesAreBlocked:
 # ALLOW: a direct write must reach the ask rule, not this hook
 # ===========================================================================
 
-class TestDirectWritesArePassedThrough:
+class TestDirectWritesAreRefusedByTheVerbGate:
     @pytest.mark.parametrize("command", [
         'git push origin main',
         'git push --force origin main',
@@ -132,10 +155,14 @@ class TestDirectWritesArePassedThrough:
         'gh pr create --title x',
         'gh api /repos/x/y',
     ])
-    def test_direct_write_is_not_blocked_here(self, command):
-        """The permission ask rule prompts on these. This hook must not block
-        them, or the prompt never gets the chance to fire."""
-        allow(command)
+    def test_direct_write_is_refused(self, command):
+        """These used to pass through so the permission prompt could fire.
+
+        They no longer do. A prompt is an approval the session can give itself,
+        and the requirement is that a git or gh write cannot run at all and is
+        handed to the human instead. check_routed_git_write still leaves a
+        direct write alone; the verb gate behind it is what refuses this."""
+        block(command)
 
 
 # ===========================================================================
@@ -162,8 +189,11 @@ class TestNoFalsePositives:
     ])
     def test_a_write_named_inside_a_quoted_string_is_not_a_write(self, command):
         """_strip_quoted removes the quoted body first, so a commit message or
-        a grep pattern that mentions a push does not trip the check."""
-        allow(command)
+        a grep pattern that mentions a push does not trip the check.
+
+        The first case is a real `git commit`, which the verb gate refuses on
+        its own account. What must not happen is a refusal naming the push."""
+        allow_except_git_write(command)
 
     def test_grep_for_a_push_in_source(self):
         allow('grep -rn "git push" scripts/')
@@ -252,7 +282,8 @@ class TestNoFalsePositives:
         stripping the payload's own quotes first, exactly as the top level
         command is stripped, keeps this honest commit working.
         """
-        allow("""bash -c "git commit -m 'fix; git push now'" """.strip())
+        allow_except_git_write(
+            """bash -c "git commit -m 'fix; git push now'" """.strip())
 
     @pytest.mark.parametrize("command", [
         # An unrelated executor earlier in the command (nothing to do with git)
@@ -268,9 +299,10 @@ class TestNoFalsePositives:
     def test_unrelated_executor_plus_quoted_mention_is_not_a_routed_write(self, command):
         """The actual git action in each of these is `git commit` or a read
         (`git log`), never a push or a gh write. The executor is real but has
-        nothing to do with git. Blocking here is a false positive: nothing in
-        the command reaches a remote outside a permission rule's view."""
-        allow(command)
+        nothing to do with git. A refusal naming the quoted push is a false
+        positive: nothing in the command reaches a remote outside a permission
+        rule's view."""
+        allow_except_git_write(command)
 
     @pytest.mark.parametrize("command", [
         # _executor_payloads returns the executor's own argument RAW, quotes
@@ -492,7 +524,7 @@ class TestExecutorFormsStillUncovered:
     def test_an_executor_named_inside_a_string_is_not_an_executor(self, command):
         """The executor head has to sit outside quotes to be running anything.
         Quoted, it is just text being echoed, committed, or searched for."""
-        allow(command)
+        allow_except_git_write(command)
 
     @pytest.mark.parametrize("command", [
         'bash -c "ls -la"',

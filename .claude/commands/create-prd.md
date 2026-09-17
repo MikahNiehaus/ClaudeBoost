@@ -21,11 +21,11 @@ Feature or task: **$ARGUMENTS**
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
-Call `GET http://127.0.0.1:8613/status` and check that `<PROJECT_PATH>` appears in the indexed projects.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "<project_path>"}` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/clean-rag-server start`.
 
 ---
 
@@ -207,13 +207,13 @@ Include agent assignments for non-trivial sub-tasks. Use the ClaudeBoost agent r
 
 | Work type | Agent |
 |-----------|-------|
-| Architecture decisions | architect-agent |
-| Tests and TDD | test-agent |
-| Security implementation | security-agent |
+| Architecture decisions | researcher, then swiper |
+| Tests and TDD | bad-cop |
+| Security implementation | bad-cop |
 | UI components | ui-agent |
 | Database schema/migrations | database-agent |
 | Documentation | docs-agent |
-| Performance optimization | performance-agent |
+| Performance optimization | researcher, then bad-cop |
 
 ### Step 5: Add Implementation Notes
 

@@ -47,11 +47,11 @@ Call `POST http://127.0.0.1:8613/search with {"query":"security review $ARGUMENT
 
 **0b — Verify project is indexed** (required for codebase search to work):
 
-Call `GET http://127.0.0.1:8613/status` and check that `PROJECT_PATH` appears in the indexed projects.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "PROJECT_PATH"}` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/clean-rag-server start`.
 
 ---
 
@@ -70,9 +70,9 @@ git diff "origin/${BASE:-main}...HEAD"
 
 If the diff is empty, report "No branch changes to review" and stop.
 
-### Step 2: Spawn security-agent
+### Step 2: Spawn bad-cop
 
-Spawn `security-agent` with the full diff and the following checks:
+Spawn `bad-cop` with the full diff and the following checks. `clean-rag/hooks/high_stakes.py` labels which surface the change touched, so point the review at that one first:
 
 **OWASP Top 10 review (branch diff scope):**
 

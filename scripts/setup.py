@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1461,6 +1462,14 @@ def _cleanup_mcp_registration() -> None:
 #
 # `name` is load-bearing: the tool prefix is derived from it, so changing a
 # name here silently breaks every enumerated `mcp__<name>__<tool>` downstream.
+
+# Astral's own standalone installer, the one uv's docs lead with. Printed as a
+# hint only. The installer never runs it: piping a remote script into a shell
+# is a code execution path an installer should not open on the user's behalf.
+UV_HINT = ('install uv: "powershell -ExecutionPolicy ByPass -c '
+           '\\"irm https://astral.sh/uv/install.ps1 | iex\\"" on Windows, '
+           '"curl -LsSf https://astral.sh/uv/install.sh | sh" elsewhere')
+
 MCP_SERVERS: list[dict] = [
     {
         "name": "mcp-debugger",
@@ -1490,6 +1499,113 @@ MCP_SERVERS: list[dict] = [
         "args": ["npx", "-y", "chrome-devtools-mcp@latest"],
         "needs": "npx",
         "why": "network capture, performance traces, Lighthouse, Hermes/React Native over CDP",
+    },
+    # --- Code intelligence -------------------------------------------------
+    {
+        "name": "serena",
+        "label": "Serena (LSP symbol tools)",
+        "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
+                 "serena", "start-mcp-server"],
+        "needs": "uvx",
+        "hint": UV_HINT,
+        "why": "real symbol references, call hierarchy and rename via language servers",
+    },
+    {
+        "name": "ast-grep",
+        "label": "ast-grep MCP",
+        "args": ["uvx", "ast-grep-mcp"],
+        "needs": "uvx",
+        "hint": UV_HINT,
+        "why": "structural AST search and codemod rule testing, 4 tools",
+    },
+    {
+        "name": "context7",
+        "label": "Context7 (library docs)",
+        "args": ["npx", "-y", "@upstash/context7-mcp"],
+        "needs": "npx",
+        "why": "version pinned library docs, the fix for a stale API guess",
+    },
+    # --- Security ----------------------------------------------------------
+    {
+        "name": "semgrep",
+        "label": "Semgrep MCP",
+        # uvx semgrep-mcp is what semgrep/mcp's own README prescribes, and its
+        # example config is literally {"command": "uvx", "args": ["semgrep-mcp"]}.
+        # The earlier ["semgrep", "mcp", "-t", "stdio"] needed a working semgrep
+        # on PATH; a pip installed one shells out to pysemgrep and dies with
+        # "No such file or directory" when the Scripts dir is off PATH. Going
+        # through uvx also drops a prerequisite, since four other rows need it.
+        "args": ["uvx", "semgrep-mcp"],
+        "needs": "uvx",
+        "hint": UV_HINT,
+        "why": "real SAST, 5000+ rules, scans stay local unless a token is set",
+    },
+    {
+        "name": "osv",
+        "label": "OSV vulnerability scanner",
+        "args": ["osv-scanner", "mcp"],
+        "needs": "osv-scanner",
+        "hint": "go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest",
+        "why": "citable CVE and advisory IDs across every package ecosystem",
+    },
+    # --- Research and swipe provenance -------------------------------------
+    {
+        "name": "arxiv",
+        "label": "arXiv MCP",
+        "args": ["uvx", "arxiv-mcp-server"],
+        "needs": "uvx",
+        "hint": UV_HINT,
+        "why": "real paper sections and BibTeX; researcher has no WebFetch",
+    },
+    {
+        "name": "socket",
+        "label": "Socket (supply chain)",
+        "transport": "http",
+        "url": "https://mcp.socket.dev/",
+        "args": [],
+        "why": "score a package before swiper takes it: license, malware, maintenance",
+    },
+    # --- Explaining and proof ----------------------------------------------
+    {
+        "name": "antv-chart",
+        "label": "AntV chart renderer",
+        "args": ["npx", "-y", "@antv/mcp-server-chart"],
+        "needs": "npx",
+        "why": "PNG mind maps, flowcharts, network graphs, fishbone diagrams",
+    },
+    {
+        "name": "jupyter",
+        "label": "Jupyter MCP",
+        "args": ["uvx", "jupyter-mcp-server@latest"],
+        "needs": "uvx",
+        "needs_env": "JUPYTER_TOKEN",
+        "hint": "start a Jupyter server and set JUPYTER_TOKEN",
+        "why": "executable .ipynb evidence: code, narrative and output a human re-runs",
+    },
+    # --- Remote, OAuth or token --------------------------------------------
+    {
+        "name": "github",
+        "label": "GitHub MCP",
+        "transport": "http",
+        "url": "https://api.githubcopilot.com/mcp/",
+        # Deliberately NOT GITHUB_TOKEN. That one is clean-rag's, documented as
+        # a read only public repo PAT for search. This server needs write scope
+        # for PRs and issues, so sharing the name would either break the server
+        # or quietly widen what the search token can do.
+        "headers": {"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"},
+        "args": [],
+        "needs_env": "GITHUB_MCP_TOKEN",
+        "hint": "needs Copilot enrolment (Copilot Free is $0) on the hosted endpoint",
+        "why": "PRs, issues and Actions as structured calls instead of parsing gh output",
+    },
+    {
+        "name": "atlassian",
+        "label": "Atlassian MCP",
+        "transport": "http",
+        "url": "https://mcp.atlassian.com/v1/mcp",
+        "args": [],
+        "hint": "an org admin must enable Rovo; run /mcp to complete OAuth",
+        "why": "live Jira and Confluence read/write for ticket handoff",
     },
 ]
 
@@ -1530,6 +1646,110 @@ def _is_connected(status: str) -> bool:
     return re.search(r"\bconnected\b", status, re.IGNORECASE) is not None
 
 
+def _server_json(server: dict) -> str:
+    """The `claude mcp add-json` payload for one server row.
+
+    add-json rather than `claude mcp add --env K=V`, because --env is variadic
+    and greedily eats whatever follows it, including the server name when the
+    two are adjacent (anthropics/claude-code#29221). A JSON object has no
+    positional ambiguity, so the footgun cannot fire.
+
+    A credential is emitted as the literal `${VAR}` placeholder, which Claude
+    Code expands from the environment at launch. The token therefore never
+    lands in ~/.claude.json. The cost is that expansion fails soft: an unset
+    var leaves the literal text in place rather than erroring, which is why
+    `needs_env` is checked at install time instead of relying on this.
+    """
+    if server.get("transport") == "http":
+        payload: dict[str, Any] = {"type": "http", "url": server["url"]}
+        if server.get("headers"):
+            payload["headers"] = server["headers"]
+    else:
+        args = server["args"]
+        payload = {"type": "stdio", "command": args[0], "args": args[1:]}
+        if server.get("env"):
+            payload["env"] = server["env"]
+    return json.dumps(payload)
+
+
+def _manual_hint(server: dict) -> str:
+    """The copy-pasteable command to register this server by hand."""
+    name = server["name"]
+    if server.get("transport") == "http" or server.get("env"):
+        return f"claude mcp add-json {name} --scope user '{_server_json(server)}'"
+    return f"claude mcp add {name} --scope user -- {' '.join(server['args'])}"
+
+
+def _script_dirs() -> list[str]:
+    """The running interpreter's own console-script directories."""
+    dirs = []
+    for key in ("scripts", os.name + "_user"):
+        try:
+            path = (sysconfig.get_path("scripts") if key == "scripts"
+                    else sysconfig.get_path("scripts", key))
+        except (KeyError, ValueError):
+            continue
+        if path and os.path.isdir(path) and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def resolve_tool(name: str) -> str | None:
+    """Absolute path to an executable, or None if it genuinely is not here.
+
+    PATH first, then the interpreter's script directories. `pip install uv`
+    drops uv.exe and uvx.exe into a per-user Scripts dir that is not on PATH
+    on a default Windows install, so shutil.which alone reports a tool missing
+    that is sitting right there. sysconfig derives those directories from the
+    running interpreter, so this stays correct under a different user, a venv,
+    or another OS, with no path literal anywhere.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in _script_dirs():
+        found = shutil.which(name, path=directory)
+        if found:
+            return found
+    return None
+
+
+# The four outcomes for one row. Kept as a pure function, byte-identical to the
+# copy in clean-rag/install.py, because the two installers previously made this
+# decision in hand-written control flow that had already drifted: setup.py
+# checked prerequisites first, install.py checked "already registered" first,
+# so the same machine got two different answers for the same server.
+# tests/test_mcp_server_registration.py drives both copies over a scenario
+# matrix, which is what makes a future divergence fail a test instead of
+# silently shipping.
+#
+# Order is the contract, not an accident. A missing prerequisite or credential
+# is reported even when the server is already registered, because Claude Code
+# expands ${VAR} from its own environment when it launches: a registered row
+# whose credential is unset still sends the literal "${VAR}" as the token and
+# fails at runtime. Answering "already registered" would hide exactly that.
+def registration_action(server: dict, status: str | None, resolve, environ) -> tuple[str, str | None]:
+    needs = server.get("needs")
+    if needs and not resolve(needs):
+        return "skip-missing-tool", needs
+    needs_env = server.get("needs_env")
+    if needs_env and not environ.get(needs_env):
+        return "skip-missing-credential", needs_env
+    if status is not None:
+        return "already-registered", status
+    return "register", None
+
+
+# Where a credential has to live to actually reach an MCP server. Claude Code
+# expands ${VAR} from its own process environment, and clean-rag/.env is read
+# by clean-rag's server process only, never by Claude Code. Naming .env here
+# would send people to a file that cannot work for this.
+CREDENTIAL_HOMES = (
+    "set it as a real environment variable for the shell that launches Claude "
+    "Code, or add it to the \"env\" block of ~/.claude/settings.json"
+)
+
+
 def _register_one(claude: list[str], listed: str, server: dict) -> None:
     """Register a single MCP server at user scope. Never fatal.
 
@@ -1537,16 +1757,23 @@ def _register_one(claude: list[str], listed: str, server: dict) -> None:
     register_playwright_mcp, with only the name and args parameterized.
     """
     name, label = server["name"], server["label"]
-    args = server["args"]
-
-    needs = server.get("needs")
-    if needs and not shutil.which(needs):
-        _warn(f"{needs} not found — {label} needs it, skipping")
-        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
-        return
 
     status = parse_mcp_list(listed).get(name)
-    if status is not None:
+    action, detail = registration_action(server, status, resolve_tool, os.environ)
+
+    if action == "skip-missing-tool":
+        _warn(f"{detail} not found — {label} needs it, skipping")
+        if server.get("hint"):
+            _warn(f"  {server['hint']}")
+        _warn(f"  To register manually: {_manual_hint(server)}")
+        return
+
+    if action == "skip-missing-credential":
+        _warn(f"{detail} is not set — {label} needs it, skipping")
+        _warn(f"  {CREDENTIAL_HOMES}, then re-run setup")
+        return
+
+    if action == "already-registered":
         if _is_connected(status):
             _ok(f"{label} already registered and connected")
         else:
@@ -1555,14 +1782,23 @@ def _register_one(claude: list[str], listed: str, server: dict) -> None:
         return
 
     _info(f"Registering {label} (user scope)...")
-    rc, out = run_cmd(claude + ["mcp", "add", name, "--scope", "user", "--"] + args)
+    if server.get("transport") == "http" or server.get("env"):
+        cmd = claude + ["mcp", "add-json", name, "--scope", "user", _server_json(server)]
+    else:
+        cmd = claude + ["mcp", "add", name, "--scope", "user", "--"] + server["args"]
+    rc, out = run_cmd(cmd)
     if rc == 0:
-        _ok(f"{label} registered — run /mcp to connect")
+        # "registered", never "working". `claude mcp add` only writes config;
+        # it does not start the server. An npx or uvx row that has to download
+        # its package on first run routinely exceeds Claude Code's 30s connect
+        # timeout, so a zero exit here is consistent with a server that never
+        # connects. /mcp is where that actually gets settled.
+        _ok(f"{label} registered — run /mcp to confirm it connects")
     else:
         _warn(f"{label} registration failed (exit {rc})")
         if out:
             _warn(f"  {out[:200]}")
-        _warn(f"  To register manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+        _warn(f"  To register manually: {_manual_hint(server)}")
 
 
 # Note the upstream rename: this was GDB-MCP. Cloning the old name 404s.

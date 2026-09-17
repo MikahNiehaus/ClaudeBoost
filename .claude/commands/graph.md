@@ -77,7 +77,7 @@ Set:
 Call `GET /status``.
 
 If it fails or the tool is unavailable:
-> "RAG server is not responding. Run `/rag` to start it, then retry `/graph $ARGUMENTS`."
+> "RAG server is not responding. Run `/clean-rag-server start`, then retry `/graph $ARGUMENTS`."
 
 Stop. Do not proceed.
 
@@ -90,7 +90,7 @@ curl -s --max-time 10 -X POST http://127.0.0.1:8613/search -H "Content-Type: app
 If this returns nothing:
 > "Project not indexed."
 
-Run `Skill(skill="index-project", args="$PROJECT_PATH")` immediately, then continue — do not stop.
+Index it with `POST http://127.0.0.1:8613/index-project` and body `{"project_path": "$PROJECT_PATH"}`, then continue — do not stop.
 
 ---
 

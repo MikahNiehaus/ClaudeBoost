@@ -29,7 +29,7 @@ Flexible — any combination:
    ```bash
    curl -s --max-time 5 http://127.0.0.1:8613/status
    ```
-   If it fails, stop and tell the user: "RAG not connected — run `/rag` to start the server, then retry."
+   If it fails, stop and tell the user: "RAG not connected — run `/clean-rag-server start` to start the server, then retry."
 
    Report current counts before indexing so the user can see what changed:
    - knowledge: N chunks, N files

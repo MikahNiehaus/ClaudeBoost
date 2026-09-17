@@ -161,7 +161,7 @@ This is a fast probe. `GET /status` does not use the embedding model, so it resp
 
 **If `GET http://127.0.0.1:8613/status` returns an error OR the tool is not available:**
 > **STOP. Do not proceed.**
-> Tell the user: "RAG server is not responding. Run `/rag` to start the server, then retry `/explore $ARGUMENTS`."
+> Tell the user: "RAG server is not responding. Run `/clean-rag-server start`, then retry `/explore $ARGUMENTS`."
 
 **If `GET http://127.0.0.1:8613/status` returns successfully:** note the result internally and proceed to Phase 1. Do not print the status to the user.
 
@@ -170,11 +170,11 @@ This is a fast probe. `GET /status` does not use the embedding model, so it resp
 Detect the project path:
 1. Run `"${CLAUDEBOOST_PYTHON}" "${CLAUDEBOOST_HOME}/scripts/get-active-workspace.py"` to get the active workspace ID for this Claude instance (same source as the blue WS indicator — per-instance, not shared). Output is JSON with `workspace_id`, `workspace_path`, `project_path`. Fall back to current working directory if no workspace is active.
 
-Call `GET http://127.0.0.1:8613/status` and check that the detected path appears in the indexed projects.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "<project_path>"}` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/clean-rag-server start`.
 
 ---
 
@@ -184,9 +184,9 @@ Call `GET http://127.0.0.1:8613/status` and check that the detected path appears
 
 Read `$WORKSPACE_ABS/ticket.md`. If empty or missing, abort and re-run Phase 0c.
 
-**1a — Spawn ticket-analyst-agent.**
+**1a — Spawn researcher on the ticket.**
 
-Spawn `ticket-analyst-agent` (Sonnet) with this prompt:
+Spawn `researcher` (Sonnet) with this prompt:
 
 ```
 You are analyzing a ticket for task $TASK_ID.
@@ -247,7 +247,7 @@ Skip this phase entirely if `PROJECT_PATH = none`.
 
 **2a — RAG health check.**
 
-Call `GET http://127.0.0.1:8613/status`. If it fails: "RAG server not responding — run `/rag` to start the server and retry."
+Call `GET http://127.0.0.1:8613/status`. If it fails: "RAG server not responding — run `/clean-rag-server start` to start the server and retry."
 
 **2b — Index the project.**
 
@@ -280,9 +280,9 @@ Skip this phase if `PROJECT_PATH = none`.
 
 Read `$WORKSPACE_ABS/analysis.md` to extract the key areas, entities, and scope from the ticket analysis. This is what the explore agent will target.
 
-**3a — Spawn explore-agent.**
+**3a — Spawn researcher on the codebase.**
 
-Spawn `explore-agent` (Sonnet) with this prompt:
+Spawn `researcher` (Sonnet) with this prompt:
 
 ```
 You are exploring a codebase to understand what code is relevant to ticket $TASK_ID.
@@ -367,7 +367,7 @@ Print the agent's summary when it returns.
 
 Call `POST http://127.0.0.1:8613/search with {"query":"implementation plan for ticket $TASK_ID","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-**If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/rag` to start the server, then retry."**
+**If the result contains an "error" key: STOP. Tell the user: "RAG error loading context — run `/clean-rag-server start` to start the server, then retry."**
 
 This loads architecture, workflow, testing, and security knowledge to validate the plan.
 

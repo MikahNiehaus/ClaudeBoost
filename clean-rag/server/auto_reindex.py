@@ -66,6 +66,23 @@ FULL_REINDEX_THRESHOLD = 50
 _sweep_in_progress = False
 _sweep_started_at = 0.0
 
+#: Set by POST /sweep-pause. Deliberately in memory only: a pause is for "give
+#: me my machine back now", and one that survives a restart is a setting the
+#: human forgets they turned on, which is how indexing silently stops forever.
+_paused = False
+
+
+def is_paused() -> bool:
+    return _paused
+
+
+def set_paused(paused: bool) -> bool:
+    """Pause or resume sweeps, returning the state actually in force."""
+    global _paused
+    _paused = bool(paused)
+    logger.info("Indexing sweeps %s", "paused" if _paused else "resumed")
+    return _paused
+
 
 #: Re-exported from reindex_unit so the batch driver and this loop cannot drift
 #: apart. Kept importable from here because that is where callers and tests
@@ -300,7 +317,7 @@ async def _sweep_project(
     # The lock is what stops this racing a manual /index-project. If someone is
     # already indexing, skip the sweep and catch it on the next pass one hour
     # from now. Waiting would just pile up sweeps behind a slow index.
-    if not acquire_index_lock():
+    if not acquire_index_lock("sweep", project_path):
         logger.info("Index lock held by another job, skipping %s this pass", project_path)
         return False
 
@@ -450,6 +467,12 @@ async def auto_reindex_loop(get_model_cache) -> None:
     while True:
         await asyncio.sleep(INTERVAL_S)
 
+        # Checked before the sweep starts as well as between projects, or a
+        # pause taken during the sleep would still cost one whole sweep.
+        if is_paused():
+            logger.debug("Indexing paused, skipping this sweep")
+            continue
+
         model_cache = get_model_cache()
         # `is None`, not truthiness. ModelCache defines __len__ but not
         # __bool__, so an empty but perfectly usable cache is falsy, and this
@@ -501,6 +524,13 @@ async def auto_reindex_loop(get_model_cache) -> None:
             #: would read as idle if this were a single project flag.
             group_did_work = False
             for project in planned:
+                # Checked in the same place as headroom, for the same reason: a
+                # sweep runs for hours and the human can ask for the machine
+                # back at any point in it.
+                if is_paused():
+                    logger.info("Indexing paused, abandoning the rest of this sweep")
+                    break
+
                 # Re-check between projects, not just once up front. A sweep
                 # runs for hours, and the user can sit down at the machine at
                 # any point during it.

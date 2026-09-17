@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 CLEAN_RAG_HOME = Path(__file__).resolve().parent
@@ -135,22 +136,105 @@ def ensure_env_file() -> None:
 # a launcher that nothing created and to satisfy a gate with agents that didn't
 # exist.
 # ---------------------------------------------------------------------------
-def install_user_assets() -> None:
-    portable = CLEAN_RAG_HOME / "portable"
-    if not portable.is_dir():
-        _warn("clean-rag/portable not found, skipping user asset install")
+def _alias_description(path: Path) -> str | None:
+    """How writing `path` would also rewrite some other file, or None.
+
+    Three mechanisms alias a destination, and each needs its own test:
+    a hard link (several names, one inode), a symlink, and on Windows a
+    junction. shutil.copyfile opens the destination "wb", which follows a
+    symlink or junction and truncates an inode in place, so every one of them
+    turns "write this file" into "rewrite a different file".
+
+    Only the final path component is examined, deliberately. os.path.realpath
+    would also flag an ordinary file whose PARENT is aliased: measured here, a
+    plain file inside a junction has realpath != abspath while the file itself
+    is perfectly ordinary. Refusing on that would break every install for
+    anyone who keeps ~/.claude behind a junction or a dotfiles symlink, which
+    is a normal setup. Aliasing of the parent is the user's own arrangement and
+    writing files into it is exactly what this installer is for.
+
+    The link count is read with follow_symlinks=False. The symlink test above
+    already returns first, so today that flag changes no outcome; it is there
+    so the count still describes the destination itself if these checks are
+    ever reordered. Path.stat() would report a symlink target's count, which is
+    1 for an ordinary file however many symlinks point at it.
+
+    Returns None when the answer cannot be trusted, which keeps the caller on
+    its previous behaviour rather than refusing an install over a stat quirk.
+    A filesystem with no hard links (FAT32, exFAT) reports 1, and one that
+    reports nothing useful degrades to the old behaviour. Note this covers the
+    hard link case only: a filesystem can lack hard links and still carry
+    symlinks or reparse points, which is why those are tested separately.
+    """
+    try:
+        if path.is_symlink():
+            try:
+                return f"a symlink to {os.readlink(path)}"
+            except OSError:
+                return "a symlink"
+        # os.path.isjunction is 3.12+. A junction is not a symlink as far as
+        # is_symlink() is concerned (measured: it returns False), so without
+        # this a junction would go undetected.
+        if getattr(os.path, "isjunction", None) and os.path.isjunction(path):
+            return "a junction"
+        nlink = os.stat(path, follow_symlinks=False).st_nlink
+    except OSError:
+        return None
+    if nlink and nlink > 1:
+        return f"hard linked to {nlink - 1} other file(s)"
+    return None
+
+
+def _copy_file(src: Path, dst: Path) -> None:
+    if not src.is_file():
+        _warn(f"missing bundled file: {src.name}")
         return
-
-    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
-
-    def _copy_file(src: Path, dst: Path) -> None:
-        if not src.is_file():
-            _warn(f"missing bundled file: {src.name}")
+    if dst.exists():
+        # Aliasing is checked before mtime because it is the more specific
+        # fact and it changes what the right advice is. An aliased destination
+        # that is also newer used to report only the mtime story, which tells
+        # the reader to "reconcile by hand" a file that is really someone
+        # else's, so the accurate diagnosis never reached them.
+        #
+        # shutil.copyfile opens dst "wb", truncating the inode in place, so
+        # every other name for it sees the new bytes. install.bat hard links
+        # ~/.claude/CLAUDE.md to the repo's own tracked CLAUDE.md, and copying
+        # over it rewrites a tracked file, leaving an unexplained `git diff` a
+        # maintainer could commit.
+        #
+        # shutil.SameFileError does not cover this. It fires on
+        # _samefile(src, dst), and here src is the portable copy while the link
+        # is between dst and a third path, so src and dst really are different
+        # files.
+        alias = _alias_description(dst)
+        if alias:
+            # Identical content means the copy would change nothing, so there
+            # is no hazard to report and nothing worth saying.
+            if _differing_lines(src, dst) == 0:
+                return
+            _warn(
+                f"{dst.name} in ~/.claude is {alias}. Writing it would rewrite "
+                f"that file too, so the installer left it alone."
+            )
+            # No `del` instruction here, on purpose. Deleting the link and
+            # re-running silently swaps the linked document for this bundled
+            # copy and drops the link, and the run ends on a plain "installed"
+            # line that gives the reader no sign their global instructions
+            # just changed identity.
+            _say(
+                f"That link is how install.bat sets things up, and the file it "
+                f"points at is already in use, so there is usually nothing to do."
+            )
+            _say(
+                f"To use this bundled copy instead, replace the link yourself; "
+                f"it then stops following the repo on git pull. Compare first:"
+            )
+            _say(f"diff \"{src}\" \"{dst}\"")
             return
-        # Don't stomp a copy the user edited to be newer than the repo's: skip it
-        # so a local tweak survives a re-run. That direction is deliberate and
-        # stays — the installer preserves the local file and never resolves a
-        # conflict on the user's behalf.
+        # Don't stomp a copy the user edited to be newer than the repo's: skip
+        # it so a local tweak survives a re-run. That direction is deliberate
+        # and stays — the installer preserves the local file and never resolves
+        # a conflict on the user's behalf.
         #
         # What mtime cannot say is whether the two actually differ, and it is a
         # weak freshness signal generally (apenwarr, "mtime comparison
@@ -160,7 +244,7 @@ def install_user_assets() -> None:
         # the repo copy while every install printed one bland line about it. So
         # compare content as well: stay quiet when the skip changes nothing, and
         # when it does, say how far apart they are and how to look.
-        if dst.exists() and dst.stat().st_mtime > src.stat().st_mtime:
+        if dst.stat().st_mtime > src.stat().st_mtime:
             drift = _differing_lines(src, dst)
             if drift == 0:
                 return
@@ -171,9 +255,18 @@ def install_user_assets() -> None:
             )
             _say(f"diff \"{src}\" \"{dst}\"")
             return
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    _ok(f"installed {dst.relative_to(CLAUDE_DIR.parent)}")
+
+
+def install_user_assets() -> None:
+    portable = CLEAN_RAG_HOME / "portable"
+    if not portable.is_dir():
+        _warn("clean-rag/portable not found, skipping user asset install")
+        return
+
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
 
     # The global instructions describing the research gate and the agents. Both
     # this installer and ClaudeBoost's setup.py (which delegates here) keep it
@@ -185,8 +278,10 @@ def install_user_assets() -> None:
     # switch can't remove it out from under a live hook registration.
     _copy_file(portable / "hook-run.py", CLAUDE_DIR / "hook-run.py")
 
-    # Agents. research-agent (Sonnet) is the gatekeeper; verifier-agent (Opus)
-    # validates the diff afterward.
+    # Agents. researcher and swiper are the two the research gate counts
+    # (RESEARCH_AGENTS in hooks/research_state.py). bad-cop reviews afterward and
+    # good-cop fixes what it finds. research-agent and verifier-agent used to be
+    # named here and neither ships any more.
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
@@ -266,11 +361,43 @@ def install_npm_qa_tools() -> None:
 # Mirrors ClaudeBoost's scripts/setup.py MCP_SERVERS table. Kept as its own copy
 # so clean-rag stays installable standalone, without ClaudeBoost present.
 # ---------------------------------------------------------------------------
-MCP_SERVERS: list[tuple[str, list[str]]] = [
-    ("mcp-debugger", ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"]),
-    ("playwright", ["npx", "-y", "@playwright/mcp@latest"]),
-    ("test-coverage", ["npx", "-y", "test-coverage-mcp"]),
-    ("chrome-devtools", ["npx", "-y", "chrome-devtools-mcp@latest"]),
+#
+# Dicts rather than (name, args) tuples since the credentialed and remote rows
+# arrived: a tuple cannot carry a transport, a URL, a header or a required env
+# var, so those rows would have silently degraded to a bare stdio registration
+# here while working correctly in ClaudeBoost's copy. The shared keys are what
+# tests/test_mcp_server_registration.py compares; label, hint and why are
+# presentation only and live in scripts/setup.py alone.
+MCP_SERVERS: list[dict] = [
+    {"name": "mcp-debugger",
+     "args": ["npx", "-y", "@debugmcp/mcp-debugger", "stdio"], "needs": "npx"},
+    {"name": "playwright",
+     "args": ["npx", "-y", "@playwright/mcp@latest"], "needs": "npx"},
+    {"name": "test-coverage",
+     "args": ["npx", "-y", "test-coverage-mcp"], "needs": "npx"},
+    {"name": "chrome-devtools",
+     "args": ["npx", "-y", "chrome-devtools-mcp@latest"], "needs": "npx"},
+    {"name": "serena",
+     "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
+              "serena", "start-mcp-server"], "needs": "uvx"},
+    {"name": "ast-grep", "args": ["uvx", "ast-grep-mcp"], "needs": "uvx"},
+    {"name": "context7",
+     "args": ["npx", "-y", "@upstash/context7-mcp"], "needs": "npx"},
+    {"name": "semgrep", "args": ["uvx", "semgrep-mcp"], "needs": "uvx"},
+    {"name": "osv", "args": ["osv-scanner", "mcp"], "needs": "osv-scanner"},
+    {"name": "arxiv", "args": ["uvx", "arxiv-mcp-server"], "needs": "uvx"},
+    {"name": "socket", "args": [],
+     "transport": "http", "url": "https://mcp.socket.dev/"},
+    {"name": "antv-chart",
+     "args": ["npx", "-y", "@antv/mcp-server-chart"], "needs": "npx"},
+    {"name": "jupyter", "args": ["uvx", "jupyter-mcp-server@latest"],
+     "needs": "uvx", "needs_env": "JUPYTER_TOKEN"},
+    {"name": "github", "args": [],
+     "transport": "http", "url": "https://api.githubcopilot.com/mcp/",
+     "headers": {"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"},
+     "needs_env": "GITHUB_MCP_TOKEN"},
+    {"name": "atlassian", "args": [],
+     "transport": "http", "url": "https://mcp.atlassian.com/v1/mcp"},
 ]
 
 
@@ -313,6 +440,96 @@ def parse_mcp_list(stdout: str) -> dict[str, str]:
     return servers
 
 
+def _mcp_add_cmd(claude: list[str], server: dict) -> list[str]:
+    """The registration command for one server row.
+
+    The ClaudeBoost twin is scripts/setup.py's _server_json plus the branch in
+    _register_one; kept as its own copy for the same standalone reason as
+    MCP_SERVERS above.
+
+    A remote or credentialed row goes through `add-json` rather than
+    `claude mcp add --env K=V`, because --env is variadic and greedily consumes
+    the server name when the two are adjacent (anthropics/claude-code#29221).
+    JSON has no positional ambiguity.
+
+    A credential is written as the literal `${VAR}` placeholder that Claude Code
+    expands from the environment at launch, so the secret never lands in
+    ~/.claude.json. Expansion fails soft on an unset var, which is why the
+    caller checks needs_env first rather than trusting it.
+    """
+    name = server["name"]
+    if server.get("transport") == "http":
+        payload: dict = {"type": "http", "url": server["url"]}
+        if server.get("headers"):
+            payload["headers"] = server["headers"]
+    elif server.get("env"):
+        args = server["args"]
+        payload = {"type": "stdio", "command": args[0], "args": args[1:],
+                   "env": server["env"]}
+    else:
+        return claude + ["mcp", "add", name, "--scope", "user", "--"] + server["args"]
+    return claude + ["mcp", "add-json", name, "--scope", "user", json.dumps(payload)]
+
+
+def _script_dirs() -> list[str]:
+    """The running interpreter's own console-script directories."""
+    dirs = []
+    for key in ("scripts", os.name + "_user"):
+        try:
+            path = (sysconfig.get_path("scripts") if key == "scripts"
+                    else sysconfig.get_path("scripts", key))
+        except (KeyError, ValueError):
+            continue
+        if path and os.path.isdir(path) and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def resolve_tool(name: str) -> str | None:
+    """Absolute path to an executable, or None if it genuinely is not here.
+
+    PATH first, then the interpreter's script directories. `pip install uv`
+    drops uv.exe and uvx.exe into a per-user Scripts dir that is not on PATH
+    on a default Windows install, so shutil.which alone reports a tool missing
+    that is sitting right there. sysconfig derives those directories from the
+    running interpreter, so this stays correct under a different user, a venv,
+    or another OS, with no path literal anywhere.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in _script_dirs():
+        found = shutil.which(name, path=directory)
+        if found:
+            return found
+    return None
+
+
+# Byte-identical twin of scripts/setup.py's registration_action, kept here for
+# the same standalone reason as MCP_SERVERS above. The two installers used to
+# make this decision in separately hand-written control flow and had already
+# drifted: setup.py checked prerequisites first, this file checked "already
+# registered" first, so one machine got two different answers for one server.
+# ClaudeBoost's tests/test_mcp_server_registration.py drives both copies over a
+# scenario matrix, so a future divergence fails a test rather than shipping.
+#
+# Order is the contract. A missing prerequisite or credential is reported even
+# when the server is already registered, because Claude Code expands ${VAR}
+# from its own environment at launch: a registered row whose credential is
+# unset still sends the literal "${VAR}" and fails at runtime. Answering
+# "already registered" would hide exactly that.
+def registration_action(server: dict, status: str | None, resolve, environ) -> tuple[str, str | None]:
+    needs = server.get("needs")
+    if needs and not resolve(needs):
+        return "skip-missing-tool", needs
+    needs_env = server.get("needs_env")
+    if needs_env and not environ.get(needs_env):
+        return "skip-missing-credential", needs_env
+    if status is not None:
+        return "already-registered", status
+    return "register", None
+
+
 def register_mcp_servers() -> None:
     """Register every debugging MCP server at user scope. Never fatal.
 
@@ -323,12 +540,6 @@ def register_mcp_servers() -> None:
     claude = _claude_cmd()
     if claude is None:
         _warn("claude CLI not found, skipping MCP server registration")
-        return
-
-    if not shutil.which("npx"):
-        _warn("npx not found, skipping MCP server registration (needs Node.js)")
-        for name, args in MCP_SERVERS:
-            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
         return
 
     try:
@@ -345,23 +556,42 @@ def register_mcp_servers() -> None:
         return
 
     registered = parse_mcp_list(listed.stdout)
-    for name, args in MCP_SERVERS:
-        if name in registered:
+    for server in MCP_SERVERS:
+        name = server["name"]
+        # Prerequisites are checked per server, not behind one global npx gate.
+        # That gate used to skip the whole table when Node was absent, which
+        # was right when every row was an npx package and wrong the moment uvx
+        # and the remote HTTP rows arrived: none of those need Node.
+        action, detail = registration_action(
+            server, registered.get(name), resolve_tool, os.environ)
+
+        if action == "skip-missing-tool":
+            _warn(f"{name} needs {detail}, not found, skipping")
+            continue
+        if action == "skip-missing-credential":
+            _warn(f"{name} needs {detail} in the environment, skipping")
+            continue
+        if action == "already-registered":
             _ok(f"{name} already registered")
             continue
+
+        cmd = _mcp_add_cmd(claude, server)
         try:
             result = subprocess.run(
-                claude + ["mcp", "add", name, "--scope", "user", "--"] + args,
-                capture_output=True, text=True, timeout=120,
+                cmd, capture_output=True, text=True, timeout=120,
             )
         except Exception as e:  # noqa: BLE001
             _warn(f"{name} registration failed: {e}")
             continue
         if result.returncode == 0:
-            _ok(f"{name} registered")
+            # "registered", never "working". `claude mcp add` writes config and
+            # does not start the server, so a zero exit is consistent with an
+            # npx or uvx row that later exceeds the 30s connect timeout while
+            # downloading its package.
+            _ok(f"{name} registered — run /mcp to confirm it connects")
         else:
             _warn(f"{name} registration failed: {result.stderr[:200]}")
-            _say(f"  Manually: claude mcp add {name} --scope user -- {' '.join(args)}")
+            _say(f"  Manually: {' '.join(cmd[1:])}")
 
 
 # ---------------------------------------------------------------------------
@@ -756,8 +986,13 @@ def set_env_var() -> None:
     # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
     # Code's own autocompact logic can't see through settings.json.
     env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
+    # Compact at 60% rather than the default, so compaction happens while there
+    # is still room to write a decent summary. setdefault, not assignment: a
+    # number the human has already tuned is theirs to keep.
+    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
+    _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")
 
 
 def protect_research_state() -> None:
@@ -1151,12 +1386,13 @@ def register_code_pattern_inject_hook() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The research gate. Blocks a code edit unless research-agent has actually run
-# and declared that it covered this file.
+# The research gate. Nudges when no researcher or swiper run this session has
+# declared that it covered this file. It does not block: every return in
+# hooks/research-gate.py's main() is 0, by decision, because an unresearched
+# edit is recoverable and earns an audit trail rather than a refusal.
 #
-# Prepended, because it should refuse before the other pre edit hooks bother
-# doing their searches. No point injecting research context into an edit that
-# is about to be blocked anyway.
+# Prepended so its stderr note lands before the other pre edit hooks add their
+# own output, not because it refuses anything.
 # ---------------------------------------------------------------------------
 def register_research_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)

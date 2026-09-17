@@ -40,7 +40,7 @@ A typical session looks like this:
 
 For a one-line fix or a doc update, none of that applies. The system doesn't add ceremony unless the task warrants it.
 
-**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, just tell Claude — for example, "have security-agent look at this." The agents always call `POST /context` as their first action — that's how they know what domain knowledge applies to the task. You'll see it in the output; it's expected behavior, not overhead.
+**You don't need to manage agents manually.** Claude routes to the right ones based on what you're asking for. If you want a specific agent, just tell Claude — for example, "have bad-cop look at this." They search with `POST http://127.0.0.1:8613/search` against your indexed projects. You'll see it in the output; it's expected behavior, not overhead.
 
 ---
 
@@ -147,58 +147,56 @@ Everything else in the tables below is available, but most of it runs automatica
 
 ## 5. Agents
 
-All 24 specialist agents are spawned automatically based on task type. You can request a specific agent by name — just tell Claude which one you want. Opus agents run on Claude's most capable model and are used for tasks that need deep reasoning or high-stakes judgment. Sonnet handles everything else — it's fast, strong at code, and handles the bulk of the work.
+Six agents are installed. Claude spawns them for you; you can also ask for one
+by name.
 
 | Agent | What it does | Best for | Model |
 |-------|-------------|----------|-------|
-| architect-agent | Designs systems, reviews SOLID principles, produces grounded architectural proposals | Designing a new module or deciding between two approaches | Opus |
-| reviewer-agent | Code review, PR review, verify-gate evaluation | Pre-merge review or confirming findings from other agents | Opus |
-| ticket-analyst-agent | Parses tickets, extracts requirements, defines done criteria | Turning a vague ticket into a clear implementation plan | Opus |
-| debug-agent | Bug diagnosis, root cause analysis | Tracking down a regression or a crash that only reproduces in production | Sonnet |
-| refactor-agent | Code restructuring, cleanup, rename campaigns | Paying down technical debt across multiple files | Sonnet |
-| test-agent | Unit/integration tests, TDD, coverage analysis | Adding tests to untested code or writing tests first | Sonnet |
-| e2e-agent | End-to-end browser testing with Playwright | Verifying a user flow works from login to checkout | Sonnet |
-| browser-agent | Browser automation, DOM inspection, UI verification | Checking that a UI element renders correctly across states | Sonnet |
-| ui-agent | Frontend components, React, accessibility | Building a new component or auditing for a11y issues | Sonnet |
-| security-agent | OWASP Top 10, auth/authz, injection detection | Auditing a new endpoint or reviewing a login flow | Sonnet |
-| performance-agent | Profiling, N+1 detection, caching strategy | Diagnosing slow page loads or database query bottlenecks | Sonnet |
-| database-agent | Schema design, migrations, query optimization | Designing a new table or reviewing a slow query plan | Sonnet |
-| devops-agent | CI/CD, Docker, deployment scripts | Writing a GitHub Actions workflow or Dockerizing an app | Sonnet |
-| observability-agent | Logging strategy, tracing, metrics setup | Adding structured logging to a service or setting up distributed tracing | Sonnet |
-| docs-agent | Documentation, README, API docs | Writing a README, API reference, or inline documentation | Sonnet |
-| research-agent | Web research, library comparison, investigation | Comparing two libraries before picking one | Sonnet |
-| explore-agent | Codebase discovery, file mapping, dependency tracing | Mapping an unfamiliar codebase before starting work | Sonnet |
-| workflow-agent | Multi-step task orchestration | Coordinating a sequence of dependent sub-tasks | Sonnet |
-| compliance-agent | Standards compliance, rule enforcement | Verifying a feature against regulatory or internal standards | Sonnet |
-| standards-validator-agent | Coding standards validation, pattern enforcement | Checking whether new code follows project conventions | Sonnet |
-| estimator-agent | Story pointing, complexity estimation | Estimating effort for a sprint backlog | Sonnet |
-| quick-cop | Verify-gate — validates findings from other agents | Confirming a security or bug finding is real before it reaches you | Sonnet |
-| rag-indexing-agent | RAG index management, re-indexing advice | Diagnosing stale or broken index state | Sonnet |
-| clean-rag-doctor-agent | Diagnoses and repairs the clean-rag research-enforcement server (port 8613) when it's down or erroring | Spawned automatically by the clean-rag health check when a search fails; runs in the background | Sonnet |
+| researcher | Reads the codebase through clean-rag's index and import graph, and researches the general engineering standard for the change | Understanding an unfamiliar codebase, or working out how this kind of change is normally built | Sonnet |
+| swiper | Checks whether the thing already exists, in your project, the stdlib, a dependency, GitHub or StackOverflow, and hands back the exact lines to take | Before writing anything from scratch | Sonnet |
+| research-agent | Web research on untrusted pages. Cannot write files, and its Bash only reaches the local clean-rag server | Comparing two libraries before picking one | Sonnet |
+| bad-cop | Writes tests aimed at breaking your change, runs them, and reports the real failures with output attached. Never fixes anything | After any real code change | Sonnet |
+| good-cop | Reproduces each of bad-cop's findings, researches the fix, applies it, gets the suite green | Only when bad-cop found something Critical or High | Opus |
+| quick-cop | Reads the code and says whether a single "it is done" claim is true. Non blocking, stamps nothing | Any time something is declared finished | Sonnet |
 
-The `_orchestrator` meta-agent is internal — it coordinates agent spawning and isn't listed as a specialist agent.
+Claude Code's own built-ins (`Explore`, `Plan`, `general-purpose`) are available
+alongside these.
+
+This table used to list 24 agents. Twenty-two of them, including
+architect-agent, reviewer-agent, ticket-analyst-agent, debug-agent and
+security-agent, do not exist and cannot be spawned. Read any older reference to
+one of those names as aspirational.
 
 ### How agents are routed
 
-Claude decides which agents to spawn based on what you're asking for. A bug report goes to debug-agent. A "please review this PR" goes to reviewer-agent (Opus). A new feature with database changes gets architect-agent for the design, then database-agent for the schema, then test-agent for coverage. You don't pick them manually unless you want to.
+Two sequences, and the order inside each one matters.
 
-Agents run in parallel when context allows it:
+Before an edit: `researcher`, then `swiper`. swiper runs second because it needs
+researcher's findings to avoid recommending a swipe for something your project
+already has.
+
+After an edit: `bad-cop`. If it finds nothing it stamps `VERIFIED:` and you are
+done. If everything it found is a nit it says `NITS:`, you fix those yourself,
+and you re-run bad-cop. Only if it says `HANDOFF:`, meaning Critical or High, do
+you spawn `good-cop`, and then bad-cop again to re-check the fix. The loop ends
+when bad-cop stamps `VERIFIED:` itself, never when good-cop says it is done.
+
+Agents run in parallel when context allows:
 
 - **Context below 50%**: up to 3 agents at once
-- **Context 50–75%**: up to 2 agents at once
-- **Context above 75%**: sequential only — one at a time
+- **Context 50 to 75%**: up to 2 agents at once
+- **Context above 75%**: one at a time
 
-If a task needs more than 3 agents, they run in batches with a compact step between batches. This prevents the context from exploding, which would cause a "conversation too long" error mid-task. Each batch completes, its findings get written to `context.md`, then the next batch starts.
-
-Spawning with `run_in_background: true` is sometimes used for agents that don't need to block the main flow — Claude can continue with other work and check in on the background agent when it finishes.
+Split parallel reviewers by dimension (correctness, security, concurrency, error
+handling, test quality) and hand every one the full diff. Never split them by
+file: a reviewer that sees only file B cannot see that a signature change in
+file A broke it.
 
 ### When to use Opus vs Sonnet
 
-Three agents always run on Opus regardless of context: `architect-agent`, `reviewer-agent`, and `ticket-analyst-agent`. These are the ones doing deep architectural reasoning, high-stakes evaluation, and requirements interpretation — tasks where the quality difference between Opus and Sonnet is most visible.
-
-Opus can also be escalated for other agents when stakes are high: production-critical code, auth systems, payment flows, or when a Sonnet agent reports it's blocked and needs more reasoning depth.
-
-Everything else runs on Sonnet. It handles code generation, testing, debugging, documentation, and most implementation work well, and it's significantly faster.
+`good-cop` runs on Opus. It is the one applying a fix to code that already
+failed an adversarial test, so the reasoning quality shows. Everything else runs
+on Sonnet.
 
 ---
 
@@ -249,7 +247,7 @@ The RAG unavailability protocol is strict: if RAG is down, stop, run `/boost`, a
 Claude researches and proposes before taking any architectural action, then waits for your input. The full loop is:
 
 1. Claude searches RAG and reads 2–3 relevant files
-2. Spawns `architect-agent` (Opus) to produce options grounded in your actual codebase
+2. Spawns `researcher`, then `swiper`, to produce options grounded in your actual codebase
 3. Presents you with 2–3 options, each with a one-sentence trade-off
 4. You pick, adjust, or write in a new option
 5. Claude implements the approved choice plus any constraints you added
@@ -330,7 +328,7 @@ For tasks involving UI work, `snapshots/` is where before/after screenshots go. 
 
 ### 1. Fix a bug
 
-Describe the bug and what you expected to happen. Claude spawns `debug-agent`, which works through a systematic process: reproduce the issue, read the relevant files, identify the root cause, and propose a fix. After the fix, it spawns `test-agent` to add a regression test so the same bug can't come back undetected.
+Describe the bug and what you expected to happen. Run `/debug`, which works through a systematic process: reproduce the issue, read the relevant files, identify the root cause, and propose a fix. After the fix, spawn `bad-cop` to add a regression test that actually fails on the old code, so the same bug can't come back undetected.
 
 For simple bugs where the cause is obvious, Claude handles it directly without spinning up agents. The decision is automatic — don't second-guess it.
 
@@ -383,7 +381,7 @@ For large features (15+ source files or a new subsystem), use `/create-prd` firs
 
 ### 4. Write tests
 
-For unit and integration tests: describe what needs testing. Claude spawns `test-agent`, which reads the code being tested, identifies the important cases (happy path, edge cases, error conditions), and writes tests that actually fail when the behavior breaks — not just tests that exist on paper.
+For unit and integration tests: describe what needs testing. Claude spawns `bad-cop`, which reads the code being tested, identifies the important cases (happy path, edge cases, error conditions), and writes tests that actually fail when the behavior breaks — not just tests that exist on paper.
 
 For browser QA sessions:
 ```

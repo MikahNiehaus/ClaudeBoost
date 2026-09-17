@@ -125,11 +125,12 @@ class SentenceTransformerEmbedding:
             return
         with self._load_lock:
             if self._model is None:
-                from server.config import DEVICE, EMBED_BATCH_SIZE
-                logger.info("Loading embedding model: %s (device=%s)", self._model_name, DEVICE)
+                from server.config import EMBED_BATCH_SIZE, get_device
+                device = get_device()
+                logger.info("Loading embedding model: %s (device=%s)", self._model_name, device)
                 _apply_torch_thread_cap()
                 from sentence_transformers import SentenceTransformer
-                kwargs: dict = {"device": DEVICE}
+                kwargs: dict = {"device": device}
                 if self._trust_remote:
                     kwargs["trust_remote_code"] = True
                 # Offline first, fall back to download.

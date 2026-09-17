@@ -16,7 +16,7 @@ One command for the full debugging loop. Give it an error message, a file:line, 
 
 **0a — Health check:**
 
-Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run `/rag` first."
+Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run `/clean-rag-server start` first."
 
 **0b — Detect project path:**
 
@@ -34,7 +34,7 @@ Call `POST http://127.0.0.1:8613/search` with:
 }
 ```
 
-If the response has an `"error"` key: stop and tell the user to run `/rag`.
+If the response has an `"error"` key: stop and tell the user to run `/clean-rag-server start`.
 An empty `results` array is not an error — it means nothing in the index matched,
 so carry on with the file reads instead.
 
@@ -663,8 +663,8 @@ Write `$WORKSPACE_ABS/debug-report-[YYYY-MM-DD].md` (if a workspace exists) or p
 
 After printing the report, suggest one of:
 
-- Root cause found, fix is clear: "Consider running `/qa --code` to verify the fix doesn't introduce regressions, then spawn `test-agent` to write a regression test for this bug."
-- Root cause is an architectural issue: "Consider spawning `architect-agent` — this reveals a design issue that goes beyond a one-line fix."
+- Root cause found, fix is clear: "Consider running `/qa --code` to verify the fix doesn't introduce regressions, then spawn `bad-cop` to write a regression test that actually bites for this bug."
+- Root cause is an architectural issue: "Consider running `/start`, which spawns `researcher` then `swiper` — this reveals a design issue that goes beyond a one-line fix."
 - Fix was complex with several changed files: "Consider running `/review` to check the fix before merging."
 - Session was BLOCKED (can't reproduce, missing data): "To unblock: [specific thing needed — production logs, a specific test account, etc.]"
 
@@ -674,8 +674,8 @@ After printing the report, suggest one of:
 
 | If the session... | Run |
 |-------------------|-----|
-| Found root cause — fix is clear | `/qa --code` to verify the fix, then `spawn test-agent` for regression coverage |
-| Bug reveals a design problem | `spawn architect-agent` — deeper structural fix may be needed |
+| Found root cause — fix is clear | `/qa --code` to verify the fix, then spawn `bad-cop` for regression coverage |
+| Bug reveals a design problem | `/start` for researcher then swiper — deeper structural fix may be needed |
 | Fix looks risky or touches many files | `/review` before merging |
 | Couldn't reproduce — needs more data | Check logs or add a logpoint: `/debug --live file.ext:LINE` |
 | Fixed and verified | `/done` — pre-push checklist and push |

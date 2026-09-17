@@ -2,7 +2,7 @@
 
 Research gated development for Claude Code. Every code edit is researched before
 it happens, and search runs over your own indexed projects, not a scraped
-knowledge base. Works standalone or with Gas Town.
+knowledge base.
 
 ## The research gate (this is the operative rule)
 
@@ -439,6 +439,95 @@ scraped topic knowledge base.
 
 If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
 
+## MCP servers, and using them safely
+
+The installer registers these from `MCP_SERVERS` in `scripts/setup.py`, mirrored
+in `clean-rag/install.py`. Adding a server means adding a row to BOTH tables,
+and `tests/test_mcp_server_registration.py` fails if they drift. Every one of
+them is free.
+
+**The rule that generalises: these servers act as you.** They carry your PAT,
+your Atlassian permissions, your filesystem. Most ship write tools enabled by
+default. The mitigation is always the scope of the credential you hand over,
+never the server's own good behaviour. A read only token is the control; a
+promise in a README is not.
+
+What each one is for, and the specific thing to watch:
+
+- **serena** gives real symbol references, call hierarchy and rename through
+  language servers. Local. It writes a `.serena/` index into whatever project
+  it is pointed at, which is gitignored. Its C# backend is the flaky part.
+- **ast-grep** does structural AST search for codemods. Local, 4 tools. The
+  maintainers call the MCP wrapper experimental, so check a rewrite's output.
+- **context7** fetches version pinned library docs. Your query strings go to
+  Upstash. Never put code or anything internal in the query.
+- **semgrep** is real SAST. Scans stay entirely local. Do NOT set
+  `SEMGREP_APP_TOKEN` unless you actually want findings shipped to Semgrep's
+  cloud; without it nothing leaves the machine.
+- **osv** returns citable CVE and advisory IDs from Google's public database.
+  Read only, no credential, nothing sensitive sent.
+- **socket** scores a package before swiper takes it: license, malware,
+  maintenance. Its `depscore` is Socket's own composite number, so it is triage,
+  not a citation. The free tier has a monthly scan cap.
+- **arxiv** pulls real paper sections. This exists because `researcher` has
+  WebSearch but no WebFetch and clean-rag has no general fetch route, so it
+  otherwise works from snippets. Scope prompts to a section; whole papers flood
+  context.
+- **antv-chart** renders mind maps, flowcharts, network graphs and fishbone
+  diagrams to PNG. By default it renders through an Ant Group hosted endpoint,
+  so **diagram data leaves the machine**. Set `VIS_REQUEST_SERVER` to self host
+  before drawing anything that describes internal systems.
+- **jupyter** produces executable `.ipynb` evidence a human can re-run. It
+  executes code, so treat it as a real execution surface. Gated on
+  `JUPYTER_TOKEN`; without a live Jupyter it is skipped.
+- **github** does PRs, issues and Actions as structured calls. Use a fine
+  grained PAT scoped to the repos you actually want reachable, never a classic
+  token with full `repo`. It can merge, push and close for real. Its secret
+  scanning needs paid Secret Protection on private repos, so do not count on
+  that tool. The hosted endpoint requires Copilot enrolment; Copilot Free is $0.
+- **atlassian** reads and writes live Jira and Confluence as your user. A write
+  here is a write to something colleagues see. Confirm before creating or
+  editing anything, the same as any outward facing action.
+
+**Credentials.** `GITHUB_MCP_TOKEN` and `JUPYTER_TOKEN` are passed as `${VAR}`
+placeholders, which Claude Code expands from **its own process environment** at
+launch. They have to live somewhere that environment sees: a real environment
+variable in the shell you start Claude Code from, or the `env` block of
+`~/.claude/settings.json`. Both were confirmed by pointing a credentialed HTTP
+server at a local listener and reading the header that arrived.
+
+**Not `clean-rag/.env`.** Only clean-rag's server process reads that file, so a
+token set there never reaches Claude Code, and the failure is quiet: the
+registration succeeds and the literal `${GITHUB_MCP_TOKEN}` goes out as the
+bearer token. `claude mcp list` does print `Missing environment variables: ...`,
+and the installer refuses to register a server whose credential is unset, which
+is the guard that actually holds.
+
+`GITHUB_MCP_TOKEN` is deliberately NOT `GITHUB_TOKEN`: that one is clean-rag's
+read only search token, and sharing the name would either break the server or
+quietly widen what search can do. An unset credential skips that one server with
+a warning and never fails the install. Never resolve a credential into the
+registration payload; the placeholder is what keeps it out of `~/.claude.json`.
+
+**The injection boundary.** `bad-cop` and `good-cop` do NOT get context7, arxiv,
+socket or anything else that fetches from the network, for the same reason they
+never had WebFetch: a reviewer that reads untrusted content is a reviewer that
+can be talked out of a finding. Fetch shaped servers go to `researcher` and
+`swiper` only, the two agents that already carry that exposure.
+`test_reviewers_get_no_fetch_shaped_tools` enforces that, so it is a checked
+invariant and not a promise in a document.
+
+The other half of that routing, giving the cops the local code readers (serena,
+semgrep, ast-grep), is **not wired**. Neither cop enumerates those tools today.
+Wiring it needs the real tool names read off a running server, because Claude
+Code silently drops a name it does not recognise, which is the exact bug
+`tests/test_mcp_server_registration.py` exists to catch.
+
+**Tool names are enumerated literally, never wildcarded.** Claude Code silently
+drops `mcp__<server>__*`, which is how bad-cop believed it had coverage data for
+months while having none. Add a server's tools by real name, and let
+`tests/test_mcp_server_registration.py` confirm the server behind them exists.
+
 ## Decision Flow
 
 Two paths, not five mandatory steps.
@@ -466,8 +555,10 @@ ui, docs, test, and the rest) are available for focused work. They are spawned
 as needed, not on every task.
 
 ### Model Routing
-- **Opus**: architect-agent, reviewer-agent, ticket-analyst-agent, good-cop.
-- **Sonnet**: research-agent, researcher, bad-cop, and all other specialists.
+- **Opus**: good-cop.
+- **Sonnet**: bad-cop, quick-cop, research-agent, researcher, swiper.
+
+That is the whole roster, 6 agents. A spawn of a name not on this list does not error; it quietly resolves to a generic agent while the session believes it got a specialist.
 
 ### Starting a new build or feature
 
@@ -648,12 +739,6 @@ Do it right the first time. Rework costs more than ceremony.
   context catches hallucinations that same context confirmation misses.
 - Web research is cheap when you survey with snippets and fetch sparingly. The
   research agent's cost is mostly full page fetches, not searches.
-
-## Gas Town Compatibility
-
-Works with `gt prime`, `gt hook`, `gt sling`, `gt mail`, `gt nudge`,
-`gt handoff`, and beads. The workspace convention is bead compatible, and agent
-spawning is compatible with `gt sling` to polecats.
 
 ## OpenCode
 

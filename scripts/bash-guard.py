@@ -16,17 +16,26 @@ Blocked patterns:
   8. ssh/scp to external hosts   — data exfiltration prevention
   9. nc/netcat to external hosts — reverse shell prevention
  10. routed git/gh writes        — xargs/env prefix/alias bypass of the ask rule
+ 11. non-read git/gh verbs       — positive allowlist, parsed, wrapper-aware
+ 12. writes to the guard's own files, and reads of any .env
+ 13. shell routing: pipe-to-shell, find -exec, awk system(), sed e
 
-Most patterns here trip a Claude Code BUILT-IN scanner that prompts regardless of
-the allow list. check_routed_git_write is the exception: it closes a gap the
-permission engine structurally cannot, since permission rules match the raw
-command string by prefix and a routed write never matches that prefix.
+Two layers with different jobs. Checks 1-9 exist to dodge a Claude Code BUILT-IN
+scanner that prompts regardless of the allow list; they are ergonomics. Checks
+10-13 are the security boundary, and they are here rather than in the permission
+list because the list structurally cannot express them: its rules match the raw
+command string by prefix, so `xargs git commit` and `find . -exec git commit ;`
+match no `Bash(git commit *)` rule and run unasked.
 
-The bare "Bash" catch all allow entry was removed from settings.json, so an
-unlisted sub-command is no longer silently allowed.
+Off switch: CLAUDEBOOST_BASH_GUARD=off disables the ergonomic half only. It no
+longer disables the security half. One env var that turns off the whole boundary
+is not a boundary, and the value of the switch was always unblocking a workflow
+that checks 1-9 obstruct.
 
-Off switch: set CLAUDEBOOST_BASH_GUARD=off (in ~/.claude/settings.json env) to
-disable the guard entirely.
+Fail safe: an ergonomic check that raises is skipped; a security check that
+raises blocks. A guard that cannot decide has no basis to allow, and exiting
+non-zero-but-not-2 is the documented silent failure of this hook contract (exit
+1 is neither allow nor block, so the command runs anyway).
 
 Exit codes:
   0 = allow (pass)
@@ -38,10 +47,21 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
-from urllib.parse import urlsplit
+# pathlib is not imported for the same reason as urllib.parse below: it cost
+# 9ms of this hook's startup to build one string. os.path does that without the
+# import. normpath rather than a bare string because Path collapsed a `//` and
+# a `.` segment, and the prefix below is compared with startswith, where a
+# spelling difference is a hole. It also collapses `..`, which Path leaves
+# alone, and that difference only ever makes the prefix match a real path it
+# would otherwise have missed.
+_BOOST_HOME = os.path.normpath(
+    os.environ.get("CLAUDEBOOST_HOME")
+    or os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-_BOOST_HOME = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).resolve().parent.parent)
+# urllib.parse is imported inside _url_host_is_local rather than here. It costs
+# 30ms of this hook's 150ms, measured with -X importtime, and it is only needed
+# for a command carrying a URL. The hook runs before every single Bash call, so
+# that is 30ms paid on every `ls` to parse a URL that is usually not there.
 
 # The value of a message flag is human prose, never a command. A commit or tag
 # message that talks about curling a URL, or that contains a backslash before a
@@ -79,21 +99,27 @@ def _strip_message_values(command: str) -> str:
     return _MESSAGE_FLAG_RE.sub(drop_if_a_message, command)
 
 
-def _write_block_telemetry(tool: str, summary: str, reason: str) -> None:
+def _write_block_telemetry(tool: str, summary: str, reason: str,
+                           result: str = "blocked") -> None:
     """Write a PreToolUse block event to claude-actions.jsonl.
 
     PostToolUse never fires when a PreToolUse hook exits 2, so we capture
     the block here before returning.
+
+    `result` is also how a check that crashed and was skipped gets recorded.
+    Swallowing that would be a silent failure, and this file is the only sink
+    a PreToolUse hook has: stderr on an allow would show Claude a message about
+    a command that ran fine.
     """
     try:
-        sys.path.insert(0, str(_BOOST_HOME / "scripts"))
+        sys.path.insert(0, os.path.join(_BOOST_HOME, "scripts"))
         from telemetry_writer import now_iso, session_id, write_telemetry
         record = {
             "ts": now_iso(),
             "session_id": session_id(),
             "tool": tool,
             "summary": f"{tool} {summary[:200]}",
-            "result": "blocked",
+            "result": result,
             "hook_event": "PreToolUse",
             "block_reason": reason[:300],
         }
@@ -362,6 +388,27 @@ _LOCALHOST_NAMES = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 # express either one correctly. Loopback addresses belong in _LOCALHOST_NAMES.
 _ALLOWED_DEV_SUFFIXES = frozenset({".vivery-dev.com", ".local", ".test"})
 
+# Exact hostnames, deliberately NOT suffixes. pantryeasy.com holds production
+# and every lower environment in one zone: api.pantryeasy.com and
+# admin.pantryeasy.com are production, while api-test, api-temp, api-trial and
+# their admin- counterparts are not. A ".pantryeasy.com" entry in the suffix set
+# above would therefore allow production, which is the one thing that must never
+# happen. Each entry here is a full hostname compared with ==, so a new
+# subdomain is denied until someone adds it on purpose.
+#
+# Deliberately absent: api-staging and admin-staging, which are neither test nor
+# dev and carry the closest thing to production data. Also absent: the per
+# tenant temp sites (nourishinghopetemp, loavestemp, waynetwptemp), which serve
+# real customer orgs and do not follow the "-test" naming.
+_ALLOWED_DEV_HOSTS = frozenset({
+    "api-test.pantryeasy.com",
+    "admin-test.pantryeasy.com",
+    "api-temp.pantryeasy.com",
+    "admin-temp.pantryeasy.com",
+    "api-trial.pantryeasy.com",
+    "admin-trial.pantryeasy.com",
+})
+
 
 def _host_is_allowed_dev_env(host: str) -> bool:
     """True when the host sits inside an allowed test or dev domain.
@@ -383,6 +430,8 @@ def _host_is_allowed_dev_env(host: str) -> bool:
     host = host.lower().rstrip(".")
     if not host or not host.isascii():
         return False
+    if host in _ALLOWED_DEV_HOSTS:
+        return True
     return any(
         host == suffix[1:] or host.endswith(suffix)
         for suffix in _ALLOWED_DEV_SUFFIXES
@@ -417,6 +466,8 @@ def _url_host_is_local(url: str) -> bool:
     credentials in the URL. An authority urlsplit cannot parse is not local
     either: unparseable is not evidence of safety.
     """
+    from urllib.parse import urlsplit
+
     try:
         parts = urlsplit(url)
         if "@" in parts.netloc or "\\" in parts.netloc:
@@ -843,12 +894,17 @@ _EXEC_FLAG_RUN = r"(?:\s+(?!-[a-zA-Z]*c\b)[^\s;&|]+){0,24}"
 
 # A shell. Its argument is shell source, so it gets read the way the top level
 # command is: quote stripped, and a write only counts in command position.
+#
+# `parallel ::: <arg>` belongs here rather than with the wrappers: GNU
+# parallel's design document has it running `$SHELL -c $COMMAND`, so each :::
+# argument is a shell command line and not an opaque operand.
 _SHELL_EXEC_HEAD_RE = re.compile(
     r"\beval\b"
     r"|\b(?:ba|z|k|da)?sh" + _EXEC_FLAG_RUN + r"\s+-[a-zA-Z]*c\b"
     r"|\b(?:ba|z|k|da)?sh" + _EXEC_FLAG_RUN + r"\s*<<<"
     r"|\b(?:pwsh|powershell)(?:\.exe)?" + _EXEC_FLAG_RUN + r"\s+-(?:c|Command)\b"
-    r"|\bcmd(?:\.exe)?\s+/[ckCK]\b",
+    r"|\bcmd(?:\.exe)?\s+/[ckCK]\b"
+    r"|\bparallel\b(?:\s+-\S+)*\s+::::?",
     re.IGNORECASE,
 )
 
@@ -859,8 +915,12 @@ _SHELL_EXEC_HEAD_RE = re.compile(
 # checked. The cost is that a program legitimately handling the literal text
 # "git push" gets blocked, which is a fair trade for a one line interpreter
 # invocation.
+# php spells the flag -r, and it is listed separately rather than folded into
+# the alternation because node's own -r preloads a module (`node -r
+# ts-node/register app.js`), which is an operand and not source.
 _INTERPRETER_EXEC_HEAD_RE = re.compile(
-    r"\b(?:python[\d.]*|perl|ruby|node|php|Rscript)\s+-(?:c|e)\b",
+    r"\b(?:python[\d.]*|perl|ruby|node|php|Rscript)\s+-(?:c|e)\b"
+    r"|\bphp(?:\.exe)?\s+-r\b",
     re.IGNORECASE,
 )
 
@@ -879,6 +939,7 @@ _ARG_TERMINATOR_RE = re.compile(r"[;&|\n]")
 _ROUTER_PREFIX = (
     r"(?:[A-Za-z_]\w*=\S*"
     r"|xargs(?:\s+-\S+)*"
+    r"|parallel(?:\s+-\S+)*"
     r"|timeout\s+\S+"
     r"|env|nohup|sudo|nice|time|command|builtin|exec|then|do|else"
     r")"
@@ -1241,6 +1302,1218 @@ def check_routed_git_write(command: str) -> str | None:
     return None
 
 
+# ===========================================================================
+# The parsing layer.
+#
+# Everything above this line matches patterns against command text. That is
+# enough for the ergonomic checks, and not enough for a boundary: the same
+# `git commit` reads as an argument to echo, a search string to grep, a routed
+# write behind xargs, or the command itself, and only splitting the command
+# into words tells those apart.
+#
+# Hand-rolled scanning rather than shlex or bashlex. Three reasons, all of
+# which are failure modes on this machine rather than preferences:
+#   1. shlex.split() raises ValueError on an unbalanced quote. A PreToolUse hook
+#      that raises exits 1, and exit 1 is neither allow (0) nor block (2) under
+#      this contract, so the command runs with a traceback shown to nobody.
+#   2. shlex in POSIX mode consumes backslashes, which destroys a Windows path.
+#      This tree runs under Git Bash on Windows and sees C:/x and C:\x alike.
+#   3. bashlex is a third party dependency and does not parse every builtin
+#      (`time` among them). No other hook in this tree has a third party import.
+# The cost is real and accepted: a true grammar catches more, but it rejects
+# valid commands on esoteric quoting, and an agent that gets rejected reaches
+# for eval. https://github.com/dwarvesf/claude-guardrails reaches the same
+# place from the same constraint -- regex-scan the whole command in the hook,
+# "so chains, wrappers, and subshells all get caught".
+# ===========================================================================
+
+# Redirections are their own words so a redirect target can be identified. A
+# leading file descriptor (`2>`) flushes as its own word first, which is
+# harmless: the operator still lands next to its target.
+_REDIRECT_CHARS = "<>"
+
+# What a consumed `$(...)` or backtick leaves behind in the word it sat in.
+# The body is lifted out and judged as its own command; this stands for the
+# text it will produce, which nothing can know until it runs.
+#
+# It has to be a character that survives word splitting rather than the space
+# that used to go here. A space cut `out-$(date).txt` into two words and left
+# the visible half looking like a complete, ordinary path.
+_SUBSTITUTION_MARK = "\x00sub\x00"
+
+# Every operator that ends one command and starts another. `(` and `)` are in
+# here for a subshell; `$(` never reaches this set because command substitution
+# is consumed before it.
+_SEGMENT_OPERATOR_CHARS = ";&|\n()"
+
+
+def _shell_words(text: str) -> list[str]:
+    """`text` split into shell words, with quotes removed and redirect
+    operators emitted as their own words.
+
+    Backslash is deliberately NOT treated as an escape. Under Git Bash a
+    backslash does escape, but the commands this guard sees carry Windows paths
+    far more often than escaped metacharacters, and consuming the backslash
+    turns C:\\Users\\x into CUsersx -- which is what the path checks below match
+    against. Leaving it literal can only under-split, never hide a word.
+    """
+    words: list[str] = []
+    current: list[str] = []
+    quoted = False
+    quote = None
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if quote is not None:
+            if char == quote:
+                quote = None
+            else:
+                current.append(char)
+        elif char in "\"'":
+            quote = char
+            quoted = True
+        elif char.isspace():
+            if current or quoted:
+                words.append("".join(current))
+            current, quoted = [], False
+        elif char in _REDIRECT_CHARS:
+            if current or quoted:
+                words.append("".join(current))
+            current, quoted = [], False
+            run = i
+            while i < n and text[i] in _REDIRECT_CHARS:
+                i += 1
+            words.append(text[run:i])
+            continue
+        else:
+            current.append(char)
+        i += 1
+    if current or quoted:
+        words.append("".join(current))
+    return words
+
+
+def _read_substitution(text: str, start: int) -> tuple[str, int]:
+    """The body of a `$(...)` beginning at `start`, and the index after it."""
+    depth, i, n = 1, start, len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i], i + 1
+        i += 1
+    return text[start:], n
+
+
+def _split_segments(text: str, depth: int = 0) -> list[tuple[str, str]]:
+    """(separator, segment) for each command in `text`, quote aware.
+
+    The separator is the operator run that preceded the segment, empty for the
+    first one. It is kept because pipe-into-shell is a different thing from
+    the same shell run on its own.
+
+    A `$(...)` or backtick body is lifted out and returned as its own segment,
+    carrying "$(" as its separator: a substitution runs a command exactly as a
+    bare one does, and leaving it inline would hide the command inside what
+    looks like one word.
+    """
+    if depth > 4:
+        return [("", text)]
+    segments: list[tuple[str, str]] = []
+    current: list[str] = []
+    separator = ""
+    quote = None
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if quote == "'":
+            current.append(char)
+            if char == "'":
+                quote = None
+            i += 1
+            continue
+        if quote is None and char == "'":
+            quote = "'"
+            current.append(char)
+            i += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            current.append(char)
+            i += 1
+            continue
+        if char == "$" and text.startswith("$(", i):
+            body, after = _read_substitution(text, i + 2)
+            for _, inner in _split_segments(body, depth + 1):
+                segments.append(("$(", inner))
+            current.append(_SUBSTITUTION_MARK)
+            i = after
+            continue
+        if char == "`":
+            end = text.find("`", i + 1)
+            if end == -1:
+                i += 1
+                continue
+            for _, inner in _split_segments(text[i + 1:end], depth + 1):
+                segments.append(("`", inner))
+            current.append(_SUBSTITUTION_MARK)
+            i = end + 1
+            continue
+        if quote is None and char in _SEGMENT_OPERATOR_CHARS:
+            segments.append((separator, "".join(current)))
+            current = []
+            run = i
+            while i < n and text[i] in _SEGMENT_OPERATOR_CHARS:
+                i += 1
+            separator = text[run:i]
+            continue
+        current.append(char)
+        i += 1
+    segments.append((separator, "".join(current)))
+    return [(sep, seg.strip()) for sep, seg in segments if seg.strip()]
+
+
+def _binary_name(word: str) -> str:
+    """The bare, comparable name of the binary a word names.
+
+    Path, quotes, case and a .exe suffix all come off, because every one of
+    them is a spelling that a literal permission rule misses and the shell does
+    not: `Git commit`, `git.exe commit` and `/usr/bin/git commit` are one
+    command.
+    """
+    word = word.strip("\"'").replace("\\", "/")
+    name = word.rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+_ASSIGNMENT_WORD_RE = re.compile(r"^[A-Za-z_]\w*=")
+
+# A command that hands off to whatever follows it rather than being the thing
+# that runs. claude-code-bash-guardian keeps the same category under the name
+# `wrapper_commands` (sudo, timeout, xargs, env, nice) for the same reason: a
+# denylist that reads only the first word is bypassed by putting any of these
+# in front of it. `start` and `wt.exe` are Windows spellings of the same idea.
+_WRAPPER_WORDS = frozenset({
+    "builtin", "chroot", "command", "do", "doas", "else", "elif", "env",
+    "exec", "ionice", "nice", "nohup", "parallel", "setsid", "start", "stdbuf",
+    "sudo", "then", "time", "timeout", "watch", "wt", "xargs",
+})
+
+# The wrappers that do not just hand off, they append arguments of their own.
+# POSIX: xargs "shall construct a command line consisting of the utility and
+# argument operands specified followed by as many arguments read in sequence
+# from standard input as fit in length and number constraints". GNU parallel
+# builds the same line from ::: or -a instead.
+#
+# That extra text is the whole problem. Everything this guard decides about a
+# git or gh command it decides from the verb, and behind a feeder the verb can
+# arrive from stdin or a file, where nothing can read it.
+_ARG_FEEDER_WORDS = frozenset({"parallel", "xargs"})
+
+# What may sit between a wrapper and the command it runs: its own flags, a
+# bare duration (`timeout 5`), a numeric level (`nice -n 10`), an xargs
+# placeholder (`-I{}`), or an environment assignment.
+_WRAPPER_OPERAND_RE = re.compile(r"^(?:-|\d|\{\}|\+|[A-Za-z_]\w*=)")
+
+# Feeder flags whose value is the next word rather than part of it. `xargs -n3`
+# is one word and stopped in the right place; `xargs -a args.txt git` was not,
+# so the scan stopped on `args.txt` and never reached the `git` behind it.
+# Case is significant: xargs gives -E and -e, -I and -i, -L and -l different
+# meanings. Only feeders consult this, so timeout and nice keep their existing
+# numeric handling.
+_FEEDER_VALUE_FLAGS = frozenset({
+    "-a", "--arg-file", "-d", "--delimiter", "-E", "-e", "--eof",
+    "-I", "-i", "--replace", "-L", "-l", "--max-lines", "-n", "--max-args",
+    "-P", "--max-procs", "-s", "--max-chars",
+    "-j", "--jobs", "-N", "--colsep", "-S", "--sshlogin", "--results",
+})
+
+
+def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
+    """(the command words, the wrapper names removed to reach them)."""
+    stripped: list[str] = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if _ASSIGNMENT_WORD_RE.match(word):
+            index += 1
+            continue
+        name = _binary_name(word)
+        if name in _WRAPPER_WORDS:
+            stripped.append(name)
+            index += 1
+            feeder = name in _ARG_FEEDER_WORDS
+            while index < len(words) and _WRAPPER_OPERAND_RE.match(words[index]):
+                takes_value = feeder and words[index] in _FEEDER_VALUE_FLAGS
+                index += 2 if takes_value else 1
+            continue
+        break
+    return words[index:], stripped
+
+
+def _without_redirections(words: list[str]) -> list[str]:
+    """`words` with redirect operators, their targets, and any attached file
+    descriptor dropped.
+
+    `git branch -a 2>/dev/null` splits to [git, branch, -a, 2, >, /dev/null].
+    The bare `2` read as a branch name, so a read-only listing was refused as a
+    ref creation. Redirect targets are still checked, by the protected path
+    scan, which reads the unstripped words for exactly that reason.
+    """
+    kept: list[str] = []
+    skip = False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        if word and set(word) <= set(_REDIRECT_CHARS):
+            # The descriptor flushed as its own word just before the operator.
+            if kept and kept[-1].isdigit():
+                kept.pop()
+            skip = True
+            continue
+        kept.append(word)
+    return kept
+
+
+def _command_words(segment: str) -> list[str]:
+    """The words of the command a segment actually runs.
+
+    Leading assignments and wrapper commands are removed, so `env FOO=1 timeout
+    5 git commit` and `git commit` return the same thing. Returns [] when the
+    segment runs nothing.
+    """
+    return _strip_wrappers(_without_redirections(_shell_words(segment)))[0]
+
+
+def _is_fed(segment: str) -> bool:
+    """True when an argument feeder will append words this guard cannot read."""
+    return any(name in _ARG_FEEDER_WORDS
+               for name in _strip_wrappers(
+                   _without_redirections(_shell_words(segment)))[1])
+
+
+def _is_wrapped(segment: str) -> bool:
+    """True when something sits between the segment start and the command.
+
+    A wrapped command is invisible to the permission engine, which matches the
+    raw string by prefix. That distinction is the only thing separating a
+    `git fetch` that still gets its prompt from one that does not.
+
+    Redirections are removed from both sides: `git fetch 2>/dev/null` is the
+    permission engine's own prefix match either way, so counting a redirect as
+    a wrapper would refuse it for a route nothing actually takes.
+    """
+    words = _without_redirections(_shell_words(segment))
+    return _command_words(segment) != words
+
+
+_SHELL_BINARIES = frozenset({
+    "sh", "bash", "zsh", "ksh", "dash", "ash", "busybox",
+    "pwsh", "powershell", "cmd", "eval",
+})
+
+
+# ---------------------------------------------------------------------------
+# git: a positive allowlist of read verbs.
+#
+# A denylist cannot be finished. `git help -a` on git 2.55 lists 150 commands
+# across porcelain, ancillary and plumbing, a user alias resolves to any of
+# them, and the next release adds more. The proposal this replaces had grown
+# to 820 permission entries still missing `commit-graph write`,
+# `multi-pack-index write`, `maintenance run` and `credential approve`.
+#
+# The set below is the complement: everything that touches no index, working
+# tree, ref, remote, config, stash, object store or credential store. It was
+# checked against the verbs that actually run in this machine's transcripts
+# (scratchpad/verbfreq.py: diff, status, log, show, rev-parse, ls-files, grep,
+# branch, merge-base, ls-tree, remote, ls-remote, check-ignore, cat-file,
+# rev-list, for-each-ref, merge-tree, count-objects) so the allowlist covers
+# real work rather than a guess at it.
+# ---------------------------------------------------------------------------
+_GIT_READ_VERBS = frozenset({
+    "annotate", "blame", "bugreport", "cat-file", "check-attr", "check-ignore",
+    "check-mailmap", "check-ref-format", "cherry", "column", "count-objects",
+    "describe", "diff", "diff-files", "diff-index", "diff-pairs", "diff-tree",
+    "for-each-ref", "fsck", "get-tar-commit-id", "grep", "help",
+    "interpret-trailers", "log", "ls-files", "ls-remote", "ls-tree",
+    "merge-base", "merge-tree", "name-rev", "patch-id", "range-diff",
+    "rev-list", "rev-parse", "shortlog", "show", "show-branch", "show-index",
+    "show-ref", "status", "stripspace", "var", "verify-commit", "verify-pack",
+    "verify-tag", "version", "whatchanged",
+})
+
+# Recorded decision, not an oversight: `git fetch` stays a prompt rather than a
+# block. It writes only remote-tracking refs and ran 47 times in the
+# transcripts. It is allowed only unwrapped, because a wrapped fetch is exactly
+# the shape that skips the prompt this decision relies on.
+_GIT_PROMPT_VERBS = frozenset({"fetch"})
+
+# Verbs that are part read and part write. The empty string means the bare verb
+# with no subcommand: `git remote` lists, `git reflog` shows, `git submodule`
+# reports status -- but `git stash` with no subcommand is `git stash push`, so
+# stash is deliberately absent from that set.
+_GIT_READ_SUBCOMMANDS = {
+    "bisect": frozenset({"log", "view"}),
+    "lfs": frozenset({"env", "ls-files", "status", "version"}),
+    "notes": frozenset({"list", "show"}),
+    "reflog": frozenset({"", "show"}),
+    "remote": frozenset({"", "get-url", "show"}),
+    "stash": frozenset({"list", "show"}),
+    "submodule": frozenset({"", "status", "summary"}),
+    "worktree": frozenset({"list"}),
+}
+
+# Global flags that choose a different repository or a different git binary.
+# -C is not here because pointing at another checkout does not by itself write
+# anything, and the verb gate still applies inside it.
+_GIT_UNSAFE_GLOBAL_FLAGS = frozenset({
+    "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path",
+})
+
+# Global flags with no write side at all. Anything not here and not handled
+# explicitly is refused, which is the point of an allowlist: a flag added by a
+# future git release is unknown, and unknown is not safe.
+_GIT_SAFE_GLOBAL_FLAGS = frozenset({
+    "-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects",
+    "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+    "--icase-pathspecs", "--no-optional-locks", "--version", "--help",
+    "-h", "--html-path", "--man-path", "--info-path", "--exec-path",
+    "--attr-source", "--no-lazy-fetch", "--no-advice",
+})
+
+# `git -c <key>=<value>` is arbitrary code execution wearing a config flag.
+# Verified on this machine: `git -c diff.external=<cmd> diff --ext-diff` and
+# `git -c alias.x='!<cmd>' x` both ran the command. Enumerating the dangerous
+# keys is the shape that already failed -- core.pager, core.editor,
+# core.sshCommand, diff.external, alias.*, credential.helper were listed and
+# pager.<cmd> and sequence.editor were not. So the keys that may be set are
+# listed instead. Transcripts contain exactly one `git -c` use in 2299
+# commands, so the cost of a short list is close to zero.
+_GIT_SAFE_CONFIG_KEYS = frozenset({
+    "color.ui", "core.abbrev", "core.quotepath", "i18n.logoutputencoding",
+    "log.date", "diff.noprefix", "core.longpaths",
+})
+
+# Flags that make an otherwise read only verb write a file or run a program.
+_GIT_UNSAFE_VERB_FLAGS = frozenset({
+    "--output", "--open-files-in-pager", "--upload-pack", "--receive-pack",
+    "--exec", "--ext-diff",
+})
+
+_GIT_BRANCH_WRITE_FLAGS = frozenset({
+    "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "-t",
+    "--delete", "--move", "--copy", "--force", "--track", "--no-track",
+    "--set-upstream", "--set-upstream-to", "--unset-upstream",
+    "--edit-description", "--create-reflog", "--recurse-submodules",
+})
+_GIT_TAG_WRITE_FLAGS = frozenset({
+    "-a", "-s", "-m", "-F", "-d", "-f", "-u", "-e",
+    "--annotate", "--sign", "--no-sign", "--local-user", "--delete",
+    "--force", "--file", "--message", "--create-reflog", "--edit",
+})
+# Read flags that take a value, so the token after them is that value and not a
+# branch or tag name being created.
+_GIT_REF_VALUE_FLAGS = frozenset({
+    "--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
+    "--sort", "--format", "--color", "--column", "-n",
+})
+_GIT_BRANCH_LIST_FLAGS = frozenset({"-l", "--list"})
+_GIT_TAG_LIST_FLAGS = frozenset({"-l", "--list", "-v", "--verify", "-n"})
+
+_GIT_CONFIG_READ_SUBCOMMANDS = frozenset({
+    "get", "list", "get-all", "get-regexp", "get-urlmatch",
+})
+_GIT_CONFIG_WRITE_FLAGS = frozenset({
+    "--add", "--replace-all", "--rename-section", "--remove-section",
+    "--edit", "-e", "--unset", "--unset-all",
+})
+
+
+def _positional_args(args: list[str], value_flags: frozenset) -> list[str]:
+    """Words in `args` that are not a flag and not a flag's value."""
+    positionals, skip = [], False
+    for word in args:
+        if skip:
+            skip = False
+            continue
+        if word.startswith("-"):
+            skip = word in value_flags
+            continue
+        positionals.append(word)
+    return positionals
+
+
+def _git_global_flag_problem(args: list[str]) -> tuple[str | None, int]:
+    """Why this git invocation's global flags are unsafe, and where the verb
+    starts. `args` is everything after the word `git`."""
+    index = 0
+    while index < len(args) and args[index].startswith("-"):
+        flag = args[index]
+        name = flag.split("=", 1)[0]
+        if name == "-C":
+            index += 2
+            continue
+        if name == "-c" or (flag.startswith("-c") and len(flag) > 2):
+            if name == "-c":
+                key = args[index + 1] if index + 1 < len(args) else ""
+                index += 2
+            else:
+                key, index = flag[2:], index + 1
+            if key.split("=", 1)[0].lower() not in _GIT_SAFE_CONFIG_KEYS:
+                return (
+                    f"`git -c {key}` sets configuration for this one command, and "
+                    "several config keys name a program git then runs "
+                    "(diff.external, alias.*, core.pager, pager.<cmd>, "
+                    "sequence.editor, core.sshCommand). Only a short list of "
+                    "keys with no program in them is allowed here."
+                ), index
+            continue
+        if name in _GIT_UNSAFE_GLOBAL_FLAGS and "=" in flag:
+            return (
+                f"the global flag {name} redirects git at another repository or "
+                "another set of git binaries, so the verb that follows is not "
+                "acting where it appears to."
+            ), index
+        if name in _GIT_UNSAFE_GLOBAL_FLAGS and name != "--exec-path":
+            return (
+                f"the global flag {name} redirects git at another repository, so "
+                "the verb that follows is not acting where it appears to."
+            ), index
+        if name not in _GIT_SAFE_GLOBAL_FLAGS:
+            return (
+                f"the global flag {flag} is not one this guard recognises as "
+                "read-only. Unknown is not safe for a flag that runs before the "
+                "verb does."
+            ), index
+        index += 1
+    return None, index
+
+
+_GIT_CONFIG_VALUE_FLAGS = frozenset({"--type", "--default", "-f", "--file", "--blob"})
+_GIT_CONFIG_READ_FLAGS = frozenset({
+    "-l", "--list", "--get", "--get-all", "--get-regexp", "--get-urlmatch",
+})
+
+
+def _git_subcommand_problem(verb: str, args: list[str]) -> str | None:
+    """Why this subcommand of a part read, part write verb is not a read."""
+    subs = _positional_args(args, _GIT_REF_VALUE_FLAGS)
+    sub = subs[0].lower() if subs else ""
+    if sub in _GIT_READ_SUBCOMMANDS[verb]:
+        return None
+    allowed = ", ".join(sorted(s or "(no subcommand)"
+                               for s in _GIT_READ_SUBCOMMANDS[verb]))
+    return (
+        f"`git {verb} {sub}`".rstrip()
+        + f" is not one of the read-only subcommands of `git {verb}` ({allowed})."
+    )
+
+
+def _git_config_problem(args: list[str]) -> str | None:
+    """Why this `git config` is a write.
+
+    Counting positional arguments is what a literal-text rule could not do:
+    `git config user.email` reads the key and `git config user.email x@y`
+    writes it, and the two differ only by an argument.
+    """
+    positionals = _positional_args(args, _GIT_CONFIG_VALUE_FLAGS)
+    if positionals and positionals[0].lower() in _GIT_CONFIG_READ_SUBCOMMANDS:
+        return None
+    if any(a.split("=", 1)[0] in _GIT_CONFIG_WRITE_FLAGS for a in args):
+        return "`git config` with a write flag changes configuration."
+    if any(a.split("=", 1)[0] in _GIT_CONFIG_READ_FLAGS for a in args):
+        return None
+    if len(positionals) <= 1:
+        return None
+    return (
+        "`git config <key> <value>` writes configuration. Read it with "
+        "`git config --get <key>`."
+    )
+
+
+def _git_ref_problem(verb: str, args: list[str]) -> str | None:
+    """Why this `git branch` or `git tag` writes a ref.
+
+    Both verbs list with no operand and create with one, so the operand count
+    decides, and a value belonging to a read flag such as `--contains <commit>`
+    is not an operand. `--list` makes any operand a pattern instead of a name.
+    """
+    write_flags = _GIT_BRANCH_WRITE_FLAGS if verb == "branch" else _GIT_TAG_WRITE_FLAGS
+    list_flags = _GIT_BRANCH_LIST_FLAGS if verb == "branch" else _GIT_TAG_LIST_FLAGS
+    hit = [a for a in args if a.split("=", 1)[0] in write_flags]
+    if hit:
+        return f"`git {verb} {hit[0]}` creates, moves or deletes a ref."
+    positionals = _positional_args(args, _GIT_REF_VALUE_FLAGS)
+    if positionals and not any(a.split("=", 1)[0] in list_flags for a in args):
+        return (
+            f"`git {verb} {positionals[0]}` with a bare name creates a ref. "
+            f"List them with `git {verb} --list`."
+        )
+    return None
+
+
+def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
+    """Why this git verb is not a read, or None when it is one."""
+    unsafe = [a for a in args if a.split("=", 1)[0] in _GIT_UNSAFE_VERB_FLAGS]
+    if unsafe:
+        return (
+            f"`git {verb} {unsafe[0]}` writes a file or runs an external program "
+            "chosen by configuration, which is a write however read-only the verb is."
+        )
+    if verb in _GIT_READ_SUBCOMMANDS:
+        return _git_subcommand_problem(verb, args)
+    if verb == "config":
+        return _git_config_problem(args)
+    if verb in ("branch", "tag"):
+        return _git_ref_problem(verb, args)
+    if verb in _GIT_READ_VERBS:
+        if verb == "grep" and any(a.startswith("-O") for a in args):
+            return "`git grep -O` runs the pager as a command."
+        return None
+    if verb in _GIT_PROMPT_VERBS:
+        if wrapped:
+            return (
+                f"`git {verb}` is allowed to reach its permission prompt, but only "
+                "when it is the command being run. Behind a wrapper the prompt "
+                "never fires, because permission rules match the raw command by prefix."
+            )
+        return None
+    return (
+        f"`git {verb}` is not on the read-only allowlist. Git has around 150 "
+        "commands and a user alias resolves to any of them, so this guard lists "
+        "what reads rather than guessing at what writes."
+    )
+
+
+# `download` is here because it reads GitHub and writes only files it is asked
+# to fetch, which is the same thing `curl -o` does and is already allowed.
+_GH_READ_VERBS = frozenset({"view", "list", "diff", "checks", "status", "download"})
+_GH_READ_COMMANDS = frozenset({"status", "version", "search", "help"})
+
+
+def _gh_problem(args: list[str]) -> str | None:
+    """Why this gh invocation is not a read, or None when it is one."""
+    positionals = [a for a in args if not a.startswith("-")]
+    if not positionals:
+        return None
+    first = positionals[0].lower()
+    if first == "api":
+        return (
+            "`gh api` reaches any GitHub REST or GraphQL endpoint, read or write, "
+            "so the verb allowlist cannot see what it does."
+        )
+    if first in _GH_READ_COMMANDS:
+        return None
+    if len(positionals) == 1:
+        return None
+    verb = positionals[1].lower()
+    if verb in _GH_READ_VERBS:
+        return None
+    return (
+        f"`gh {first} {verb}` is not one of the read-only gh verbs "
+        f"({', '.join(sorted(_GH_READ_VERBS))})."
+    )
+
+
+# In interpreter source a git call is not a shell word: `os.system('git push')`
+# splits into os.system(git and push). The verb is read with a regex there
+# instead, which over-matches on a program that merely handles the text -- an
+# acceptable trade for a one line -c payload.
+_GIT_IN_SOURCE_RE = re.compile(r"\bgit(?:\.exe)?\s+(?:-[^\s]+\s+)*([a-z][\w-]*)",
+                               re.IGNORECASE)
+_GH_IN_SOURCE_RE = re.compile(r"\bgh(?:\.exe)?\s+([a-z][\w-]*)(?:\s+([a-z][\w-]*))?",
+                              re.IGNORECASE)
+
+
+def _find_exec_payloads(text: str) -> list[str]:
+    """The command each `find -exec` in `text` would run.
+
+    find's own manual calls -exec/-execdir/-ok/-okdir "Execute command", and it
+    runs the binary directly rather than through a shell, so nothing in the
+    permission engine or in the executor checks above ever sees it. Verified on
+    this machine: `find . -maxdepth 0 -exec echo X \\;` printed X.
+    """
+    payloads = []
+    for _, segment in _split_segments(text):
+        words = _shell_words(segment)
+        for index, word in enumerate(words):
+            if word in ("-exec", "-execdir", "-ok", "-okdir"):
+                tail = []
+                for follow in words[index + 1:]:
+                    if follow in (";", "\\;", "+"):
+                        break
+                    tail.append(follow)
+                if tail:
+                    payloads.append(" ".join(tail))
+    return payloads
+
+
+def _scannable_texts(command: str) -> list[tuple[str, bool, str]]:
+    """(text, routed, kind) for every place in `command` a command can run.
+
+    routed means the permission engine cannot see it, which is what decides
+    whether a verb that is only allowed to reach a prompt may run at all.
+    """
+    scannable = command
+    for start, end in _heredoc_data_spans(command):
+        scannable = scannable[:start] + (" " * (end - start)) + scannable[end:]
+
+    texts = [(scannable, False, "shell")]
+    for payload, kind in _executor_payloads(scannable):
+        texts.append((payload, True, kind))
+    for payload in _find_exec_payloads(scannable):
+        texts.append((payload, True, "shell"))
+    return texts
+
+
+def check_git_gh_verbs(command: str) -> str | None:
+    """Block any git or gh invocation that is not a read.
+
+    This is the requirement stated as a property rather than as a list: a git
+    command that writes the index, working tree, refs, a remote, config, the
+    stash, the object store or the credential store must be unable to run, so
+    it is handed to the human instead. Read-only git keeps working silently.
+    """
+    lowered = command.lower()
+    if "git" not in lowered and "gh" not in lowered:
+        return None
+
+    for text, routed, kind in _scannable_texts(command):
+        if kind == "interpreter":
+            problem = _source_verb_problem(text)
+            if problem:
+                return problem
+            continue
+        for separator, segment in _split_segments(text):
+            words = _command_words(segment)
+            if not words:
+                continue
+            name = _binary_name(words[0])
+            wrapped = routed or bool(separator.strip("\n")) or _is_wrapped(segment)
+            if name == "git":
+                flag_problem, verb_index = _git_global_flag_problem(words[1:])
+                if flag_problem:
+                    return _refuse(segment, flag_problem)
+                verb_args = words[1 + verb_index:]
+                if not verb_args:
+                    continue
+                problem = _git_verb_problem(verb_args[0].lower(), verb_args[1:], wrapped)
+                if problem:
+                    return _refuse(segment, problem)
+            elif name == "gh":
+                problem = _gh_problem(words[1:])
+                if problem:
+                    return _refuse(segment, problem)
+    return None
+
+
+def _source_verb_problem(source: str) -> str | None:
+    """The same verb gate, applied to interpreter source rather than words.
+
+    Only the verb is read, never its arguments: shell word rules do not apply
+    here, so `git branch` in source cannot be told from `git branch newname`.
+    A verb that reads with no arguments is therefore allowed through, which is
+    the direction that keeps a program merely handling the text from being
+    refused.
+    """
+    for match in _GIT_IN_SOURCE_RE.finditer(source):
+        verb = match.group(1).lower()
+        if verb in _GIT_READ_VERBS or verb in _GIT_READ_SUBCOMMANDS:
+            continue
+        problem = _git_verb_problem(verb, [], True)
+        if problem:
+            return _refuse(match.group(0), problem)
+    for match in _GH_IN_SOURCE_RE.finditer(source):
+        words = [w for w in match.groups() if w]
+        if words[0].lower() in _GH_READ_COMMANDS:
+            continue
+        problem = _gh_problem(words)
+        if problem:
+            return _refuse(match.group(0), problem)
+    return None
+
+
+# Two of them, because a feeder appends one argument or many and the two are
+# judged differently: `git config user.email` reads and `git config user.email
+# x@y` writes. Standing in for "at least one more" rather than "exactly one"
+# keeps the verdict on the writing side of that pair.
+_FED_ARG = "\x00fed\x00"
+_FED_ARGS = [_FED_ARG, _FED_ARG]
+
+_INTERPRETER_NAME_RE = re.compile(
+    r"^(?:python[\d.]*|perl|ruby|node|deno|bun|php|rscript)$", re.IGNORECASE)
+
+
+def _fed_git_problem(words: list[str]) -> str | None:
+    """Why this git command is not a read once the feeder has appended to it.
+
+    The verb gate is re-run with unknown arguments on the end rather than
+    reimplemented, so `xargs git log` stays allowed (appending paths to a read
+    is still a read) while `xargs git branch` does not (appending a name to it
+    creates a ref).
+    """
+    flag_problem, verb_index = _git_global_flag_problem(words[1:])
+    if flag_problem:
+        return flag_problem
+    verb_args = words[1 + verb_index:]
+    if not verb_args:
+        return (
+            "`git` here has no verb: an argument feeder supplies it at runtime "
+            "from stdin or a file. The verb is the whole of what separates a "
+            "read from a push, and nothing that reads the command can see it."
+        )
+    return _git_verb_problem(verb_args[0].lower(), verb_args[1:] + _FED_ARGS, True)
+
+
+def check_argument_feeder(command: str) -> str | None:
+    """Block a binary whose arguments arrive from somewhere unreadable.
+
+    POSIX has xargs constructing "a command line consisting of the utility and
+    argument operands specified followed by as many arguments read in sequence
+    from standard input". Reading the words after `git` in the static text
+    found an empty list there and let the command through.
+    """
+    lowered = command.lower()
+    if "xargs" not in lowered and "parallel" not in lowered:
+        return None
+
+    for text, _routed, kind in _scannable_texts(command):
+        if kind == "interpreter":
+            continue
+        for _separator, segment in _split_segments(text):
+            if not _is_fed(segment):
+                continue
+            words = _command_words(segment)
+            if not words:
+                continue
+            name = _binary_name(words[0])
+            if name == "git":
+                problem = _fed_git_problem(words)
+                if problem:
+                    return _refuse(segment, problem)
+            elif name == "gh":
+                problem = _gh_problem(words[1:] + _FED_ARGS)
+                if problem:
+                    return _refuse(segment, problem)
+            elif name in _SHELL_BINARIES or _INTERPRETER_NAME_RE.match(name):
+                return _refuse(segment, (
+                    f"`{name}` here is handed its script by an argument feeder, so "
+                    "what runs is chosen at runtime. No permission rule can match it "
+                    "either, because those match the raw command by prefix."
+                ))
+    return None
+
+
+def _refuse(what: str, why: str) -> str:
+    return (
+        f"BLOCKED: {why} Found in: {what.strip()[:120]!r}. "
+        "Read-only git and gh run with no prompt; a write is handed to the human "
+        "instead. Put the command on the clipboard for them, or ask them to run it."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The guard's own files, and every .env.
+#
+# A guard that the thing it guards can overwrite is not a guard. The Edit and
+# Write tool rules cover those two tools and nothing else, so `cp payload.py
+# scripts/bash-guard.py` and `echo x > scripts/bash-guard.py` reached the same
+# paths through Bash with no prompt at all.
+# ---------------------------------------------------------------------------
+_BOOST_SCRIPTS_PREFIX = _BOOST_HOME.replace("\\", "/").rstrip("/").lower() + "/scripts/"
+
+_PROTECTED_PATH_RES = (
+    # The guard itself, wherever it has been installed or copied to.
+    re.compile(r"(?:^|/)bash-guard(?:\.proposed)?\.py$"),
+    # Claude Code's own control files: what runs, and what is permitted.
+    re.compile(r"(?:^|/)\.claude/(?:settings[^/]*\.json$|hooks/|agents/)"),
+    # The research and verifier gates.
+    re.compile(r"(?:^|/)clean-rag/hooks/"),
+    # A relative path has no root to check, so scripts/ and its tests are
+    # treated as this project's until proven otherwise. Refusing more is the
+    # safe direction for a path whose base is unknown.
+    re.compile(r"^\.?/?scripts/"),
+)
+
+# `.env`, `.env.local`, and the glob pathspecs that reach the same bytes:
+# `git log -p -- "*.env"` prints the content of every .env in the history.
+#
+# The line sits at the dot-segment, not at the substring. A token is an env
+# file when a path component is exactly `.env` or `.env.<something>`, where the
+# component may begin with a glob metacharacter and may end with one. So
+# `*.env` and `**/.env` match, and `src/environment.ts`, `docs/dotenv.md`,
+# `--env-file` and `process.env` do not: in each of those the letters sit
+# inside a longer name rather than forming the component.
+#
+# `.env.example` matches and is meant to. It is a committed template, but the
+# separation between a template and a real secret is a convention rather than a
+# rule, and this refusal costs one Read tool call to work around.
+_ENV_FILE_RE = re.compile(r"(?:^|[/*?\]])\.env(?:\.[^/*?]*)?[*?]*$")
+
+# Flags whose value is a name pattern rather than a file being opened. The
+# split is by what the flag makes the command do, measured rather than assumed:
+# `rg --glob .env SECRET` and `grep -r --include=.env SECRET` both printed the
+# secret, because an inclusion filter selects the files the tool then reads.
+# Only `find`'s predicates locate without reading, and `find -name .env`
+# printed a path where `find -name .env -exec cat {} \;` printed the value.
+#
+# So an inclusion filter is deliberately absent from both sets below and reads
+# as a filename. rg's negated form (`--glob !.env`) excludes rather than
+# selects, and falls out for free: _ENV_FILE_RE does not match a `!` prefix.
+_LOCATE_FLAGS = frozenset({"-name", "-iname", "-wholename", "-path", "-ipath"})
+
+# Exclusion narrows what gets read, so naming .env here protects it.
+_EXCLUSION_FLAGS = frozenset({"--exclude", "--exclude-dir"})
+
+# Inclusion filters select the files the tool opens. Their value is a filename
+# and never the search pattern, which matters because the pattern is what
+# skip_operands below exists to drop.
+_INCLUSION_FLAGS = frozenset({"--include", "--glob", "-g", "--iglob"})
+
+# find actions that consume a match instead of printing its path. With one of
+# these present the locate exemption above no longer holds.
+_FIND_ACTION_FLAGS = frozenset({
+    "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint",
+})
+
+# Commands that modify every file they are given. Redirections are handled
+# separately, so this only has to cover the ones that write without one.
+_WRITER_COMMANDS = frozenset({
+    "tee", "rm", "del", "erase", "unlink", "rmdir", "shred", "touch",
+    "truncate", "chmod", "chown", "chgrp", "attrib", "icacls", "takeown",
+    "patch", "gzip", "gunzip", "bzip2", "xz", "zip", "unzip", "tar", "7z",
+    "set-content", "out-file", "add-content", "clear-content", "copy-item",
+    "move-item", "remove-item", "new-item", "rename-item", "set-itemproperty",
+})
+
+# Commands that read their first operands and write only the last one.
+# Measured, not assumed: treating every operand as written refused
+# `cp settings.json settings.json.bak`, an ordinary backup, in the transcripts.
+_DESTINATION_ONLY_COMMANDS = frozenset({
+    "cp", "copy", "mv", "move", "rename", "ren", "install", "ln", "mklink",
+    "rsync",
+})
+_TARGET_DIRECTORY_FLAGS = ("-t", "--target-directory")
+
+# Stream editors write only when told to. `sed -n '340,400p' <file>` is a pager,
+# and it accounted for 86 of the regressions the first version of this measured.
+_IN_PLACE_COMMANDS = frozenset({"sed", "perl", "ruby"})
+_IN_PLACE_FLAG_RE = re.compile(r"^(?:-i|--in-place)")
+
+# Where a sed command can start: the beginning of the script, or after ; or a
+# newline or {, with an optional address in front of it. The anchor is load
+# bearing and was found missing by measurement rather than by reading. Without
+# it the `s` matcher below found `s(serialise(data, indent, crlf))/PROJ.write`
+# inside an ordinary replacement string, because sed's `s` takes any delimiter
+# and `s(` looks like one, and it refused two real transcript commands.
+# Nothing in here captures, so \1 in the patterns below still means the
+# delimiter captured right after the `s`.
+_SED_ADDRESS = r"(?:^|[;\n{])[ \t]*(?:[0-9,$~+]|/(?:[^/\\]|\\.)*/|![ \t]*)*[ \t]*"
+_SED_SUBSTITUTION = r"s(.)(?:(?!\1).|\\.)*\1(?:(?!\1).|\\.)*\1[a-z]*"
+
+# A sed script that runs a shell command. Both forms verified on this machine:
+# `sed '1e echo X' f` and `sed 's/.*/&/e' f` each printed X. GNU sed documents
+# `e [command]` and the `e` modifier on `s///` as executing through /bin/sh.
+_SED_EXEC_COMMAND_RE = re.compile(_SED_ADDRESS + r"e(?:[ \t]|$)")
+_SED_EXEC_FLAG_RE = re.compile(_SED_ADDRESS + _SED_SUBSTITUTION + "e")
+
+# `w <file>` and the `w` flag on `s///` write a file named in the script rather
+# than on the command line, so an in place flag is not the only way sed writes.
+_SED_WRITE_RE = re.compile(
+    _SED_ADDRESS + r"(?:[wW][ \t]|" + _SED_SUBSTITUTION + r"[wW])")
+
+
+def _written_operands(words: list[str]) -> list[str]:
+    """The operands this command writes, which is not always all of them."""
+    name = _binary_name(words[0])
+    flags = [w for w in words[1:] if w.startswith("-")]
+    operands = [w for w in words[1:] if not w.startswith("-")]
+
+    if name == "dd":
+        return [w for w in operands if w.lower().startswith("of=")]
+
+    if name in _IN_PLACE_COMMANDS:
+        in_place = any(_IN_PLACE_FLAG_RE.match(f) for f in flags)
+        if name == "sed" and not in_place and not _SED_WRITE_RE.search(_sed_script(words[1:])):
+            return []
+        if not in_place and name != "sed":
+            return []
+        return operands
+
+    if name in _DESTINATION_ONLY_COMMANDS:
+        destinations = operands[-1:]
+        for index, word in enumerate(words[1:], start=1):
+            if word.startswith("--target-directory="):
+                destinations.append(word.split("=", 1)[1])
+            elif word in _TARGET_DIRECTORY_FLAGS and index + 1 < len(words):
+                destinations.append(words[index + 1])
+        return destinations
+
+    return operands if name in _WRITER_COMMANDS else []
+
+
+def _path_candidates(word: str) -> list[str]:
+    """The paths a single word could name, normalised for comparison.
+
+    A word is not always a bare path. `dd of=<path>` and `--output=<path>` put
+    the path after an `=`; git puts it after a `:`, where `git show HEAD:.env`
+    prints the real bytes of any .env the history ever held. Reading only the
+    whole word missed all three.
+    """
+    normalized = word.strip("\"'").replace("\\", "/").lower()
+    if not normalized:
+        return []
+    candidates = [normalized]
+    if "=" in normalized:
+        candidates.append(normalized.split("=", 1)[1])
+    # git's <ref>:<path>. A single character before the colon is a Windows
+    # drive letter instead, and splitting those turned every C:/... path into a
+    # rooted /... one that matched the relative `scripts/` pattern.
+    head, colon, tail = normalized.partition(":")
+    if colon and tail and len(head) != 1:
+        candidates.append(tail)
+    return [c for c in candidates if c]
+
+
+def _is_protected_path(word: str) -> bool:
+    return any(
+        path.startswith(_BOOST_SCRIPTS_PREFIX)
+        or any(pattern.search(path) for pattern in _PROTECTED_PATH_RES)
+        for path in _path_candidates(word)
+    )
+
+
+def _is_env_file(word: str) -> bool:
+    return any(_ENV_FILE_RE.search(path) for path in _path_candidates(word))
+
+
+# Commands whose first operand is a pattern or a script rather than a file.
+# `grep -i "\.env"` searches stdin for the text and opens nothing, and that
+# spelling turned up in the transcripts inside an audit for committed secrets.
+# The file operands after it are still read, so `grep API .env` stays refused.
+_PATTERN_FIRST_COMMANDS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "findstr", "sed", "awk",
+})
+
+
+def _names_no_file(word: str, previous: str, locating: bool) -> bool:
+    """True when this word names a pattern the command will not open.
+
+    `--exclude=.env` arrives as one word, so the joined spelling is checked as
+    well as the separated one. Refusing either would refuse a command whose
+    whole effect is to leave the file alone.
+    """
+    if previous in _EXCLUSION_FLAGS:
+        return True
+    if locating and previous in _LOCATE_FLAGS:
+        return True
+    return any(word.startswith(flag + "=") for flag in _EXCLUSION_FLAGS)
+
+
+def _env_read_problem(words: list[str], skip_operands: int = 0) -> str | None:
+    """The refusal this word list earns for naming an .env file, or None.
+
+    skip_operands drops that many leading non-flag words, which is how the
+    command name and a search pattern are kept from reading as filenames.
+    """
+    # A locate predicate only stays exempt while nothing consumes the match.
+    locating = not any(word in _FIND_ACTION_FLAGS for word in words)
+    previous = ""
+    for word in words:
+        if _names_no_file(word, previous, locating):
+            previous = word
+            continue
+        # An inclusion filter's value is a filename, never the search pattern.
+        is_pattern = (skip_operands and not word.startswith("-")
+                      and previous not in _INCLUSION_FLAGS)
+        if is_pattern:
+            skip_operands -= 1
+            previous = word
+            continue
+        if _is_env_file(word):
+            return (
+                "BLOCKED: an .env file holds this project's secrets, and Bash reaches "
+                f"it by any route the Read tool rule does not cover. Found: {word!r}. "
+                "If you need a specific key, ask the human for that one value."
+            )
+        previous = word
+    return None
+
+
+def _operands_to_skip(segment: str) -> int:
+    """How many leading operands of a segment are not filenames.
+
+    Always the command name, plus the pattern or script for a command that
+    takes one first.
+    """
+    words = _command_words(segment)
+    if not words:
+        return 0
+    return 2 if _binary_name(words[0]) in _PATTERN_FIRST_COMMANDS else 1
+
+
+_REDIRECT_WORDS = frozenset({">", ">>", ">|", ">&", "&>", "&>>"})
+_SOURCE_PATH_RE = re.compile(r"[\w.:/\\@+-]+")
+
+
+def check_protected_paths(command: str) -> str | None:
+    """Block writes to the guard's own files and reads of any .env, through Bash.
+
+    Three routes are covered because three routes exist: a redirection, a
+    command whose arguments are files it modifies, and an interpreter payload
+    naming the path directly.
+    """
+    lowered = command.lower()
+    # `$(` and a backtick are in the prefilter because a substitution can
+    # produce a protected path out of a command that names none of the other
+    # tokens: `cp payload.py $(cat target.txt)` mentions nothing at all.
+    if not any(token in lowered for token in
+               (".env", "scripts/", "scripts\\", "hooks", "settings",
+                "bash-guard", ".claude", "$(", "`")):
+        return None
+
+    for text, _routed, kind in _scannable_texts(command):
+        if kind == "interpreter":
+            words = _SOURCE_PATH_RE.findall(text)
+            problem = _env_read_problem(words)
+            if problem:
+                return problem
+            for word in words:
+                if _is_protected_path(word):
+                    return _protected_refusal(word, "named inside interpreter source")
+            continue
+
+        for _separator, segment in _split_segments(text):
+            words = _shell_words(segment)
+            problem = _env_read_problem(words, _operands_to_skip(segment))
+            if problem:
+                return problem
+            for index, word in enumerate(words):
+                if word in _REDIRECT_WORDS and index + 1 < len(words):
+                    problem = _write_target_problem(words[index + 1], "a redirection target")
+                    if problem:
+                        return problem
+            command_words = _command_words(segment)
+            if not command_words:
+                continue
+            how = f"written by `{_binary_name(command_words[0])}`"
+            for word in _written_operands(command_words):
+                problem = _write_target_problem(word, how)
+                if problem:
+                    return problem
+    return None
+
+
+def _write_target_problem(word: str, how: str) -> str | None:
+    """The refusal this write target earns, or None.
+
+    A target built by a command substitution is refused rather than resolved.
+    Nothing bounds what the substitution prints: it can emit a leading
+    directory, so no amount of visible text around it rules out a control file.
+    `$(echo scripts/bash-guard.py)` reached the guard itself while all eight
+    literal spellings of the same path were refused.
+    """
+    if _SUBSTITUTION_MARK in word:
+        return (
+            f"BLOCKED: this command is {how}, and part of the target is built by a "
+            "command substitution, so the path it names is only known once it runs. "
+            "The files that decide what this session may do are protected by path, "
+            "and a path this guard cannot read is one it cannot clear. Write the "
+            "path literally, or compute the name in a separate command first."
+        )
+    if _is_protected_path(word):
+        return _protected_refusal(word, how)
+    return None
+
+
+def _protected_refusal(path: str, how: str) -> str:
+    return (
+        f"BLOCKED: {path!r} is {how}, and it is one of the files that decide what "
+        "this session is allowed to do (the command guard, the research and "
+        "verifier hooks, the settings files, and the tests that keep them honest). "
+        "A guard the session can overwrite is not a guard. Use the Write or Edit "
+        "tool, which prompts the human for these paths, or ask them to make the "
+        "change."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routing through a program that runs what it is handed.
+# ---------------------------------------------------------------------------
+
+# An awk program that reaches a shell: system(), a coprocess, or print into a
+# command. Verified: `awk 'BEGIN{system("echo X")}'` printed X.
+_AWK_EXEC_RE = re.compile(r"\bsystem\s*\(|\|&|\|\s*[\"']")
+
+_SED_SCRIPT_FLAGS = frozenset({"-e", "--expression", "-f", "--file"})
+
+
+def check_shell_exec_routing(command: str) -> str | None:
+    """Block the shapes whose whole purpose is to run text as a command.
+
+    Piping into a shell is the one this matters most for: it defeats every
+    check that reads the command, because the command being run is data at the
+    time the guard sees it. claude-code-bash-guardian keeps the same category
+    under `forbidden_pipe_targets` for the same reason.
+    """
+    lowered = command.lower()
+    if not any(token in lowered for token in ("|", "sed", "awk", "xargs")):
+        return None
+
+    for text, _routed, kind in _scannable_texts(command):
+        if kind == "interpreter":
+            continue
+        for separator, segment in _split_segments(text):
+            words = _command_words(segment)
+            if not words:
+                continue
+            name = _binary_name(words[0])
+            if "|" in separator and name in _SHELL_BINARIES:
+                return (
+                    f"BLOCKED: this command pipes into `{name}`, so what actually runs "
+                    "is text produced at runtime. Nothing that reads the command can "
+                    "see it, including this guard and the permission rules. Run the "
+                    "command you mean directly."
+                )
+            if name == "sed":
+                script = _sed_script(words[1:])
+                if _SED_EXEC_COMMAND_RE.search(script) or _SED_EXEC_FLAG_RE.search(script):
+                    return (
+                        "BLOCKED: this sed script uses the `e` command or the `e` flag on "
+                        "`s///`, both of which run their argument through a shell. "
+                        f"Found: {script[:80]!r}."
+                    )
+            if name == "awk" and any(_AWK_EXEC_RE.search(word) for word in words[1:]):
+                return (
+                    "BLOCKED: this awk program reaches a shell (system(), a coprocess, or "
+                    "a print into a command). awk runs it directly, so nothing that reads "
+                    "the command sees what runs."
+                )
+    return None
+
+
+def _sed_script(args: list[str]) -> str:
+    """The script text of a sed invocation, from -e/-f or the first operand."""
+    parts, expect_script, seen_operand = [], False, False
+    for word in args:
+        if expect_script:
+            parts.append(word)
+            expect_script = False
+            continue
+        if word in _SED_SCRIPT_FLAGS:
+            expect_script = True
+            continue
+        if word.startswith("-"):
+            continue
+        if not seen_operand:
+            parts.append(word)
+            seen_operand = True
+    return "\n".join(parts)
+
+
 def _command_from_payload(payload) -> str:
     """The Bash command out of a PreToolUse payload, or "" if there isn't one.
 
@@ -1254,6 +2527,81 @@ def _command_from_payload(payload) -> str:
     tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     return command if isinstance(command, str) else ""
+
+
+# Checks that exist so Claude Code's own scanners do not prompt on a command
+# the allow list already covers. Turning one off costs an extra prompt.
+_ERGONOMIC_CHECKS = (
+    check_env_var_expansion,
+    check_cat_heredoc,
+    check_coauthor,
+    check_python_multiline_c,
+    check_cd_compound,
+    check_backslash_spaces,
+)
+
+# Checks that are the boundary. Turning one off costs the boundary, so the off
+# switch does not reach them and a crash in one blocks rather than allows.
+_SECURITY_CHECKS = (
+    check_db_mutation,
+    check_production_environment,
+    check_destructive_delete,
+    check_ssh_external,
+    check_netcat,
+    check_curl_external,
+    check_shell_exec_routing,
+    check_protected_paths,
+    # Before the verb gate, because a routed write and a plain write are both
+    # refused and the routed message is the one that explains the route.
+    check_routed_git_write,
+    check_git_gh_verbs,
+    # After it, so a visible write is named as one rather than as a missing verb.
+    check_argument_feeder,
+)
+
+_OFF_VALUES = frozenset({"off", "0", "false", "disabled", "no"})
+
+
+def _ergonomics_disabled() -> bool:
+    return os.environ.get("CLAUDEBOOST_BASH_GUARD", "").strip().lower() in _OFF_VALUES
+
+
+def evaluate(command: str) -> str | None:
+    """The first refusal this command earns, or None.
+
+    Security checks run first so a crash in an ergonomic check cannot let a
+    write through by ordering. Each check is isolated: an ergonomic one that
+    raises is skipped, because its only job is avoiding a prompt, while a
+    security one that raises blocks, because a guard that cannot decide has no
+    basis to allow.
+    """
+    for check in _SECURITY_CHECKS:
+        try:
+            message = check(command)
+        except Exception as error:
+            message = (
+                f"BLOCKED: the command guard crashed while checking this command "
+                f"({check.__name__}: {error!r}). It blocks rather than allows when it "
+                "cannot decide, because it is what stops git writes and protects its "
+                "own files. Report the command above so the guard can be fixed, or "
+                "run it yourself in a terminal."
+            )
+        if message:
+            return message
+
+    if _ergonomics_disabled():
+        return None
+
+    for check in _ERGONOMIC_CHECKS:
+        try:
+            message = check(command)
+        except Exception as error:
+            _write_block_telemetry(
+                "Bash", command, f"{check.__name__}: {error!r}", result="check_error")
+            continue
+        if message:
+            return message
+    return None
 
 
 def main() -> int:
@@ -1273,18 +2621,11 @@ def main() -> int:
     if not command:
         return 0
 
-    # Full off switch — set CLAUDEBOOST_BASH_GUARD=off to let everything through.
-    if os.environ.get("CLAUDEBOOST_BASH_GUARD", "").strip().lower() in ("off", "0", "false", "disabled", "no"):
-        return 0
-
-    # Run checks in order
-    for check in [check_db_mutation, check_production_environment, check_destructive_delete, check_env_var_expansion, check_cat_heredoc, check_ssh_external, check_netcat, check_curl_external, check_coauthor, check_python_multiline_c, check_cd_compound, check_backslash_spaces, check_routed_git_write]:
-        msg = check(command)
-        if msg:
-            print(msg, file=sys.stderr)
-            _write_block_telemetry("Bash", command, msg)
-            return 2
-
+    message = evaluate(command)
+    if message:
+        print(message, file=sys.stderr)
+        _write_block_telemetry("Bash", command, message)
+        return 2
     return 0
 
 

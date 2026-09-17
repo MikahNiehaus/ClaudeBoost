@@ -1,7 +1,7 @@
 ---
 name: swiper
 description: Swipes working code instead of writing it from scratch. Hates original implementation. Checks whether the thing already exists in the project, the stdlib, an installed dependency, the skills.sh skill registry (for "make the agent do X" tasks), or on GitHub/StackOverflow, and if it does, hands back the exact command or exact lines to take it. Never writes to project files itself. Spawn before any real build or edit.
-tools: WebSearch, WebFetch, Bash, Grep, Glob, Read
+tools: WebSearch, WebFetch, Bash, Grep, Glob, Read, mcp__context7__resolve-library-id, mcp__context7__query-docs
 model: sonnet
 effort: medium
 skills:

@@ -59,15 +59,15 @@ Call `POST http://127.0.0.1:8613/search` with:
 }
 ```
 
-If it fails: stop — "RAG is not connected. Run `/rag` first."
+If it fails: stop — "RAG is not connected. Run `/clean-rag-server start` first."
 
 **0b — Verify project is indexed:**
 
-Call `GET http://127.0.0.1:8613/status` and check that `PROJECT_PATH` appears in the indexed projects.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: continue
-- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` first
-- **RAG offline**: stop, tell user to run `/rag`
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "PROJECT_PATH"}` first
+- **RAG offline**: stop, tell the user to run `/clean-rag-server start`
 
 ---
 
@@ -136,6 +136,30 @@ Review the diff systematically. For each issue found, classify by severity:
 - Minor code smells
 
 For each issue: file:line, severity, description, suggested fix.
+
+### Step 2b: Reachability gate
+
+Severity is not final until this runs. It covers every CRITICAL and MAJOR you
+hold at this point, including the ones Step 1b raised for code that already
+exists.
+
+A bug in code nobody can reach is not a MAJOR. For each of those findings,
+write down the exact user action or input that reaches the line, then look for
+what stands in the way of it:
+
+- A server side branch: does client side validation, a `[Required]` attribute,
+  a guard clause, or a role check reject the input first?
+- An error or fallback path: can anything actually put the code in that state?
+- New code: is it called from anywhere yet?
+
+Record the trigger sequence beside the finding. If you cannot name one, the
+finding drops to MINOR and says why. If the trigger needs an unusual
+precondition (JS disabled, a collapsed or hidden field, a direct POST, a
+non default config), keep the finding and name that precondition in the
+description, because a reviewer reading "this breaks on save" will act on it
+differently than "this breaks on save with validation bypassed".
+
+A finding whose reachability you did not check is not ready to report.
 
 ## Grade
 
@@ -211,11 +235,24 @@ Verdict: FAIL
 
 ## Evidence Verification
 
-Spawn a single `quick-cop`:
+Spawn a single `quick-cop`. Its job is to disprove the findings, not to
+confirm them. Hand it the findings and the diff. Never hand it your reasoning
+for why a finding is real, since that reasoning is what talks a reviewer into
+agreeing with you.
 
-"Verify the review output: (1) every CRITICAL and MAJOR cites a specific file:line, (2) Grade is consistent with issue counts, (3) Verdict matches Grade. Output a table: Claim | Evidence? | CONFIRMED/NEEDS_EVIDENCE. Under 500 tokens."
+"Try to DISPROVE each finding below. For every CRITICAL and MAJOR: (1) read the
+cited file:line and confirm the code says what the finding claims, (2) name the
+exact user action that reaches that line, and hunt for validation, a guard
+clause, a role check, or dead code that blocks the path first, (3) say whether
+the stated severity survives. Report each one as CONFIRMED, REFUTED, or
+CONFIRMED BUT NARROWER with the precondition named. Give me the strongest
+argument against each finding that you found. If a trigger needs specific
+steps, spell out the exact sequence. Under 600 tokens."
 
-Surface any NEEDS_EVIDENCE items alongside the grade.
+Apply what comes back before you print the grade. NARROWER lowers the severity,
+and the grade moves with it. REFUTED removes the finding. Never report a
+finding at a severity quick-cop did not sustain, and say plainly when a
+verdict changed your first read.
 
 ## Fix Phase (FIX_MODE = true, quick review)
 
@@ -662,6 +699,14 @@ Rules:
 3. Multiple findings about the same issue count as one.
 4. Every BLOCKER/WARNING must have file:line and a concrete fix. If not: downgrade to NIT or FALSE POSITIVE.
 5. Use FINDINGS_CITATIONS as your work queue. Read each cited file:line to confirm the issue exists. For any BLOCKER claiming something is MISSING (missing row, missing emit, missing field, missing record) — read the full enclosing method from its opening brace, not just the cited line. A row that looks absent from the emission block may be present via a write path in pre-existing code above it that was not in the diff. Confirm or discard based on the full data flow.
+5b. Reachability. For every BLOCKER and WARNING, name the exact user action or
+input that reaches the cited line, then look for what blocks that path:
+client side validation, a `[Required]` attribute, a guard clause, a role check,
+or the code simply never being called. A real bug on an unreachable path is a
+NIT, not a BLOCKER. A bug whose trigger needs an unusual precondition (JS
+disabled, a hidden or collapsed field, a direct POST, a non default config)
+keeps its finding but must carry that precondition in its description. Say
+which findings you downgraded here and on what evidence.
 6. Pass 8 without `artifact_type_checked` field = INCOMPLETE — flag it.
 7. Pass 14b without `template_files_scanned` field = INCOMPLETE — flag it.
 8. Pass 15b without `async_audit_complete` field = INCOMPLETE — flag it.

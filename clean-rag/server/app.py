@@ -519,7 +519,7 @@ async def handle_index_project(request: web.Request) -> web.Response:
     if _model_cache is None:
         return _json_response({"error": "Server not initialized"}, 503)
 
-    if not acquire_index_lock("index-project"):
+    if not acquire_index_lock("index-project", project_path):
         return _json_response({"error": "Index busy, retry in a moment"}, 423)
 
     loop = asyncio.get_running_loop()
@@ -1351,6 +1351,59 @@ async def handle_projects(request: web.Request) -> web.Response:
     return _json_response({"projects": projects})
 
 
+async def handle_sweep_pause(request: web.Request) -> web.Response:
+    """POST /sweep-pause: stop or resume automatic reindexing.
+
+    Pausing also evicts the resident embedding models, because the reason to
+    pause is almost always wanting the machine back, and two models resident is
+    gigabytes. They reload on the next search, which costs seconds.
+
+    A running index is not killed. The lock holder finishes the project it is
+    on; the sweep stops before the next one. Interrupting mid project would
+    leave the manifest describing chunks that were never written.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - any unparseable body is just a bad request
+        body = {}
+    if not isinstance(body, dict) or "paused" not in body:
+        return _json_response(
+            {"error": "send {\"paused\": true} or {\"paused\": false}"}, status=400,
+        )
+
+    # Imported here, not at module scope, matching how the startup hook reaches
+    # for this module at app.py:1581.
+    from .auto_reindex import set_paused
+
+    paused = set_paused(bool(body["paused"]))
+
+    evicted = []
+    if paused and _model_cache is not None:
+        evicted = _model_cache.loaded_models()
+        _model_cache.evict_all()
+        logger.info("Paused: evicted %d model(s) to give the RAM back", len(evicted))
+
+    operation, project = _current_index_lock()
+    return _json_response({
+        "paused": paused,
+        "models_evicted": evicted,
+        # True while a project that was already underway finishes.
+        "indexing_still_finishing": bool(operation),
+        "indexing_project": project,
+    })
+
+
+def _current_index_lock() -> tuple[str, str]:
+    """(operation, project) from the index lock file, or empty strings."""
+    try:
+        data = json.loads((STATE_DIR / "index-lock.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "", ""
+    if not isinstance(data, dict):
+        return "", ""
+    return str(data.get("operation") or ""), str(data.get("project") or "")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1557,6 +1610,7 @@ def create_app() -> web.Application:
     app.router.add_post("/mutation-test", handle_mutation_test)
     app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
+    app.router.add_post("/sweep-pause", handle_sweep_pause)
 
     from .kanban import setup_kanban
     setup_kanban(app)

@@ -177,7 +177,7 @@ def _break_stale_lock() -> bool:
     return True
 
 
-def acquire_index_lock(operation: str = "index") -> bool:
+def acquire_index_lock(operation: str = "index", project: str = "") -> bool:
     """Try to acquire the indexing lock. Returns True if acquired, False if busy.
 
     The claim is one ``os.open(O_CREAT | O_EXCL)``, not an ``exists()`` check
@@ -215,6 +215,9 @@ def acquire_index_lock(operation: str = "index") -> bool:
     payload = json.dumps({
         "pid": os.getpid(),
         "operation": operation,
+        # Which project, so a reader can say WHICH row is indexing rather than
+        # only that something is. Empty when the caller does not know yet.
+        "project": str(project or ""),
         "started": datetime.now(timezone.utc).isoformat(),
     }).encode("utf-8")
 

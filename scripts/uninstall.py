@@ -38,6 +38,7 @@ Re-running setup.py puts everything back, so the default path is fully reversibl
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import platform
@@ -423,6 +424,60 @@ def _strip_mcp_server(path: Path, name: str, label: str) -> None:
         _skip(f"{name} not in {label}")
 
 
+def _mcp_names_from_table(path: Path) -> list[str]:
+    """Server names out of setup.py's MCP_SERVERS literal, by AST.
+
+    Only the "name" of each row is read, so a value the table computes rather
+    than spells out (a shared hint constant, for instance) does not matter.
+
+    Raises rather than returning an empty list, because every caller treats a
+    short list as "these are the servers" and would deregister nothing. A table
+    restructured into a call or a comprehension already raises here; an empty
+    literal has to be turned into a raise explicitly or it reads as success.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(getattr(t, "id", None) == "MCP_SERVERS" for t in targets):
+            continue
+        names = [value.value
+                 for row in node.value.elts
+                 for key, value in zip(row.keys, row.values)
+                 if getattr(key, "value", None) == "name"]
+        if not names:
+            raise ValueError(f"MCP_SERVERS in {path} yielded no server names")
+        return names
+    raise ValueError(f"no MCP_SERVERS table in {path}")
+
+
+def _shared_mcp_names() -> list[str]:
+    """Every MCP server the installer registers, read from the installer itself.
+
+    This used to be the hardcoded pair ("mcp-debugger", "playwright"), which had
+    already drifted: test-coverage, chrome-devtools and mdb were being registered
+    by setup.py and never deregistered here, so --purge left them behind. Reading
+    the real table means adding a server can no longer forget to remove it.
+
+    Parsed out of setup.py's AST rather than imported. Importing it ran every
+    module level statement in the installer, including a
+    sys.stdout.reconfigure that silently changed the uninstaller's own output
+    encoding. Reading the table is all this needs, and reading does not need
+    execution.
+
+    Falls back to the known core servers if setup.py cannot be read at all,
+    because an uninstall must never be the thing that crashes.
+    """
+    try:
+        names = _mcp_names_from_table(Path(__file__).resolve().parent / "setup.py")
+        return names + ["mdb"]  # cloned conditionally, so absent from the table
+    except Exception:  # noqa: BLE001
+        _warn("could not read the MCP server table from setup.py, "
+              "falling back to the known core servers")
+        return ["mcp-debugger", "playwright", "test-coverage", "chrome-devtools", "mdb"]
+
+
 def _mcp_remove(claude: list[str] | None, name: str) -> None:
     if claude is None:
         _skip(f"claude CLI not found, remove {name} MCP by hand if needed")
@@ -449,11 +504,13 @@ def deregister_mcp() -> None:
     _mcp_remove(claude, "rag-server")
 
     # Shared tools, only on --purge, since other projects may use them.
+    shared = _shared_mcp_names()
     if PURGE:
-        for name in ("mcp-debugger", "playwright"):
+        for name in shared:
             _mcp_remove(claude, name)
     else:
-        _skip("mcp-debugger / playwright left registered (use --purge to remove shared MCPs)")
+        _skip(f"{len(shared)} shared MCP servers left registered "
+              f"(use --purge to remove them)")
 
 
 # ---------------------------------------------------------------------------

@@ -330,3 +330,80 @@ rounds above.
 The data carve-out is load bearing and should not be removed to simplify this.
 Measured: six of eight ordinary heredoc shapes would be wrongly refused without
 it, including `cat <<EOF | grep x` and `python <<EOF`.
+
+### ANSI-C quoting hides a git flag, recorded rather than closed (2026-09-17)
+
+`verify-loop-git-guard.py` moved its branch, tag and stash checks off raw-text
+regexes onto the shlex tokens the subcommand check already used, because the
+regexes both missed `git branch "-d" x` and refused ordinary work such as
+`grep -rn "branch --delete" clean-rag`. One spelling survives the move.
+
+Measured on 2026-09-17 by invoking the guard and reading its exit code:
+
+| Command | Guard verdict |
+|---|---|
+| `git branch "-d" stale-branch` | BLOCK (exit 2) |
+| `git branch -dr origin/gone` | BLOCK (exit 2) |
+| `git branch $'-d' stale-branch` | allow (exit 0) |
+| `git branch $'\x2dd' stale-branch` | allow (exit 0) |
+| `git $'push' origin main` | allow (exit 0) |
+| `git $'commit' -am wip` | allow (exit 0) |
+
+shlex does not expand `$'...'`, so the argument arrives as the token `$-d`.
+
+Left alone, for three reasons. The last two rows are the pre-existing
+subcommand check rather than the new flag check, so this is the guard's
+existing ceiling and not one the change introduced; closing the flag case alone
+would block a ref delete spelled this way while the `git push` the guard exists
+to prevent stayed open. Row four shows expansion has no floor: decoding
+`$'...'` means implementing bash's ANSI-C escapes (`\x`, `\u`, `\0`, and the
+rest) inside a PreToolUse hook, and a complete decoder still does not reach the
+variable indirection or `eval` rows measured earlier in this file. And an agent
+that means to delete a branch types `git branch -d x`, which blocks, so `$'-d'`
+is the deliberate construction side of the rule at line 240.
+
+If it is ever closed, close it in `shell_tokens.py` where the other quoting
+forms already live, so the subcommand and flag checks move together.
+`clean-rag/tests/test_git_guard_quoted_delete_flag.py` asserts the refusal that
+does not happen, under `pytest.mark.xfail(strict=True)`. The suite reports it as
+`2 xfailed` with the reason pointing here, and closing the gap turns it into an
+`XPASS(strict)` failure, which is the prompt to drop the marker and rewrite this
+section.
+
+It previously asserted that the flag check and the subcommand check agreed with
+each other. That assertion was `0 == 0`, and it held against a guard that
+blocked nothing at all, so a green suite implied coverage of an input nobody
+covers. Recorded because the reasoning for it reads as sound: a relationship
+assertion does follow a future fix instead of failing on it, but it buys that by
+asserting nothing about the behaviour under review.
+
+### An abbreviated long flag walked past the delete check (2026-09-17)
+
+Separate defect, found in the same file on the round after the above and fixed
+rather than recorded, because it needs no unusual quoting.
+
+`_deletes_a_ref` matched `token.startswith("--delete")`, so `git branch --del x`
+was allowed while `git branch --delete x` blocked. git's parse-options resolves
+any unambiguous prefix of a long option, and `--delete` is the only long option
+starting with 'd' on either subcommand, so every prefix down to `--d` deletes.
+Measured against git 2.55.0.windows.5 without deleting anything: `--d`, `--de`,
+`--del`, `--dele` and `--delet` all reach ref lookup and report `not found`
+(exit 1), while `--dx` and `--dry-run` are rejected at parse time with `unknown
+option` (exit 129).
+
+The fix matches any option name that is a prefix of `--delete`, which is the
+complete set of spellings that can reach it and needs no per-version option
+table. That is the remediation GHSA-2f96-g7mh-g2hx prescribes for the same class
+in GitPython, where `--conf` bypassed a blocklist of `--config`. The blunter
+reading, refusing every `--d...` on these subcommands, was declined: it would
+refuse a future non-delete option beginning with 'd', and `--no-delete` already
+shows the shape, since it creates a branch rather than deleting one.
+
+This is not the ceiling the rest of this file describes, and fixing it does not
+reopen the decision to stop closing spellings. An agent types `--del` meaning
+`--delete`; it does not type `$'-d'`.
+
+The comment this replaced justified prefix matching as covering
+`--delete-merged <pattern>`. No such option exists on `git branch` in git 2.55
+(`git branch -h`); it is a `git-extras` command. The prefix behaviour it
+described was real and the reason given for it was not.

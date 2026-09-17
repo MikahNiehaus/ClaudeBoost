@@ -78,9 +78,13 @@ either way.
 ## Phase 1: safe now, clearly redundant (low risk, no decision needed)
 
 - Delete `.claude/commands/research-task.md` and `research-project.md`.
-- Remove `scripts/research-task-nudge.py` (a whole UserPromptSubmit hook that
+- ~~Remove `scripts/research-task-nudge.py` (a whole UserPromptSubmit hook that
   nags you to run a command that will no longer exist), its install block in
-  `setup.py:820-823`, and its test.
+  `setup.py:820-823`, and its test.~~ **Done 2026-09-16.** The install block and
+  the test were already gone when this was picked up; only a comment at
+  `setup.py:953` records the removal. The file itself had been emptied to 0
+  bytes rather than deleted, and was registered in neither settings file. Now
+  deleted.
 - Clean dangling references to the already-dead `research-rag-agent`,
   `research-task`, `research-project` in: `knowledge/skill-routing.xml`,
   `scripts/skill-verify-gate.py`, `agents/_orchestrator.xml`,

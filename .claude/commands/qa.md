@@ -46,11 +46,11 @@ This loads relevant knowledge before any work begins. If `POST http://127.0.0.1:
 Detect the project path:
 1. Read `$CLAUDEBOOST_HOME/state/project-workspaces.json` — use the entry keyed by the current working directory to get the active workspace ID, then look up `project_path` in `workspaces.json`. Fall back to current working directory if the file doesn't exist or has no entry for this directory.
 
-Call `GET http://127.0.0.1:8613/status` and check `indexed_projects` for the detected path.
+Call `GET http://127.0.0.1:8613/status` and check `projects.entries` for an entry whose `project_path` matches.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<project_path>")` immediately. Do not continue until indexing completes.
-- **RAG offline**: stop and tell the user to run `/rag` first.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "<project_path>"}` immediately. Do not continue until indexing completes.
+- **RAG offline**: stop and tell the user to run `/clean-rag-server start`.
 
 ---
 
@@ -786,7 +786,7 @@ Only continue past this probe if ALL checks pass.
 
 Do not wait for codebase analysis before starting the browser crawl. Dispatch both at the same time.
 
-**Spawn `workflow-agent` (background) for codebase analysis.** The spawn prompt must include:
+**Spawn `researcher` (background) for codebase analysis.** The spawn prompt must include:
 1. `POST http://127.0.0.1:8613/search` as first action with `{"query":"codebase route and entity analysis for QA session discovery","sources":["project:<WORKSPACE_ROOT>"],"mode":"both","limit":8}`
 2. Run all three RAG searches in parallel, each `POST http://127.0.0.1:8613/search`:
    - `{"query":"routes pages navigation URL paths","sources":["project:<WORKSPACE_ROOT>"],"mode":"graph","limit":6}`

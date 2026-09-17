@@ -121,8 +121,54 @@ def _agent_type(payload: dict) -> str:
         tool_input.get("subagent_type")
         or tool_input.get("agent_type")
         or tool_input.get("agent")
+        # SubagentStop carries it at the top level instead of under tool_input.
+        or payload.get("agent_type")
+        or payload.get("subagent_type")
         or ""
     )
+
+
+def _is_subagent_stop(payload: dict) -> bool:
+    """A SubagentStop payload, which names an agent but no tool."""
+    return not payload.get("tool_name") and bool(
+        payload.get("agent_type") or payload.get("agent_id")
+    )
+
+
+def _last_assistant_message(transcript_path: str) -> str:
+    """The final assistant text in a JSONL transcript, or empty.
+
+    The documented SubagentStop payload was not confirmed to carry the report
+    inline, so this is the fallback that does not depend on a key name. Reading
+    happens in this hook's own process, so it costs the session no context.
+    """
+    if not transcript_path:
+        return ""
+    p = Path(transcript_path)
+    if not p.is_file():
+        return ""
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        msg = entry.get("message")
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        text = _report({"tool_response": msg.get("content")})
+        if text.strip():
+            return text
+    return ""
 
 
 def _spawn_prompt(payload: dict) -> str:
@@ -171,15 +217,54 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
-    if payload.get("tool_name") not in ("Task", "Agent"):
+    subagent_stop = _is_subagent_stop(payload)
+    if not subagent_stop and payload.get("tool_name") not in ("Task", "Agent"):
         return 0
 
     agent_type = _agent_type(payload)
     if agent_type not in VERIFIER_AGENTS:
         return 0
 
-    report = _report(payload)
+    if subagent_stop:
+        # SubagentStop fires when the agent actually finishes, so this is the
+        # only path that sees a report at all once Task spawns run async. The
+        # inline key was not confirmed in the docs, so fall back to the
+        # transcript rather than depend on a name that may not be there.
+        report = payload.get("last_assistant_message") or ""
+        if not isinstance(report, str) or not report.strip():
+            report = _last_assistant_message(payload.get("transcript_path", ""))
+    else:
+        report = _report(payload)
     if is_evidence_judge_pass(_spawn_prompt(payload), report):
+        return 0
+
+    # A report with none of the three closing markers is not a report.
+    #
+    # Recording it anyway writes a stamp with an empty covers list, and
+    # loop_stage() reads `agent == "bad-cop" and not covers` as
+    # STAGE_BUGS_FOUND. So a completion that carried no report at all becomes
+    # indistinguishable from a real HANDOFF, and the loop routes to good-cop on
+    # evidence that does not exist. Skipping it leaves STAGE_NO_VERIFIER, which
+    # is the truthful state and the same reasoning the proof check below uses.
+    #
+    # Measured 2026-09-17: every session from 2026-08-28 onward recorded 0 of N
+    # stamps with a covers list, 21 sessions running. Feeding this hook a real
+    # report records covers, hashes and verdict correctly, so the hook was never
+    # the defect; it was being handed completions with no report text. A
+    # backgrounded spawn is the known cause, since the PostToolUse fires when
+    # the Task tool returns rather than when the agent finishes
+    # (anthropics/claude-code#21352).
+    if not closing_stamp(report):
+        print(
+            f"[verifier-record] {agent_type} completion carried no VERIFIED, "
+            f"HANDOFF or NITS line, so nothing was recorded and the files stay "
+            f"unverified. A report is required to end with one of the three. "
+            f"The usual cause is a backgrounded spawn: the record is written "
+            f"when the Task tool returns, not when the agent finishes, so the "
+            f"launch acknowledgement arrives here instead of the report. Spawn "
+            f"{agent_type} in the foreground and re-run.",
+            file=sys.stderr,
+        )
         return 0
 
     # A VERIFIED with no execution behind it is not recorded at all.
@@ -217,7 +302,13 @@ def main() -> int:
         return 0
 
     session_id = payload.get("session_id", "")
-    record_verifier(session_id=session_id, report=report, agent_type=agent_type)
+    record_verifier(
+        session_id=session_id,
+        report=report,
+        agent_type=agent_type,
+        # Resolves a relative covers entry to the file whose contents get hashed.
+        cwd=payload.get("cwd") or "",
+    )
     return 0
 
 

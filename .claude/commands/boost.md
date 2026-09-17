@@ -278,10 +278,16 @@ re-run `/boost` — cannot auto-install a binary.
 ollama pull qwen3:4b
 ```
 
-**Force re-index after any fix** (ensures RAG sees the latest agents and knowledge):
+**Force re-index after any fix** (ensures search sees the latest ClaudeBoost source):
 ```bash
-curl -s -X POST http://127.0.0.1:8613/index-project -H "Content-Type: application/json" -d "{\"force\": true}"
+curl -s -X POST http://127.0.0.1:8613/index-project -H "Content-Type: application/json" -d "{\"project_path\": \"${CLAUDEBOOST_HOME}\", \"force\": true}"
 ```
+
+`project_path` is required. Without it the server answers
+`{"error": "Missing 'project_path' field"}` and nothing is indexed. This call
+used to send only `{"force": true}`, because it was written against the deleted
+8612 server, which took a `scope` of `agents` or `knowledge` instead of a
+project. Those scopes are gone; ClaudeBoost is indexed as an ordinary project.
 
 ### Step 7 — Post-fix summary
 

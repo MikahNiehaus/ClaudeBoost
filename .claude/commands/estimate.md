@@ -36,15 +36,15 @@ If `PROJECT_PATH` is empty: fall back to current working directory.
 
 Call `GET http://127.0.0.1:8613/status`.
 
-- If it returns an error: STOP. Tell the user: "RAG server not responding — run `/rag` to start the server, then retry `/estimate`."
-- If successful: note status and check `indexed_projects` for `PROJECT_PATH`.
+- If it returns an error: STOP. Tell the user: "RAG server not responding — run `/clean-rag-server start` to start the server, then retry `/estimate`."
+- If successful: note status and check `projects.entries` for an entry whose `project_path` matches `PROJECT_PATH`.
 
 **0c — Verify project is indexed:**
 
-Find `PROJECT_PATH` in `indexed_projects` from the status response.
+Find an entry under `projects.entries` whose `project_path` matches `PROJECT_PATH`.
 
 - **Indexed**: note file/chunk counts and continue.
-- **Not indexed**: run `Skill(skill="index-project", args="<PROJECT_PATH>")` immediately. Do not continue until indexing completes.
+- **Not indexed**: run `POST http://127.0.0.1:8613/index-project` with `{"project_path": "PROJECT_PATH"}` immediately. Do not continue until indexing completes.
 
 **0d — Load context:**
 
@@ -52,7 +52,7 @@ Find `PROJECT_PATH` in `indexed_projects` from the status response.
 POST http://127.0.0.1:8613/search with {"query":"story point estimation for sprint planning","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 ```
 
-If the result contains an `"error"` key: STOP. Tell the user: "RAG context load failed. Run `/rag` to start the server."
+If the result contains an `"error"` key: STOP. Tell the user: "RAG context load failed. Run `/clean-rag-server start`."
 
 ---
 
@@ -148,7 +148,7 @@ When estimating multiple tickets, interleave agents across tickets to maximize p
 ```
 Your FIRST action: call POST http://127.0.0.1:8613/search with {"query":"estimate dimension: <DIMENSION_NAME> for ticket <TICKET_ID>","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 
-This is a read-only analysis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file. Spawn one first; it must emit a COVERS line naming the file. Markdown and other non-code files are exempt.
+This is a read-only analysis. It never edits a code file, so the research gate does not apply. If that ever changes: the gate nudges, it does not block, and the two agents it counts are researcher and swiper.
 
 You are an estimation analyst for ONE specific dimension: **<DIMENSION_NAME>**
 
@@ -285,7 +285,7 @@ After ALL analysis agents complete, collect their JSON outputs as `ANALYSIS_RESU
 ```
 Your FIRST action: call POST http://127.0.0.1:8613/search with {"query":"synthesize story point estimates from analysis dimensions","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}
 
-This is a read-only synthesis. If you ever do need to edit a code file, the clean-rag research gate blocks the edit until a triage-agent or research-agent has run this turn and declared it covers that file.
+This is a read-only synthesis. It never edits a code file, so the research gate does not apply.
 
 You are the Estimation Synthesis Agent. You do NOT re-analyze the codebase. You synthesize the findings from all 5 dimension analysts into final story point estimates.
 
