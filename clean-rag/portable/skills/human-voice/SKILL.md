@@ -145,6 +145,153 @@ That agent repairs facts in fresh wording rather than restoring the original
 sentences, which matters because the original phrasing is usually what the
 transformation was run to remove.
 
+## The back translation pipeline: translate, diff, repair, diff again
+
+A rewrite does not move a classifier based AI detector much. A machine
+translation round trip does (Pangram and AiDetector both respond to it), and it
+is one of two RAID attacks a careful writer could plausibly have produced. Its
+cost is fact fidelity: translation drops qualifiers, flips verbs and reformats
+numbers without saying so. The pipeline is the three scripts and one agent above
+in a fixed order, and the last two stages are what make the first one safe to
+run.
+
+```
+python scripts/back_translate.py in.txt out.txt            # 1. round trip, one file per hop
+python scripts/fact_diff.py in.txt out.txt --rules r.json  # 2. expect exit 1
+# 3. spawn fact-medic with in.txt, out.txt and the fact_diff output
+python scripts/fact_diff.py in.txt out.txt --rules r.json  # 4. repeat until exit 0
+```
+
+`back_translate.py` is stdlib only and drives Google's public `gtx` endpoint
+with a browser User-Agent. Default chain `en, zh-CN, tr, ja, en`, configurable
+with `--chain`. It chunks on paragraphs, then sentences, never mid sentence, and
+budgets the chunk on the percent encoded length because a CJK glyph is 9 URL
+characters. It retries 408, 429 and 5xx with exponential backoff and jitter and
+fails fast on anything else. Every hop lands next to `out.txt` as
+`out.hopN.<lang>.txt`, so a bad hop is identified rather than guessed at.
+
+Two limits. The translator never protects tokens: `fact_diff.py` detects and
+`fact-medic` repairs, and a masked token the endpoint mangles anyway would fail
+silently. And `fact_diff.py` cannot see a verb flip that keeps every number
+(`took C# from 0.82 to 0.950` coming back as `reduces C#'s MRR from 0.82 to
+0.950`, observed on a live round trip). That is fact-medic's side by side read,
+and it is why stage 3 is an agent and not a regex.
+
+Measured on Pangram 4 (2026-09-13): the round trip, the fresh wording repair and
+a terse bullet rewrite of the same resume all scored AI. Pangram's own DAMAGE
+paper reports 93% of paraphrase and 97% of synonym substitution caught, and its
+EditLens model scores style consistency across the document, not word choice.
+Wording changes do not move it. The next tool changes shape instead.
+
+## Shape shuffle: randomize structure, keep every word
+
+The one published recipe for making Pangram 4 flag text on shape alone is
+structural: identical bullet length and form, symmetrical sections, the rule of
+three. `shape_shuffle.py` attacks that without touching a word, so `fact_diff.py`
+can verify every variant. Whether shape alone moves the score is unmeasured in
+any paper; run it, score the variants, and report the number either way.
+
+```
+python scripts/shape_shuffle.py in.txt out.txt --seed 7 --variants 4 --glue r.json
+python scripts/fact_diff.py in.txt out.variant1.txt --rules r.json   # per variant
+```
+
+Each variant draws its own recipe (split, join, prose, bulletize, reorder, blank
+line knobs) from one sub seed, so variant K is the same bytes whether you ask
+for 2 or 8, and same seed means same output on any machine. Operations: split a
+multi sentence bullet at one boundary (never leaving a piece under four words),
+join two neighbours into one long bullet, turn two or three bullets into a
+paragraph, turn a paragraph of three plus sentences into bullets, shuffle bullet
+order, and occasionally double a blank line. Heading lines (`# ...` or ALL CAPS)
+are never touched. Any section whose body contains a date range keeps its
+order. `--no-merge` keeps every bullet a bullet (an ATS parses discrete items
+better than a prose blob), `--no-reorder` keeps every order, and `--glue r.json`
+reads the `fact_diff` qualifier rules so a bullet stays next to the bullet that
+holds its qualifier. The script refuses to emit a variant whose sentence multiset
+differs from the input; that check is the invariant, and it fires.
+
+Measured 2026-09-16 against Pangram 4, twice, on two independent variants of
+the same document: no movement, 100% AI both times. Pangram 4's own technical
+report (arXiv:2607.27183) explains why on architectural grounds, not just this
+one sample. The verdict is a character weighted sum over per span labels that
+a CRF assigns from local (within window) context; reordering spans that are
+already confidently labeled cannot change what is inside any window, and the
+sum does not care what order the labels arrived in. Shape alone cannot move
+this detector. Run it anyway for whatever structural variation the document
+actually benefits from, never for the detector score.
+
+## The full pipeline: everything combined, in order
+
+Word level rewriting and structure shuffling each move the score for some
+detectors and not this one; the two sections above measure that directly.
+What actually has evidence behind it against Pangram 4 is a different kind of
+move: change how much of the document is genuinely, verifiably human, not how
+the remaining AI-drafted portion is dressed. Pangram's own launch paper
+(arXiv:2607.27183, Section 5.5.1) reports a document that is a real 25 to 75%
+mix of human and AI content lands "Human" 27.85% of the time and "Mixed" most
+of the rest, against 0.34% overall false negative rate on fully AI text. That
+gap is the only lever here with a number behind it. Five steps, in this order,
+because each one depends on the one before it:
+
+1. **Find real writing of the author's that is already known human.** A prior
+   document, an email, an old resume, anything with either an independent
+   human verdict from the detector that matters or a paper trail (a creation
+   date before generative models existed, for instance) that makes the
+   question moot. This step is the only one that can supply genuine human
+   bytes; nothing downstream manufactures them. If none exists, say so and
+   stop here rather than pretending a later step compensates.
+2. **Splice it in verbatim wherever the facts it states still hold.** Exact
+   words, exact punctuation, its own quirks and grammar included. Do not
+   correct it and do not run it through `back_translate.py` or any paraphrase
+   pass: both are mechanical transforms, and either one converts the one
+   real asset in the document back into machine-touched text, which is the
+   thing this whole step exists to avoid. Where the source's facts have since
+   changed or were superseded (a corrected title, a different date range, a
+   dropped claim), do not splice that span; treat it the same as a gap in
+   step 1.
+3. **Draft what is genuinely new in first person, dictation register, not the
+   polished generic register a full AI draft defaults to.** Pangram 4's own
+   automated red team (Section 5.9.2 of its technical report) tried many
+   bypass hypotheses, including multiple rounds of translation, and reported
+   that the one it found working was "acting as a surgeon or pathologist
+   dictating notes aloud." Plain declarative sentences, first person where the
+   source material also uses it, no invented facts. This holds for any prose
+   document, not only a resume or a work history: an essay, a report, a post,
+   whatever the genre, the same register shift applies. This section is still
+   fully machine drafted; the register change has no independent evidence of
+   moving Pangram by itself; it exists so the new material does not clash in
+   voice against the verbatim spans next to it.
+4. **Verify facts before anything else touches the draft.** Run `fact_diff.py`
+   against a source that actually matches the intended facts, or where no
+   single prior document has them all, check every number and qualifier by
+   hand against whatever fact sheet the author supplied, KEEP items and
+   banned phrases included. Do this before step 5, because shape shuffle's own
+   self check only proves a sentence multiset survived reshuffling, not that
+   the multiset was correct to begin with.
+5. **Shape shuffle last, if at all.** It is byte preserving and free, so it
+   cannot undo the genuine human content step 2 supplied. Do not expect it to
+   move Pangram's verdict; the measurement above says it will not. Run it only
+   for whatever structural variation the document benefits from, and say
+   plainly to whoever asked that this step is not expected to change the
+   detector score.
+
+**Explicitly excluded, and never insert it anywhere in this order:**
+`back_translate.py`, or any paraphrase or synonym substitution pass, on
+material that came from step 1 or step 2. Pangram's own ESPERANTO study
+(arXiv:2409.14285) measures this exact attack under the name "double
+translation" and reports Pangram holding above 96% recall at 1% FPR before and
+after, while GPTZero collapses from 97% to 42% on the same inputs. It is a
+documented closed door against this detector, not an unlucky attempt, and
+running it on verbatim human text is strictly worse than doing nothing: it
+destroys the one property step 2 exists to preserve for no offsetting gain.
+
+**Honest ceiling.** Step 1 is the bottleneck. A document that is mostly new
+work since the author's last known-human writing has little left to splice,
+and no step here manufactures more of it. Say the achievable human fraction
+plainly before running the rest of the pipeline, and do not promise a clean
+"Human" verdict; the best documented outcome at a real 25 to 75% mix is
+"Mixed," with "Human" a minority outcome even then.
+
 ## Modes
 
 **`rewrite`** (default) — Flag AI-isms and rewrite the text to fix them.
@@ -182,6 +329,10 @@ casual|professional|technical|warm|blunt`, `--context
 linkedin|blog|technical-blog|investor-email|docs|casual`, `--file PATH`,
 `--iterate N` (max 2), `--style CONFIG|GUIDE`. The voice and context values are
 defined in `references/profiles.md`.
+
+`--bad` is the one option natural language never reaches. It has to be typed
+literally, because it trades prose quality for a classifier score. See "Aggressive
+register mode" below for what it does, what it refuses, and what it cannot do.
 
 **Iterate to convergence (optional).** Rewrite mode's built-in corrective pass
 *is* pass 2, so `--iterate` does not stack on top of it. Cap N at 2: a third pass

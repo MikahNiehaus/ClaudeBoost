@@ -79,19 +79,22 @@ hedge is a stronger claim than the evidence supports.
 Run the mechanical checks first, then read. The checks find what a reader's eye
 slides past, and reading finds what no regex can.
 
-If the checkers below exist in the scratchpad or the project, use them. They are
-already calibrated and they kill injected defects:
+The checker ships with the human-voice skill, `~/.claude/skills/human-voice/scripts/fact_diff.py`
+(in the repo, `clean-rag/portable/skills/human-voice/scripts/fact_diff.py`). It is
+already calibrated and it kills injected defects:
 
 ```
-python verify_rewrite.py <original> <damaged>
-python qualifier_check.py <damaged> <original>
+python fact_diff.py <original> <damaged>
+python fact_diff.py <original> <damaged> --rules rules.json
 ```
 
-The first diffs number tokens, verification tags, citations, ticket ids, section
-references and structure. The second checks that load bearing qualifiers survived
-near the numbers they qualify, and that no banned phrasing appeared.
+One pass diffs number tokens, verification tags, citations, ticket ids, section
+references and structure, then, with a rules file, checks that load bearing
+qualifiers survived near the numbers they qualify, that no banned phrasing
+appeared, and that verbatim passages are intact. `rules.example.json` next to it
+shows the format.
 
-If they are not available, build the equivalent before you start reading. A
+If it is not available, build the equivalent before you start reading. A
 fact diff you can run beats a careful read you cannot repeat.
 
 Then read both texts side by side, sentence by sentence, for the classes above.

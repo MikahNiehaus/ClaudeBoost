@@ -287,6 +287,46 @@ A very low TTR is not by itself proof of AI authorship — narrow topics, techni
 
 This is the first of four stylometric signals on the roadmap. The others (sentence-length burstiness as a continuous measure, function-word z-scores against a human-prose reference, POS-bigram log-odds) require either a POS tagger or a reference distribution and aren't implemented as detector categories yet.
 
+**Read those three as writing-quality signals, not as detector-evasion features,
+and do not let the roadmap imply otherwise.** Burstiness in particular looks like
+the obvious next build and is the wrong thing to build for that purpose.
+`roowus/clarity`'s `docs/DESIGN.md` records why it rejected perplexity plus
+burstiness as a core signal: *"Superseded (GPTZero themselves moved off it in
+2023); raw perplexity confounds 'predictable topic' with 'machine text'"*. A
+resume, a changelog, a reference table and an API doc are all predictable topics,
+so the confound is not an edge case, it is most technical writing.
+
+Measured, on this repo, 2026-09-11. A 22,340 word reference document was fully
+rewritten under this skill. Vocabulary flags stayed at 0 throughout. Structural
+flags went 251 to 15. Bullets opening on a past-tense verb went 85% to 1%. Em
+dashes went 260 to 1. GPTZero's verdict before: AI 100%, Human 0%. After: AI 100%,
+Human 0%. Not one point. On the same text Sapling read 0.0% to 16.7% and QuillBot
+read 78%.
+
+The control is the part that matters. Text the subject wrote himself, with no
+model involved, scored **GPTZero 100% AI and QuillBot 78% AI** in the same genre on
+the same subject. Two authors, opposite provenance, identical verdict.
+
+Reproduced independently. `onurcangnc/ai-text-humanizer` ran a Q-learning
+optimiser over ten rewrite strategies and published the per-detector results:
+GPTZero and Originality.ai **stayed pinned at 100% across every pass**, while
+ZeroGPT moved 38.8% to 20.8% and QuillBot 26.7% to 24.9%. Its own conclusion is
+that perplexity-based and classifier-based detectors measure different things, with
+Binoculars against ZeroGPT anti-correlated at r = -0.65, p = 0.041.
+
+So: rewriting moves classifier-based scores and does not move perplexity-based
+ones. **This skill must not promise that a rewrite will change what a detector says.**
+Say what it does do, which is make the writing better and cut the tells a reader
+notices.
+
+**On genre, say less than you want to.** The control above suggests detectors here
+respond to register rather than authorship, and that is a reasonable reading of it,
+but it is one document. No rigorous published measurement of detector behaviour on
+resumes, CVs or bullet lists was found; every result was a vendor's marketing page.
+One such page claims Turnitin excludes bullet and non-sentence structures from
+analysis entirely, which would fit, and it is unverified against any primary source.
+State the gap rather than filling it.
+
 ### Paragraph-reshuffle immunity (structure test)
 - A writer-side diagnostic, not a regex: can you swap two body paragraphs without breaking the piece? If the order doesn't matter, you've written a list of points, not an argument that builds. AI prose often fails this — each paragraph is a self-contained module with no load-bearing connection to its neighbors.
 - The fix is structural, not lexical: establish a through-line where each paragraph depends on the one before it. If the paragraphs are genuinely independent, decide whether the piece should be an explicit list, or whether it's missing a thesis. Adapted from `Aboudjem/humanizer-skill` P38.
