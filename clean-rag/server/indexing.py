@@ -9,6 +9,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,7 +30,12 @@ from .config import (
     STATE_DIR,
 )
 from .lang_router import get_model_for_project
-from .project_id import resolve_project_dir
+from .project_id import (
+    leaf_only_dir_name,
+    legacy_project_dir_name,
+    project_dir_name,
+    resolve_project_dir,
+)
 from .file_scan import (
     CODE_EXTENSIONS,
     MAX_FILE_SIZE,
@@ -1479,3 +1487,167 @@ def _update_project_registry(
 
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+
+def _clear_readonly_and_retry(func, path, _exc):
+    """shutil.rmtree error handler for Windows.
+
+    Git writes pack/idx files read-only (-r--r--r--), and Windows refuses to
+    delete a read-only file, so rmtree raises PermissionError [Errno 13] on
+    them. Clear the read-only bit and reattempt the removal. This is the
+    canonical CPython-documented workaround (shutil.rmtree onexc example).
+    The third argument is the exception (onexc) or exc_info tuple (onerror);
+    unused, so the handler works for either signature.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree_clearing_readonly(path: Path) -> None:
+    """rmtree that survives read only files, on either handler signature."""
+    # onerror was deprecated in 3.12 and onexc replaced it. Passing the wrong
+    # one is a TypeError on some versions and a silent DeprecationWarning on
+    # others, so pick by what this interpreter actually accepts.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+    else:
+        shutil.rmtree(path, onerror=_clear_readonly_and_retry)
+
+
+def project_index_dirs(project_path: str) -> list[Path]:
+    """Every database directory that exists on disk for *project_path*.
+
+    Three naming schemes have coexisted (project_id.py:149-170), and
+    resolve_project_dir deliberately returns only the first match. A delete
+    that used it would leave the other directories behind: invisible to
+    search, still holding disk, and ready to confuse a later reindex.
+    """
+    root = DATABASES_DIR / "_projects"
+    names = {
+        project_dir_name(project_path),
+        leaf_only_dir_name(project_path),
+        legacy_project_dir_name(project_path),
+    }
+    found = []
+    for name in sorted(names):
+        candidate = root / name
+        if _is_inside_projects_root(candidate, root) and candidate.is_dir():
+            found.append(candidate)
+    return found
+
+
+def _is_inside_projects_root(candidate: Path, root: Path) -> bool:
+    """True only for a direct child of databases/_projects.
+
+    The names above are hashes and slugs this module computes, so they cannot
+    currently escape. This checks anyway, because the guard costs nothing and
+    the thing on the other side of it is an rmtree. A future caller passing a
+    name through from a request body would otherwise turn this into a path
+    traversal that deletes outside the database directory.
+    """
+    try:
+        resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except OSError:
+        return False
+    return resolved.parent == root_resolved and resolved != root_resolved
+
+
+def delete_project_index(project_path: str) -> dict:
+    """Remove clean-rag's index of *project_path*. Never touches its source.
+
+    Caller must hold the index lock for the whole call. Without it the auto
+    reindex sweep can rebuild the directory mid removal, or rewrite the
+    registry entry after this function has removed it.
+
+    Disk first, registry second, on purpose. An orphaned directory is visible
+    and recoverable: the project reads as unindexed and a later index run
+    overwrites it. An orphaned registry entry is the opposite, and it is the
+    exact failure project_id.py's docstring exists to prevent, because the
+    project then reads as indexed while every search against it silently
+    returns nothing.
+
+    Reports per step rather than a bare ok, matching index_project's
+    stopped_early shape, so a caller can tell "nothing was there" from "two of
+    three directories went and the third is locked".
+    """
+    removed: list[str] = []
+    failed: list[dict] = []
+
+    for directory in project_index_dirs(project_path):
+        # Release our own SQLite handle on this project's vectors.db first.
+        # The connection cache is process wide (store.py:123), so on Windows an
+        # rmtree with it still open fails with WinError 32 rather than doing
+        # anything. evict_cache closes it now when nothing holds it, and marks
+        # it to close on the last holder's exit when something does.
+        ChromaStore.evict_cache(str(directory / "chroma"))
+        try:
+            _rmtree_clearing_readonly(directory)
+            removed.append(str(directory))
+        except OSError as e:
+            logger.error(
+                "Could not remove index directory %s: %s: %s",
+                directory, type(e).__name__, e,
+            )
+            failed.append({"path": str(directory), "error": f"{type(e).__name__}: {e}"})
+
+    result: dict = {
+        "project_path": project_path,
+        "dirs_removed": removed,
+        "dirs_failed": failed,
+        "registry_removed": [],
+    }
+
+    # A directory that refused to go means the index is still partly on disk.
+    # Removing the registry entry now would hide it from every tool that could
+    # find it again, so stop and say so instead.
+    if failed:
+        result["error"] = (
+            f"{len(failed)} index director(ies) could not be removed, so the "
+            f"registry entry was left in place. The project is unchanged from "
+            f"the caller's point of view. Retry once whatever holds the files "
+            f"has let go."
+        )
+        return result
+
+    result["registry_removed"] = _remove_from_project_registry(project_path)
+    return result
+
+
+def _remove_from_project_registry(project_path: str) -> list[str]:
+    """Drop every registry entry pointing at *project_path*. Returns their pids.
+
+    Matched on the resolved path rather than the pid, because the pid is
+    derived from a naming scheme that has changed three times and an entry
+    written under an older one would otherwise survive the delete.
+    """
+    registry_path = STATE_DIR / "projects.json"
+    if not registry_path.exists():
+        return []
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(registry, dict):
+        return []
+
+    try:
+        target = Path(project_path).resolve()
+    except OSError:
+        return []
+
+    dropped = []
+    for pid, entry in list(registry.items()):
+        entry_path = (entry or {}).get("project_path") if isinstance(entry, dict) else None
+        if not entry_path:
+            continue
+        try:
+            if Path(entry_path).resolve() == target:
+                del registry[pid]
+                dropped.append(pid)
+        except OSError:
+            continue
+
+    if dropped:
+        registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    return dropped

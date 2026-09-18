@@ -39,7 +39,13 @@ from .github_search import (
     github_search,
 )
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
-from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
+from .indexing import (
+    acquire_index_lock,
+    delete_project_index,
+    index_project,
+    reindex_file,
+    release_index_lock,
+)
 from .mutation import run_mutation
 from .resource_guard import PressureCheckpoint
 from .security import run_security_scan
@@ -1351,6 +1357,95 @@ async def handle_projects(request: web.Request) -> web.Response:
     return _json_response({"projects": projects})
 
 
+async def handle_delete_project(request: web.Request) -> web.Response:
+    """POST /delete-project: remove clean-rag's index of a project.
+
+    Removes the vector index, the import graph and the manifest, plus the
+    registry entry. It never touches the project's own source code, and it
+    only ever removes directories under databases/_projects.
+
+    Requires ``confirm: true`` in the body. This is destructive and reachable
+    from anything that can POST to the port, so the flag is there to stop an
+    ordinary malformed request from deleting an index.
+
+    The index lock is held for the whole removal. Without it the auto reindex
+    sweep can rebuild the directory mid delete, or rewrite the registry entry
+    after this has removed it.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - any unparseable body is just a bad request
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    if not isinstance(body, dict):
+        return _json_response({"error": "Body must be a JSON object"}, 400)
+
+    project_path = str(body.get("project_path", "")).strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    if body.get("confirm") is not True:
+        return _json_response(
+            {"error": "Refusing to delete without {\"confirm\": true}"}, 400,
+        )
+
+    # Deliberately NOT gated on the directory still existing. A project whose
+    # folder has been deleted or moved is exactly the one most worth removing
+    # from the index, and requiring is_dir() here would make it undeletable.
+    # What is required is that clean-rag actually knows about it, so a typo
+    # cannot reach the removal path at all.
+    known = _registered_project_paths()
+    if not any(_same_path(project_path, p) for p in known):
+        return _json_response(
+            {"error": f"Not a registered project: {project_path}"}, 404,
+        )
+
+    if not acquire_index_lock("delete-project", project_path):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, partial(delete_project_index, project_path),
+        )
+    finally:
+        release_index_lock()
+
+    # 500, not 400: a directory that would not delete is this server failing to
+    # do what it was asked, not the caller sending something wrong.
+    status = 200 if "error" not in result else 500
+    return _json_response(result, status)
+
+
+def _registered_project_paths() -> list[str]:
+    """Every project_path in state/projects.json, or an empty list."""
+    registry_path = STATE_DIR / "projects.json"
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(registry, dict):
+        return []
+    return [
+        str(e["project_path"])
+        for e in registry.values()
+        if isinstance(e, dict) and e.get("project_path")
+    ]
+
+
+def _same_path(a: str, b: str) -> bool:
+    """Whether two path strings name the same location.
+
+    Compared resolved, because the registry holds backslash Windows paths
+    while callers routinely send forward slash ones for the same directory.
+    A plain string comparison rejects the console's own requests.
+    """
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
 async def handle_sweep_pause(request: web.Request) -> web.Response:
     """POST /sweep-pause: stop or resume automatic reindexing.
 
@@ -1611,6 +1706,7 @@ def create_app() -> web.Application:
     app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/sweep-pause", handle_sweep_pause)
+    app.router.add_post("/delete-project", handle_delete_project)
 
     from .kanban import setup_kanban
     setup_kanban(app)

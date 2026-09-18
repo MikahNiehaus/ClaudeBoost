@@ -404,6 +404,54 @@ def _routes_reaching_a_registry_writer(app) -> dict:
 #: The one function allowed to write the registry.
 _REGISTRY_WRITER = "_update_project_registry"
 
+#: Writers that may only ever REMOVE entries, with the route that reaches each.
+#:
+#: The property this whole class defends is that registry membership means the
+#: server indexed the directory, because membership is the allowlist the exec
+#: routes check. Only ADDING an entry can break that. A function that can just
+#: delete one cannot mint the allowlist entry an attacker needs, so it does not
+#: reopen the hole.
+#:
+#: That distinction already existed here as a sentence, in
+#: test_the_registry_has_exactly_one_writer_in_the_server_package's docstring,
+#: excusing fix_boat_bug.py on exactly this ground. It was never checked. When
+#: /delete-project made the same argument from inside the server package and a
+#: route, the sentence was all there was to appeal to. So it is a rule now:
+#: every name here has to pass test_a_removal_only_writer_really_cannot_add,
+#: which reads its source and fails if it can put an entry in.
+#:
+#: Adding a name here is not a formality. It widens what may touch the file
+#: that gates code execution.
+_REMOVAL_ONLY_WRITERS = {
+    "indexing.py:_remove_from_project_registry": "/delete-project",
+}
+
+
+#: Ways a function puts an entry INTO a mapping. `registry[pid] = entry` is the
+#: shape _update_project_registry uses; the other two are how the same thing is
+#: written without a subscript assignment.
+def _can_add_a_registry_entry(tree) -> bool:
+    """Whether this function can put an entry into the registry mapping.
+
+    Deliberately shape based rather than name based: the question is what the
+    code can do, not what it is called. A remover deletes keys and rewrites the
+    file with fewer of them, and never assigns into the mapping.
+
+    Over approximates on purpose. Any subscript store, `update` or `setdefault`
+    anywhere in the function counts, even against an unrelated dict. That
+    direction costs a loud failure on a false positive and never a silent pass
+    on a real one, which is the same trade the route walk above documents.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Subscript):
+                    return True
+        if _called_name(node) in {"update", "setdefault"}:
+            return True
+    return False
+
 #: The only places in the server package allowed to name it: its own
 #: definition, and the indexing pipeline that calls it.
 _ALLOWED_WRITER_REFERENCE_SITES = {
@@ -906,12 +954,31 @@ class TestOnlyIndexingCanRegisterAProject:
             ).items()
         }
 
-        assert set(reaching) == {"/index-project"}, (
+        allowed = {"/index-project", *_REMOVAL_ONLY_WRITERS.values()}
+        assert set(reaching) == allowed, (
             "a route other than /index-project can reach the code that writes "
             "state/projects.json, which makes the allowlist self service: the "
             f"caller registers its own directory and then runs its tests. "
             f"Reachable from: { {p: ' -> '.join(c) for p, c in reaching.items()} }"
         )
+
+        # A removal only route is excused from the rule above, so the chain it
+        # actually takes has to end at the remover it was excused for. Without
+        # this, /delete-project growing a call to the adding writer would be
+        # covered by its own exemption.
+        for path, route in ((v, v) for v in _REMOVAL_ONLY_WRITERS.values()):
+            if route not in reaching:
+                continue
+            terminal = reaching[route][-1].rsplit(".", 1)[-1]
+            expected = {
+                site.split(":", 1)[1]
+                for site, r in _REMOVAL_ONLY_WRITERS.items() if r == route
+            }
+            assert terminal in expected, (
+                f"{route} is exempt because it only removes entries, but its "
+                f"call chain ends at {terminal!r}, not at {sorted(expected)}. "
+                f"Chain: {' -> '.join(reaching[route])}"
+            )
 
     @pytest.mark.parametrize(
         "route, handler",
@@ -990,11 +1057,60 @@ class TestOnlyIndexingCanRegisterAProject:
         removes entries does not reopen this.
         """
         writers = _registry_writers_in_package()
+        adding = [w for w in writers if w not in _REMOVAL_ONLY_WRITERS]
 
-        assert writers == ["indexing.py:_update_project_registry"], (
+        assert adding == ["indexing.py:_update_project_registry"], (
             "state/projects.json has a writer other than the indexing "
             f"pipeline, so registry membership no longer means the server "
-            f"indexed the directory: {writers}"
+            f"indexed the directory: {adding}"
+        )
+
+        # A name on the removal allowlist that no longer writes the file at all
+        # is a stale exemption. Left in place it silently approves in advance
+        # whatever a future function of that name does.
+        stale = set(_REMOVAL_ONLY_WRITERS) - set(writers)
+        assert not stale, (
+            f"these are allowlisted as removal only writers but no longer "
+            f"write state/projects.json, so the exemption is stale and should "
+            f"be deleted: {sorted(stale)}"
+        )
+
+    def test_a_removal_only_writer_really_cannot_add(self):
+        """The allowlist has to be earned, not asserted.
+
+        _REMOVAL_ONLY_WRITERS excuses a function from the one writer rule on
+        the grounds that it can only take entries out. Nothing checked that.
+        A name on a list is exactly the inert assertion the class docstring
+        above warns about: it pins a name, and the identical hole reopens the
+        day that function grows an assignment.
+
+        So this reads each allowlisted function's source and fails if it can
+        put an entry into a mapping at all. Adding `registry[pid] = entry` to
+        _remove_from_project_registry has to turn this red.
+        """
+        package_dir = Path(app_mod.__file__).parent
+        offenders = {}
+
+        for site in sorted(_REMOVAL_ONLY_WRITERS):
+            filename, func_name = site.split(":", 1)
+            tree = ast.parse((package_dir / filename).read_text(encoding="utf-8"))
+            found = [
+                n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == func_name
+            ]
+            assert found, (
+                f"{site} is on the removal only allowlist but no such function "
+                f"exists, so the exemption protects nothing"
+            )
+            for node in found:
+                if _can_add_a_registry_entry(node):
+                    offenders[site] = "assigns into a mapping"
+
+        assert not offenders, (
+            "a function allowlisted as removal only can add an entry to "
+            "state/projects.json, which is the exec route allowlist. That is "
+            f"the self service registration hole reopening: {offenders}"
         )
 
     def test_indexing_refuses_a_path_that_is_not_a_directory(self, tmp_path):

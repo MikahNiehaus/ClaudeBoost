@@ -17,7 +17,6 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 _CLEAN_RAG_HOME = Path(__file__).resolve().parent.parent
@@ -26,7 +25,8 @@ if str(_CLEAN_RAG_HOME) not in sys.path:
 
 try:
     from textual.app import App, ComposeResult
-    from textual.containers import Horizontal, Vertical
+    from textual.containers import Grid, Horizontal, Vertical
+    from textual.screen import ModalScreen
     from textual.widgets import (
         Button, DataTable, Footer, Header, Label, RichLog, Static, TabbedContent, TabPane,
     )
@@ -76,24 +76,15 @@ def _post(path: str, body: dict, timeout: float = 4.0):
         return None, None
 
 
-def _age(iso: str) -> str:
-    """A short human age for an ISO timestamp, or a dash."""
-    if not iso:
-        return "-"
-    try:
-        then = datetime.fromisoformat(iso)
-    except ValueError:
-        return "-"
-    if then.tzinfo is None:
-        then = then.replace(tzinfo=timezone.utc)
-    secs = (datetime.now(timezone.utc) - then).total_seconds()
-    if secs < 90:
-        return f"{int(secs)}s"
-    if secs < 5400:
-        return f"{int(secs // 60)}m"
-    if secs < 172800:
-        return f"{int(secs // 3600)}h"
-    return f"{int(secs // 86400)}d"
+# There is deliberately no age or staleness column here.
+#
+# Reindexing is incremental and keyed on content hashes, so a project last
+# touched a month ago is correctly indexed, not stale, as long as nothing in it
+# changed. An age column coloured red past a week says the opposite, and says it
+# about the normal case.
+#
+# "Currently indexing" is the live signal worth having, and _state_of provides
+# it from the index lock.
 
 
 def _state_of(entry: dict, busy_path: str) -> Text:
@@ -120,24 +111,6 @@ def _lock_state() -> tuple[str, str]:
     if not isinstance(data, dict):
         return "", ""
     return str(data.get("operation") or "indexing"), str(data.get("project") or "")
-
-
-def _age_style(iso: str) -> str:
-    """Green when it was indexed recently, red once it is a week stale."""
-    if not iso:
-        return "dim"
-    try:
-        then = datetime.fromisoformat(iso)
-    except ValueError:
-        return "dim"
-    if then.tzinfo is None:
-        then = then.replace(tzinfo=timezone.utc)
-    hours = (datetime.now(timezone.utc) - then).total_seconds() / 3600
-    if hours < 24:
-        return "bold green"
-    if hours < 168:
-        return "yellow"
-    return "red"
 
 
 def _num(value: int, zero_is_odd: bool = False) -> Text:
@@ -171,6 +144,61 @@ class EmptyView(Static):
             f"{self._why}\n\n"
             f"[dim]Where it would come from: {self._where}[/dim]"
         )
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """Yes/no dialog. Dismisses with True only if the user pressed the red one.
+
+    Cloned from Textual's own docs/examples/guide/screens/modal01.py, with the
+    three changes a returning modal needs: ModalScreen[bool] instead of Screen,
+    dismiss(bool) instead of app.exit()/pop_screen(), and the caller's wording.
+
+    The `align: center middle` rule below is load bearing. A ModalScreen with
+    no alignment renders its dialog in the top left corner rather than over the
+    page, which reads as a broken overlay.
+    """
+
+    CSS = """
+    ConfirmScreen { align: center middle; }
+
+    #dialog {
+        grid-size: 2;
+        grid-gutter: 1 2;
+        grid-rows: 1fr 3;
+        padding: 1 2;
+        width: 66;
+        height: 13;
+        border: thick $background 80%;
+        background: $surface;
+    }
+    #question { column-span: 2; height: 1fr; width: 1fr; content-align: center middle; }
+    ConfirmScreen Button { width: 100%; }
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, question: str, confirm_label: str = "Delete") -> None:
+        super().__init__()
+        self._question = question
+        self._confirm_label = confirm_label
+
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(self._question, id="question"),
+            Button(self._confirm_label, variant="error", id="confirm"),
+            Button("Cancel", variant="primary", id="cancel"),
+            id="dialog",
+        )
+
+    def on_mount(self) -> None:
+        # Cancel takes focus, so a stray Enter cancels rather than deletes.
+        self.query_one("#cancel", Button).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
 
 
 class ConsoleApp(App):
@@ -208,6 +236,23 @@ class ConsoleApp(App):
     #bar #pause:hover { background: $primary 45%; }
     #bar #pause.-paused { background: $warning 30%; color: $warning; }
 
+    /* Same flattened chip as #pause, in the error colour because it destroys
+       something. Docked right too, so it sits left of Pause rather than in the
+       middle of the status labels. */
+    #bar #delete {
+        dock: right;
+        width: auto;
+        min-width: 14;
+        height: 1;
+        margin: 1 2 1 0;
+        padding: 0 2;
+        border: none;
+        background: $error 22%;
+        color: $text;
+        text-style: bold;
+    }
+    #bar #delete:hover { background: $error 45%; }
+
     .ok   { color: $success; text-style: bold; }
     .bad  { color: $error;   text-style: bold; }
     .warn { color: $warning; text-style: bold; }
@@ -230,6 +275,7 @@ class ConsoleApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("p", "toggle_pause", "Pause indexing"),
+        ("d", "delete_selected", "Delete index"),
         ("r", "refresh_now", "Refresh"),
     ]
 
@@ -237,6 +283,10 @@ class ConsoleApp(App):
         super().__init__()
         self._tail = LogTail(SERVER_LOG)
         self._rows: set[str] = set()
+        #: pid -> project_path. The table stores display text, not the real
+        #: path, and the Directory column is truncated from the left to fit.
+        #: Sending that truncated string to the server would delete nothing.
+        self._paths: dict[str, str] = {}
         self._paused = False
 
     def compose(self) -> ComposeResult:
@@ -246,6 +296,7 @@ class ConsoleApp(App):
             yield Label("", id="models")
             yield Label("", id="ram")
             yield Label("", id="projects")
+            yield Button("Delete index", id="delete", variant="error")
             yield Button("Pause indexing", id="pause", variant="primary")
         with TabbedContent(initial="tab-indexed"):
             with TabPane("Indexed", id="tab-indexed"):
@@ -279,11 +330,14 @@ class ConsoleApp(App):
             ("state", "State", 9),
             ("project", "Project", 24),
             ("where", "Directory", 30),
-            ("files", "Files", 9),
-            ("chunks", "Chunks", 10),
+            # "Run files", not "Files". files_indexed counts only what a single
+            # run processed, which indexing.py:1110 says in its own comment, and
+            # chunks_created is the same. Labelling them as totals made the
+            # table read 1 file for a project whose manifest holds 458.
+            ("files", "Run files", 10),
+            ("chunks", "Run chunks", 11),
             ("edges", "Edges", 10),
             ("nodes", "Nodes", 9),
-            ("age", "Indexed", 9),
         ):
             table.add_column(label, key=key, width=width)
 
@@ -328,7 +382,6 @@ class ConsoleApp(App):
         for pid, entry in projects.items():
             graph = entry.get("graph") or {}
             path = Path(entry.get("project_path", pid))
-            indexed_at = entry.get("indexed_at", "")
             parent = str(path.parent)
             if len(parent) > 31:
                 parent = "..." + parent[-28:]
@@ -341,8 +394,8 @@ class ConsoleApp(App):
                 "chunks": _num(entry.get("chunks_created", 0), zero_is_odd=True),
                 "edges": _num(graph.get("edges_total", 0)),
                 "nodes": _num(graph.get("pagerank_nodes", 0)),
-                "age": Text(_age(indexed_at), style=_age_style(indexed_at)),
             }
+            self._paths[pid] = str(path)
             if pid not in self._rows:
                 table.add_row(*values.values(), key=pid)
                 self._rows.add(pid)
@@ -360,9 +413,87 @@ class ConsoleApp(App):
         self.refresh_status()
 
     def action_toggle_pause(self) -> None:
-        self.on_button_pressed(None)
+        self._toggle_pause()
 
-    def on_button_pressed(self, _event) -> None:
+    def action_delete_selected(self) -> None:
+        """Confirm, then ask the server to delete the highlighted project."""
+        table = self.query_one("#projects-table", DataTable)
+        try:
+            pid = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        except Exception:  # noqa: BLE001 - an empty table has no cell to resolve
+            pid = None
+        if not pid:
+            self.notify("Select a project row first.", severity="warning")
+            return
+
+        path = self._paths.get(pid)
+        if not path:
+            self.notify("That row has no project path yet.", severity="warning")
+            return
+
+        def _go(confirmed: bool | None) -> None:
+            # The key, not the cursor index. _fill updates rows on a 3 second
+            # timer, so an index captured when the dialog opened can point at a
+            # different project by the time the dialog closes.
+            if confirmed:
+                self._delete_project(pid, path)
+
+        self.push_screen(
+            ConfirmScreen(
+                f"Delete clean-rag's index of\n{path}?\n\n"
+                f"The project's own files are not touched.",
+            ),
+            _go,
+        )
+
+    def _delete_project(self, pid: str, path: str) -> None:
+        status, body = _post("/delete-project", {"project_path": path, "confirm": True})
+
+        if status is None:
+            self.notify("Server is not answering.", severity="error")
+            return
+        if status == 404:
+            self.notify(
+                "The server has no /delete-project route, or does not know that "
+                "project. Restart the server if you just updated it.",
+                severity="warning", timeout=8,
+            )
+            return
+        if status == 423:
+            self.notify(
+                "Indexing holds the lock right now. Try again in a moment.",
+                severity="warning",
+            )
+            return
+        if status != 200:
+            self.notify(
+                str((body or {}).get("error") or f"Delete failed ({status})."),
+                severity="error", timeout=10,
+            )
+            return
+
+        # The row goes only after the server says it went. Dropping it on click
+        # would show a delete that did not happen.
+        table = self.query_one("#projects-table", DataTable)
+        try:
+            table.remove_row(pid)
+        except Exception:  # noqa: BLE001 - the next refresh rebuilds it anyway
+            pass
+        self._rows.discard(pid)
+        self._paths.pop(pid, None)
+
+        removed = len((body or {}).get("dirs_removed") or [])
+        self.notify(f"Deleted the index of {Path(path).name}. {removed} director(ies) removed.")
+        self.refresh_status()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Route by which button. Without this every button ran pause."""
+        if event.button.id == "delete":
+            self.action_delete_selected()
+        elif event.button.id == "pause":
+            self._toggle_pause()
+
+    def _toggle_pause(self) -> None:
         """Ask the server to flip the flag, then show whatever it reports back."""
         want = not self._paused
         status, body = _post("/sweep-pause", {"paused": want})
