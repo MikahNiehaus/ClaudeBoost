@@ -1168,10 +1168,21 @@ def setup_graphrag() -> None:
 def setup_clean_rag_venv() -> None:
     """Set up the isolated venv the server's embedding stack runs in.
 
-    Same shape and same reasoning as setup_graphrag above: create it if missing,
-    probe for the package, install only when absent. Idempotent and best effort.
+    Creates the venv if missing, then always runs `pip install -r
+    requirements.txt` against it. That call is idempotent and best effort on
+    its own: pip already skips anything whose pin is already satisfied, so
+    there is no need to hand roll that check.
 
-    Why this exists at all. The server used to import torch, transformers and
+    This used to probe for one package (sentence_transformers) and skip the
+    whole install if it imported, on the theory that meant the venv was fully
+    populated. That broke the moment a second dependency was added to
+    requirements.txt later (textual, for cli/console.py): sentence_transformers
+    still imported fine, so the probe reported "already populated" and pip
+    never ran, leaving textual missing on every machine that had installed
+    before that line was added. Running pip every time is what a normal
+    project does (CI, Docker) for exactly this reason.
+
+    Why the venv exists at all. The server used to import torch, transformers and
     sentence-transformers from whatever interpreter happened to launch it,
     normally the user's global one. Three packages that must agree on versions,
     installed next to everything else on the machine, is a standing conflict. It
@@ -1207,22 +1218,15 @@ def setup_clean_rag_venv() -> None:
         return
 
     try:
-        probe = subprocess.run(
-            [str(venv_py), "-c",
-             "import importlib.util as u; print(u.find_spec('sentence_transformers') is not None)"],
-            capture_output=True, text=True, timeout=30,
+        # torch alone is a few hundred MB, so a first run is the slow step of
+        # the whole install. Long timeout on purpose: a half installed venv is
+        # the state this function exists to avoid creating. A re-run with
+        # everything already satisfied is fast, pip just checks each pin.
+        print("  installing requirements into clean-rag-venv ...")
+        subprocess.run(
+            [str(venv_py), "-m", "pip", "install", "--quiet", "-r", str(reqs)],
+            check=True, timeout=3600,
         )
-        if "True" in probe.stdout:
-            print("  clean-rag-venv already populated")
-        else:
-            # torch alone is a few hundred MB, so this is the slow step of the
-            # whole install. Long timeout on purpose: a half installed venv is
-            # the state this function exists to avoid creating.
-            print("  installing requirements into clean-rag-venv (large download) ...")
-            subprocess.run(
-                [str(venv_py), "-m", "pip", "install", "--quiet", "-r", str(reqs)],
-                check=True, timeout=3600,
-            )
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] clean-rag-venv requirements install failed: {e}")
         print("  the server falls back to the launching interpreter, which may be broken")
@@ -1455,47 +1459,6 @@ def configure_code_pattern_inject_env() -> None:
     _ok("Code pattern injection enabled (CLEAN_RAG_PATTERN_INJECT=true)")
 
 
-def setup_gpu_memory_manager():
-    """Configure GPU memory management for embeddings.
-
-    Copies smart_gpu_indexing.py to LocalAI project and configures
-    dynamic VRAM allocation based on available GPU memory.
-    """
-    try:
-        # Check if LocalAI project exists
-        localai_path = Path.cwd().parent / "LocalAI"
-        if not localai_path.exists():
-            _warn("LocalAI project not found, skipping GPU memory manager setup")
-            return
-
-        # Check if smart_gpu_indexing.py exists locally (in clean-rag)
-        gpu_manager_src = CLEAN_RAG_HOME / "smart_gpu_indexing.py"
-        if not gpu_manager_src.exists():
-            _say("smart_gpu_indexing.py not found in clean-rag directory")
-            _say("GPU memory manager must be set up separately in LocalAI project")
-            return
-
-        # Verify it exists in LocalAI
-        gpu_manager_dst = localai_path / "smart_gpu_indexing.py"
-        if gpu_manager_dst.exists():
-            _ok("GPU memory manager already installed in LocalAI")
-            return
-
-        # Configure Python embedding settings with GPU memory awareness
-        try:
-            from server.embedding import configure_gpu_aware_embedding
-            from server.config import CODE_EMBEDDING_MODEL
-            configure_gpu_aware_embedding(CODE_EMBEDDING_MODEL)
-            _ok("GPU-aware embedding configured for dynamic batch sizing")
-        except Exception as e:
-            _say(f"Optional: GPU-aware embedding setup: {e}")
-            _say("Embeddings will use CPU fallback if GPU memory is insufficient")
-
-    except Exception as e:
-        _warn(f"GPU memory manager setup: {e}")
-        _say("Embeddings will still function with CPU fallback")
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1586,10 +1549,6 @@ def main():
     print("\nStep 5d: Setting up GraphRAG (isolated venv + models; may download)...")
     setup_graphrag()
 
-    # Step 5e
-    print("\nStep 5e: Setting up GPU memory management...")
-    setup_gpu_memory_manager()
-
     # Step 5f
     print("\nStep 5f: Registering spec-compliance-gate hook...")
     register_spec_compliance_gate_hook()
@@ -1639,11 +1598,10 @@ def main():
     print(f"    PreToolUse:        code-pattern-inject.py (forces research on Edit/Write/MultiEdit)")
     print(f"    UserPromptSubmit:  rag-enforce.py (real-query search, web fallback, git auto-index)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
-    print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
+    print(f"  Console: python {CLEAN_RAG_HOME.as_posix()}/cli/console.py")
     print()
     print("Start the server to enable RAG-backed research and code quality metrics injection.")
-    print("GPU memory manager provides dynamic batch sizing for embeddings.")
     print("=" * 60)
 
 
