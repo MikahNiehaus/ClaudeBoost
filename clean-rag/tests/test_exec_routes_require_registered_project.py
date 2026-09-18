@@ -427,28 +427,60 @@ _REMOVAL_ONLY_WRITERS = {
 }
 
 
-#: Ways a function puts an entry INTO a mapping. `registry[pid] = entry` is the
-#: shape _update_project_registry uses; the other two are how the same thing is
-#: written without a subscript assignment.
+#: The node types a removal only writer may be built out of. Everything else,
+#: including whatever a later grammar adds, reads as able to add an entry.
+#: Taken from what _remove_from_project_registry actually contains: widening
+#: this list is a decision about the exec route allowlist, so it should cost a
+#: red test and a moment's thought.
+_ADD_FREE_NODES = frozenset({
+    ast.Assign, ast.Attribute, ast.BinOp, ast.BoolOp, ast.Call, ast.Compare,
+    ast.Constant, ast.Continue, ast.Del, ast.Delete, ast.Dict, ast.Div,
+    ast.Eq, ast.ExceptHandler, ast.Expr, ast.For, ast.FunctionDef, ast.If,
+    ast.IfExp, ast.List, ast.Load, ast.Name, ast.Not, ast.Or, ast.Return,
+    ast.Store, ast.Subscript, ast.Try, ast.Tuple, ast.UnaryOp, ast.arg,
+    ast.arguments, ast.keyword,
+})
+
+#: The calls it may make. A call is opaque to this check, so the name at the
+#: call site is the whole of it: `dict.__setitem__`, `operator.setitem` and a
+#: helper that does the same thing are indistinguishable from the outside.
+_ADD_FREE_CALLS = frozenset({
+    "Path", "append", "dumps", "exists", "get", "isinstance", "items",
+    "list", "loads", "read_text", "resolve", "write_text",
+})
+
+
 def _can_add_a_registry_entry(tree) -> bool:
-    """Whether this function can put an entry into the registry mapping.
+    """Whether this function might put an entry into the registry mapping.
 
-    Deliberately shape based rather than name based: the question is what the
-    code can do, not what it is called. A remover deletes keys and rewrites the
-    file with fewer of them, and never assigns into the mapping.
+    Deny by default. It returns True for anything it does not positively
+    recognise as add free, which is the shape ast.literal_eval uses: a fixed
+    set of node types it understands, and a rejection for everything else.
 
-    Over approximates on purpose. Any subscript store, `update` or `setdefault`
-    anywhere in the function counts, even against an unrelated dict. That
-    direction costs a loud failure on a false positive and never a silent pass
-    on a real one, which is the same trade the route walk above documents.
+    An allowlist of ways to ADD is unsound by construction, and this one was:
+    `registry = {**registry, pid: entry}`, `dict.__setitem__(registry, ...)`
+    and `operator.setitem(registry, ...)` each put a key in, and each read as
+    clean against a check that knew only subscript stores, `update` and
+    `setdefault`. There is no finite list of spellings to catch, so the
+    question has to be asked the other way round.
+
+    Over approximates, on purpose and now much harder: an unrecognised call or
+    statement anywhere in the function counts, even against an unrelated dict.
+    That direction costs a loud failure on a false positive and never a silent
+    pass on a real one, which is the same trade the route walk above documents.
     """
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Subscript):
-                    return True
-        if _called_name(node) in {"update", "setdefault"}:
+        if type(node) not in _ADD_FREE_NODES:
+            return True
+        # `del registry[pid]` is a subscript too, so the context is what
+        # separates taking a key out from putting one in.
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+            return True
+        # An empty `{}` is a default to read through. A dict display with any
+        # key in it, `**` unpacking included, is an entry being built.
+        if isinstance(node, ast.Dict) and node.keys:
+            return True
+        if isinstance(node, ast.Call) and _called_name(node) not in _ADD_FREE_CALLS:
             return True
     return False
 

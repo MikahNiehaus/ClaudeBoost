@@ -1,23 +1,15 @@
-"""bad-cop adversarial test: property 2/7 attacked directly.
+"""A delete that cannot finish must never leave search on a stale directory.
 
-delete_project_index processes the naming-scheme directories one at a time,
-and each rmtree either fully succeeds or fully fails independently. The
-existing single-directory test (test_a_directory_that_will_not_delete_leaves_
-the_registry_alone in test_delete_project_index.py) proves the registry stays
-put on failure. It never exercises the case where THREE directories coexist
-(the exact scenario the delete feature was built for) and only the MIDDLE one
-fails: the other two are already gone from disk by the time the function
-returns, while the registry is left untouched and the caller is told "the
-project is unchanged from the caller's point of view."
+server/search.py resolves a project's data through resolve_project_dir(),
+which prefers the current naming scheme and falls back to an older one when
+the current directory is missing. Remove the directories one at a time and a
+failure halfway through produces exactly that: the current scheme gone, an
+older stale one left to answer every search, and nothing in the response or
+the registry entry saying so.
 
-That framing is false for search. server/search.py resolves a project's data
-through project_id.resolve_project_dir(), which prefers the CURRENT naming
-scheme and only falls back to an older one when the current directory is
-missing. If the partial failure happens to remove the current-scheme
-directory while an older, stale one survives, every search against this
-project silently starts being served from the stale leftover directory
-instead of erroring -- with nothing in the API response or the registry
-entry indicating that has happened.
+So the property under test is not "the delete succeeded". It is that whatever
+the delete manages to do, the directory resolve_project_dir lands on is never
+one the delete has already orphaned.
 """
 import json
 import sys
@@ -70,24 +62,45 @@ def _make_index_dir(projects_root: Path, name: str, marker: str) -> Path:
     return d
 
 
-def test_partial_failure_can_strand_search_on_a_stale_directory(env, monkeypatch):
+def _two_schemes(env):
+    """A fresh current-scheme directory and a stale older-scheme one."""
     src = str(env["source"])
     root = env["projects_root"]
-
     current_name = project_dir_name(src)
     leaf_name = leaf_only_dir_name(src)
     assert current_name != leaf_name, "fixture needs two distinct scheme names"
 
     current = _make_index_dir(root, current_name, "FRESH")
     leaf = _make_index_dir(root, leaf_name, "STALE")
-
     reg = env["state"] / "projects.json"
     reg.write_text(json.dumps({"mine": {"project_path": src}}), encoding="utf-8")
+    return src, root, current, leaf, reg
+
+
+def _served_marker(root: Path, src: str):
+    """What search would read, or None when the project resolves to nothing."""
+    resolved = resolve_project_dir(root, src)
+    marker = resolved / "MARKER.txt"
+    return marker.read_text(encoding="utf-8") if marker.exists() else None
+
+
+def test_a_stale_directory_that_will_not_delete_is_never_served(env, monkeypatch):
+    """The stale directory refuses to go. Search must not end up on it.
+
+    Removal is the failure injected here rather than the rename, because that
+    is the half the caller cannot retry its way out of: whatever is holding
+    those files is holding them now.
+    """
+    src, root, current, leaf, reg = _two_schemes(env)
 
     real_rmtree = indexing._rmtree_clearing_readonly
 
     def _fail_on_leaf(path):
-        if path == leaf:
+        # Matched on the name, so this bites whether the directory is removed
+        # where it sits or after being renamed out of the lookup path. Not a
+        # substring test: the current scheme's name ends with the older one.
+        name = Path(path).name
+        if name == leaf.name or name.startswith(f"{indexing._QUARANTINE_PREFIX}{leaf.name}-"):
             raise PermissionError(32, "locked")
         real_rmtree(path)
 
@@ -95,22 +108,43 @@ def test_partial_failure_can_strand_search_on_a_stale_directory(env, monkeypatch
 
     result = indexing.delete_project_index(src)
 
-    assert not current.exists(), "the current/fresh directory was removed"
-    assert leaf.exists(), "the stale directory survived the failure"
-    assert "mine" in json.loads(reg.read_text(encoding="utf-8")), (
-        "registry correctly left in place, property 2 still holds"
+    assert _served_marker(root, src) != "STALE", (
+        f"resolve_project_dir() lands on the stale older-scheme directory "
+        f"after a delete that could not remove it, so every search against "
+        f"this project is silently served from data the delete was supposed "
+        f"to have taken away. Result was {result}"
+    )
+    assert not leaf.exists(), (
+        "the stale directory is still where resolve_project_dir looks for it"
     )
 
-    resolved = resolve_project_dir(root, src)
-    marker = (resolved / "MARKER.txt").read_text(encoding="utf-8")
 
-    # This is the actual finding: search now silently reads the STALE
-    # directory, not the fresh one, even though nothing told the caller that.
-    assert marker == "FRESH", (
-        f"search.py's resolve_project_dir() now resolves to {resolved}, which "
-        f"is the STALE leftover directory (marker={marker!r}), after a "
-        f"partial delete failure removed the current one. The delete API "
-        f"response and the preserved registry entry both imply the project "
-        f"is unchanged, but every search against it is now silently served "
-        f"from out of date data instead of erroring or being blocked."
+def test_a_directory_that_will_not_rename_leaves_everything_alone(env, monkeypatch):
+    """The other half. Nothing may be orphaned before every directory can go.
+
+    The rename is the point of no return: a directory that cannot be taken out
+    of the lookup path has to abort the whole delete, with the ones already
+    renamed put back.
+    """
+    src, root, current, leaf, reg = _two_schemes(env)
+
+    real_quarantine = indexing._quarantine_index_dir
+
+    def _fail_on_leaf(directory):
+        if directory == leaf:
+            raise PermissionError(5, "access is denied")
+        return real_quarantine(directory)
+
+    monkeypatch.setattr(indexing, "_quarantine_index_dir", _fail_on_leaf)
+
+    result = indexing.delete_project_index(src)
+
+    assert _served_marker(root, src) == "FRESH", (
+        f"the delete orphaned the current-scheme directory even though it "
+        f"could not remove the older one, so search fell back to stale data. "
+        f"Result was {result}"
     )
+    assert current.is_dir() and leaf.is_dir(), "both directories stay put"
+    assert result["dirs_removed"] == []
+    assert "mine" in json.loads(reg.read_text(encoding="utf-8"))
+    assert "error" in result

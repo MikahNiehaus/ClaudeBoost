@@ -142,6 +142,38 @@ async def test_the_delete_button_does_not_fire_a_pause(wired):
 
 
 @pytest.mark.asyncio
+async def test_a_directory_the_server_could_not_erase_is_said_out_loud(wired, monkeypatch):
+    """The delete succeeded, so the server answers 200 and the row goes. A
+    directory it could not erase yet is still news, and the old message would
+    have reported a clean delete and nothing else."""
+    monkeypatch.setattr(con, "_post", lambda path, payload, timeout=10.0: (
+        200, {"dirs_removed": [r"C:\fake\dir"], "dirs_failed": [],
+              "dirs_left_on_disk": [{"path": r"C:\fake\.deleting-dir-1234abcd",
+                                     "error": "PermissionError: in use"}],
+              "registry_removed": ["alpha-1111"]}
+    ))
+    said = []
+
+    app = con.ConsoleApp()
+    monkeypatch.setattr(
+        con.ConsoleApp, "notify",
+        lambda self, message, **kw: said.append((message, kw.get("severity"))),
+    )
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#projects-table", DataTable).focus()
+        await pilot.press("d")
+        await pilot.pause()
+        app.screen.query_one("#confirm", Button).press()
+        await pilot.pause()
+
+    assert said, "the delete said nothing at all"
+    message, severity = said[-1]
+    assert "still hold disk" in message
+    assert severity == "warning"
+
+
+@pytest.mark.asyncio
 async def test_no_age_column_is_rendered(wired):
     """Age is not a state here: reindexing is incremental and content hash
     keyed, so an old index is not a stale one."""

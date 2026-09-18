@@ -102,6 +102,29 @@ def _state_of(entry: dict, busy_path: str) -> Text:
     return Text("INDEXED", style="green")
 
 
+def _delete_summary(project_path: str, body) -> tuple[str, str]:
+    """What to tell the user after a delete the server accepted.
+
+    A directory the server could not erase is not an error, because the index
+    is out of reach either way. Saying nothing about it would still be wrong:
+    the disk is not back yet, and deleting again is what clears it.
+    """
+    body = body or {}
+    removed = len(body.get("dirs_removed") or [])
+    stranded = len(body.get("dirs_left_on_disk") or [])
+    message = (
+        f"Deleted the index of {Path(project_path).name}. "
+        f"{removed} director(ies) removed."
+    )
+    if not stranded:
+        return message, "information"
+    return (
+        f"{message} {stranded} of them still hold disk because something has "
+        f"the files open. Deleting again clears them.",
+        "warning",
+    )
+
+
 def _lock_state() -> tuple[str, str]:
     """(operation, project_path) from the index lock, or empty strings."""
     try:
@@ -482,8 +505,8 @@ class ConsoleApp(App):
         self._rows.discard(pid)
         self._paths.pop(pid, None)
 
-        removed = len((body or {}).get("dirs_removed") or [])
-        self.notify(f"Deleted the index of {Path(path).name}. {removed} director(ies) removed.")
+        message, severity = _delete_summary(path, body)
+        self.notify(message, severity=severity)
         self.refresh_status()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

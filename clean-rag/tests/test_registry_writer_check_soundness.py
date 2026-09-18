@@ -1,18 +1,18 @@
-"""bad-cop adversarial test: does _can_add_a_registry_entry actually catch
-every way a function can put an entry into a dict?
+"""Does _can_add_a_registry_entry catch every way a function adds to a dict?
 
-test_exec_routes_require_registered_project.py's own docstring for this
-helper says it is meant to fail loudly the day an allowlisted "removal only"
-writer (currently indexing.py:_remove_from_project_registry) grows the
-ability to add an entry to state/projects.json, the file that gates the exec
-routes. It only recognises three shapes: a subscript assignment
-(``d[k] = v``), ``.update(...)``, and ``.setdefault(...)``.
+That helper is what earns a place on _REMOVAL_ONLY_WRITERS in
+test_exec_routes_require_registered_project.py: it has to fail loudly the day
+an allowlisted "removal only" writer (currently
+indexing.py:_remove_from_project_registry) grows the ability to add an entry
+to state/projects.json, the file that gates the exec routes.
 
-This proves three other ways to put a key into a dict that the checker does
-not recognise at all, and that all three really do add the entry when run.
-A future edit to the allowlisted function using any of these forms would
-pass test_a_removal_only_writer_really_cannot_add while silently reopening
-the self-registration hole that whole test class exists to prevent.
+Each case below really does add a key when it runs, and none of them is a
+subscript assignment, ``.update`` or ``.setdefault``. A checker that only
+knows those three spellings passes all of them, which is how the
+self-registration hole reopens with every test still green.
+
+The last test is the other half: a checker made sound by answering True to
+everything protects nothing either.
 """
 import ast
 import sys
@@ -48,7 +48,7 @@ def _remove_from_project_registry(project_path):
 
 
 @pytest.mark.parametrize("label", list(_CASES))
-def test_checker_misses_a_real_way_to_add_an_entry(label):
+def test_the_checker_catches_every_real_way_to_add_an_entry(label):
     src = _CASES[label]
     tree = ast.parse(src)
     func_node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
@@ -61,12 +61,32 @@ def test_checker_misses_a_real_way_to_add_an_entry(label):
     assert added == ["new-pid"], f"{label}: sanity check, the function should have added a key"
 
     verdict = _can_add_a_registry_entry(func_node)
-    # This is the actual bug: the checker says False (cannot add) for code
-    # that we just proved DOES add an entry.
     assert verdict is True, (
         f"_can_add_a_registry_entry has a false negative for: {label}. "
         f"It returned False for a function that demonstrably adds a "
         f"registry entry, so a removal-only allowlist entry written this "
         f"way would pass test_a_removal_only_writer_really_cannot_add "
         f"while actually being able to self-register a project."
+    )
+
+
+def test_a_function_that_only_removes_still_reads_as_add_free():
+    """Answering True to everything would satisfy the cases above and say
+    nothing. A real remover has to stay on the clean side of the check."""
+    src = '''
+def _remove_from_project_registry(project_path):
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    dropped = []
+    for pid, entry in list(registry.items()):
+        if (entry or {}).get("project_path") == project_path:
+            del registry[pid]
+            dropped.append(pid)
+    return dropped
+'''
+    tree = ast.parse(src)
+    func_node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+
+    assert _can_add_a_registry_entry(func_node) is False, (
+        "the check now reports every function as able to add, so the removal "
+        "only allowlist is unearnable and the rule it enforces is dead"
     )

@@ -143,25 +143,73 @@ def test_registry_match_is_by_path_not_by_pid(env):
     assert result["registry_removed"] == ["a-pid-from-some-older-scheme-0000"]
 
 
-def test_a_directory_that_will_not_delete_leaves_the_registry_alone(env, monkeypatch):
+def test_a_directory_that_will_not_move_leaves_the_registry_alone(env, monkeypatch):
     """Ordering property. An orphaned registry entry makes the project read as
     indexed while every search silently returns nothing, so the registry write
-    must not happen when the data is still on disk."""
+    must not happen while the data is still where a lookup finds it."""
     src = str(env["source"])
-    _make_index_dir(env["projects_root"], project_dir_name(src))
+    d = _make_index_dir(env["projects_root"], project_dir_name(src))
     reg = _write_registry(env["state"], {"mine": {"project_path": src}})
 
-    def _refuse(path):
+    def _refuse(directory):
         raise PermissionError(32, "The process cannot access the file")
 
-    monkeypatch.setattr(indexing, "_rmtree_clearing_readonly", _refuse)
+    monkeypatch.setattr(indexing, "_quarantine_index_dir", _refuse)
 
     result = indexing.delete_project_index(src)
 
+    assert d.is_dir(), "nothing may be destroyed when the delete cannot finish"
     assert "mine" in json.loads(reg.read_text(encoding="utf-8"))
     assert result["registry_removed"] == []
+    assert result["dirs_removed"] == []
     assert len(result["dirs_failed"]) == 1
     assert "error" in result
+
+
+def test_a_directory_that_moves_but_will_not_delete_is_reported_not_restored(
+    env, monkeypatch,
+):
+    """Past the rename the index is unreachable, so the delete has happened.
+
+    What is left is disk to reclaim. Putting the directory back instead would
+    hand a lookup something the registry no longer knows about."""
+    src = str(env["source"])
+    d = _make_index_dir(env["projects_root"], project_dir_name(src))
+    reg = _write_registry(env["state"], {"mine": {"project_path": src}})
+
+    monkeypatch.setattr(
+        indexing, "_rmtree_clearing_readonly",
+        lambda path: (_ for _ in ()).throw(PermissionError(32, "in use")),
+    )
+
+    result = indexing.delete_project_index(src)
+
+    assert not d.exists(), "the directory is out of the lookup path"
+    assert json.loads(reg.read_text(encoding="utf-8")) == {}
+    assert result["dirs_removed"] == [str(d)]
+    assert result["dirs_failed"] == []
+    assert len(result["dirs_left_on_disk"]) == 1
+    assert "error" not in result
+
+
+@pytest.mark.parametrize("folder", ["MyProject", "foo[a]"])
+def test_a_later_delete_sweeps_what_an_earlier_one_could_not_remove(env, folder):
+    """Otherwise every failed delete leaks a directory nothing ever collects.
+
+    The bracketed name is not decoration: slugify_name keeps square brackets,
+    so matching leftovers by glob reads them as a character class and misses.
+    """
+    source = env["source"].parent / folder
+    source.mkdir(exist_ok=True)
+    src = str(source)
+    root = env["projects_root"]
+    name = project_dir_name(src)
+    leftover = _make_index_dir(root, f"{indexing._QUARANTINE_PREFIX}{name}-abc12345")
+    _write_registry(env["state"], {})
+
+    indexing.delete_project_index(src)
+
+    assert not leftover.exists()
 
 
 def test_a_read_only_file_inside_the_tree_still_gets_removed(env):

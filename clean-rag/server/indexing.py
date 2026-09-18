@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from .code_chunker import RawChunk, chunk_code, estimate_tokens
 from .config import (
@@ -1514,6 +1515,15 @@ def _rmtree_clearing_readonly(path: Path) -> None:
         shutil.rmtree(path, onerror=_clear_readonly_and_retry)
 
 
+def _scheme_dir_names(project_path: str) -> set[str]:
+    """The directory name every naming scheme gives *project_path*."""
+    return {
+        project_dir_name(project_path),
+        leaf_only_dir_name(project_path),
+        legacy_project_dir_name(project_path),
+    }
+
+
 def project_index_dirs(project_path: str) -> list[Path]:
     """Every database directory that exists on disk for *project_path*.
 
@@ -1523,13 +1533,8 @@ def project_index_dirs(project_path: str) -> list[Path]:
     search, still holding disk, and ready to confuse a later reindex.
     """
     root = DATABASES_DIR / "_projects"
-    names = {
-        project_dir_name(project_path),
-        leaf_only_dir_name(project_path),
-        legacy_project_dir_name(project_path),
-    }
     found = []
-    for name in sorted(names):
+    for name in sorted(_scheme_dir_names(project_path)):
         candidate = root / name
         if _is_inside_projects_root(candidate, root) and candidate.is_dir():
             found.append(candidate)
@@ -1553,6 +1558,77 @@ def _is_inside_projects_root(candidate: Path, root: Path) -> bool:
     return resolved.parent == root_resolved and resolved != root_resolved
 
 
+#: Prefix for a directory that has been taken out of the lookup path and is
+#: waiting to be removed. A leading dot is unreachable by every naming scheme
+#: (slugify_name turns dots into hyphens and strips the leading ones, and the
+#: legacy name is bare hex), so resolve_project_dir can never return one.
+_QUARANTINE_PREFIX = ".deleting-"
+
+
+def _quarantine_index_dir(directory: Path) -> Path:
+    """Rename *directory* out of the lookup path. Returns where it went.
+
+    A rename is all or nothing; an rmtree is not. Measured on Windows: rmtree
+    of an index directory whose vectors.db is still open deletes manifest.json
+    and then raises WinError 32, leaving a gutted directory that
+    resolve_project_dir still returns and search still reads. Renaming the same
+    tree fails with WinError 5 and changes nothing. So the rename is the point
+    of no return, and the rmtree after it only reclaims disk.
+    """
+    holding = directory.parent / f"{_QUARANTINE_PREFIX}{directory.name}-{uuid4().hex[:8]}"
+    directory.rename(holding)
+    return holding
+
+
+def _restore_quarantined(pairs: list[tuple[Path, Path]]) -> None:
+    """Put quarantined directories back where they were.
+
+    Called when a later rename in the same delete fails. Without it a partial
+    quarantine is the stranding bug it exists to prevent: the current scheme
+    directory gone from the lookup path and an older one left to answer for it.
+    """
+    for original, holding in pairs:
+        try:
+            holding.rename(original)
+        except OSError as e:
+            logger.error(
+                "Could not restore index directory %s from %s: %s: %s",
+                original, holding, type(e).__name__, e,
+            )
+
+
+def _sweep_quarantine_leftovers(root: Path, project_path: str) -> None:
+    """Best effort removal of this project's earlier failed quarantines.
+
+    Retrying a delete is the natural moment to reclaim what the last attempt
+    could not. Scoped to this project's own directory names so a concurrent
+    delete of another project is never touched.
+    """
+    # Matched by prefix rather than by glob: slugify_name keeps square
+    # brackets, so a project called foo[a] would turn its own leftover name
+    # into a character class and the sweep would never find it.
+    prefixes = tuple(
+        f"{_QUARANTINE_PREFIX}{name}-" for name in sorted(_scheme_dir_names(project_path))
+    )
+    try:
+        candidates = sorted(root.iterdir())
+    except OSError:
+        return
+
+    for leftover in candidates:
+        if not leftover.name.startswith(prefixes):
+            continue
+        if not (_is_inside_projects_root(leftover, root) and leftover.is_dir()):
+            continue
+        try:
+            _rmtree_clearing_readonly(leftover)
+        except OSError as e:
+            logger.warning(
+                "Left over index directory %s still cannot be removed: %s: %s",
+                leftover, type(e).__name__, e,
+            )
+
+
 def delete_project_index(project_path: str) -> dict:
     """Remove clean-rag's index of *project_path*. Never touches its source.
 
@@ -1560,57 +1636,75 @@ def delete_project_index(project_path: str) -> dict:
     reindex sweep can rebuild the directory mid removal, or rewrite the
     registry entry after this function has removed it.
 
-    Disk first, registry second, on purpose. An orphaned directory is visible
-    and recoverable: the project reads as unindexed and a later index run
-    overwrites it. An orphaned registry entry is the opposite, and it is the
-    exact failure project_id.py's docstring exists to prevent, because the
-    project then reads as indexed while every search against it silently
-    returns nothing.
+    Two phases, because the naming schemes share a lookup. Every directory is
+    renamed out of the lookup path first, and one that will not rename aborts
+    the whole delete with the earlier renames undone. Only once no directory
+    can answer a lookup any more does the registry entry go, and only then are
+    the renamed copies actually deleted. Removing them one at a time instead
+    lets a failure halfway through leave an older scheme's directory as the one
+    resolve_project_dir finds, so search keeps answering from data the delete
+    was supposed to have removed.
 
     Reports per step rather than a bare ok, matching index_project's
-    stopped_early shape, so a caller can tell "nothing was there" from "two of
-    three directories went and the third is locked".
+    stopped_early shape, so a caller can tell "nothing was there" from "the
+    index is gone but one directory is still holding disk".
     """
-    removed: list[str] = []
-    failed: list[dict] = []
+    result: dict = {
+        "project_path": project_path,
+        "dirs_removed": [],
+        "dirs_failed": [],
+        "dirs_left_on_disk": [],
+        "registry_removed": [],
+    }
 
+    root = DATABASES_DIR / "_projects"
+    _sweep_quarantine_leftovers(root, project_path)
+
+    quarantined: list[tuple[Path, Path]] = []
     for directory in project_index_dirs(project_path):
         # Release our own SQLite handle on this project's vectors.db first.
-        # The connection cache is process wide (store.py:123), so on Windows an
-        # rmtree with it still open fails with WinError 32 rather than doing
+        # The connection cache is process wide (store.py:123), so on Windows a
+        # rename or an rmtree with it still open fails rather than doing
         # anything. evict_cache closes it now when nothing holds it, and marks
         # it to close on the last holder's exit when something does.
         ChromaStore.evict_cache(str(directory / "chroma"))
         try:
-            _rmtree_clearing_readonly(directory)
-            removed.append(str(directory))
+            quarantined.append((directory, _quarantine_index_dir(directory)))
         except OSError as e:
             logger.error(
                 "Could not remove index directory %s: %s: %s",
                 directory, type(e).__name__, e,
             )
-            failed.append({"path": str(directory), "error": f"{type(e).__name__}: {e}"})
-
-    result: dict = {
-        "project_path": project_path,
-        "dirs_removed": removed,
-        "dirs_failed": failed,
-        "registry_removed": [],
-    }
-
-    # A directory that refused to go means the index is still partly on disk.
-    # Removing the registry entry now would hide it from every tool that could
-    # find it again, so stop and say so instead.
-    if failed:
-        result["error"] = (
-            f"{len(failed)} index director(ies) could not be removed, so the "
-            f"registry entry was left in place. The project is unchanged from "
-            f"the caller's point of view. Retry once whatever holds the files "
-            f"has let go."
-        )
-        return result
+            _restore_quarantined(quarantined)
+            result["dirs_failed"].append(
+                {"path": str(directory), "error": f"{type(e).__name__}: {e}"}
+            )
+            result["error"] = (
+                f"{directory.name} could not be removed, so nothing was: the "
+                f"other index directories were put back and the registry entry "
+                f"was left in place. The project is unchanged. Retry once "
+                f"whatever holds the files has let go."
+            )
+            return result
 
     result["registry_removed"] = _remove_from_project_registry(project_path)
+
+    for original, holding in quarantined:
+        result["dirs_removed"].append(str(original))
+        try:
+            _rmtree_clearing_readonly(holding)
+        except OSError as e:
+            # The index is already gone as far as every lookup is concerned, so
+            # this is disk to reclaim rather than a failed delete. Named in the
+            # response, and the next delete of this project sweeps it.
+            logger.warning(
+                "Index directory %s is out of the lookup path but still on "
+                "disk: %s: %s", holding, type(e).__name__, e,
+            )
+            result["dirs_left_on_disk"].append(
+                {"path": str(holding), "error": f"{type(e).__name__}: {e}"}
+            )
+
     return result
 
 
