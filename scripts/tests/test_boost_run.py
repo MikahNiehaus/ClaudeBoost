@@ -214,7 +214,7 @@ class TestBoostRunHelpers:
         mod.SCRIPTS = tmp_path / "scripts"
         (tmp_path / "scripts").mkdir(parents=True)
 
-        def fake_run(args, timeout=60):
+        def fake_run(args, timeout=60, env=None):
             return 0, "started\n"
 
         with patch.object(mod, "_run", side_effect=fake_run):
@@ -250,7 +250,7 @@ class TestBoostRunHelpers:
             "dimension_mismatch": [],
         }
 
-        def fake_run(args, timeout=60):
+        def fake_run(args, timeout=60, env=None):
             return 0, "server already running\n"
 
         get_calls = [0]
@@ -275,6 +275,44 @@ class TestBoostRunHelpers:
         assert result.get("ready") is True
         assert result.get("healed") == []
 
+    def test_step_rag_starts_the_server_with_no_console(self, tmp_path, monkeypatch):
+        """The spawn carries CLEAN_RAG_CONSOLE=0 on top of the real environment.
+
+        server_ctl.py:126 opens the console UI unless that variable reads "0",
+        and boost-run captures stdout inside a pipeline, so a window here is
+        noise. subprocess.run is what gets recorded rather than _run, so the
+        assertion covers both step_rag naming the variable and _run forwarding
+        what it was given.
+        """
+        mod = self._load_mod(tmp_path)
+        mod.SCRIPTS = tmp_path / "scripts"
+        (tmp_path / "scripts").mkdir(parents=True)
+        monkeypatch.setenv("BOOST_RUN_PARENT_ENV_MARKER", "inherited")
+
+        calls = []
+
+        def record(args, **kwargs):
+            calls.append({"argv": args, **kwargs})
+            return MagicMock(returncode=0, stdout="started\n", stderr="")
+
+        with patch.object(mod.subprocess, "run", record):
+            with patch.object(mod, "_get", side_effect=Exception("connection refused")):
+                with patch("time.monotonic", side_effect=[0.0, 1e9, 1e9, 1e9]):
+                    with patch("time.sleep"):
+                        mod.step_rag()
+
+        starts = [c for c in calls if "server_ctl.py" in " ".join(str(a) for a in c["argv"])]
+        assert starts, f"step_rag never spawned server_ctl.py; saw {[c['argv'] for c in calls]}"
+        env = starts[-1].get("env")
+        assert env is not None, "server_ctl.py was started with the inherited environment"
+        assert env.get("CLEAN_RAG_CONSOLE") == "0", (
+            f"server_ctl.py would open a console window; CLEAN_RAG_CONSOLE="
+            f"{env.get('CLEAN_RAG_CONSOLE')!r}"
+        )
+        # A bare {"CLEAN_RAG_CONSOLE": "0"} starts a child with no PATH and no
+        # SYSTEMROOT, which fails on Windows before the server is reached.
+        assert env.get("BOOST_RUN_PARENT_ENV_MARKER") == "inherited"
+
     def test_step_hooks_all_present(self, tmp_path):
         mod = self._load_mod(tmp_path)
         mod.SCRIPTS = tmp_path / "scripts"
@@ -292,7 +330,7 @@ class TestBoostRunHelpers:
 
         # All hooks fail except the first
         run_calls = [0]
-        def fake_run(args, timeout=60):
+        def fake_run(args, timeout=60, env=None):
             run_calls[0] += 1
             return (0, "") if run_calls[0] == 1 else (1, "")
 
@@ -306,9 +344,11 @@ class TestBoostRunHelpers:
     # ------------------------------------------------------------------
 
     def test_step_mcp_debugger_cli_not_found(self, tmp_path):
+        """The CLI resolves, then will not run: exit 127 from the list call."""
         mod = self._load_mod(tmp_path)
-        with patch.object(mod, "_run", return_value=(127, "")):
-            result = mod.step_mcp_debugger()
+        with patch.object(mod, "claude_cmd", return_value=["claude"]):
+            with patch.object(mod, "_run", return_value=(127, "")):
+                result = mod.step_mcp_debugger()
         assert result == "unknown"
 
     # Fixtures below use the real `claude mcp list` shape — a header line then
@@ -317,19 +357,26 @@ class TestBoostRunHelpers:
     # ("mcp-debugger connected ✓") that no `claude mcp list` ever emits, and
     # they only covered one of the four expected servers, so both the connected
     # and unhealthy cases reported "missing" and failed.
+    #
+    # claude_cmd is patched because these three test how output is classified,
+    # not how the CLI is found. Left unpatched they read "unknown" off a
+    # machine with no claude on PATH, which is a pass or a fail decided by the
+    # environment. The shim test below is the one that covers resolution.
     def test_step_mcp_debugger_not_registered(self, tmp_path):
         mod = self._load_mod(tmp_path)
         listed = "Checking MCP server health…\n\nsome-other-mcp: npx -y x - ✔ Connected"
-        with patch.object(mod, "_run", return_value=(0, listed)):
-            result = mod.step_mcp_debugger()
+        with patch.object(mod, "claude_cmd", return_value=["claude"]):
+            with patch.object(mod, "_run", return_value=(0, listed)):
+                result = mod.step_mcp_debugger()
         assert result == "missing"
 
     def test_step_mcp_debugger_connected(self, tmp_path):
         mod = self._load_mod(tmp_path)
         listed = "\n".join(
             f"{name}: npx -y {name} - ✔ Connected" for name, _ in mod.MCP_SERVERS_EXPECTED)
-        with patch.object(mod, "_run", return_value=(0, listed)):
-            result = mod.step_mcp_debugger()
+        with patch.object(mod, "claude_cmd", return_value=["claude"]):
+            with patch.object(mod, "_run", return_value=(0, listed)):
+                result = mod.step_mcp_debugger()
         assert result == "connected"
 
     def test_step_mcp_debugger_unhealthy(self, tmp_path):
@@ -337,8 +384,9 @@ class TestBoostRunHelpers:
         listed = "\n".join(
             f"{name}: npx -y {name} - ✗ Failed to connect"
             for name, _ in mod.MCP_SERVERS_EXPECTED)
-        with patch.object(mod, "_run", return_value=(0, listed)):
-            result = mod.step_mcp_debugger()
+        with patch.object(mod, "claude_cmd", return_value=["claude"]):
+            with patch.object(mod, "_run", return_value=(0, listed)):
+                result = mod.step_mcp_debugger()
         assert result == "unhealthy"
 
     @pytest.mark.skipif(sys.platform != "win32", reason="the CLI ships as claude.cmd only on Windows")

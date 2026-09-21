@@ -57,6 +57,28 @@ For a high stakes surface (auth, money, SQL, a subprocess, a trust boundary),
 also get a fresh context review. Otherwise, just run it.
 """
 
+# The rationale above is worth saying once. Saying it on all 98 edits of a
+# session cost 19,502 measured tokens and told the reader nothing new after the
+# first time. The nudge still fires on every edit, because the moment is the
+# point; only its restated reasoning is dropped.
+_REMINDER_SHORT = (
+    "\n[verify-by-running] Run a check on what you just wrote: a test, an "
+    "assert, or drive the real flow. Do not self review the diff instead.\n"
+)
+
+
+def _reminder(session_id: str) -> str:
+    """Full text on the first code edit of a session, one line on the rest."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from research_state import claim_session_once
+
+        first = claim_session_once(session_id, "verify-by-running")
+    except Exception:
+        # A broken state layer must not be able to silence the nudge.
+        return _REMINDER
+    return _REMINDER if first else _REMINDER_SHORT
+
 
 def _is_code_file(file_path: str) -> bool:
     if not file_path or not isinstance(file_path, str):
@@ -94,7 +116,7 @@ def main() -> int:
     tool_input = payload.get("tool_input")
     file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
     if _is_code_file(file_path):
-        print(_REMINDER)
+        print(_reminder(payload.get("session_id", "")))
     return 0
 
 

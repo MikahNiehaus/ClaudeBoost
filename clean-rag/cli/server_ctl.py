@@ -1,7 +1,7 @@
 """Server control CLI for clean-rag.
 
 Usage:
-  python clean-rag/cli/server_ctl.py start     # headed, own console window
+  python clean-rag/cli/server_ctl.py start     # windowless; CLEAN_RAG_HEADED=1 for a console
   python clean-rag/cli/server_ctl.py stop
   python clean-rag/cli/server_ctl.py restart
   python clean-rag/cli/server_ctl.py status
@@ -99,6 +99,49 @@ def cmd_start(args):
     # stop marker.
     _clear_stopped_by_user(state)
 
+    def _launch_console() -> None:
+        """Open cli/console.py in its own window beside the windowless server.
+
+        The server deliberately has no console of its own, and console.py is a
+        Textual app, which needs a real terminal. CREATE_NEW_CONSOLE is the flag
+        that gives a child one. It cannot be combined with DETACHED_PROCESS
+        (Microsoft's process creation flags reference: DETACHED_PROCESS "cannot
+        be used with CREATE_NEW_CONSOLE"), which is why this is a second spawn
+        rather than a flag on the server's.
+
+        server/graphrag_client.py already opens a watchable window this exact
+        way, so this follows the shape the codebase has rather than a new one.
+
+        On by default, because the server having no visible output and the UI
+        never starting meant indexing was invisible unless someone remembered
+        to run a second command. CLEAN_RAG_CONSOLE=0 turns it off, which is what
+        automation and CI should set.
+
+        Never raises. A missing terminal, a headless box or a missing textual
+        must not stop the server from starting, so every failure here is
+        swallowed. console.py also guards its own textual import and only ever
+        talks to the server over HTTP and the log file, so a dead console cannot
+        affect a live server.
+        """
+        if os.environ.get("CLEAN_RAG_CONSOLE") == "0":
+            return
+        if sys.platform != "win32":
+            # CREATE_NEW_CONSOLE has no POSIX equivalent that works without
+            # knowing which terminal emulator is installed. Left unimplemented
+            # rather than guessed at.
+            return
+        console_script = _CLEAN_RAG_HOME / "cli" / "console.py"
+        if not console_script.exists():
+            return
+        try:
+            subprocess.Popen(
+                [_server_python(), str(console_script)],
+                cwd=str(_CLEAN_RAG_HOME),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        except Exception as exc:
+            print(f"Console UI did not start ({type(exc).__name__}). Server is unaffected.")
+
     port = _port()
 
     # Single instance. Checked against the port, not the PID file.
@@ -111,6 +154,10 @@ def cmd_start(args):
                 pass
         who = f"PID {pid}" if pid and _is_process_alive(pid) else "an unknown process"
         print(f"clean-rag server already running on port {port} ({who}). Not starting a second one.")
+        # Still open the UI. Asking to start a server that is already up is
+        # usually someone wanting to see it, and the console is the only way to
+        # watch indexing. A closed console is not a reason to be left blind.
+        _launch_console()
         return
 
     clean_rag_home = str(_CLEAN_RAG_HOME)
@@ -119,20 +166,41 @@ def cmd_start(args):
     env = os.environ.copy()
     env["CLEAN_RAG_HOME"] = clean_rag_home
 
-    # Headed by default: the server gets its own console window and its logs
-    # stream there live, so indexing and search problems are visible while they
-    # happen instead of being reconstructed afterwards from state/server.log.
+    # Windowless by default. This reverses the earlier "headed by default"
+    # decision, and the reason that decision gave has been met another way:
+    # its point was that logs should be visible while they happen rather than
+    # reconstructed from state/server.log afterwards. cli/console.py now shows
+    # exactly those logs live, because app.py attaches a RotatingFileHandler to
+    # state/server.log independently of where stdout goes. So the server's own
+    # window duplicated the console and cost a second terminal.
     #
-    # DETACHED_PROCESS was what suppressed the window, and it's mutually
-    # exclusive with CREATE_NEW_CONSOLE, so it has to go. The DEVNULL redirects
-    # go too, otherwise the new console just sits there blank.
+    # The other half of the old tradeoff goes away with it: a headed server
+    # died when its window was closed, which is how it died on 2026-09-18.
     #
-    # Tradeoff, stated plainly: closing that window now kills the server. Set
-    # CLEAN_RAG_HEADLESS=1 to get the old detached behaviour back.
-    headless = os.environ.get("CLEAN_RAG_HEADLESS") == "1"
+    # Set CLEAN_RAG_HEADED=1 for the raw terminal. Positive name on purpose:
+    # every other flag here (CLEAN_RAG_WEB_SEARCH, CLEAN_RAG_SECURITY_SCAN,
+    # CLEAN_RAG_PATTERN_INJECT) names the behaviour being asked for, and
+    # CLEAN_RAG_HEADLESS was the one that named a suppressed state instead.
+    headed = os.environ.get("CLEAN_RAG_HEADED") == "1"
 
     if sys.platform == "win32":
-        if headless:
+        if headed:
+            proc = subprocess.Popen(
+                [_server_python(), server_script],
+                cwd=clean_rag_home,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NEW_CONSOLE,
+            )
+        else:
+            # DETACHED_PROCESS, not CREATE_NO_WINDOW. Microsoft's process
+            # creation flags doc: CREATE_NO_WINDOW "is ignored ... if it is
+            # used with either CREATE_NEW_CONSOLE or DETACHED_PROCESS", and on
+            # its own it only hides the window of a process still tied to the
+            # parent's console. DETACHED_PROCESS is what lets the server
+            # outlive whatever launched it. CREATE_NEW_PROCESS_GROUP on top is
+            # meaningful here, it keeps console Ctrl+C from reaching the
+            # server; in the headed branch above the same flag is a documented
+            # no-op, left alone because it already was one.
             proc = subprocess.Popen(
                 [_server_python(), server_script],
                 cwd=clean_rag_home,
@@ -141,21 +209,14 @@ def cmd_start(args):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        else:
-            proc = subprocess.Popen(
-                [_server_python(), server_script],
-                cwd=clean_rag_home,
-                env=env,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NEW_CONSOLE,
-            )
     else:
         proc = subprocess.Popen(
             [_server_python(), server_script],
             cwd=clean_rag_home,
             env=env,
             start_new_session=True,
-            stdout=None if not headless else subprocess.DEVNULL,
-            stderr=None if not headless else subprocess.DEVNULL,
+            stdout=None if headed else subprocess.DEVNULL,
+            stderr=None if headed else subprocess.DEVNULL,
         )
 
     # Write PID file
@@ -167,6 +228,12 @@ def cmd_start(args):
     }, indent=2), encoding="utf-8")
 
     print(f"clean-rag server started (PID {proc.pid}, port {port})")
+
+    # Before the /status wait below, not after, so the UI is already up while
+    # the embedding model loads. That load takes about 55 seconds measured, and
+    # it is the exact window where a user with no console assumes the server
+    # failed, because the health check times out and nothing else says anything.
+    _launch_console()
 
     # Wait a moment and verify it's running
     time.sleep(2)
@@ -415,7 +482,10 @@ def _is_process_alive(pid: int) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="clean-rag server control")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("start", help="Start the server in its own console window")
+    sub.add_parser(
+        "start",
+        help="Start the server with no window (CLEAN_RAG_HEADED=1 for a console)",
+    )
     sub.add_parser("stop", help="Stop the server")
     sub.add_parser("restart", help="Stop then start")
     sub.add_parser("status", help="Check server status")

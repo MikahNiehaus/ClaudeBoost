@@ -88,6 +88,33 @@ def _format_conversation(conversation: dict) -> str:
     return "\n".join(parts)
 
 
+def _clear_once_flags(home: Path, session_id: str) -> None:
+    """Let the once per session blocks be said again after a context wipe.
+
+    prompt-rules-injector.py, code-pattern-inject.py and verify-after-edit.py
+    each emit their full text once per session and a pointer afterwards, which
+    is what took the measured per message injection from 2,051 characters to
+    nothing. A compaction deletes the message that carried the full text, so
+    without this the rules would be gone for the rest of the session.
+
+    This is the reason the once flags carry no TTL. The event that should
+    restore them is this one, not the clock. It also does not matter whether
+    Claude Code issues a fresh session id for a compaction: a new id gets new
+    flags, and the same id gets cleared here.
+    """
+    try:
+        hooks_dir = str(home / "clean-rag" / "hooks")
+        if hooks_dir not in sys.path:
+            sys.path.insert(0, hooks_dir)
+        from research_state import clear_session_once
+
+        clear_session_once(session_id)
+    except Exception:
+        # Worst case the rules stay suppressed until the next real session.
+        # Never let this stop the memo restore below from running.
+        pass
+
+
 def main() -> int:
     home = Path(os.environ.get("CLAUDEBOOST_HOME") or os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
@@ -103,6 +130,12 @@ def main() -> int:
 
     source = hook_input.get("source", "")
     session_cwd = hook_input.get("cwd", "")
+
+    # Before every early return below, because those returns are about whether
+    # a memo exists to restore, which says nothing about whether the standing
+    # rules should be re sent.
+    if source in ("compact", "clear"):
+        _clear_once_flags(home, hook_input.get("session_id", ""))
 
     if source == "compact":
         # Prefer unified handoff-latest.json; fall back to compaction-memo.json

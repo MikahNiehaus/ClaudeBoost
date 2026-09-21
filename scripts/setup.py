@@ -1935,6 +1935,72 @@ def register_mcp_servers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claude Code plugins. One row per plugin. `marketplace` is what
+# `claude plugin marketplace add` takes, `name` is the plugin@marketplace id
+# `claude plugin install` takes. Both steps are needed; the marketplace alone
+# registers nothing.
+# ---------------------------------------------------------------------------
+PLUGINS = [
+    {
+        "name": "ponytail@ponytail",
+        "marketplace": "DietrichGebert/ponytail",
+        "why": "stops the agent over-building; MIT",
+        "needs_node": True,
+    },
+]
+
+
+def install_plugins() -> None:
+    """Install every plugin in PLUGINS.
+
+    Idempotent: `claude plugin list` is read once and anything already there is
+    skipped. Nothing here is fatal, same as MCP registration. A plugin's hooks
+    run as the user on every prompt, so each row is a trust decision, not a
+    convenience.
+    """
+    if not PLUGINS:
+        return
+
+    _info("\nVerifying Claude Code plugins...")
+
+    claude = claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found - skipping plugin install")
+        return
+
+    rc, listed = run_cmd(claude + ["plugin", "list"])
+    if rc != 0:
+        _skip(f"claude plugin list failed (exit {rc}) - skipping plugin install")
+        return
+
+    for plugin in PLUGINS:
+        name = plugin["name"]
+        if name in listed:
+            _ok(f"{name} already installed")
+            continue
+
+        # Its lifecycle hooks are Node. Without node they fail on every prompt.
+        if plugin.get("needs_node") and resolve_tool("node") is None:
+            _warn(f"{name} needs node on PATH - skipping")
+            continue
+
+        rc, out = run_cmd(claude + ["plugin", "marketplace", "add", plugin["marketplace"]])
+        if rc != 0:
+            _warn(f"could not add marketplace {plugin['marketplace']} (exit {rc})")
+            if out:
+                _warn(out.strip()[:300])
+            continue
+
+        rc, out = run_cmd(claude + ["plugin", "install", name])
+        if rc == 0:
+            _ok(f"{name} installed - {plugin['why']}")
+        else:
+            _warn(f"{name} install failed (exit {rc}); run: claude plugin install {name}")
+            if out:
+                _warn(out.strip()[:300])
+
+
+# ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
 # ---------------------------------------------------------------------------
@@ -2218,6 +2284,7 @@ def main() -> int:
     _clean_project_local_settings()
     install_rag_server()
     register_mcp_servers()
+    install_plugins()
     install_edge_tts()
     install_mermaid_cli()
     install_netcoredbg()

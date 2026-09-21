@@ -57,6 +57,13 @@ SKIP_DIRS = {
     ".svelte-kit", ".angular",
     # Apple and iOS dependency and build dirs.
     "Pods", "Carthage", "DerivedData",
+    # Browser automation page snapshots, written by the playwright MCP server
+    # this project registers itself. Named here rather than left to
+    # `_drop_ignored` because that filter reads the project's own ignore rules,
+    # and a directory with no `.git` and no `.gitignore` gives it nothing to
+    # read. Measured 2026-09-18: 48 of these were indexed across three
+    # projects, and the only two still on disk are both non git directories.
+    ".playwright-mcp",
 }
 
 # Generated files to skip (exact filenames)

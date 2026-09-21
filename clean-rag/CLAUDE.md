@@ -30,9 +30,43 @@ Only Claude Code can start an agent, and the stamp only lands after one complete
 
 **`CLEAN_RAG_RESEARCH_GATE=off`** silences the nudge and the audit entry entirely. Since the gate no longer blocks anything, this only matters if you want the hook to do nothing at all rather than nudge and log.
 
+## What the hooks inject, and why it is said once
+
+Every fixed block these hooks emit is now sent **once per session**, then as a short pointer or not at all. Changed 2026-09-21 on measured evidence, and it is the opposite of what the design assumed.
+
+The assumption was that repeating a rule on every message is what makes it followed. Counted from one real session's transcript, that cost **339,523 tokens**, which is 1.7 full 200k context windows spent on hook output:
+
+| block | firings | tokens | state |
+|---|---|---|---|
+| RAG contract plus rules | 325 | 164,012 | byte identical every time |
+| "does it already exist?" | 183 | 98,978 | byte identical every time |
+| Project and Research Context | 140 | 54,639 | header fixed, snippets retrieved |
+| decision nudge | 47 | 28,344 | byte identical every time |
+| "verify by running" | 98 | 19,502 | byte identical every time |
+
+Three things make repetition the wrong tool, not merely an expensive one:
+
+- **A `UserPromptSubmit` injection is a new permanent message, not one block re sent.** 325 firings leave 325 copies in the transcript, every one of them re sent on every later API call. A system prompt is one copy.
+- **Position beats count.** Liu et al., "Lost in the Middle", measured a U shaped recall curve: best at the very start or the very end, worst in the middle. Every copy but the newest sits in the middle. No study isolates repeat count as a lever that improves compliance.
+- **Restating a rule does not close the compliance gap.** Mechanical enforcement does, which is what the gates already are. A hook that checks beats a hook that reminds.
+
+So each block moved to the layer that fits it. Anything invariant belongs in the Plain output style, which rewrites the system prompt and is cached. Anything session stable is said once. Anything genuinely conditional still fires at its moment, in a short form after the first time, which is ESLint's convention of a short message plus a rule id with the reasoning one lookup away.
+
+`hooks/research_state.py` owns the mechanism: `claim_session_once(session_id, key, fingerprint)` returns True the first time and again whenever the fingerprint changes, so switching workspace or indexing the project re emits rather than going stale. It carries **no TTL on purpose**. The event that should restore a block is a context wipe, not the clock, so `scripts/compaction-restore.py` calls `clear_session_once` on `source == "compact"` and `source == "clear"`. That holds whether or not Claude Code issues a fresh session id for a compaction.
+
+Measured after: **328,853 tokens down to 45,411, an 86% cut**, with the per message floor at zero for the fixed blocks.
+
+**`CLEAN_RAG_PROMPT_SEARCH=1`** brings back the automatic search on every message. It is off by default. The comment in `rag-enforce.py` already refused to *web* search there, because "a keyword-extracted query has no judgment behind it", and defended the vector search on the grounds that "a bad match scores low and gets dropped". This project measured that defence and it is false: see "Why the KB is gone" below, where four wrong hits scored 0.80 to 0.86 and `min_score: 0.5` caught none. Observed again on 2026-09-21, a message about context budgets returned three unrelated test helper functions.
+
+Turning it off also fixed something unrelated looking. Pausing indexing evicts the embedding models to give the RAM back, and the per message search pulled them straight back in 11 seconds later, so the pause never worked. The hook still probes `/status`, which loads nothing, so an outage is still reported.
+
 ## swiper
 
-**`swiper`** (Sonnet) is the researcher. When the gate nudges toward research on an edit, spawn it; it picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources, a `COVERS:` line, and a `MATCH_STRATEGY:`. It hates writing code from scratch: its whole job is to find real working code (in the project, the stdlib, an installed dependency, GitHub, or StackOverflow) and hand it back exactly as found so the builder can place it, not just describe it. It does not write or edit project files itself. Writing original logic is the builder's last resort, said plainly when reached. It runs real research every time it fires (roughly 44 to 52k tokens and 2 to 8 minutes for a full pass) and does NOT guess whether a change is trivial. Spawn it in the foreground (`run_in_background: false`), never backgrounded — a backgrounded completion arrives later as a `TaskNotificationMessage`, not a tool result, so `research-record.py`'s `PostToolUse` hook never fires for it and the record never gets stamped no matter how long you wait. It's defined in `~/.claude/agents/` and preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check).
+**`swiper`** (Sonnet) is the researcher. When the gate nudges toward research on an edit, spawn it; it picks its own queries, covers depth and breadth, checks whether the thing already exists, reads the import graph, and reports with sources, a `COVERS:` line, and a `MATCH_STRATEGY:`. It hates writing code from scratch: its whole job is to find real working code (in the project, the stdlib, an installed dependency, GitHub, or StackOverflow) and hand it back exactly as found so the builder can place it, not just describe it. It does not write or edit project files itself. Writing original logic is the builder's last resort, said plainly when reached. It runs real research every time it fires (roughly 44 to 52k tokens and 2 to 8 minutes for a full pass) and does NOT guess whether a change is trivial. It's defined in `~/.claude/agents/` and preloads the `research-routing` skill (depth vs breadth routing, the does-this-exist check).
+
+**Every agent spawn runs in the background. You cannot choose otherwise.** The line above used to end with "spawn it in the foreground (`run_in_background: false`), never backgrounded". That instruction asked for something the agent tool does not offer. Its inputs are `description`, `isolation`, `model`, `prompt` and `subagent_type`, and nothing else; `run_in_background` is a `Bash` input, not an agent one. Verified 2026-09-18 by reading the live tool schema.
+
+The consequence is structural, not a mistake anyone made. A completion arrives as a `TaskNotificationMessage` rather than a tool result, so `research-record.py` on `PostToolUse` never fires for a subagent and can never stamp coverage. `SubagentStop` is the only event that can. Do not try to work around this by spawning differently; there is no other way to spawn.
 
 Its report also names a `MATCH_STRATEGY:`, one of two values: `clone-and-patch` or `pattern-only`. There is no `adapt` tier: that word let a builder rewrite a shipping ready reference from scratch instead of using it, a real observed failure, so it's gone, not softened. `clone-and-patch` means copy the verbatim quoted block as the literal starting point and make only the smallest set of changes actually required, whatever the fetched reference's original framework or scale, no rewrite, no restyle, no swapped libraries, no added structure the reference didn't have. That's a hard ceiling on the diff, not a suggestion. `pattern-only` means nothing was worth swiping; only then does a real diff from correctness properties apply.
 
@@ -147,7 +181,7 @@ The registry of what's indexed is `state/projects.json`.
 
 **What gets skipped** (`server/indexing.py`): `SKIP_DIRS`, `SKIP_FILES`, `SKIP_SUFFIXES`, an allowlist of `CODE_EXTENSIONS`, and a 500KB per file cap. Every path into the index goes through `scan_project()`, so the skip rules are defined once and apply everywhere, including the auto reindex sweep.
 
-**The graph is built automatically at index time.** Tree-sitter parses each file's AST and extracts `imports`, `inherits`, `implements`, and `calls` edges across 15 languages, then PageRank ranks the nodes. No LLM is involved. This is the cheap kind of code graph, the same approach as Aider's repo map, not the expensive GraphRAG kind where a model reads your whole codebase to extract entities.
+**The graph is built automatically at index time.** Tree-sitter parses each file's AST and extracts `imports`, `inherits`, `implements`, and `calls` edges across 14 languages, then PageRank ranks the nodes. No LLM is involved. This is the cheap kind of code graph, the same approach as Aider's repo map, not the expensive GraphRAG kind where a model reads your whole codebase to extract entities.
 
 ### Reindexing keeps itself honest
 
@@ -162,7 +196,7 @@ All three take `acquire_index_lock()` so they can't race each other.
 ## Server
 
 ```bash
-python clean-rag/cli/server_ctl.py start     # headed, own console window
+python clean-rag/cli/server_ctl.py start     # windowless; CLEAN_RAG_HEADED=1 for a console
 python clean-rag/cli/server_ctl.py stop
 python clean-rag/cli/server_ctl.py restart
 python clean-rag/cli/server_ctl.py status
@@ -170,7 +204,13 @@ python clean-rag/cli/server_ctl.py status
 
 Or double click `clean-rag/runragserver.bat`.
 
-It runs **headed**, in its own console window, so you can watch indexing and search happen instead of reconstructing it from a log afterwards. Set `CLEAN_RAG_HEADLESS=1` for the old detached behaviour.
+The server runs **windowless** and `start` now opens `cli/console.py` in its own window beside it, so indexing is visible without a second command. It never was before: `server_ctl.py` had no reference to the console at all, and `runragserver.bat` printed the console command as a suggestion rather than running it.
+
+`CLEAN_RAG_CONSOLE=0` turns the UI off. Automation should set it, and `scripts/boost-run.py` does, because that path captures stdout and a terminal appearing in it is noise. Windows only: `CREATE_NEW_CONSOLE` has no POSIX equivalent that works without knowing the terminal emulator, so the POSIX branch skips it rather than guessing. A console that cannot start never stops the server, which is the one guarantee `test_a_console_that_cannot_start_does_not_stop_the_server` pins by making the spawn raise for real.
+
+`CLEAN_RAG_HEADED=1` still gives the **server** its own raw terminal. `runragserver.bat` no longer sets it, because with the console launching too it produced two windows showing one log, and the console is the better of the two: it renders indexing state, it can pause sweeps, and closing it cannot kill the server the way closing a headed server's window could and did on 2026-09-18.
+
+This reverses an earlier "headed by default" decision. That decision existed so logs were visible as they happened rather than reconstructed afterwards, and the console now does exactly that. A headed server also died whenever its window was closed, which is how it died on 2026-09-18.
 
 `start` is single instance and checks the **port**, not the PID file. The PID file lies: it goes stale when a server dies badly and knows nothing about one started by hand. Running `start` twice is safe and does nothing the second time.
 

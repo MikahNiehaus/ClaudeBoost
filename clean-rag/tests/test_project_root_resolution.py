@@ -690,6 +690,12 @@ class TestOneProjectPerPrompt:
     def test_the_project_named_to_the_user_is_the_project_that_gets_searched(
         self, rag_enforce, home, monkeypatch, capsys
     ):
+        # Asked for by name, not inherited. The hook no longer searches on every
+        # message, because a keyword extracted query has no judgment behind it,
+        # so the one source consistency this test is about has to be switched on
+        # for the search to happen at all.
+        monkeypatch.setenv("CLEAN_RAG_PROMPT_SEARCH", "1")
+
         cwd = home / "Development" / "Domain"
         cwd.mkdir(parents=True)
         (cwd.parent / ".git").mkdir()

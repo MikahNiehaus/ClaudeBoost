@@ -31,11 +31,22 @@ When the gate nudges toward research:
    and report with sources and a `COVERS:` line naming the files they covered.
    That scope is what the audit trail
    checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
-   Wait for it before editing anyway; that's still the point. Spawn it in the
-   foreground (`run_in_background: false`), never backgrounded — a backgrounded
-   completion arrives later as a `TaskNotificationMessage`, not a tool result, so
-   the hook that stamps the turn record never fires for it and the record never
-   shows the coverage no matter how long you wait.
+   Wait for it before editing anyway; that's still the point.
+
+   **Every agent spawn runs in the background. You cannot choose otherwise.**
+   This paragraph used to say "spawn it in the foreground
+   (`run_in_background: false`), never backgrounded". That instruction asked
+   for something the agent tool does not offer. Its inputs are `description`,
+   `isolation`, `model`, `prompt` and `subagent_type`, and nothing else;
+   `run_in_background` is a `Bash` input, not an agent one. Verified
+   2026-09-18 by reading the live tool schema.
+
+   The consequence is structural, not a mistake anyone made. A completion
+   arrives as a `TaskNotificationMessage` rather than a tool result, so
+   `PostToolUse` on `Task|Agent` never fires for a subagent and can never
+   stamp coverage. `SubagentStop` is the only event that can, and it is
+   registered for that reason. Do not try to work around this by spawning
+   differently; there is no other way to spawn.
    Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,
@@ -438,6 +449,30 @@ scraped topic knowledge base.
   headed so you can watch it.
 
 If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
+
+## Plugins
+
+Installed from `PLUGINS` in `scripts/setup.py`, mirrored in
+`clean-rag/install.py` for the same standalone reason as `MCP_SERVERS`. Adding
+one means adding a row to BOTH tables. Each row needs `marketplace` (the repo)
+and `name` (the `plugin@marketplace` id); adding the marketplace alone installs
+nothing.
+
+Installed today:
+
+- **ponytail** (`DietrichGebert/ponytail`, MIT) stops the agent over-building.
+  Before writing code it walks a ladder: does this need to exist, does the
+  stdlib do it, is there a native platform feature, is it already a dependency,
+  can it be one line. Validation, error handling, security and accessibility are
+  never on the chopping block. Its two lifecycle hooks are Node, so `node` has
+  to be on PATH or they fail on every prompt.
+
+  **It pulls against this file, on purpose.** Everything above mandates research
+  before an edit and a fresh context review after one. Ponytail's first rung is
+  "skip it". When they disagree, the ladder decides what to build and this file
+  decides how to check it, so research still runs and bad-cop still runs; the
+  ladder just usually means there is less to review. If a turn feels ceremonious
+  for a one line change, that is `/ps`, not a reason to switch either off.
 
 ## MCP servers, and using them safely
 

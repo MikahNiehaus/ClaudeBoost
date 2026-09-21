@@ -19,15 +19,27 @@ researched it" is never what gets written down.
 
 When the gate nudges toward research:
 
-1. **Spawn `researcher` and/or `swiper`** (Sonnet, foreground). Tell them what
+1. **Spawn `researcher` and/or `swiper`** (Sonnet). Tell them what
    you're changing, why, and the code you intend to write. Both cover depth and
    breadth and report with sources and a `COVERS:` line naming the files they
    covered. That scope is what the audit trail checks; nothing refuses the edit,
    but an uncovered file shows up as uncovered. Wait for them before editing
-   anyway; that's still the point. Spawn in the foreground (`run_in_background:
-   false`), never backgrounded — a backgrounded completion arrives later as a
-   `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
-   record never fires for it and the gate never sees the coverage.
+   anyway; that's still the point.
+
+   **Every agent spawn runs in the background. You cannot choose otherwise.**
+   This paragraph used to say "spawn in the foreground
+   (`run_in_background: false`), never backgrounded". That instruction asked
+   for something the agent tool does not offer. Its inputs are `description`,
+   `isolation`, `model`, `prompt` and `subagent_type`, and nothing else;
+   `run_in_background` is a `Bash` input, not an agent one. Verified
+   2026-09-18 by reading the live tool schema.
+
+   The consequence is structural, not a mistake anyone made. A completion
+   arrives as a `TaskNotificationMessage` rather than a tool result, so
+   `PostToolUse` on `Task|Agent` never fires for a subagent and can never
+   stamp coverage. `SubagentStop` is the only event that can, and it is
+   registered for that reason. Do not try to work around this by spawning
+   differently; there is no other way to spawn.
    Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,

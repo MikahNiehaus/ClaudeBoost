@@ -612,6 +612,90 @@ def _module_available(module: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Claude Code plugins. Mirrors ClaudeBoost's scripts/setup.py PLUGINS table,
+# kept as its own copy for the same standalone reason as MCP_SERVERS above.
+# `marketplace` is what `claude plugin marketplace add` takes, `name` is the
+# plugin@marketplace id `claude plugin install` takes. Both steps are needed;
+# adding the marketplace alone installs nothing.
+# ---------------------------------------------------------------------------
+PLUGINS: list[dict] = [
+    {
+        "name": "ponytail@ponytail",
+        "marketplace": "DietrichGebert/ponytail",
+        "needs_node": True,
+    },
+]
+
+
+def install_plugins() -> None:
+    """Install every plugin in PLUGINS.
+
+    Idempotent: `claude plugin list` is read once and anything already there is
+    skipped. Best effort, same contract as register_mcp_servers. A plugin's
+    hooks run as the user on every prompt, so each row is a trust decision.
+    """
+    if not PLUGINS:
+        return
+
+    claude = _claude_cmd()
+    if claude is None:
+        _warn("claude CLI not found, skipping plugin install")
+        return
+
+    try:
+        # encoding and errors are load bearing: `claude plugin list` prints a
+        # check mark, and under cp1252 a bare text=True decodes to None, which
+        # silently reinstalls every row on every run.
+        listed = subprocess.run(
+            claude + ["plugin", "list"],
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"claude plugin list failed ({e}), skipping plugin install")
+        return
+
+    if listed.returncode != 0:
+        _warn("claude plugin list failed, skipping plugin install")
+        return
+
+    installed = listed.stdout or ""
+
+    for plugin in PLUGINS:
+        name = plugin["name"]
+        if name in installed:
+            _ok(f"{name} already installed")
+            continue
+
+        # Its lifecycle hooks are Node. Without node they fail on every prompt.
+        if plugin.get("needs_node") and resolve_tool("node") is None:
+            _warn(f"{name} needs node on PATH, skipping")
+            continue
+
+        try:
+            added = subprocess.run(
+                claude + ["plugin", "marketplace", "add", plugin["marketplace"]],
+                capture_output=True, text=True, timeout=120,
+            )
+            if added.returncode != 0:
+                _warn(f"could not add marketplace {plugin['marketplace']}, skipping {name}")
+                continue
+
+            done = subprocess.run(
+                claude + ["plugin", "install", name],
+                capture_output=True, text=True, timeout=180,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{name} install failed ({e})")
+            continue
+
+        if done.returncode == 0:
+            _ok(f"{name} installed")
+        else:
+            _warn(f"{name} install failed, run: claude plugin install {name}")
+
+
 def install_pptx_tools() -> None:
     """Install what the powerpoint skill needs to build and narrate a deck.
 
@@ -1502,6 +1586,13 @@ def main():
         register_mcp_servers()
     else:
         print("\nStep 2b2: Skipped (--skip-deps)")
+
+    # Step 2b3
+    if not args.skip_deps:
+        print("\nStep 2b3: Installing Claude Code plugins...")
+        install_plugins()
+    else:
+        print("\nStep 2b3: Skipped (--skip-deps)")
 
     # Step 2c
     if not args.skip_deps:

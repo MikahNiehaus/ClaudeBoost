@@ -332,11 +332,26 @@ def _state_dir() -> Path:
     return d
 
 
+def _session_key(session_id: object) -> str:
+    """Hash a session id into a filename fragment, whatever arrives.
+
+    Two shapes reach here from a hook payload and neither is a string. A field
+    present with the wrong type (`{"session_id": 12}`) raises AttributeError on
+    .encode(), and a lone surrogate raises UnicodeEncodeError. Both read as
+    absent instead, which is how rag-enforce._str_field already treats a
+    mistyped field, so two hooks on the same payload cannot disagree about
+    which flag file they are using.
+    """
+    if not isinstance(session_id, str):
+        session_id = ""
+    raw = (session_id or "no-session").encode("utf-8", "replace")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
 def _record_path(session_id: str) -> Path:
     # Session ids come from Claude Code and could contain anything, so hash
     # rather than trusting one as a filename.
-    key = hashlib.sha256((session_id or "no-session").encode("utf-8")).hexdigest()[:16]
-    return _state_dir() / f"turn-{key}.json"
+    return _state_dir() / f"turn-{_session_key(session_id)}.json"
 
 
 def _load_record(path: Path) -> dict | None:
@@ -607,8 +622,7 @@ SESSION_QUICK_MAX_AGE_S = 600  # 10 minutes
 
 
 def _session_quick_path(session_id: str) -> Path:
-    key = hashlib.sha256((session_id or "no-session").encode()).hexdigest()[:16]
-    return _state_dir() / f"session-quick-{key}.json"
+    return _state_dir() / f"session-quick-{_session_key(session_id)}.json"
 
 
 def set_session_quick(session_id: str) -> None:
@@ -634,6 +648,74 @@ def is_session_quick(session_id: str) -> bool:
         return (time.time() - data.get("set_at", 0)) <= SESSION_QUICK_MAX_AGE_S
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Emit once per session, or again when the content actually changes.
+#
+# Cloned from the session-quick pair above: same session id hashing, same
+# _state_dir, so there is one place that decides how a session keyed file is
+# named. The differences are that this one holds many keys in one file and
+# stores a fingerprint per key instead of a timestamp.
+#
+# Why it exists: a hook that printed the same fixed block on every message left
+# one permanent copy per firing in the transcript, 325 of them in a measured
+# session, 164,012 tokens. Repetition also does not buy what it was meant to
+# buy. Liu et al. measured a U shaped recall curve over long contexts, so every
+# copy but the newest sits in the worst position, and no study isolates repeat
+# count as the lever that improves compliance.
+#
+# No TTL on purpose. A stale flag is not the failure mode here; losing the rule
+# after the context is wiped is. compaction-restore.py calls clear_session_once
+# on source=="compact" and source=="clear", so the full text comes back exactly
+# when the context that held it went away, whether or not Claude Code issues a
+# new session id for a compaction.
+# ---------------------------------------------------------------------------
+
+
+def _session_once_path(session_id: str) -> Path:
+    return _state_dir() / f"session-once-{_session_key(session_id)}.json"
+
+
+def claim_session_once(session_id: str, key: str, fingerprint: str = "") -> bool:
+    """True the first time *key* is claimed, and again if *fingerprint* changed.
+
+    Pass an empty fingerprint for content that never varies. Pass a hash of the
+    rendered block for content that can vary, such as the search contract that
+    names the active workspace: switching workspace changes the fingerprint and
+    the block is emitted again, so nothing goes stale silently.
+
+    Fails open. Any unreadable or unwritable state returns True, because a hook
+    that cannot record its flag must still say the thing it was going to say.
+    """
+    try:
+        path = _session_once_path(session_id)
+    except OSError:
+        # mkdir(exist_ok=True) still raises when state/research exists as a
+        # file, so there is no flag to read and no lock worth waiting on.
+        return True
+    with write_lock(path):
+        seen = _load_record(path) or {}
+        if seen.get(key) == fingerprint:
+            return False
+        seen[key] = fingerprint
+        try:
+            write_json_atomic(path, seen)
+        except OSError:
+            return True
+    return True
+
+
+def clear_session_once(session_id: str) -> None:
+    """Forget every once flag, so the next firing emits in full again."""
+    path = _session_once_path(session_id)
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
+def fingerprint(text: str) -> str:
+    """Short stable digest of a rendered block, for the fingerprint argument."""
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def check_file_researched(session_id: str, file_path: str) -> tuple[bool, str]:

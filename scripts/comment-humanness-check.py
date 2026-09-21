@@ -29,6 +29,14 @@ NUDGE PATTERNS (exit 0, stderr):
   3. Spacing uniformity: 5+ comments all using "// " with no variation
   4. Structural uniformity: 4+ consecutive comments within 5 chars of same length
   5. Banned vocab (from human-voice.xml and CLAUDE.md)
+  6. Comment length: over 20 words, so it is not one line
+  7. Narration: the comment's opening verb restates the code under it
+
+Checks 6 and 7 fire on a single comment; 1 through 5 need three or more.
+Both exempt any comment carrying a reason (because, must, race, security,
+bug and the rest of _EXPLANATORY_RE), since a comment that says why has
+earned its words. The narration rule is ported from no-redundant-comments
+in pertrai1/eslint-plugin-llm-core (MIT).
 
 INLINE COMMENTS:
   Checks both standalone comment lines and inline comments on code lines.
@@ -97,6 +105,63 @@ _SPACE_PREFIXES = {"non", "well", "step", "thread", "self", "read", "write",
                    "null", "empty"}
 
 
+COMMENT_WORD_CAP = 20
+
+# A comment matching any of these is earning its keep, so length and narration
+# both leave it alone. Ported from no-redundant-comments in
+# pertrai1/eslint-plugin-llm-core (MIT).
+_EXPLANATORY_RE = re.compile(
+    r"\b(because|so that|in order to|avoid|avoids|prevent|prevents|workaround"
+    r"|important|why|only|unless|until|race|bug|issue|security|compat"
+    r"|compatibility|must|cannot|can't|should|otherwise|note that|caveat"
+    r"|gotcha|todo|fixme|hack|deliberate|deliberately|on purpose)\b",
+    re.IGNORECASE,
+)
+
+# A comment opening with one of these is describing an action, which is what
+# the line under it already says.
+_NARRATION_VERBS = {
+    "assign", "build", "calculate", "call", "check", "compute", "create",
+    "delete", "fetch", "filter", "get", "handle", "initialize", "iterate",
+    "load", "loop", "map", "parse", "process", "render", "return", "save",
+    "send", "set", "sort", "update", "validate", "verify", "add", "remove",
+    "close", "open", "start", "stop", "clear", "reset", "read", "write",
+}
+
+_COMMENT_MARKER_RE = re.compile(r"^(?://+|#+)\s*")
+_CODE_LEAD_RE = re.compile(r"^[\s{}\[\]()]*([A-Za-z_$][\w$]*)")
+# `(` is excluded so a default or named argument (`fetchPage(size = 20)`) stays a
+# call, and `>` so an arrow function (`beforeEach(() => {`) does too. Both are
+# ExpressionStatement in the eslint rule this came from, never VariableDeclaration.
+_ASSIGN_RE = re.compile(r"^[^=!<>(]+(?<![=!<>+\-*/%&|^])=(?![=>])")
+_CALL_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
+
+_COND_VERBS = {"check", "verify", "validate", "test", "ensure"}
+_LOOP_VERBS = {"process", "loop", "iterate", "map", "filter", "sort"}
+_ASSIGN_VERBS = {
+    "assign", "build", "calculate", "compute", "create", "fetch", "get",
+    "initialize", "load", "parse", "set", "read",
+}
+
+
+def _inline_comment_index(stripped: str) -> int:
+    """Index of the inline // marker, or -1.
+
+    A regex literal such as /\\/\\//g puts a // inside the code, and taking the
+    first one glues the regex tail onto the front of the real comment. Skipping
+    a marker whose preceding char is a backslash covers the escaped slash case
+    without pretending to parse the language.
+    """
+    first = stripped.find("//")
+    idx = first
+    while idx > 0 and stripped[idx - 1] == "\\":
+        idx = stripped.find("//", idx + 1)
+    # Falling back to the first marker matters more than the skip does. Returning
+    # -1 here drops the comment from every check, dash block included, so an
+    # ambiguous line has to grab too much rather than nothing at all.
+    return idx if idx > 0 else first
+
+
 @dataclass
 class BlockFinding:
     comment: str
@@ -162,7 +227,7 @@ def extract_comment_texts(text: str) -> list[str]:
             texts.append(stripped)
             continue
 
-        idx = stripped.find("//")
+        idx = _inline_comment_index(stripped)
         if idx > 0:
             before = stripped[:idx]
             if before.rstrip().endswith(":") or before.rstrip().endswith("/"):
@@ -284,14 +349,144 @@ def check_banned_vocab(comments: list[str]) -> list[tuple[str, str]]:
     return out
 
 
-def get_new_content(payload: dict) -> str:
-    tool_input = payload.get("tool_input") or {}
-    if "new_string" in tool_input:
-        return tool_input["new_string"]
-    if "content" in tool_input:
-        return tool_input["content"]
-    if "edits" in tool_input:
-        parts = [e.get("new_string", "") for e in tool_input.get("edits", []) if isinstance(e, dict)]
+def extract_comment_code_pairs(text: str) -> list[tuple[str, str]]:
+    """Pair each comment with the code it describes.
+
+    Standalone comments pair with the next non blank, non comment line.
+    An inline comment pairs with the code to its left on the same line.
+    """
+    pairs: list[tuple[str, str]] = []
+    lines = text.splitlines()
+    in_triple = False
+    triple_char = ""
+    pending: list[int] = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if in_triple:
+            if triple_char in stripped:
+                in_triple = False
+            continue
+        for marker in ('"""', "'''"):
+            if stripped.count(marker) == 1:
+                in_triple = True
+                triple_char = marker
+                break
+        if in_triple:
+            continue
+
+        if stripped.startswith("//") or (stripped.startswith("#") and not stripped.startswith("#!")):
+            pending.append(i)
+            continue
+
+        if not stripped:
+            continue
+
+        idx = _inline_comment_index(stripped)
+        if idx > 0:
+            before = stripped[:idx]
+            if not (before.rstrip().endswith(":") or before.rstrip().endswith("/")):
+                q_double = before.count('"') - before.count('\\"')
+                q_single = before.count("'") - before.count("\\'")
+                if q_double % 2 == 0 and q_single % 2 == 0:
+                    pairs.append(("//" + stripped[idx + 2:], before.strip()))
+
+        for j in pending:
+            pairs.append((lines[j].strip(), stripped))
+        pending = []
+
+    return pairs
+
+
+def _comment_body(comment: str) -> str:
+    return _COMMENT_MARKER_RE.sub("", comment).strip()
+
+
+def _leading_verb(body: str) -> str:
+    word = re.split(r"[^A-Za-z']+", body.strip(), maxsplit=1)[0].lower()
+    if word in _NARRATION_VERBS:
+        return word
+    for suffix in ("es", "s", "ing"):
+        if word.endswith(suffix):
+            stem = word[: -len(suffix)]
+            if stem in _NARRATION_VERBS:
+                return stem
+            if suffix == "ing" and stem + "e" in _NARRATION_VERBS:
+                return stem + "e"
+    return ""
+
+
+def check_comment_length(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    out = []
+    for comment, _ in pairs:
+        body = _comment_body(comment)
+        if _EXPLANATORY_RE.search(body):
+            continue
+        words = len(body.split())
+        if words > COMMENT_WORD_CAP:
+            out.append((comment, f"{words} words, cap is {COMMENT_WORD_CAP}"))
+    return out
+
+
+def check_narration(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Flag a comment whose opening verb restates the line it sits on."""
+    out = []
+    for comment, code in pairs:
+        body = _comment_body(comment)
+        if len(body) < 8 or _EXPLANATORY_RE.search(body):
+            continue
+        verb = _leading_verb(body)
+        if not verb:
+            continue
+
+        lead_m = _CODE_LEAD_RE.match(code)
+        lead = lead_m.group(1).lower() if lead_m else ""
+        reason = ""
+
+        if lead == "return" and verb == "return":
+            reason = "'return' above a return statement"
+        elif lead in {"if", "elif", "switch"} and verb in _COND_VERBS:
+            reason = f"'{verb}' above a conditional"
+        elif lead in {"for", "foreach", "while"} and verb in _LOOP_VERBS:
+            reason = f"'{verb}' above a loop"
+        elif verb in _ASSIGN_VERBS and _ASSIGN_RE.match(code):
+            reason = f"'{verb}' above an assignment"
+        else:
+            for callee in _CALL_RE.findall(code):
+                if verb in callee.lower():
+                    reason = f"'{verb}' above a call to {callee}"
+                    break
+
+        if reason:
+            out.append((comment, f"restates the code: {reason}"))
+    return out
+
+
+def get_new_content(payload: object) -> str:
+    """Pull the written text out of the payload, or "" for any other shape.
+
+    Every field is type checked rather than trusted. A PostToolUse hook that
+    raises on an unexpected payload prints a traceback on a write that was
+    perfectly fine, so an unreadable payload has to mean no check, not a crash.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return ""
+
+    for key in ("new_string", "content"):
+        value = tool_input.get(key)
+        if isinstance(value, str):
+            return value
+
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        parts = [
+            e["new_string"] for e in edits
+            if isinstance(e, dict) and isinstance(e.get("new_string"), str)
+        ]
         return "\n".join(parts)
     return ""
 
@@ -344,38 +539,57 @@ def main() -> int:
         print("\n".join(lines), file=sys.stderr)
         return 2
 
-    if len(comments) < 3:
-        return 0
-
     nudge_lines: list[str] = []
+    pairs = extract_comment_code_pairs(content)
 
-    formal = check_formal_opener(comments)
-    if formal:
-        nudge_lines.append("[formal-opener] Comments starting with 'This [noun]':")
-        for i, (orig, sug) in enumerate(formal, 1):
+    verbose = check_comment_length(pairs)
+    if verbose:
+        nudge_lines.append("[comment-length] Over the one line budget. Cut to the why, or delete:")
+        for i, (orig, why) in enumerate(verbose, 1):
             nudge_lines.append(f"  COMMENT {i}")
             nudge_lines.append(f"  {'Original':<10}: {orig}")
-            nudge_lines.append(f"  {'Rewrite':<10}: {sug}")
+            nudge_lines.append(f"  {'Issue':<10}: {why}")
+            nudge_lines.append(f"  {'Rewrite':<10}: [one line, or drop it]")
             nudge_lines.append("")
 
-    banned = check_banned_vocab(comments)
-    if banned:
-        nudge_lines.append("[banned-vocab] Comments with banned vocabulary:")
-        for i, (orig, sug) in enumerate(banned, 1):
+    narrated = check_narration(pairs)
+    if narrated:
+        nudge_lines.append("[comment-narration] Comment repeats the line under it. Delete it or say why:")
+        for i, (orig, why) in enumerate(narrated, 1):
             nudge_lines.append(f"  COMMENT {i}")
             nudge_lines.append(f"  {'Original':<10}: {orig}")
-            nudge_lines.append(f"  {'Rewrite':<10}: {sug}")
+            nudge_lines.append(f"  {'Issue':<10}: {why}")
+            nudge_lines.append(f"  {'Rewrite':<10}: [delete, or replace with the reason]")
             nudge_lines.append("")
 
-    for label, msg in [
-        ("complete-sentence-uniformity", check_complete_sentence_uniformity(comments)),
-        ("spacing-uniformity", check_spacing_uniformity(comments)),
-        ("structural-uniformity", check_structural_uniformity(comments)),
-    ]:
-        if msg:
-            nudge_lines.append(f"[{label}] {msg}")
-            nudge_lines.append("  No per-comment form needed. Vary structure naturally.")
-            nudge_lines.append("")
+    if len(comments) >= 3:
+        formal = check_formal_opener(comments)
+        if formal:
+            nudge_lines.append("[formal-opener] Comments starting with 'This [noun]':")
+            for i, (orig, sug) in enumerate(formal, 1):
+                nudge_lines.append(f"  COMMENT {i}")
+                nudge_lines.append(f"  {'Original':<10}: {orig}")
+                nudge_lines.append(f"  {'Rewrite':<10}: {sug}")
+                nudge_lines.append("")
+
+        banned = check_banned_vocab(comments)
+        if banned:
+            nudge_lines.append("[banned-vocab] Comments with banned vocabulary:")
+            for i, (orig, sug) in enumerate(banned, 1):
+                nudge_lines.append(f"  COMMENT {i}")
+                nudge_lines.append(f"  {'Original':<10}: {orig}")
+                nudge_lines.append(f"  {'Rewrite':<10}: {sug}")
+                nudge_lines.append("")
+
+        for label, msg in [
+            ("complete-sentence-uniformity", check_complete_sentence_uniformity(comments)),
+            ("spacing-uniformity", check_spacing_uniformity(comments)),
+            ("structural-uniformity", check_structural_uniformity(comments)),
+        ]:
+            if msg:
+                nudge_lines.append(f"[{label}] {msg}")
+                nudge_lines.append("  No per-comment form needed. Vary structure naturally.")
+                nudge_lines.append("")
 
     if nudge_lines:
         out = ["[comment-humanness] Style issues found. Review and rewrite where needed.", ""]

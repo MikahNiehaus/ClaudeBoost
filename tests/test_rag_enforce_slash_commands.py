@@ -46,6 +46,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -679,16 +680,35 @@ def _fake_server(status_body=b"{}", search_body=b"{}"):
         thread.join(timeout=5)
 
 
-def run_hook_against_server(port, home, prompt, transcript_path=None):
+def run_hook_against_server(
+    port, home, prompt, transcript_path=None, search=True, session_id=None
+):
     """Drive the real hook with a fake clean-rag on `port`.
 
     cwd is the repo root so the hook finds a real git root, which is what makes
     the /status project-index branch run at all.
+
+    CLEAN_RAG_PROMPT_SEARCH is set explicitly rather than inherited. The hook no
+    longer searches on every message, because a keyword extracted query has no
+    judgment behind it and the project measured that a score threshold does not
+    catch the wrong answers. The result handling it guards is still worth
+    testing, so the tests that test it ask for it by name. Pass search=False to
+    exercise the default.
+
+    The session id is unique per call unless one is named. A fixed one silently
+    broke isolation once the hook started emitting its fixed blocks only once
+    per session: the second test in a run got an empty injection, so results
+    depended on test order and on state files left behind by earlier runs. Pass
+    session_id only when the test needs to look the record up afterwards.
     """
     env = dict(os.environ)
     env["CLEAN_RAG_HOME"] = str(home)
     env["CLEAN_RAG_PORT"] = str(port)
-    payload = {"session_id": "s", "prompt": prompt}
+    env["CLEAN_RAG_PROMPT_SEARCH"] = "1" if search else "0"
+    payload = {
+        "session_id": session_id or f"test-{uuid.uuid4().hex}",
+        "prompt": prompt,
+    }
     if transcript_path is not None:
         payload["transcript_path"] = str(transcript_path)
     proc = subprocess.run(
@@ -785,7 +805,10 @@ def test_an_unreadable_status_still_opens_the_turn_record(tmp_path, monkeypatch)
     status must not cost the turn its record. This is the test a blanket
     try/except around main() would fail."""
     with _fake_server(status_body=b"null") as port:
-        code, _, _ = run_hook_against_server(port, tmp_path, "fix the bug")
+        # Named, because the assertion below looks the record up by this id.
+        code, _, _ = run_hook_against_server(
+            port, tmp_path, "fix the bug", session_id="s"
+        )
     assert code == 0
 
     monkeypatch.setenv("CLEAN_RAG_HOME", str(tmp_path))

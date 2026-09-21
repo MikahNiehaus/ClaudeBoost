@@ -42,6 +42,7 @@ except ImportError:  # noqa: BLE001 - the message matters more than the tracebac
 from rich.text import Text  # noqa: E402
 
 from cli.log_tail import LogTail  # noqa: E402
+from cli.single_instance import already_running  # noqa: E402
 from server.config import STANDALONE_PORT, STATE_DIR  # noqa: E402
 
 BASE_URL = f"http://127.0.0.1:{STANDALONE_PORT}"
@@ -97,7 +98,27 @@ def _state_of(entry: dict, busy_path: str) -> Text:
     path = entry.get("project_path", "")
     if busy_path and path and Path(busy_path) == Path(path):
         return Text("INDEXING", style="bold yellow")
-    if not entry.get("files_indexed"):
+
+    # files_total, not files_indexed. files_indexed counts one run, so a
+    # project whose last sweep found nothing changed wrote 0 and rendered
+    # EMPTY while holding thousands of vectors. AscendMobile showed EMPTY on
+    # 1,072 vectors and 1,486 edges. The column headers at :356 were renamed
+    # to "Run files" after the same misreading, and this cell was missed.
+    #
+    # /status omits files_total when it could not read the project's manifest,
+    # so the fallback runs on an unreadable manifest and nothing else.
+    # chunks_created and the graph counts are both real liveness signals, and a
+    # project with neither and no run count really is empty.
+    total = entry.get("files_total")
+    if total is None:
+        graph = entry.get("graph") or {}
+        total = (
+            entry.get("files_indexed")
+            or entry.get("chunks_created")
+            or graph.get("pagerank_nodes")
+            or graph.get("edges_total")
+        )
+    if not total:
         return Text("EMPTY", style="bold red")
     return Text("INDEXED", style="green")
 
@@ -543,19 +564,31 @@ class ConsoleApp(App):
             self.notify("Indexing resumed.")
             return
 
-        # Says "released", not "freed". Measured 2026-09-17: evicting drops RSS
-        # by about 4 MB, because torch pools freed blocks rather than returning
-        # them. What eviction buys is a ceiling, since the next load reuses that
-        # pool, not memory back now.
-        freed = len((body or {}).get("models_evicted") or [])
+        # The message says evicted and names the limit out loud, because torch
+        # pools the blocks it frees rather than handing them back. Measured
+        # 2026-09-17: evicting drops RSS by about 4 MB. What eviction buys is a
+        # ceiling, since the next load reuses that pool, not memory back now.
+        # An earlier version said "released", which reads as "freed" and sent
+        # someone to Task Manager expecting gigabytes.
+        evicted = len((body or {}).get("models_evicted") or [])
         still = (body or {}).get("indexing_project") or ""
-        msg = f"Indexing paused. {freed} model(s) released."
+        msg = (
+            f"Indexing paused. {evicted} model(s) evicted, which caps growth. "
+            "RAM already in use will not drop much."
+        )
         if still:
             msg += f" {Path(still).name} finishes first."
         self.notify(msg, timeout=7)
 
 
 def main() -> int:
+    if already_running(_CLEAN_RAG_HOME):
+        print(
+            "A clean-rag console is already open for this checkout. "
+            "Switch to that window instead of opening a second one.",
+            file=sys.stderr,
+        )
+        return 0
     ConsoleApp().run()
     return 0
 

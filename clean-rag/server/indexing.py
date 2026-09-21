@@ -283,6 +283,22 @@ def release_index_lock() -> None:
 #: ever equal this.
 UNREADABLE_SENTINEL = "__unreadable__"
 
+#: The manifest keys _save_project_manifest owns. Every other key in a
+#: manifest is a project relative file path from _rel_path.
+#:
+#: Matched by exact name and never by the __dunder__ shape, because real file
+#: paths carry that shape too: __tests__/Foo.test.js is the Jest layout, and 71
+#: of those keys sit in the AscendMobile manifest alone. Exact names cannot
+#: collide, since every manifest key ends in a CODE_EXTENSIONS suffix and none
+#: of these hold a dot.
+MANIFEST_METADATA_KEYS = frozenset({
+    "__project_path__",
+    "__pipeline_version__",
+    "__model_id__",
+    "__embedding_dim__",
+    "__incomplete__",
+})
+
 
 def file_hash(content: str) -> str:
     """SHA-256 hash prefix for change detection."""
@@ -492,7 +508,7 @@ def _save_project_manifest(
     if manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            prior = {k: v for k, v in raw.items() if k.startswith("__")}
+            prior = {k: v for k, v in raw.items() if k in MANIFEST_METADATA_KEYS}
         except Exception:
             prior = {}
 
@@ -528,6 +544,8 @@ def read_project_provenance(project_path: str) -> dict:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         return {"model_id": None, "embedding_dim": None}
+    if not isinstance(raw, dict):
+        return {"model_id": None, "embedding_dim": None}
     return {
         "model_id": raw.get("__model_id__"),
         "embedding_dim": raw.get("__embedding_dim__"),
@@ -550,6 +568,11 @@ def index_is_incomplete(project_path: str) -> bool:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         logger.error("Manifest unreadable for %s: %s", project_path, e)
+        return False
+    if not isinstance(raw, dict):
+        logger.error(
+            "Manifest root for %s is %s, not an object", project_path, type(raw).__name__
+        )
         return False
     return bool(raw.get("__incomplete__"))
 
@@ -729,7 +752,9 @@ def index_project(
                     stored_version, PIPELINE_VERSION, project_path,
                 )
                 force = True
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1092,6 +1117,7 @@ def index_project(
         _update_project_registry(
             pid, str(project_root), files_indexed, chunks_created,
             graph_stats=graph_stats,
+            files_total=manifest_file_count(manifest),
         )
 
         # Reclaim any free pages after the bulk delete+insert cycle.
@@ -1168,7 +1194,9 @@ def drop_manifest_key(project_path: str, rel_path: str) -> dict:
     if manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1284,7 +1312,9 @@ def reindex_file(
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
             stored_model_id = raw.get("__model_id__")
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1460,34 +1490,78 @@ def reindex_file(
 def _update_project_registry(
     pid: str,
     project_path: str,
-    files_indexed: int,
-    chunks_created: int,
+    files_indexed: int | None = None,
+    chunks_created: int | None = None,
     graph_stats: dict | None = None,
+    files_total: int | None = None,
 ) -> None:
-    """Update state/projects.json with current project stats."""
+    """Update state/projects.json with current project stats.
+
+    Merges into the stored entry instead of replacing it, and every stat is
+    optional so a caller writes only what it actually measured. This shape is
+    load bearing, not tidiness. The previous version built a fresh dict and
+    assigned it, adding "graph" only when graph_stats was truthy, so any
+    partial writer erased the graph counts for that project.
+
+    index_project (indexing.py:1117) is the only caller today, and it writes
+    every stat. The merge is what makes the first partial caller safe rather
+    than a silent eraser of the graph counts, so it stays.
+
+    files_indexed and chunks_created count one run, never the project, which
+    is why the console labels them "Run files" and "Run chunks".
+
+    files_total is the cumulative count: how many files the index holds,
+    which is the manifest length minus MANIFEST_METADATA_KEYS. index_project
+    records it here as the last known value. /status does not read it, and
+    recomputes from the manifest instead, so a reader is never handed a number
+    this function wrote before the manifest moved underneath it.
+    """
     registry_path = STATE_DIR / "projects.json"
     registry: dict = {}
     if registry_path.exists():
         try:
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        except Exception:
-            registry = {}
+            parsed = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Project registry unreadable, starting a new one: %s", e)
+        else:
+            # A root that is not an object is as unusable as one that would
+            # not parse, and the branch above already starts over from empty
+            # for that. Without this, .get below raised and lost a whole index
+            # run at its last step, after every file was already embedded.
+            if isinstance(parsed, dict):
+                registry = parsed
+            else:
+                logger.warning(
+                    "Project registry root is %s, not an object. Starting a new one.",
+                    type(parsed).__name__,
+                )
 
-    entry = {
+    prior = registry.get(pid)
+    entry = dict(prior) if isinstance(prior, dict) else {}
+    entry.update({
         "project_path": project_path,
         "source": "clean-rag",
         "server": "http://127.0.0.1:8613",
-        "files_indexed": files_indexed,
-        "chunks_created": chunks_created,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if graph_stats:
-        entry["graph"] = graph_stats
+    })
+    for key, value in (
+        ("files_indexed", files_indexed),
+        ("chunks_created", chunks_created),
+        ("files_total", files_total),
+        ("graph", graph_stats or None),
+    ):
+        if value is not None:
+            entry[key] = value
 
     registry[pid] = entry
 
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+
+def manifest_file_count(manifest: dict) -> int:
+    """How many real files a manifest holds, ignoring the metadata keys."""
+    return sum(1 for key in manifest if key not in MANIFEST_METADATA_KEYS)
 
 
 def _clear_readonly_and_retry(func, path, _exc):

@@ -22,14 +22,23 @@ every loaded module that holds a real STATE_DIR or DATABASES_DIR, not only the
 one whose handler is under test. Patching app.py alone was not enough and is
 the trap that fixture's docstring describes.
 """
+from __future__ import annotations
+
 import ast
 import asyncio
+import builtins
+import contextlib
 import functools
+import importlib
 import inspect
+import io
 import json
+import os
+import stat
 import sys
 import textwrap
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from aiohttp import web
@@ -418,7 +427,7 @@ _REGISTRY_WRITER = "_update_project_registry"
 #: /delete-project made the same argument from inside the server package and a
 #: route, the sentence was all there was to appeal to. So it is a rule now:
 #: every name here has to pass test_a_removal_only_writer_really_cannot_add,
-#: which reads its source and fails if it can put an entry in.
+#: which runs it against a scratch registry and fails if a key appears.
 #:
 #: Adding a name here is not a formality. It widens what may touch the file
 #: that gates code execution.
@@ -427,62 +436,513 @@ _REMOVAL_ONLY_WRITERS = {
 }
 
 
-#: The node types a removal only writer may be built out of. Everything else,
-#: including whatever a later grammar adds, reads as able to add an entry.
-#: Taken from what _remove_from_project_registry actually contains: widening
-#: this list is a decision about the exec route allowlist, so it should cost a
-#: red test and a moment's thought.
-_ADD_FREE_NODES = frozenset({
-    ast.Assign, ast.Attribute, ast.BinOp, ast.BoolOp, ast.Call, ast.Compare,
-    ast.Constant, ast.Continue, ast.Del, ast.Delete, ast.Dict, ast.Div,
-    ast.Eq, ast.ExceptHandler, ast.Expr, ast.For, ast.FunctionDef, ast.If,
-    ast.IfExp, ast.List, ast.Load, ast.Name, ast.Not, ast.Or, ast.Return,
-    ast.Store, ast.Subscript, ast.Try, ast.Tuple, ast.UnaryOp, ast.arg,
-    ast.arguments, ast.keyword,
-})
+def _registry_keys(registry_path: Path) -> set[str]:
+    """The pids the exec route gate could match in this registry file.
 
-#: The calls it may make. A call is opaque to this check, so the name at the
-#: call site is the whole of it: `dict.__setitem__`, `operator.setitem` and a
-#: helper that does the same thing are indistinguishable from the outside.
-_ADD_FREE_CALLS = frozenset({
-    "Path", "append", "dumps", "exists", "get", "isinstance", "items",
-    "list", "loads", "read_text", "resolve", "write_text",
-})
+    Follows app._list_projects (app.py:1506) for a missing or unparseable
+    file, empty either way, because a key the gate cannot read is not a
+    membership anyone can spend.
 
-
-def _can_add_a_registry_entry(tree) -> bool:
-    """Whether this function might put an entry into the registry mapping.
-
-    Deny by default. It returns True for anything it does not positively
-    recognise as add free, which is the shape ast.literal_eval uses: a fixed
-    set of node types it understands, and a rejection for everything else.
-
-    An allowlist of ways to ADD is unsound by construction, and this one was:
-    `registry = {**registry, pid: entry}`, `dict.__setitem__(registry, ...)`
-    and `operator.setitem(registry, ...)` each put a key in, and each read as
-    clean against a check that knew only subscript stores, `update` and
-    `setdefault`. There is no finite list of spellings to catch, so the
-    question has to be asked the other way round.
-
-    Over approximates, on purpose and now much harder: an unrecognised call or
-    statement anywhere in the function counts, even against an unrelated dict.
-    That direction costs a loud failure on a false positive and never a silent
-    pass on a real one, which is the same trade the route walk above documents.
+    Diverges from it deliberately on one shape. _list_projects hands back
+    whatever json.loads produced, so a registry holding a JSON list comes back
+    as a list; _registered_project_or_error then calls .values() on it and
+    raises, which grants nobody anything. Membership is what this counts, so a
+    registry that is not a mapping counts zero.
+    test_a_removal_only_writer_really_cannot_add holds
+    the two readers against each other everywhere they should agree.
     """
-    for node in ast.walk(tree):
-        if type(node) not in _ADD_FREE_NODES:
+    try:
+        loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return set(loaded) if isinstance(loaded, dict) else set()
+
+
+def _seed_registry(registry_path: Path, seed) -> None:
+    """Put *seed* in the registry file before a writer runs.
+
+    None leaves the file absent. A string is written verbatim, which is how a
+    malformed registry gets driven.
+    """
+    if seed is None:
+        return
+    text = seed if isinstance(seed, str) else json.dumps(seed, indent=2)
+    registry_path.write_text(text, encoding="utf-8")
+
+
+#: Both names for the same function object. They are separate module
+#: attributes, so a writer reaching either one needs both replaced.
+_OPEN_BINDINGS = ((builtins, "open"), (io, "open"))
+
+#: Audit events that mean the registry file is about to change, so what a
+#: reader would see right now is worth recording. PEP 578 raises ``open`` from
+#: every open path including os.open, and ``os.rename`` covers the write to a
+#: temp file and rename over the target.
+_TOUCH_EVENTS = frozenset({"open", "os.rename", "os.remove"})
+
+#: Audit events that hand the writing to something no hook here can watch.
+_OPAQUE_EVENTS = frozenset({
+    "subprocess.Popen", "os.system", "os.exec", "os.spawn", "os.posix_spawn",
+})
+
+#: The armed _RegistryWatch, or None. Global because an audit hook is global.
+_WATCH = None
+_AUDIT_HOOK_INSTALLED = False
+
+
+#: Why a path yields no identity. The two are kept apart because they earn
+#: opposite answers: a path that names nothing cannot be mistaken for the
+#: registry, while a path the filesystem refuses to describe might be it.
+_NAMES_NOTHING = object()
+_WILL_NOT_SAY = object()
+
+
+class _FileKey(NamedTuple):
+    """What one os.stat says about which object a path names.
+
+    ``ino`` is 0 whenever the filesystem mints no file id, which is what a
+    character device, a CIFS share (python/cpython#105212) and a file the
+    process cannot open (python/cpython#111877) all report. ``kind`` is the
+    S_IFMT file type, and it survives a missing id, which is what makes a
+    device distinguishable from a file.
+    """
+
+    kind: int
+    dev: int
+    ino: int
+
+
+def _file_key(path: str):
+    """What os.stat says about *path*, or why it says nothing.
+
+    A filesystem can always mint another string for a file it already has: a
+    hard link, a junction, an 8.3 short name, a trailing dot. os.stat follows
+    every one of them and reports the pair os.path.samefile compares, so two
+    spellings of one file give one key where string equality gives two.
+
+    Same shape as hooks/rag-enforce.py:_same_dir_key, which answered this for
+    directories. It folds "no file id" into "no key"; here the two are kept
+    apart, because this caller has to fail closed on a missing id rather than
+    ignore the path.
+    """
+    try:
+        st = os.stat(path)
+    except PermissionError:
+        return _WILL_NOT_SAY
+    except (OSError, ValueError):
+        return _NAMES_NOTHING
+    return _FileKey(stat.S_IFMT(st.st_mode), st.st_dev, st.st_ino)
+
+
+def _same_object(mine: _FileKey, theirs: _FileKey):
+    """Do two keys name one object? None when the filesystem will not say.
+
+    Microsoft's rule for the ids behind st_dev and st_ino is to "combine the
+    identifier and the volume serial number for each file and compare them",
+    and that "file systems that do not support file IDs return zero"
+    (BY_HANDLE_FILE_INFORMATION). A zero id is therefore an absence and never
+    a value to compare, which is the step os.path.samestat skips when it calls
+    two such files identical.
+
+    The type is what still decides when an id is missing, because one object
+    reports one type through every spelling of it. os.devnull is a character
+    device with no id at all, so it is decidably not a registry file the
+    volume identifies perfectly well.
+    """
+    if mine.kind != theirs.kind:
+        return False
+    if not mine.ino or not theirs.ino:
+        return None
+    return (mine.dev, mine.ino) == (theirs.dev, theirs.ino)
+
+
+def _names_path(candidate, watch) -> bool:
+    """Is this audit argument the registry file, in whatever spelling?
+
+    An int is a file descriptor, which no path compares against. Whatever
+    opened it raised its own ``open`` event carrying the real path, so
+    ignoring it here loses nothing.
+    """
+    try:
+        spelled = os.path.normcase(os.path.abspath(os.fsdecode(candidate)))
+    except (TypeError, ValueError):
+        return False
+    return spelled == watch.normalized_path or watch.is_the_registry(spelled)
+
+
+def _audit_registry_access(event, args):
+    """Record what the registry file holds whenever something touches it.
+
+    Never raises. An exception from an audit hook aborts the operation that
+    raised the event, which would break unrelated code in this process for the
+    rest of the session, so a failure here is recorded and surfaced by the
+    check instead.
+    """
+    watch = _WATCH
+    if watch is None:
+        return
+    try:
+        watch.note_audit(event, args)
+    except BaseException as exc:  # noqa: BLE001 - see the docstring
+        watch.unobserved.append(f"the audit hook raised {exc!r} on {event}")
+
+
+#: Captured before anything is patched, so delegating cannot come back here.
+_REAL_OPEN = io.open
+
+
+def _watched_open(*args, **kwargs):
+    """``open`` for the armed window, wrapping handles on the registry file."""
+    watch = _WATCH
+    real = _REAL_OPEN if watch is None else watch.open_without_watching
+    if watch is None or watch.reading or not args:
+        return real(*args, **kwargs)
+    if not _names_path(args[0], watch):
+        return real(*args, **kwargs)
+    watch.expecting_open = True
+    try:
+        handle = real(*args, **kwargs)
+    finally:
+        watch.expecting_open = False
+    try:
+        writable = handle.writable()
+    except Exception:  # noqa: BLE001 - an object that cannot say is watched
+        writable = True
+    return _WatchedHandle(handle, watch) if writable else handle
+
+
+class _WatchedHandle:
+    """A file handle that records the registry after every write it makes.
+
+    Writes on one open handle raise no audit event, so this is the only way to
+    see a state that exists between two of them. Probed on Windows: a second
+    reader really can read that content while the handle is still open, which
+    is what makes it a state worth catching rather than a theoretical one.
+
+    A handle can also be escaped rather than written through. Reaching for the
+    descriptor or the underlying buffer puts the writing somewhere this cannot
+    follow, so those are recorded as unobserved rather than allowed to look
+    clean.
+    """
+
+    _SNAPSHOT_AFTER = frozenset({"write", "writelines", "truncate", "flush", "close"})
+    _ESCAPES = frozenset({"detach", "fileno", "buffer", "raw"})
+
+    def __init__(self, handle, watch):
+        self._handle = handle
+        self._watch = watch
+
+    def __getattr__(self, name):
+        attr = getattr(self._handle, name)
+        if name in self._ESCAPES:
+            self._watch.unobserved.append(
+                f"the writer took .{name} off the open registry handle, so "
+                f"what it wrote through that is not visible here"
+            )
+            return attr
+        if name not in self._SNAPSHOT_AFTER or not callable(attr):
+            return attr
+
+        def snapshotting(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                self._watch.snapshot()
+
+        return snapshotting
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *exc_info):
+        try:
+            return self._handle.__exit__(*exc_info)
+        finally:
+            self._watch.snapshot()
+
+    def __iter__(self):
+        return iter(self._handle)
+
+
+class _RegistryWatch:
+    """Every set of keys the registry file holds at any point during a run.
+
+    Before against after is not enough, and the gap is not theoretical.
+    delete_project_index hands the writer to loop.run_in_executor, so the
+    event loop keeps serving requests while it runs. A key that exists on disk
+    only between two writes is a key a concurrent /run-tests can read through
+    _registered_project_or_error and spend. It is gone by the time the call
+    returns, so a check that only compares the ends reports nothing added.
+
+    Two channels, because neither covers the other:
+
+    * The audit hook records the file at every audited touch of it. That
+      catches whatever a previous operation left settled, whichever API wrote
+      it, including a writer that renames a temp file over the target.
+    * The wrapped handle records it after every write, truncate, flush and
+      close, which raise no audit event at all.
+
+    Both channels first have to recognise a touch as a touch of this file, and
+    they ask ``_file_key`` rather than comparing path strings. A filesystem can
+    always spell one file more than one way, so a string comparison is
+    incomplete by construction: a hard link, a junction or an 8.3 short name
+    reaches the registry under a name no normalizer folds, and the watch used
+    to hand those straight through to the real ``open`` unwrapped.
+
+    Together they are deterministic: no polling, no second thread, no window
+    that depends on timing. Anything neither channel can see is recorded in
+    ``unobserved`` and fails the check rather than passing quietly, so a
+    writer using os.open, escaping the handle, or spawning a process to do the
+    writing gets a red test naming what could not be watched. A path the
+    filesystem will not identify is recorded the same way, because "a
+    different file" and "I will not say" cannot both mean a pass. They are
+    also not the same answer: a device or a directory is a different object
+    whatever its file id says, and only a volume that identifies nothing
+    leaves a real file undecidable, which is settled once when the watch arms
+    rather than blamed on whichever unrelated path came past. Sizing the
+    guarantee to what is actually observed is the whole point: the shape this
+    replaced answered "nothing added" for writes it never looked at.
+    """
+
+    def __init__(self, registry_path: Path):
+        self.registry_path = registry_path
+        self.normalized_path = os.path.normcase(os.path.abspath(registry_path))
+        self.normalized_name = os.path.basename(self.normalized_path)
+        self.states: list[set[str]] = []
+        self.unobserved: list[str] = []
+        #: Set while this class reads the file itself, so its own reads are
+        #: neither counted as the writer's nor recursed into.
+        self.reading = False
+        self.expecting_open = False
+        self.open_without_watching = io.open
+        #: Whether this filesystem identifies the registry at all, settled
+        #: once when the watch arms.
+        self.identifiable = True
+
+    def is_the_registry(self, spelled: str) -> bool:
+        """Does a path spelled unlike the registry's own still name that file?
+
+        Reached only once string equality has said no, because identity costs
+        two stat calls and string equality answers almost every touch.
+        """
+        # A volume with no file ids already failed this run at arm time.
+        # Asking it again per path buries that one line under one more for
+        # every unrelated file the writer opens.
+        if not self.identifiable:
+            return False
+        mine = _file_key(self.normalized_path)
+        theirs = _file_key(spelled)
+        if mine is _WILL_NOT_SAY or theirs is _WILL_NOT_SAY:
+            self.note_undecidable(spelled)
             return True
-        # `del registry[pid]` is a subscript too, so the context is what
-        # separates taking a key out from putting one in.
-        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+        if mine is _NAMES_NOTHING or theirs is _NAMES_NOTHING:
+            return self._same_directory_entry(spelled)
+        same = _same_object(mine, theirs)
+        if same is None:
+            self.note_undecidable(spelled)
             return True
-        # An empty `{}` is a default to read through. A dict display with any
-        # key in it, `**` unpacking included, is an entry being built.
-        if isinstance(node, ast.Dict) and node.keys:
+        return same
+
+    def _same_directory_entry(self, spelled: str) -> bool:
+        """Identity for a path with no file behind it yet.
+
+        A writer creating the registry reaches this, and so does every touch
+        while the registry is absent. Nothing outside the registry's own
+        directory can become the registry, and inside it only the registry's
+        own name can, because an alias has to alias something that exists.
+        """
+        mine = _file_key(os.path.dirname(self.normalized_path))
+        theirs = _file_key(os.path.dirname(spelled))
+        if mine is _WILL_NOT_SAY or theirs is _WILL_NOT_SAY:
+            self.note_undecidable(spelled)
             return True
-        if isinstance(node, ast.Call) and _called_name(node) not in _ADD_FREE_CALLS:
+        if mine is _NAMES_NOTHING or theirs is _NAMES_NOTHING:
+            return False
+        same = _same_object(mine, theirs)
+        if same is None:
+            self.note_undecidable(spelled)
             return True
-    return False
+        return same and os.path.basename(spelled) == self.normalized_name
+
+    def note_if_the_volume_has_no_file_ids(self) -> None:
+        """Settle whether this filesystem identifies the registry at all.
+
+        A volume that reports st_ino 0 for everything (FAT, a CIFS share:
+        python/cpython#105212) cannot tell an alias of the registry from any
+        other path on it, so the honest answer is to refuse the run and say
+        which volume. Per path it would instead name whichever unrelated file
+        the writer happened to open, which is the same refusal read as an
+        accusation against the wrong file.
+
+        It does NOT settle every case, and the word "once" used to claim it
+        did. When neither the registry nor its parent directory exists yet,
+        there is nothing to stat, so this returns leaving `identifiable` at its
+        default and writes no note. That is safe rather than lucky, for two
+        reasons worth stating because the gap looks alarming otherwise.
+        `is_the_registry` derives the key again on every call and still routes
+        a zero id through `_same_object` to `note_undecidable`, so per path
+        detection never goes stale. And neither real writer can reach it:
+        `_update_project_registry` (indexing.py:1489) runs
+        `parent.mkdir(parents=True, exist_ok=True)` before it writes, so the
+        directory exists by the first audited touch, and
+        `_remove_from_project_registry` (indexing.py:1719) returns early when
+        the registry is absent and creates nothing.
+
+        One limit no audit hook design escapes, recorded so nobody reads the
+        two channels as total coverage: a writer reaching Win32 `CreateFileW`
+        through ctypes or pywin32 raises no PEP 578 event at all, so a
+        transient add through one would go unseen. Both real writers use
+        `Path.read_text` and `Path.write_text`, which do raise it.
+        """
+        key = _file_key(self.normalized_path)
+        if key is _NAMES_NOTHING:
+            key = _file_key(os.path.dirname(self.normalized_path))
+        if key is _NAMES_NOTHING:
+            return
+        self.identifiable = isinstance(key, _FileKey) and bool(key.ino)
+        if not self.identifiable:
+            self.unobserved.append(
+                f"the filesystem gives {self.normalized_path!r} no file id of "
+                f"its own, so an alias of {self.registry_path.name} cannot be "
+                f"told from any other path on that volume and this check "
+                f"cannot run here"
+            )
+
+    def note_undecidable(self, spelled: str) -> None:
+        """Record a path the filesystem refused to identify, once per path.
+
+        The refusal is the whole point: "different file" and "I will not say"
+        are different answers, and only the first one earns a pass.
+        """
+        note = (
+            f"the filesystem would not say whether {spelled!r} is "
+            f"{self.registry_path.name}, so a write through it cannot be "
+            f"ruled out"
+        )
+        if note not in self.unobserved:
+            self.unobserved.append(note)
+
+    def snapshot(self) -> None:
+        if self.reading:
+            return
+        self.reading = True
+        try:
+            self.states.append(_registry_keys(self.registry_path))
+        finally:
+            self.reading = False
+
+    def note_audit(self, event, args) -> None:
+        if self.reading:
+            return
+        if event in _OPAQUE_EVENTS:
+            self.unobserved.append(
+                f"the writer raised {event}, and nothing here can see what "
+                f"another process wrote"
+            )
+            return
+        if event not in _TOUCH_EVENTS:
+            return
+        if not any(_names_path(arg, self) for arg in args):
+            return
+        self.snapshot()
+        if event == "open" and not self.expecting_open:
+            self.unobserved.append(
+                f"the registry file was opened by a route this does not wrap "
+                f"(audit args {args!r}), so writes through that handle are "
+                f"not visible here"
+            )
+
+    def added(self) -> set[str]:
+        """Keys that appeared at any observed instant, gone by the end or not."""
+        return set().union(*self.states) - self.states[0]
+
+    @contextlib.contextmanager
+    def armed(self):
+        global _WATCH
+        assert _WATCH is None, "a registry watch is already armed"
+        _install_audit_hook()
+        originals = [(mod, name, getattr(mod, name)) for mod, name in _OPEN_BINDINGS]
+        self.open_without_watching = io.open
+        self.note_if_the_volume_has_no_file_ids()
+        _WATCH = self
+        try:
+            for module, name in _OPEN_BINDINGS:
+                setattr(module, name, _watched_open)
+            self.snapshot()
+            yield self
+        finally:
+            for module, name, original in originals:
+                setattr(module, name, original)
+            _WATCH = None
+
+
+def _install_audit_hook() -> None:
+    """Add the audit hook the first time one is needed.
+
+    PEP 578: "Hooks cannot be removed or replaced." So there is exactly one,
+    for the life of the process, and it returns on a global read whenever no
+    watch is armed.
+    """
+    global _AUDIT_HOOK_INSTALLED
+    if not _AUDIT_HOOK_INSTALLED:
+        sys.addaudithook(_audit_registry_access)
+        _AUDIT_HOOK_INSTALLED = True
+
+
+def _keys_added_by(run, registry_path: Path) -> set[str]:
+    """Keys the registry file held at any point during ``run()``, minus its own.
+
+    The observed effect, not the source. Reading source for this was tried and
+    defeated five times: `registry = {**registry, pid: entry}`,
+    `dict.__setitem__`, `operator.setitem`, a local `get = registry.setdefault`
+    and a bare call to a `get` bound one scope up each put a key in, and each
+    reads as clean against a finite list of spellings. RestrictedPython says
+    the same of its own AST filter, that it "is not a sandbox system or a
+    security solution", and CPython took the word safe out of
+    ast.literal_eval's docs for the same reason (python/cpython#100305).
+
+    Comparing only the file before against the file after replaced one blind
+    spot with another: a writer that adds a key, writes it, then removes it and
+    writes again is reported clean, while the key sat readable on disk in
+    between. _RegistryWatch is what closes that, and its docstring says how far
+    the observation reaches.
+
+    Two limits, both real. It covers the inputs the caller drives and nothing
+    else, so a branch no drive reaches is unchecked and a writer nothing here
+    calls is unchecked entirely. And it watches one thread: the flag that keeps
+    its own reads out of the result is not thread local, so a drive that wrote
+    the registry from a second thread would need that made so first.
+
+    Neither limit is the one a path string used to add. Recognising the file
+    by identity rather than by spelling is what removed that one, and on a
+    volume that reports no inode the check now says so instead of reporting
+    nothing added.
+    """
+    watch = _RegistryWatch(registry_path)
+    with watch.armed():
+        run()
+    watch.snapshot()
+    assert not watch.unobserved, (
+        f"this check could not watch everything the run did to "
+        f"{registry_path.name}, so reporting no key was added would be a "
+        f"guess: {watch.unobserved}. Widen the observation rather than "
+        f"trusting it."
+    )
+    return watch.added()
+
+
+def _removal_only_writer(site: str):
+    """The module and the function behind a _REMOVAL_ONLY_WRITERS key."""
+    filename, func_name = site.split(":", 1)
+    package = app_mod.__name__.split(".")[0]
+    module = importlib.import_module(f"{package}.{Path(filename).stem}")
+    writer = getattr(module, func_name, None)
+    assert writer is not None, (
+        f"{site} is on the removal only allowlist but {filename} defines no "
+        f"{func_name}, so the exemption protects nothing"
+    )
+    return module, writer
 
 #: The only places in the server package allowed to name it: its own
 #: definition, and the indexing pipeline that calls it.
@@ -1107,43 +1567,105 @@ class TestOnlyIndexingCanRegisterAProject:
             f"be deleted: {sorted(stale)}"
         )
 
-    def test_a_removal_only_writer_really_cannot_add(self):
-        """The allowlist has to be earned, not asserted.
+    def test_a_removal_only_writer_really_cannot_add(
+        self, empty_registry, tmp_path, monkeypatch,
+    ):
+        """The allowlist is earned by running the writer, not by reading it.
 
         _REMOVAL_ONLY_WRITERS excuses a function from the one writer rule on
-        the grounds that it can only take entries out. Nothing checked that.
-        A name on a list is exactly the inert assertion the class docstring
-        above warns about: it pins a name, and the identical hole reopens the
-        day that function grows an assignment.
+        the grounds that it can only take entries out. This runs each one
+        against a seeded scratch registry and watches the file throughout the
+        call. No key may appear, in any spelling, including spellings nobody
+        has listed, and no key may appear only for part of the call either:
+        the writer runs in an executor thread while the event loop serves
+        other requests, so a key readable for an instant is a key that can be
+        spent. A source reading version of this check stood here first and was
+        defeated five times, once per spelling somebody thought of.
 
-        So this reads each allowlisted function's source and fails if it can
-        put an entry into a mapping at all. Adding `registry[pid] = entry` to
-        _remove_from_project_registry has to turn this red.
+        Its limit, said plainly because it is real: it covers the drives
+        below and nothing else. A branch no drive reaches is unchecked, and a
+        writer that lands on the allowlist without a drive here is unchecked
+        entirely. `expected_after` is the other half, so a writer that quietly
+        stopped removing cannot pass by doing nothing.
+
+        Nothing outside tmp_path is touched. empty_registry repoints every
+        loaded binding that resolves into the operator's own tree, each drive
+        gets its own scratch STATE_DIR below tmp_path, and _assert_isolated
+        runs again after the writers resolve in case importing one carried a
+        real path back in.
         """
-        package_dir = Path(app_mod.__file__).parent
-        offenders = {}
+        victim = tmp_path / "Indexed"
+        victim.mkdir()
+        bystander = tmp_path / "AlsoIndexed"
+        bystander.mkdir()
+        populated = {
+            "victim-pid": {"project_path": str(victim), "source": "clean-rag"},
+            "bystander-pid": {"project_path": str(bystander), "source": "clean-rag"},
+        }
 
-        for site in sorted(_REMOVAL_ONLY_WRITERS):
-            filename, func_name = site.split(":", 1)
-            tree = ast.parse((package_dir / filename).read_text(encoding="utf-8"))
-            found = [
-                n for n in ast.walk(tree)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and n.name == func_name
+        # Label, what the registry holds, the path the writer is handed, and
+        # the pids that must remain. The first drive is the one that reaches
+        # the write; every other returns early, and a check that ran only
+        # those would never touch the code that puts bytes in the file.
+        drives = [
+            ("removes its own entry", populated, str(victim), {"bystander-pid"}),
+            ("matches nothing", populated, str(tmp_path / "Never"), set(populated)),
+            ("empty registry", {}, str(victim), set()),
+            ("no registry file", None, str(victim), set()),
+            ("registry is not a mapping", ["victim-pid"], str(victim), set()),
+            ("registry is malformed", "{not json", str(victim), set()),
+            ("empty path", populated, "", set(populated)),
+        ]
+
+        for site_index, site in enumerate(sorted(_REMOVAL_ONLY_WRITERS)):
+            module, writer = _removal_only_writer(site)
+            _assert_isolated()
+            required = [
+                p for p in inspect.signature(writer).parameters.values()
+                if p.default is inspect.Parameter.empty
             ]
-            assert found, (
-                f"{site} is on the removal only allowlist but no such function "
-                f"exists, so the exemption protects nothing"
+            assert len(required) == 1, (
+                f"{site} does not take one project path, so the drives below "
+                f"never exercise it. Extend them rather than leaving an "
+                f"allowlist entry unchecked: {[p.name for p in required]}"
             )
-            for node in found:
-                if _can_add_a_registry_entry(node):
-                    offenders[site] = "assigns into a mapping"
 
-        assert not offenders, (
-            "a function allowlisted as removal only can add an entry to "
-            "state/projects.json, which is the exec route allowlist. That is "
-            f"the self service registration hole reopening: {offenders}"
-        )
+            for index, (label, seed, argument, expected_after) in enumerate(drives):
+                state = tmp_path / f"drive-{site_index}-{index}"
+                state.mkdir()
+                monkeypatch.setattr(module, "STATE_DIR", state)
+                # The gate's own reader has to see the same file, so its
+                # verdict below is the production one and not a paraphrase.
+                monkeypatch.setattr(app_mod, "STATE_DIR", state)
+                registry_path = state / _REGISTRY_FILENAME
+                _seed_registry(registry_path, seed)
+
+                added = _keys_added_by(functools.partial(writer, argument), registry_path)
+
+                assert not added, (
+                    f"{site} put {sorted(added)} into state/projects.json on "
+                    f"the {label!r} drive. That file is the exec route "
+                    f"allowlist, so a removal only writer able to add to it "
+                    f"is the self service registration hole reopening."
+                )
+                remaining = _registry_keys(registry_path)
+                assert remaining == expected_after, (
+                    f"{site} left the registry holding {sorted(remaining)} on "
+                    f"the {label!r} drive, where the gate should be able to "
+                    f"match {sorted(expected_after)}"
+                )
+                # _registry_keys has to agree with the gate's own reader
+                # wherever that reader works at all, or the check above is a
+                # paraphrase of production rather than a view of it.
+                loaded = app_mod._list_projects()
+                if isinstance(loaded, dict):
+                    assert set(loaded) == remaining, (
+                        f"the registry view this check asserts on and the one "
+                        f"the gate reads disagree on the {label!r} drive: "
+                        f"{sorted(loaded)} against {sorted(remaining)}"
+                    )
+
+        _assert_isolated()
 
     def test_indexing_refuses_a_path_that_is_not_a_directory(self, tmp_path):
         """The half that makes removing the other route enough.

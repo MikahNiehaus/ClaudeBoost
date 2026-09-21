@@ -887,6 +887,53 @@ def _nudge_for(message: str) -> str:
     return _RESEARCH_REQUIRED
 
 
+# Short forms. The reasoning above each nudge is worth reading once a session,
+# not on every message that happens to look like a question. Measured: the
+# decision nudge alone fired 47 times in one session at 2,372 chars.
+_SHORT_FORMS = {
+    id(_DECISION_NUDGE): (
+        "[decision] Research this before answering, do not answer from memory."
+        " Spawn swiper or researcher. Cover depth and breadth, and ask whether"
+        " it already exists.\n"
+    ),
+    id(_RESEARCH_REQUIRED): (
+        "[research] Research before writing. Spawn researcher or swiper, or"
+        " start the turn with /ps if you know it is trivial.\n"
+    ),
+}
+
+
+def _say_once(session_id: str, key: str, content: str = "") -> bool:
+    """True the first time this content is due, and again if it changed.
+
+    Fails open. A state layer that cannot answer must never be the reason a
+    rule goes unsaid, so any failure returns True and the full text is printed.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from research_state import claim_session_once, fingerprint
+
+        return claim_session_once(session_id, key, fingerprint(content))
+    except Exception:
+        return True
+
+
+def _nudge_text(session_id: str, nudge: str) -> str:
+    """Full nudge on its first firing this session, a pointer afterwards.
+
+    The nudge keeps firing at the same moments it always did. Only the restated
+    rationale is dropped, which is the ESLint convention: a short message and a
+    rule id, with the reasoning one lookup away instead of re sent every time.
+    """
+    if not nudge:
+        return ""
+    short = _SHORT_FORMS.get(id(nudge))
+    if short is None:
+        return nudge
+    key = "nudge-decision" if nudge is _DECISION_NUDGE else "nudge-research"
+    return nudge if _say_once(session_id, key) else short
+
+
 def _format_rag_results(results: list[dict]) -> str:
     """Format search results as markdown context.
 
@@ -1209,7 +1256,7 @@ def main() -> int:
     project_root = _project_root()
 
     git_context = _git_project_context(port, project_root)
-    if git_context:
+    if git_context and _say_once(session_id, "project-context", git_context):
         print(git_context)
 
     keywords = _extract_keywords(user_prompt) if user_prompt else []
@@ -1262,18 +1309,43 @@ def main() -> int:
         logger.info(f"No project root, nothing to search. query={search_query!r}")
         nudge = _nudge_for(user_prompt)
         if nudge:
-            print(nudge)
+            print(_nudge_text(session_id, nudge))
         return 0
 
     search_sources = [f"project:{project_root}"]
 
-    # The third value is the server's own web-search fallback. It is discarded
-    # on purpose, for the reason spelled out at the bottom of this function: a
-    # keyword-extracted query has no judgment behind it, and a confidently wrong
-    # web snippet is worse than none.
-    rag_results, is_healthy, _web_results = _search_rag(
-        search_query, port, limit=10, sources=search_sources
-    )
+    # Off by default. CLEAN_RAG_PROMPT_SEARCH=1 brings it back.
+    #
+    # The comment at the bottom of this function already refuses to web search
+    # here, because "a keyword-extracted query has no judgment behind it". The
+    # defence it gives for still running the vector search is that "a bad match
+    # scores low and gets dropped". This project measured that claim and it is
+    # false: clean-rag/CLAUDE.md's "Why the KB is gone" records four wrong hits
+    # scoring 0.80 to 0.86 that min_score 0.5 did not catch, and concludes
+    # "cosine similarity always hands back a confident nearest neighbour; there
+    # is no I don't know". Observed again on 2026-09-21: a message about context
+    # budgets returned three unrelated test helper functions at 0.77 to 0.81.
+    #
+    # So the same asymmetry argument applies to both, and the fix the project
+    # already adopted for the KB applies here too: retrieval belongs to an agent
+    # that writes its own query, not to a hook that guesses before anyone knows
+    # what the message needs.
+    #
+    # Two measured costs, both removed by this: 54,639 tokens of snippets in one
+    # session, and a model reload. Embedding a query pulls the embedder back
+    # into RAM 11 seconds after the user pauses indexing to get that RAM back,
+    # so pausing never worked while this ran on every message.
+    if os.environ.get("CLEAN_RAG_PROMPT_SEARCH") == "1":
+        # The third value is the server's own web-search fallback. It is
+        # discarded on purpose, for the reason spelled out at the bottom of this
+        # function.
+        rag_results, is_healthy, _web_results = _search_rag(
+            search_query, port, limit=10, sources=search_sources
+        )
+    else:
+        # Still probe, so an outage is still reported. /status does not load a
+        # model, which is the whole reason this is not a search.
+        rag_results, is_healthy = [], _health_check(port)
 
     if not is_healthy:
         # Nothing restarts the server any more. This hook reports the
@@ -1301,7 +1373,7 @@ def main() -> int:
         # message is a real decision, still say so: the repo can tell you what
         # the code does, never whether it is the right thing to do.
         if _nudge_for(user_prompt) is _DECISION_NUDGE:
-            print(_DECISION_NUDGE)
+            print(_nudge_text(session_id, _DECISION_NUDGE))
         return 0
 
     # No usable local research. We deliberately do NOT web search here.
@@ -1325,7 +1397,7 @@ def main() -> int:
     logger.info(f"No local research. best_score={best_score:.2f} query={search_query!r}")
     nudge = _nudge_for(user_prompt)
     if nudge:
-        print(nudge)
+        print(_nudge_text(session_id, nudge))
     return 0
 
 

@@ -67,9 +67,11 @@ def _temp_dir() -> Path:
     return Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp")
 
 
-def _run(args: list[str], timeout: int = 60) -> tuple[int, str]:
+def _run(args: list[str], timeout: int = 60, env: dict | None = None) -> tuple[int, str]:
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(
+            args, capture_output=True, text=True, timeout=timeout, env=env
+        )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
@@ -131,9 +133,14 @@ def step_rag() -> dict:
     # clean-rag's own control CLI. This used to call scripts/rag-server-start.py,
     # which started the retired 8612 server; both that script and the server it
     # started are gone.
+    # CLEAN_RAG_CONSOLE=0 because server_ctl now opens the console UI in its own
+    # window by default. That is what an interactive start should do, and the
+    # opposite of what this should: boost-run captures stdout and runs as part
+    # of a pipeline, so a terminal appearing here is noise at best.
     rc, start_out = _run(
         [PY, str(BOOST_HOME / "clean-rag" / "cli" / "server_ctl.py"), "start"],
         timeout=90,
+        env={**os.environ, "CLEAN_RAG_CONSOLE": "0"},
     )
     last = start_out.strip().splitlines()[-1] if start_out.strip() else ""
     print(f"  rag-server: {last or ('exit ' + str(rc))}")

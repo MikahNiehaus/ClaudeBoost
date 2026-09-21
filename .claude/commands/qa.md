@@ -2337,14 +2337,15 @@ raised costs a whole extra round.
 
 #### 5d-lite — the quick check (default path, ran instead of 5d-i through 5d-iv when 5d-0 found no high stakes surface)
 
-One pass. Ask the question once and stop. This replaces what used to run
-here for every session regardless of stakes: a real incident recorded in
+One pass, plus one confirming pass only if the first found a gap. Two at
+most, ever. This replaces what used to run here for every session regardless
+of stakes: a real incident recorded in
 project memory found that loop sending a QA session deep into evidence
 hygiene busywork, on a ticket that was already tested enough, because the
 loop had no built in sense of proportion and kept finding smaller and smaller
 process gaps. This path builds proportion in by construction, not by asking
-the agent to restrain itself: it runs once and has no mechanism to restart
-itself.
+the agent to restrain itself: it is capped at two passes and has no mechanism
+to reach a third.
 
 Spawn `quick-cop`, in the foreground, not backgrounded. Phase 5e needs its
 answer before the session can end:
@@ -2373,19 +2374,64 @@ List what's missing, or say nothing missing. Nothing else.
 
 Act on the answer:
 
-- **Nothing missing.** Proceed to 5e.
+- **Nothing missing.** Proceed to 5e. One pass total, and no second one:
+  there is nothing to confirm.
 - **Something missing.** Gather that proof now, the same way 5d-iv gathers
   proof for a PASS without evidence TC. Update plan.md and report.md's
-  Evidence Index. Then proceed to 5e.
+  Evidence Index. Then run the confirming pass below.
 
-**Do not spawn quick-cop again to check the fix.** One pass finds the gap, one
-pass closes it, the session ends there. Re-checking the fix is the exact
-shape that rabbit-holed before. If the new artifact does not visibly close
-the gap, say so plainly in coverage-gaps.md instead of looping.
+**The confirming pass. Exactly once, and only when pass one named a gap.**
 
-If quick-cop's answer reads as a style note or a completeness wish rather
+This is the step that answers "did the fix actually work", which nothing else
+on this path asks. A session that fills a gap and never checks its own filling
+is judging its own evidence, which is the failure the cops exist to prevent.
+
+Spawn `quick-cop` a second time, foreground, with one question about one named
+gap:
+
+```
+Agent(subagent_type="quick-cop", run_in_background=false, prompt="""
+A /qa session was told one specific thing was missing and has now added
+proof for it. Check that one thing. Answer CLOSED or NOT CLOSED, and if
+not closed, one sentence naming what is still absent.
+
+Scope: only the gap quoted below. Any other gap, however real, is out of
+scope for this question and must not be reported. This is a confirming
+pass, not a second review.
+
+=== THE GAP THAT WAS NAMED IN PASS ONE, VERBATIM ===
+[quick-cop's own words from pass one, copied exactly, not paraphrased]
+
+=== THE ARTIFACT ADDED TO CLOSE IT ===
+[the new path or paths on disk, and what each one shows]
+
+=== THE REQUIREMENTS CLAUSE IT IS MEANT TO PROVE, VERBATIM ===
+[the clause from requirements.md]
+
+CLOSED or NOT CLOSED. Nothing else.
+""")
+```
+
+**Then stop, whatever it answers.** No third pass, no second round of gap
+filling.
+
+- **CLOSED.** Proceed to 5e.
+- **NOT CLOSED.** Write what is still absent into coverage-gaps.md, in
+  quick-cop's words rather than yours, and proceed to 5e with it listed as an
+  open item. Do not gather more proof and do not ask again.
+
+The cap is structural on purpose, not a matter of the agent showing restraint.
+An unbounded version of this loop already sent a QA session deep into evidence
+hygiene busywork on a ticket that was already tested enough, because it kept
+finding smaller and smaller process gaps. Two passes answer whether the fix
+worked. A third pass starts hunting.
+
+If pass one's answer reads as a style note or a completeness wish rather
 than something traceable to a specific clause in requirements.md, it is not a
-gap. Do not act on it and do not list it in the report as an open item.
+gap. Do not act on it, do not list it in the report as an open item, and do
+not run the confirming pass for it. The confirming pass exists to check a real
+fix, and running it on a non gap is how the second pass turns back into the
+loop the cap is there to prevent.
 
 ---
 
@@ -2421,11 +2467,12 @@ Date      : [date]
   Gaps found : [N]  (resolved: [N], unresolvable: [N])
 
 ── Evidence Check (5d) ───────────────────────────────────────
-  Path             : [LITE — quick-cop, one pass / FULL — bad-cop adversarial loop]
+  Path             : [LITE — quick-cop, one pass plus one confirming pass / FULL — bad-cop adversarial loop]
   Reason           : [surfaces 5d-0 detected, or "none, ordinary session"]
 
   If LITE:
   Result           : [nothing missing / N gap(s) found and closed]
+  Confirming pass  : [not run, nothing was missing / CLOSED / NOT CLOSED]
   Clauses proven   : [N] / [total clauses in requirements.md]
 
   If FULL:
@@ -2943,7 +2990,7 @@ Jump to **Phase 5** now. Use `MODE = general` context:
 - Phase 5a: Check debug proof (no screenshots expected — `MODE = general`)
 - Phase 5b: Retry any BLOCKED items
 - Phase 5c: Run the `/audit` checklist on report.md + debug-proof/session-summary.json
-- Phase 5d: **The evidence check.** Run 5d-0 first to pick the path, same as browser mode. Either path gets the same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Lite path stops after one quick-cop pass; full path loops until a fresh bad-cop judge stamps `FULLY VERIFIED`
+- Phase 5d: **The evidence check.** Run 5d-0 first to pick the path, same as browser mode. Either path gets the same three inputs, adjusted for general mode: `requirements.md` verbatim, the artifact paths that actually exist (`$DEBUG_PROOF_DIR/path-NNN-*.json`, `session-summary.json`, test runner output, coverage output, `plan.md`, `report.md`, `coverage-gaps.md` — no screenshots), and the tool inventory with Playwright listed under "not used: no browser target this session." Lite path runs one quick-cop pass, then one confirming pass only if that found a gap, and stops there either way; full path loops until a fresh bad-cop judge stamps `FULLY VERIFIED`
 - Phase 5e: Print the final output to the user (same format as browser mode, screenshot line shows "N/A — general mode")
 
 Then Phase 6 (log cleanup) and Phase 7. **Set `RECORDING = none` before entering Phase 7**: general mode never opened a browser, so Phase 0h did not run and there is no recording to cut. Phase 7 therefore takes its 7f still-image fallback, and 7f's opening line about saying why there is no video is satisfied by naming general mode as the reason. The deck's test case slides carry the debugger's real variable values and test output in place of screenshots — the code proof is the evidence in general mode, so it is what the slides show. Skip 7f's red box guidance entirely: with no screenshots there is nothing to annotate.
@@ -3201,7 +3248,8 @@ found.
 | If Phase 5d's result was... | Do this |
 |---------------------------|---------|
 | LITE, nothing missing | `/done` — run the pre-push checklist and push |
-| LITE, a gap found and closed | Same as above, plus open the new artifact yourself and confirm it actually shows what was missing before shipping |
+| LITE, a gap found and the confirming pass said CLOSED | Same as above, plus open the new artifact yourself and confirm it shows what was missing. quick-cop's CLOSED is a claim like any other |
+| LITE, a gap found and the confirming pass said NOT CLOSED | Treat it as unresolved, below. The session ended on a gap it could not close |
 | FULL, FULLY VERIFIED — every clause proven by a real artifact | `/done` — run the pre-push checklist and push |
 | FULL or LITE, unresolved — a gap that would not close | Read the unresolved gap segments in the video, or the gap slides if 7f's fallback ran. Each names what was tried and what it needs. Decide: get what it needs, accept it as a post-deploy item, or drop the requirement |
 | FULLY VERIFIED but with UNVERIFIABLE items | Ship if the post-deploy validation plan is real and owned. Those clauses are not verified, only scheduled |
