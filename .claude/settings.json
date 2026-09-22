@@ -13,10 +13,6 @@
       "Bash(find **)",
       "Bash(mkdir **)",
       "Bash(echo **)",
-      "Bash(python \"C:/Development/ClaudeBoost/scripts/*.py\"*)",
-      "Bash(python \"C:/Development/ClaudeBoost/clean-rag/*.py\"*)",
-      "Bash(python \"C:/Users/mniehaus/AppData/Local/Temp/claude/*\")",
-      "Bash(python \"C:/Users/mniehaus/AppData/Local/Temp/claude/*\" *)",
       "Bash(python -m pytest *)",
       "Bash(curl -s http://127.0.0.1:8613*)",
       "Bash(curl -s -X POST http://127.0.0.1:8613*)",
@@ -25,7 +21,17 @@
     ],
     "ask": [
       "Bash(sqlite3 *)",
-      "Bash(sqlite3)"
+      "Bash(sqlite3)",
+      "Edit(**/.claude/browser-targets.local.json)",
+      "Write(**/.claude/browser-targets.local.json)",
+      "Edit(**/.claude/browser-targets.example.json)",
+      "Write(**/.claude/browser-targets.example.json)",
+      "Edit(**/.claude/redacted-terms.local.json)",
+      "Write(**/.claude/redacted-terms.local.json)",
+      "Edit(**/scripts/bash-guard.py)",
+      "Write(**/scripts/bash-guard.py)",
+      "Edit(**/clean-rag/hooks/**)",
+      "Write(**/clean-rag/hooks/**)"
     ],
     "deny": [
       "Bash(rm -rf *)",

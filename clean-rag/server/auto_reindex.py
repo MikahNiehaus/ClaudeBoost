@@ -30,6 +30,7 @@ from .config import (
     SWEEP_INTERVAL_S,
 )
 from .indexing import (
+    MANIFEST_METADATA_KEYS,
     UNREADABLE_SENTINEL,
     _project_paths,
     acquire_index_lock,
@@ -216,7 +217,21 @@ def find_changed_files(project_path: str) -> tuple[list[str], list[str]]:
         logger.error("Manifest unreadable for %s: %s", project_path, e)
         return [], []
 
-    known = {k: v for k, v in raw.items() if not k.startswith("__")}
+    if not isinstance(raw, dict):
+        # Same conclusion as unreadable, because .items() below raises out of
+        # the sweep and takes every later project in the pass with it.
+        logger.error(
+            "Manifest root for %s is %s, not an object", project_path, type(raw).__name__
+        )
+        return [], []
+
+    # Exact names, because the dunder shape belongs to real files too:
+    # __tests__/Foo.test.js is the Jest layout. The prefix filter hid those keys
+    # from both sides of the computation below, so such a file was re embedded
+    # on every sweep and, once deleted, could never appear in `deleted` and was
+    # never evicted. The other five readers of a manifest already match this way
+    # (indexing.py:294).
+    known = {k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS}
 
     changed = []
     seen = set()

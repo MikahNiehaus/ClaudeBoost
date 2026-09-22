@@ -1,0 +1,43 @@
+{
+  "_readme": [
+    "Copy this file to browser-targets.local.json and fill it in. That name is",
+    "gitignored, which is the point: the hostnames of your employer's or your",
+    "client's environments must not enter a public repo. Same pattern as",
+    ".env.example beside a gitignored .env.",
+    "",
+    "scripts/bash-guard.py reads it to decide which hosts curl and browser",
+    "automation may reach. localhost, *.local and *.test are always allowed and",
+    "do not belong here. With no file present the guard allows only those, so a",
+    "fresh clone on someone else's machine reaches nothing of yours.",
+    "",
+    "allowed_suffixes: whole zones. Every entry MUST start with a dot, because",
+    "the match is endswith() and the leading dot is the only thing making it a",
+    "label boundary: 'evil-env-dev.contoso.com' does not end with",
+    "'.env-dev.contoso.com'.",
+    "Two labels minimum, so '.com' cannot be entered. Use this only for a zone",
+    "that holds nothing but lower environments.",
+    "",
+    "allowed_hosts: exact hostnames, compared with ==. Use this, never a suffix,",
+    "for any zone that holds production and lower environments together. If",
+    "api.contoso.com is production and api-test.contoso.com is not, then",
+    "'.contoso.com'",
+    "in allowed_suffixes would allow production, and that is the one thing that",
+    "must never happen. Listing exact hosts means a new subdomain stays denied",
+    "until someone adds it deliberately.",
+    "",
+    "Leave out anything holding production-like data. A staging environment",
+    "restored from a production snapshot is production data with a friendlier",
+    "name. Do not put an IP range or an IPv6 literal in either list; suffix",
+    "matching cannot express either one correctly.",
+    "",
+    "Entries must be lowercase ASCII. Anything malformed is dropped silently",
+    "rather than widening the allowlist."
+  ],
+  "allowed_suffixes": [
+    ".env-dev.example.com"
+  ],
+  "allowed_hosts": [
+    "api-test.example.com",
+    "admin-test.example.com"
+  ]
+}

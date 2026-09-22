@@ -279,7 +279,7 @@ class TestVerifyLoopGuardReadsWindowsAndPosixAlike:
             # becoming invocations.
             'echo "git commit is the orchestrator\'s job"',
             "grep -rn 'git commit' .",
-            r"git -C C:\Development\ClaudeBoost status",
+            r"git -C C:\proj\SomeRepo status",
             r"dotnet test C:\proj\App.Tests\App.Tests.csproj",
             "python -m pytest scripts/tests/ -q",
         ],

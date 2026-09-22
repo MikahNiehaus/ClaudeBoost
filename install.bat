@@ -40,11 +40,14 @@ if not exist "%CLAUDE_DIR%" (
 :: ── 1. Link CLAUDE.md ────────────────────────────────────────────────────────
 echo  [1/3] Linking CLAUDE.md...
 
+:: clean-rag\portable\CLAUDE.md is the canonical copy, because clean-rag's own
+:: installer reads it. The repo root file is only a pointer at it, so linking
+:: root here shipped a stub as the whole rule set.
 if exist "%CLAUDE_DIR%\CLAUDE.md" del "%CLAUDE_DIR%\CLAUDE.md" >nul 2>&1
-mklink /h "%CLAUDE_DIR%\CLAUDE.md" "%BOOST_DIR%\CLAUDE.md" >nul 2>&1
+mklink /h "%CLAUDE_DIR%\CLAUDE.md" "%BOOST_DIR%\clean-rag\portable\CLAUDE.md" >nul 2>&1
 if errorlevel 1 (
     :: mklink requires Developer Mode on some Windows configs. Fall back to copy.
-    copy /y "%BOOST_DIR%\CLAUDE.md" "%CLAUDE_DIR%\CLAUDE.md" >nul 2>&1
+    copy /y "%BOOST_DIR%\clean-rag\portable\CLAUDE.md" "%CLAUDE_DIR%\CLAUDE.md" >nul 2>&1
     if errorlevel 1 (
         echo  ERROR: Could not link or copy CLAUDE.md. Check permissions.
         exit /b 1

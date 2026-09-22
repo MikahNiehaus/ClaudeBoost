@@ -241,27 +241,27 @@ class TestCSharpFallbackResolution:
 
     def test_a_dotted_project_folder_is_recognised_as_its_own_namespace(self, tmp_path):
         """A .NET folder carries the dotted namespace it holds, so
-        "ViveryAscend.API/" is namespace ViveryAscend.API and "ViveryAscend"
+        "Contoso.API/" is namespace Contoso.API and "Contoso"
         is a project namespace too. Splitting only on "/" leaves the first
-        segment of "using ViveryAscend.API.Services;" matching no folder, and
+        segment of "using Contoso.API.Services;" matching no folder, and
         the project's own code gets filed under _external_. Measured on 300
         real .cs files, that was 507 of the 514 symbols the fallback marked
         external."""
         store = self._store(tmp_path)
         store.add_edges([GraphEdge(
-            source_file="ViveryAscend.API/Controllers/OrderController.cs",
+            source_file="Contoso.API/Controllers/OrderController.cs",
             source_symbol="<module>", target_file="",
-            target_symbol="ViveryAscend.API.Services",
+            target_symbol="Contoso.API.Services",
             edge_type="imports", confidence="EXTRACTED",
         )])
         file_map = {}
         _register_file_variants(
-            "ViveryAscend.API/Controllers/OrderController.cs", file_map,
+            "Contoso.API/Controllers/OrderController.cs", file_map,
         )
 
         store.resolve_target_files(file_map)
         rows = [e for e in store.get_all_edges()
-                if e.target_symbol == "ViveryAscend.API.Services"]
+                if e.target_symbol == "Contoso.API.Services"]
         assert rows[0].target_file == "", (
             "the project's own namespace must never be called a third party "
             f"dependency, got {rows[0].target_file!r}"
@@ -312,7 +312,7 @@ class TestProjectNamespaceCollisionDefeatsExternalDetection:
     external symbol whose first segment matches the folder name is judged
     to be a project namespace and left empty forever, instead of being
     marked external. This is not hypothetical: the real target project
-    (Nectar) has ViveryAscend.Function/Helpers/Twilio/ containing .cs files,
+    (Litware) has Contoso.Function/Helpers/Twilio/ containing .cs files,
     though that specific case is caught upstream by the hardcoded
     _CS_EXTERNAL_PREFIXES list before the new fallback ever runs. This test
     picks a namespace that is NOT on that hardcoded list, to isolate the

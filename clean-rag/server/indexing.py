@@ -9,11 +9,15 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from .code_chunker import RawChunk, chunk_code, estimate_tokens
 from .config import (
@@ -27,7 +31,12 @@ from .config import (
     STATE_DIR,
 )
 from .lang_router import get_model_for_project
-from .project_id import resolve_project_dir
+from .project_id import (
+    leaf_only_dir_name,
+    legacy_project_dir_name,
+    project_dir_name,
+    resolve_project_dir,
+)
 from .file_scan import (
     CODE_EXTENSIONS,
     MAX_FILE_SIZE,
@@ -274,6 +283,22 @@ def release_index_lock() -> None:
 #: ever equal this.
 UNREADABLE_SENTINEL = "__unreadable__"
 
+#: The manifest keys _save_project_manifest owns. Every other key in a
+#: manifest is a project relative file path from _rel_path.
+#:
+#: Matched by exact name and never by the __dunder__ shape, because real file
+#: paths carry that shape too: __tests__/Foo.test.js is the Jest layout, and 71
+#: of those keys sit in the ContosoMobile manifest alone. Exact names cannot
+#: collide, since every manifest key ends in a CODE_EXTENSIONS suffix and none
+#: of these hold a dot.
+MANIFEST_METADATA_KEYS = frozenset({
+    "__project_path__",
+    "__pipeline_version__",
+    "__model_id__",
+    "__embedding_dim__",
+    "__incomplete__",
+})
+
 
 def file_hash(content: str) -> str:
     """SHA-256 hash prefix for change detection."""
@@ -483,7 +508,7 @@ def _save_project_manifest(
     if manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            prior = {k: v for k, v in raw.items() if k.startswith("__")}
+            prior = {k: v for k, v in raw.items() if k in MANIFEST_METADATA_KEYS}
         except Exception:
             prior = {}
 
@@ -519,6 +544,8 @@ def read_project_provenance(project_path: str) -> dict:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         return {"model_id": None, "embedding_dim": None}
+    if not isinstance(raw, dict):
+        return {"model_id": None, "embedding_dim": None}
     return {
         "model_id": raw.get("__model_id__"),
         "embedding_dim": raw.get("__embedding_dim__"),
@@ -541,6 +568,11 @@ def index_is_incomplete(project_path: str) -> bool:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         logger.error("Manifest unreadable for %s: %s", project_path, e)
+        return False
+    if not isinstance(raw, dict):
+        logger.error(
+            "Manifest root for %s is %s, not an object", project_path, type(raw).__name__
+        )
         return False
     return bool(raw.get("__incomplete__"))
 
@@ -720,7 +752,9 @@ def index_project(
                     stored_version, PIPELINE_VERSION, project_path,
                 )
                 force = True
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1083,6 +1117,7 @@ def index_project(
         _update_project_registry(
             pid, str(project_root), files_indexed, chunks_created,
             graph_stats=graph_stats,
+            files_total=manifest_file_count(manifest),
         )
 
         # Reclaim any free pages after the bulk delete+insert cycle.
@@ -1159,7 +1194,9 @@ def drop_manifest_key(project_path: str, rel_path: str) -> dict:
     if manifest_path.exists():
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1275,7 +1312,9 @@ def reindex_file(
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
             stored_model_id = raw.get("__model_id__")
-            manifest = {k: v for k, v in raw.items() if not k.startswith("__")}
+            manifest = {
+                k: v for k, v in raw.items() if k not in MANIFEST_METADATA_KEYS
+            }
         except Exception:
             manifest = {}
 
@@ -1451,31 +1490,332 @@ def reindex_file(
 def _update_project_registry(
     pid: str,
     project_path: str,
-    files_indexed: int,
-    chunks_created: int,
+    files_indexed: int | None = None,
+    chunks_created: int | None = None,
     graph_stats: dict | None = None,
+    files_total: int | None = None,
 ) -> None:
-    """Update state/projects.json with current project stats."""
+    """Update state/projects.json with current project stats.
+
+    Merges into the stored entry instead of replacing it, and every stat is
+    optional so a caller writes only what it actually measured. This shape is
+    load bearing, not tidiness. The previous version built a fresh dict and
+    assigned it, adding "graph" only when graph_stats was truthy, so any
+    partial writer erased the graph counts for that project.
+
+    index_project (indexing.py:1117) is the only caller today, and it writes
+    every stat. The merge is what makes the first partial caller safe rather
+    than a silent eraser of the graph counts, so it stays.
+
+    files_indexed and chunks_created count one run, never the project, which
+    is why the console labels them "Run files" and "Run chunks".
+
+    files_total is the cumulative count: how many files the index holds,
+    which is the manifest length minus MANIFEST_METADATA_KEYS. index_project
+    records it here as the last known value. /status does not read it, and
+    recomputes from the manifest instead, so a reader is never handed a number
+    this function wrote before the manifest moved underneath it.
+    """
     registry_path = STATE_DIR / "projects.json"
     registry: dict = {}
     if registry_path.exists():
         try:
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        except Exception:
-            registry = {}
+            parsed = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Project registry unreadable, starting a new one: %s", e)
+        else:
+            # A root that is not an object is as unusable as one that would
+            # not parse, and the branch above already starts over from empty
+            # for that. Without this, .get below raised and lost a whole index
+            # run at its last step, after every file was already embedded.
+            if isinstance(parsed, dict):
+                registry = parsed
+            else:
+                logger.warning(
+                    "Project registry root is %s, not an object. Starting a new one.",
+                    type(parsed).__name__,
+                )
 
-    entry = {
+    prior = registry.get(pid)
+    entry = dict(prior) if isinstance(prior, dict) else {}
+    entry.update({
         "project_path": project_path,
         "source": "clean-rag",
         "server": "http://127.0.0.1:8613",
-        "files_indexed": files_indexed,
-        "chunks_created": chunks_created,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if graph_stats:
-        entry["graph"] = graph_stats
+    })
+    for key, value in (
+        ("files_indexed", files_indexed),
+        ("chunks_created", chunks_created),
+        ("files_total", files_total),
+        ("graph", graph_stats or None),
+    ):
+        if value is not None:
+            entry[key] = value
 
     registry[pid] = entry
 
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+
+def manifest_file_count(manifest: dict) -> int:
+    """How many real files a manifest holds, ignoring the metadata keys."""
+    return sum(1 for key in manifest if key not in MANIFEST_METADATA_KEYS)
+
+
+def _clear_readonly_and_retry(func, path, _exc):
+    """shutil.rmtree error handler for Windows.
+
+    Git writes pack/idx files read-only (-r--r--r--), and Windows refuses to
+    delete a read-only file, so rmtree raises PermissionError [Errno 13] on
+    them. Clear the read-only bit and reattempt the removal. This is the
+    canonical CPython-documented workaround (shutil.rmtree onexc example).
+    The third argument is the exception (onexc) or exc_info tuple (onerror);
+    unused, so the handler works for either signature.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree_clearing_readonly(path: Path) -> None:
+    """rmtree that survives read only files, on either handler signature."""
+    # onerror was deprecated in 3.12 and onexc replaced it. Passing the wrong
+    # one is a TypeError on some versions and a silent DeprecationWarning on
+    # others, so pick by what this interpreter actually accepts.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+    else:
+        shutil.rmtree(path, onerror=_clear_readonly_and_retry)
+
+
+def _scheme_dir_names(project_path: str) -> set[str]:
+    """The directory name every naming scheme gives *project_path*."""
+    return {
+        project_dir_name(project_path),
+        leaf_only_dir_name(project_path),
+        legacy_project_dir_name(project_path),
+    }
+
+
+def project_index_dirs(project_path: str) -> list[Path]:
+    """Every database directory that exists on disk for *project_path*.
+
+    Three naming schemes have coexisted (project_id.py:149-170), and
+    resolve_project_dir deliberately returns only the first match. A delete
+    that used it would leave the other directories behind: invisible to
+    search, still holding disk, and ready to confuse a later reindex.
+    """
+    root = DATABASES_DIR / "_projects"
+    found = []
+    for name in sorted(_scheme_dir_names(project_path)):
+        candidate = root / name
+        if _is_inside_projects_root(candidate, root) and candidate.is_dir():
+            found.append(candidate)
+    return found
+
+
+def _is_inside_projects_root(candidate: Path, root: Path) -> bool:
+    """True only for a direct child of databases/_projects.
+
+    The names above are hashes and slugs this module computes, so they cannot
+    currently escape. This checks anyway, because the guard costs nothing and
+    the thing on the other side of it is an rmtree. A future caller passing a
+    name through from a request body would otherwise turn this into a path
+    traversal that deletes outside the database directory.
+    """
+    try:
+        resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except OSError:
+        return False
+    return resolved.parent == root_resolved and resolved != root_resolved
+
+
+#: Prefix for a directory that has been taken out of the lookup path and is
+#: waiting to be removed. A leading dot is unreachable by every naming scheme
+#: (slugify_name turns dots into hyphens and strips the leading ones, and the
+#: legacy name is bare hex), so resolve_project_dir can never return one.
+_QUARANTINE_PREFIX = ".deleting-"
+
+
+def _quarantine_index_dir(directory: Path) -> Path:
+    """Rename *directory* out of the lookup path. Returns where it went.
+
+    A rename is all or nothing; an rmtree is not. Measured on Windows: rmtree
+    of an index directory whose vectors.db is still open deletes manifest.json
+    and then raises WinError 32, leaving a gutted directory that
+    resolve_project_dir still returns and search still reads. Renaming the same
+    tree fails with WinError 5 and changes nothing. So the rename is the point
+    of no return, and the rmtree after it only reclaims disk.
+    """
+    holding = directory.parent / f"{_QUARANTINE_PREFIX}{directory.name}-{uuid4().hex[:8]}"
+    directory.rename(holding)
+    return holding
+
+
+def _restore_quarantined(pairs: list[tuple[Path, Path]]) -> None:
+    """Put quarantined directories back where they were.
+
+    Called when a later rename in the same delete fails. Without it a partial
+    quarantine is the stranding bug it exists to prevent: the current scheme
+    directory gone from the lookup path and an older one left to answer for it.
+    """
+    for original, holding in pairs:
+        try:
+            holding.rename(original)
+        except OSError as e:
+            logger.error(
+                "Could not restore index directory %s from %s: %s: %s",
+                original, holding, type(e).__name__, e,
+            )
+
+
+def _sweep_quarantine_leftovers(root: Path, project_path: str) -> None:
+    """Best effort removal of this project's earlier failed quarantines.
+
+    Retrying a delete is the natural moment to reclaim what the last attempt
+    could not. Scoped to this project's own directory names so a concurrent
+    delete of another project is never touched.
+    """
+    # Matched by prefix rather than by glob: slugify_name keeps square
+    # brackets, so a project called foo[a] would turn its own leftover name
+    # into a character class and the sweep would never find it.
+    prefixes = tuple(
+        f"{_QUARANTINE_PREFIX}{name}-" for name in sorted(_scheme_dir_names(project_path))
+    )
+    try:
+        candidates = sorted(root.iterdir())
+    except OSError:
+        return
+
+    for leftover in candidates:
+        if not leftover.name.startswith(prefixes):
+            continue
+        if not (_is_inside_projects_root(leftover, root) and leftover.is_dir()):
+            continue
+        try:
+            _rmtree_clearing_readonly(leftover)
+        except OSError as e:
+            logger.warning(
+                "Left over index directory %s still cannot be removed: %s: %s",
+                leftover, type(e).__name__, e,
+            )
+
+
+def delete_project_index(project_path: str) -> dict:
+    """Remove clean-rag's index of *project_path*. Never touches its source.
+
+    Caller must hold the index lock for the whole call. Without it the auto
+    reindex sweep can rebuild the directory mid removal, or rewrite the
+    registry entry after this function has removed it.
+
+    Two phases, because the naming schemes share a lookup. Every directory is
+    renamed out of the lookup path first, and one that will not rename aborts
+    the whole delete with the earlier renames undone. Only once no directory
+    can answer a lookup any more does the registry entry go, and only then are
+    the renamed copies actually deleted. Removing them one at a time instead
+    lets a failure halfway through leave an older scheme's directory as the one
+    resolve_project_dir finds, so search keeps answering from data the delete
+    was supposed to have removed.
+
+    Reports per step rather than a bare ok, matching index_project's
+    stopped_early shape, so a caller can tell "nothing was there" from "the
+    index is gone but one directory is still holding disk".
+    """
+    result: dict = {
+        "project_path": project_path,
+        "dirs_removed": [],
+        "dirs_failed": [],
+        "dirs_left_on_disk": [],
+        "registry_removed": [],
+    }
+
+    root = DATABASES_DIR / "_projects"
+    _sweep_quarantine_leftovers(root, project_path)
+
+    quarantined: list[tuple[Path, Path]] = []
+    for directory in project_index_dirs(project_path):
+        # Release our own SQLite handle on this project's vectors.db first.
+        # The connection cache is process wide (store.py:123), so on Windows a
+        # rename or an rmtree with it still open fails rather than doing
+        # anything. evict_cache closes it now when nothing holds it, and marks
+        # it to close on the last holder's exit when something does.
+        ChromaStore.evict_cache(str(directory / "chroma"))
+        try:
+            quarantined.append((directory, _quarantine_index_dir(directory)))
+        except OSError as e:
+            logger.error(
+                "Could not remove index directory %s: %s: %s",
+                directory, type(e).__name__, e,
+            )
+            _restore_quarantined(quarantined)
+            result["dirs_failed"].append(
+                {"path": str(directory), "error": f"{type(e).__name__}: {e}"}
+            )
+            result["error"] = (
+                f"{directory.name} could not be removed, so nothing was: the "
+                f"other index directories were put back and the registry entry "
+                f"was left in place. The project is unchanged. Retry once "
+                f"whatever holds the files has let go."
+            )
+            return result
+
+    result["registry_removed"] = _remove_from_project_registry(project_path)
+
+    for original, holding in quarantined:
+        result["dirs_removed"].append(str(original))
+        try:
+            _rmtree_clearing_readonly(holding)
+        except OSError as e:
+            # The index is already gone as far as every lookup is concerned, so
+            # this is disk to reclaim rather than a failed delete. Named in the
+            # response, and the next delete of this project sweeps it.
+            logger.warning(
+                "Index directory %s is out of the lookup path but still on "
+                "disk: %s: %s", holding, type(e).__name__, e,
+            )
+            result["dirs_left_on_disk"].append(
+                {"path": str(holding), "error": f"{type(e).__name__}: {e}"}
+            )
+
+    return result
+
+
+def _remove_from_project_registry(project_path: str) -> list[str]:
+    """Drop every registry entry pointing at *project_path*. Returns their pids.
+
+    Matched on the resolved path rather than the pid, because the pid is
+    derived from a naming scheme that has changed three times and an entry
+    written under an older one would otherwise survive the delete.
+    """
+    registry_path = STATE_DIR / "projects.json"
+    if not registry_path.exists():
+        return []
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(registry, dict):
+        return []
+
+    try:
+        target = Path(project_path).resolve()
+    except OSError:
+        return []
+
+    dropped = []
+    for pid, entry in list(registry.items()):
+        entry_path = (entry or {}).get("project_path") if isinstance(entry, dict) else None
+        if not entry_path:
+            continue
+        try:
+            if Path(entry_path).resolve() == target:
+                del registry[pid]
+                dropped.append(pid)
+        except OSError:
+            continue
+
+    if dropped:
+        registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    return dropped

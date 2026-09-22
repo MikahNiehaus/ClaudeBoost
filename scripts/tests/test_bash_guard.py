@@ -315,7 +315,7 @@ class TestBlock:
     # Backslash-escaped spaces in paths ---------------------------------
 
     def test_backslash_spaces_in_path_blocked(self):
-        cmd = "ls /Users/geoff/My\\ Documents/file.txt"
+        cmd = "ls /Users/foo/My\\ Documents/file.txt"
         block(cmd)
 
     def test_backslash_spaces_nested_path_blocked(self):
@@ -401,7 +401,7 @@ class TestCdCompound:
     def test_cd_semicolon_then_git_add_and_commit(self):
         """cd /path; git add X && git commit — the && joins the gits, not the cd."""
         cmd = (
-            "cd /Users/geoff/repo; "
+            "cd /Users/foo/repo; "
             "git add a.ts b.ts && git commit -m \"fix: thing\""
         )
         allow_except_git_write(cmd)
@@ -409,7 +409,7 @@ class TestCdCompound:
     def test_cd_semicolon_then_git_commit_heredoc(self):
         """The reported case: cd ; git add && git commit -m \"$(cat <<'EOF' ...)\"."""
         cmd = (
-            "cd /Users/geoff/repo; git add x.ts && "
+            "cd /Users/foo/repo; git add x.ts && "
             "git commit -m \"$(cat <<'EOF'\nfix: mfa\nEOF\n)\""
         )
         allow_except_git_write(cmd)

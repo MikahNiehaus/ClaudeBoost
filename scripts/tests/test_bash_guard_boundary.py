@@ -13,6 +13,7 @@ so the file works on a machine where this project lives somewhere else.
 from __future__ import annotations
 
 import importlib.util
+import json
 import time
 
 import pytest
@@ -732,3 +733,98 @@ class TestLatency:
         start = time.perf_counter()
         guard.evaluate(command)
         assert time.perf_counter() - start < 1.0
+
+
+class TestBrowserTargetAllowlist:
+    """The site allowlist lives in a gitignored file, not in tracked source.
+
+    Nothing pinned this behaviour while the hostnames were literals in the
+    guard, so moving them could have widened the allowlist with the suite
+    still green. Every case builds its own config under tmp_path, because a
+    test that reads the developer's real browser-targets.local.json passes for
+    whatever happens to be on that one machine.
+
+    Hostnames here are Microsoft's documentation placeholders (contoso,
+    fabrikam) and RFC 2606 reserved names. A test for a leak detector must not
+    carry the leak.
+    """
+
+    _CONFIG = json.dumps({
+        "allowed_suffixes": [".env-dev.contoso.com"],
+        "allowed_hosts": ["api-test.fabrikam.org"],
+    })
+
+    @staticmethod
+    def _guard_with(tmp_path, config):
+        spec = importlib.util.spec_from_file_location("bash_guard_targets", GUARD)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if config is None:
+            module._BROWSER_TARGETS_PATH = str(tmp_path / "absent.json")
+        else:
+            path = tmp_path / "browser-targets.local.json"
+            path.write_text(config, encoding="utf-8")
+            module._BROWSER_TARGETS_PATH = str(path)
+        module._browser_targets = None
+        return module
+
+    @pytest.mark.parametrize("host", [
+        "app.env-dev.contoso.com",
+        "APP.ENV-DEV.CONTOSO.COM",
+        "app.env-dev.contoso.com.",
+        "env-dev.contoso.com",
+        "api-test.fabrikam.org",
+    ])
+    def test_a_configured_target_is_allowed(self, tmp_path, host):
+        guard = self._guard_with(tmp_path, self._CONFIG)
+        assert guard._host_is_allowed_dev_env(host) is True
+
+    @pytest.mark.parametrize("host", [
+        "contoso.com",
+        "api.fabrikam.org",
+        "api-staging.fabrikam.org",
+        # The leading dot on a suffix is the label boundary. Without it this
+        # host ends with the zone name as a plain substring.
+        "evil-env-dev.contoso.com",
+        "env-dev.contoso.com.example.net",
+        # str.lower() does not fold a Cyrillic homograph, so non ASCII is out.
+        "app.env-dev.contoso.coм",
+        "",
+    ])
+    def test_a_host_outside_the_allowlist_is_rejected(self, tmp_path, host):
+        guard = self._guard_with(tmp_path, self._CONFIG)
+        assert guard._host_is_allowed_dev_env(host) is False
+
+    def test_no_config_falls_back_to_the_reserved_suffixes_only(self, tmp_path):
+        """Fail closed, because a guard that cannot read its config has no
+        basis to widen. A fresh clone must reach nothing of anyone else's."""
+        guard = self._guard_with(tmp_path, None)
+        assert guard._host_is_allowed_dev_env("myapp.local") is True
+        assert guard._host_is_allowed_dev_env("myapp.test") is True
+        assert guard._host_is_allowed_dev_env("app.env-dev.contoso.com") is False
+        assert guard._host_is_allowed_dev_env("api-test.fabrikam.org") is False
+
+    @pytest.mark.parametrize("config", [
+        "{ not json at all",
+        json.dumps(["a", "b"]),
+        json.dumps({"allowed_suffixes": ".env-dev.contoso.com"}),
+        # A bare TLD entry would hand over every .com there is.
+        json.dumps({"allowed_suffixes": [".com"]}),
+        json.dumps({"allowed_suffixes": ["attacker.net"]}),
+        json.dumps({"allowed_hosts": ["https://attacker.net/x"]}),
+        json.dumps({"allowed_hosts": ["attacker.net:8080"]}),
+        json.dumps({"allowed_hosts": ["аttacker.net"]}),
+        json.dumps({"allowed_hosts": [1, None, {"a": 1}]}),
+    ])
+    def test_a_malformed_config_never_widens_the_allowlist(self, tmp_path, config):
+        guard = self._guard_with(tmp_path, config)
+        for host in ("attacker.net", "x.attacker.net", "contoso.com"):
+            assert guard._host_is_allowed_dev_env(host) is False
+        assert guard._host_is_allowed_dev_env("myapp.local") is True
+
+    def test_the_curl_block_message_names_no_private_hostname(self, tmp_path):
+        """The message is user facing prose shipped in a public repo."""
+        guard = self._guard_with(tmp_path, self._CONFIG)
+        message = guard.check_curl_external("curl https://denied.fabrikam.org/x")
+        assert message is not None
+        assert "browser-targets.local.json" in message

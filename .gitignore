@@ -13,6 +13,13 @@ state/
 __pycache__/
 *.pyc
 .claude/settings.local.json
+# Your own environments' hostnames. bash-guard.py reads it; the committed
+# browser-targets.example.json documents the shape.
+.claude/browser-targets.local.json
+# Your own client and project names, so the test that keeps them out of this
+# repo does not have to spell them out in it. redacted-terms.example.json
+# documents the shape.
+.claude/redacted-terms.local.json
 .claude/scheduled_tasks.lock
 .events.jsonl
 .events.jsonl.lock

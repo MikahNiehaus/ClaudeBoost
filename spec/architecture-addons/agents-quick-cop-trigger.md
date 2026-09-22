@@ -14,7 +14,7 @@
 Three places state the rule, and all three phrase it as a standing exhortation,
 none as a mechanically checked condition:
 
-`CLAUDE.md:196-203` (root), identical in `C:/Users/mniehaus/.claude/CLAUDE.md:177-184`
+`CLAUDE.md:196-203` (root), identical in `~/.claude/CLAUDE.md:177-184`
 and `clean-rag/portable/CLAUDE.md:150-157`:
 
 > "**Use quick-cop far more than you currently do.** Every time you say
@@ -27,7 +27,7 @@ and `clean-rag/portable/CLAUDE.md:150-157`:
 > it to the user as settled fact."
 
 `clean-rag/portable/agents/quick-cop.md:3` (identical text in
-`C:/Users/mniehaus/.claude/agents/quick-cop.md:3`, confirmed byte-identical by
+`~/.claude/agents/quick-cop.md:3`, confirmed byte-identical by
 `diff`):
 
 > "description: 'Cheap claim checker. Given a claim that something is done,

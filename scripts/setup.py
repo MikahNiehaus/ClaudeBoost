@@ -1115,6 +1115,12 @@ def update_settings() -> None:
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
     env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
 
+    # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
+    # subprocess per write. setdefault, not assignment, so a human who retunes
+    # either one keeps their value across re-runs.
+    env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
+    env.setdefault("PIPE_DOWN_LLM", "0")
+
     # clean-rag bundled mode: set CLEAN_RAG_HOME when clean-rag/ is present
     if _clean_rag_detected():
         env["CLEAN_RAG_HOME"] = _clean_rag_home_posix()
@@ -1935,6 +1941,80 @@ def register_mcp_servers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claude Code plugins. One row per plugin. `marketplace` is what
+# `claude plugin marketplace add` takes, `name` is the plugin@marketplace id
+# `claude plugin install` takes. Both steps are needed; the marketplace alone
+# registers nothing.
+# ---------------------------------------------------------------------------
+PLUGINS = [
+    {
+        "name": "ponytail@ponytail",
+        "marketplace": "DietrichGebert/ponytail",
+        "why": "stops the agent over-building; MIT",
+        "needs_node": True,
+    },
+    # PreToolUse, so an over-long comment is refused rather than written and
+    # then nudged. Python, no node needed. Its LLM judge is on by default and
+    # spawns a claude subprocess per write, so PIPE_DOWN_LLM is set to 0 below.
+    {
+        "name": "pipe-down@claude-pipe-down",
+        "marketplace": "hoo29/claude-pipe-down",
+        "why": "blocks low value and over-long comments before the write; MIT",
+    },
+]
+
+
+def install_plugins() -> None:
+    """Install every plugin in PLUGINS.
+
+    Idempotent: `claude plugin list` is read once and anything already there is
+    skipped. Nothing here is fatal, same as MCP registration. A plugin's hooks
+    run as the user on every prompt, so each row is a trust decision, not a
+    convenience.
+    """
+    if not PLUGINS:
+        return
+
+    _info("\nVerifying Claude Code plugins...")
+
+    claude = claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found - skipping plugin install")
+        return
+
+    rc, listed = run_cmd(claude + ["plugin", "list"])
+    if rc != 0:
+        _skip(f"claude plugin list failed (exit {rc}) - skipping plugin install")
+        return
+
+    for plugin in PLUGINS:
+        name = plugin["name"]
+        if name in listed:
+            _ok(f"{name} already installed")
+            continue
+
+        # Its lifecycle hooks are Node. Without node they fail on every prompt.
+        if plugin.get("needs_node") and resolve_tool("node") is None:
+            _warn(f"{name} needs node on PATH - skipping")
+            continue
+
+        rc, out = run_cmd(claude + ["plugin", "marketplace", "add", plugin["marketplace"]])
+        if rc != 0:
+            _warn(f"could not add marketplace {plugin['marketplace']} (exit {rc})")
+            if out:
+                _warn(out.strip()[:300])
+            continue
+
+        rc, out = run_cmd(claude + ["plugin", "install", name])
+        if rc == 0:
+            _ok(f"{name} installed - {plugin['why']}")
+        else:
+            _warn(f"{name} install failed (exit {rc}); run: claude plugin install {name}")
+            if out:
+                _warn(out.strip()[:300])
+
+
+# ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
 # ---------------------------------------------------------------------------
@@ -2218,6 +2298,7 @@ def main() -> int:
     _clean_project_local_settings()
     install_rag_server()
     register_mcp_servers()
+    install_plugins()
     install_edge_tts()
     install_mermaid_cli()
     install_netcoredbg()

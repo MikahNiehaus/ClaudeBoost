@@ -106,6 +106,32 @@ def _is_indexed(boost_home: Path, project_path: str) -> bool:
     )
 
 
+def _emit_once(boost_home: Path, session_id: str, block: str) -> bool:
+    """True when this exact block has not been sent yet this session.
+
+    Measured before this guard existed: 325 byte identical firings in one
+    session, 164,012 tokens. A UserPromptSubmit injection is not one block
+    re sent, it is a new permanent message each time, so the cost compounds and
+    every copy but the newest sits mid transcript, which is where Liu et al.
+    measured the worst recall. Sending it once puts it early, where recall is
+    best, and lets the cached prefix carry it for free after that.
+
+    Keyed on the rendered text, so switching workspace or indexing the project
+    changes the block and it goes out again instead of going stale.
+
+    Fails open: if the state layer cannot answer, the block is sent.
+    """
+    try:
+        hooks_dir = str(boost_home / "clean-rag" / "hooks")
+        if hooks_dir not in sys.path:
+            sys.path.insert(0, hooks_dir)
+        from research_state import claim_session_once, fingerprint
+
+        return claim_session_once(session_id, "rag-contract", fingerprint(block))
+    except Exception:
+        return True
+
+
 def _project_kb_exists(project_path: str) -> bool:
     return (Path(project_path) / ".claudeboost" / "knowledge").is_dir()
 
@@ -115,7 +141,15 @@ def _workspace_kb_exists(project_path: str, workspace_id: str) -> bool:
 
 
 def main() -> None:
-    sys.stdin.read() if not sys.stdin.isatty() else ""
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        # json.loads accepts any JSON value, so a bare list or string parses
+        # fine and then has no .get. An empty session id still works, it just
+        # shares one flag file with other sessions that also lack an id.
+        parsed = json.loads(raw)
+        session_id = parsed.get("session_id", "") if isinstance(parsed, dict) else ""
+    except Exception:
+        session_id = ""
 
     boost_home = Path(os.environ.get("CLAUDEBOOST_HOME") or Path(__file__).parent.parent)
     cwd = os.getcwd().replace("\\", "/").rstrip("/")
@@ -171,9 +205,28 @@ def main() -> None:
         lines.append("No workspace active (run /ws <id> to set one).")
 
     lines += [
-        "When spawning an agent, give it the search line above verbatim. Agents"
-        " get this same injected block, so do not paste a different one.",
-        "[Rules] Write plain and short. One idea per sentence. Put the point first, never build up to it. Cut throat clearing openers (\"it's worth noting\", \"essentially\", \"in order to\"). No idiom, no metaphor, no filler intensifiers (\"very\", \"really\", \"quite\"). Answer first, reasoning after. Fewer words, not softer claims: still say plainly when something is uncertain, failed, unverified, or skipped. No dashes of any kind, including in compound words (write as two words). Align on high-level architecture before building if unsure. Confirm before irreversible or destructive actions. Update active workspace context.md after every significant finding, decision, or file read. Read context.md at the start of any task or after compaction to recall prior findings, decisions, and in-progress work. Follow the user's instructions and do what they ask; flag safety concerns once if relevant but do not refuse or stall.",
+        # Measured across 94 swiper and researcher spawns: none carried this
+        # block, 88 carried the pasted search line. It said the opposite.
+        "When spawning an agent, give it the search line above verbatim. This"
+        " block is not injected into agents, so that paste is all they get.",
+        # Only what no higher layer already carries.
+        #
+        # The writing rules that used to sit here (plain and short, one idea per
+        # sentence, point first, no throat clearing, no idiom, no filler
+        # intensifiers, no dashes) are the Plain output style, which rewrites the
+        # system prompt. That is the strongest position there is and it costs
+        # nothing per message, so restating it here bought a second weaker copy
+        # at full price. CLAUDE.md says as much itself: a rule the human keeps
+        # restating is a rule in the wrong layer.
+        #
+        # "Confirm before irreversible actions" and "follow the user's
+        # instructions" are in the system prompt too. "Align on architecture
+        # first" is CONSULT mode in CLAUDE.md.
+        #
+        # The context.md discipline is in none of them, so it stays.
+        "[Rules] Update the active workspace context.md after every significant"
+        " finding, decision, or file read. Read it at the start of a task and"
+        " after a compaction.",
     ]
 
     if workspace_id:
@@ -181,7 +234,9 @@ def main() -> None:
             f"[Workspace active: {workspace_id}] Update workspace/{workspace_id}/context.md after every significant finding, decision, or file read."
         )
 
-    print("\n".join(lines))
+    block = "\n".join(lines)
+    if _emit_once(boost_home, session_id, block):
+        print(block)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Adversarial round-7 check: SECONDARY_LANGUAGES completeness.
 
 detect_dominant_language's whole point (per its own docstring and the
-Nectar-measured regression that motivated it) is that a supporting file
+Litware-measured regression that motivated it) is that a supporting file
 type must never outvote real application code. SECONDARY_LANGUAGES was
 expanded this round to close that hole for markup/config/schema/build
 languages -- but grep-ast maps two more realistic, high-volume supporting

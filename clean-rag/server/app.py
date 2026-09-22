@@ -39,7 +39,15 @@ from .github_search import (
     github_search,
 )
 from .graphrag_client import build as graphrag_build, query as graphrag_query, status as graphrag_status
-from .indexing import acquire_index_lock, index_project, reindex_file, release_index_lock
+from .indexing import (
+    _project_paths,
+    acquire_index_lock,
+    delete_project_index,
+    index_project,
+    manifest_file_count,
+    reindex_file,
+    release_index_lock,
+)
 from .mutation import run_mutation
 from .resource_guard import PressureCheckpoint
 from .security import run_security_scan
@@ -133,9 +141,95 @@ def _json_response(data: dict, status: int = 200) -> web.Response:
 # Route handlers
 # ---------------------------------------------------------------------------
 
+#: manifest path -> (mtime, size, file count). Grows with the number of
+#: distinct projects seen since startup, and only ever read through
+#: _files_total_of. Deleting a project leaves its row behind.
+#:
+#: Size is in the key beside mtime because two writes a few milliseconds apart
+#: can land on the same mtime: 2 of 20 shared one when measured here.
+_FILES_TOTAL_CACHE: dict[str, tuple[float, int, int]] = {}
+
+
+def _files_total_of(project_path: object) -> int | None:
+    """How many files this project's index holds right now, or None.
+
+    The manifest is the only place that number exists. Nothing stores it,
+    deliberately: the registry has exactly one writer and three tests in
+    test_exec_routes_require_registered_project.py keep it that way, because
+    the exec route gate treats an entry in state/projects.json as proof this
+    server indexed the directory.
+
+    Computed here rather than stored, which also means it cannot go stale.
+    The cache turns the repeat cost into one stat per project: the console
+    polls /status every 3 seconds and the largest manifest here holds 1,731
+    entries, so parsing all of them every tick would be real work.
+
+    None, never 0, when the manifest cannot be read. 0 would claim the project
+    was measured and found empty, which is a different statement.
+
+    project_path is typed object because it arrives from json.loads on
+    state/projects.json, which nothing validates. A truthy non string such as
+    123 or ["C:/proj"] used to reach Path() and raise TypeError, and /status
+    builds one response for every project, so one malformed entry returned 500
+    for all of them.
+    """
+    if not isinstance(project_path, str) or not project_path:
+        return None
+    try:
+        manifest_path = _project_paths(project_path)[4]
+        stat = manifest_path.stat()
+    except (OSError, ValueError):
+        return None
+
+    key = str(manifest_path)
+    stamp = (stat.st_mtime, stat.st_size)
+    cached = _FILES_TOTAL_CACHE.get(key)
+    if cached is not None and cached[:2] == stamp:
+        return cached[2]
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    total = manifest_file_count(raw)
+    _FILES_TOTAL_CACHE[key] = (*stamp, total)
+    return total
+
+
+def _with_files_total(projects: object) -> dict:
+    """Attach the cumulative count to each entry, without storing it.
+
+    files_indexed and chunks_created count one run of index_project. A project
+    whose last sweep found nothing changed writes 0 to both, which is correct
+    and which the console read as EMPTY: ContosoMobile rendered EMPTY on 1,072
+    vectors, 1,486 edges and 223 nodes. The table headers were renamed to
+    "Run files" and "Run chunks" after the same misreading and the State cell
+    was missed. files_total is the number that cell actually wanted.
+
+    Takes object and returns a dict, so handle_status can call len() on the
+    result without asking again. It used to hand a non dict straight back, on
+    the reasoning that a reply carrying the other fields beat a 500. It did
+    not: a bare 7, null, 3.14 or true went through that passthrough and into
+    len(), which is the 500 it claimed to prevent. No registry root other than
+    an object carries an entry any caller can read, so there is nothing to
+    preserve by passing one on.
+    """
+    if not isinstance(projects, dict):
+        return {}
+    out = {}
+    for pid, entry in projects.items():
+        if not isinstance(entry, dict):
+            out[pid] = entry
+            continue
+        total = _files_total_of(entry.get("project_path"))
+        out[pid] = entry if total is None else {**entry, "files_total": total}
+    return out
+
+
 async def handle_status(request: web.Request) -> web.Response:
     """GET /status: server health, model status, indexed projects."""
-    projects = _list_projects()
+    projects = _with_files_total(_list_projects())
 
     loaded = _model_cache is not None and len(_model_cache) > 0
     if loaded:
@@ -861,6 +955,14 @@ def _registered_project_or_error(project_path: str, action: str) -> web.Response
         return _json_response({"error": "Invalid project_path"}, 400)
 
     for entry in _list_projects().values():
+        # An entry that is not an object grants nothing and skipping it keeps
+        # the refusal below, whereas .get() on it raised out of the handler and
+        # turned one malformed entry into a 500 for every gated route.
+        # _registered_project_paths and _with_files_total both read an entry
+        # this way already.
+        if not isinstance(entry, dict):
+            logger.warning("Registry holds a non object entry: %r", entry)
+            continue
         registered = entry.get("project_path")
         if not registered:
             continue
@@ -1351,6 +1453,95 @@ async def handle_projects(request: web.Request) -> web.Response:
     return _json_response({"projects": projects})
 
 
+async def handle_delete_project(request: web.Request) -> web.Response:
+    """POST /delete-project: remove clean-rag's index of a project.
+
+    Removes the vector index, the import graph and the manifest, plus the
+    registry entry. It never touches the project's own source code, and it
+    only ever removes directories under databases/_projects.
+
+    Requires ``confirm: true`` in the body. This is destructive and reachable
+    from anything that can POST to the port, so the flag is there to stop an
+    ordinary malformed request from deleting an index.
+
+    The index lock is held for the whole removal. Without it the auto reindex
+    sweep can rebuild the directory mid delete, or rewrite the registry entry
+    after this has removed it.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - any unparseable body is just a bad request
+        return _json_response({"error": "Invalid JSON body"}, 400)
+
+    if not isinstance(body, dict):
+        return _json_response({"error": "Body must be a JSON object"}, 400)
+
+    project_path = str(body.get("project_path", "")).strip()
+    if not project_path:
+        return _json_response({"error": "Missing 'project_path' field"}, 400)
+
+    if body.get("confirm") is not True:
+        return _json_response(
+            {"error": "Refusing to delete without {\"confirm\": true}"}, 400,
+        )
+
+    # Deliberately NOT gated on the directory still existing. A project whose
+    # folder has been deleted or moved is exactly the one most worth removing
+    # from the index, and requiring is_dir() here would make it undeletable.
+    # What is required is that clean-rag actually knows about it, so a typo
+    # cannot reach the removal path at all.
+    known = _registered_project_paths()
+    if not any(_same_path(project_path, p) for p in known):
+        return _json_response(
+            {"error": f"Not a registered project: {project_path}"}, 404,
+        )
+
+    if not acquire_index_lock("delete-project", project_path):
+        return _json_response({"error": "Index busy, retry in a moment"}, 423)
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, partial(delete_project_index, project_path),
+        )
+    finally:
+        release_index_lock()
+
+    # 500, not 400: a directory that would not delete is this server failing to
+    # do what it was asked, not the caller sending something wrong.
+    status = 200 if "error" not in result else 500
+    return _json_response(result, status)
+
+
+def _registered_project_paths() -> list[str]:
+    """Every project_path in state/projects.json, or an empty list."""
+    registry_path = STATE_DIR / "projects.json"
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(registry, dict):
+        return []
+    return [
+        str(e["project_path"])
+        for e in registry.values()
+        if isinstance(e, dict) and e.get("project_path")
+    ]
+
+
+def _same_path(a: str, b: str) -> bool:
+    """Whether two path strings name the same location.
+
+    Compared resolved, because the registry holds backslash Windows paths
+    while callers routinely send forward slash ones for the same directory.
+    A plain string comparison rejects the console's own requests.
+    """
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
 async def handle_sweep_pause(request: web.Request) -> web.Response:
     """POST /sweep-pause: stop or resume automatic reindexing.
 
@@ -1409,15 +1600,34 @@ def _current_index_lock() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def _list_projects() -> dict:
-    """Read project registry from state/projects.json."""
+    """Read project registry from state/projects.json. Always a dict.
+
+    Nothing validates that file, so its root is whatever JSON happens to be
+    there. Every caller here relies on the annotation: handle_status takes
+    len(), _registered_project_or_error takes .values(), handle_projects
+    serialises it. A bare 7, null, 3.14 or true parses fine and has neither,
+    so one corrupt byte turned /status into a 500 for every project.
+
+    A root that is not an object is unusable, which is the same conclusion the
+    unreadable and missing cases already reach, so it returns the same empty
+    registry rather than a second failure shape for callers to handle.
+    _registered_project_paths already reads this file this way.
+    """
     registry_path = STATE_DIR / "projects.json"
     if not registry_path.exists():
         return {}
     try:
-        return json.loads(registry_path.read_text(encoding="utf-8"))
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
     except Exception as e:
         logger.warning("Failed to read project registry: %s", e)
         return {}
+    if not isinstance(registry, dict):
+        logger.warning(
+            "Project registry root is %s, not an object. Treating it as empty.",
+            type(registry).__name__,
+        )
+        return {}
+    return registry
 
 
 # ---------------------------------------------------------------------------
@@ -1611,6 +1821,7 @@ def create_app() -> web.Application:
     app.router.add_post("/security-scan", handle_security_scan)
     app.router.add_get("/projects", handle_projects)
     app.router.add_post("/sweep-pause", handle_sweep_pause)
+    app.router.add_post("/delete-project", handle_delete_project)
 
     from .kanban import setup_kanban
     setup_kanban(app)

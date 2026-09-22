@@ -71,7 +71,7 @@ ALLOWED_URLS = [
 # URLs that are not local and must be refused
 DISALLOWED_URLS = [
     "https://example.com",
-    "https://staging.myapp.com",
+    "https://staging.example.com",
     "http://10.0.0.1:3000",    # private IP, not in the documented allow list
     "http://192.168.1.100",    # LAN IP, not in the documented allow list
     "https://localhost.evil.com",  # subdomain lookalike

@@ -94,8 +94,8 @@ Write-back: update the dict and write back atomically.
 ## Python Script Instead of python -c
 
 Never use `python -c "..."` for multi-line code in Bash commands. The bash-guard
-blocks it. Write a file to `C:/Users/grayw/AppData/Local/Temp/cb_script.py` and
-run `python "C:/Users/grayw/AppData/Local/Temp/cb_script.py"` instead.
+blocks it. Write a file to `C:/Users/<user>/AppData/Local/Temp/cb_script.py` and
+run `python "C:/Users/<user>/AppData/Local/Temp/cb_script.py"` instead.
 
 ## Exemption Pattern in Guards
 

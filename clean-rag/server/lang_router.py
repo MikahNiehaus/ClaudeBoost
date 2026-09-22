@@ -53,7 +53,7 @@ JINA_FAMILY: frozenset[str] = frozenset({
 #: every extension missing from edge_extraction._EXT_TO_LANG under that name,
 #: and that map only covers 24 code extensions, so .html, .yml, .cshtml, .json,
 #: .xml, .md, .sql and .css all land in it. Without this entry that bucket wins
-#: the vote on any project with a lot of markup and config: Nectar counted 3138
+#: the vote on any project with a lot of markup and config: Litware counted 3138
 #: "unknown" against 1323 real csharp files and routed to the fallback model
 #: instead of the C# one. Excluding it means the vote is decided only by files
 #: whose language is actually known, which is what the vote was ever for.

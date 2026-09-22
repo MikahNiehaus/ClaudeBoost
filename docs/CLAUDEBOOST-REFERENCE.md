@@ -906,7 +906,7 @@ server does not serve.
 ## 6. Hook Registration
 
 **Global settings:** `~/.claude/settings.json` — 46 registrations.
-**Project settings:** `C:\Development\ClaudeBoost\.claude\settings.json` — 6 registrations.
+**Project settings:** `<repo>/.claude/settings.json` — 6 registrations.
 **Total:** 52, spread across seven events.
 
 Both files are the source of truth. This section deliberately does not list

@@ -444,7 +444,7 @@ For quick, one-off research (comparing two libraries, answering a specific quest
 ```
 /index-project
 /index-project C:/Development/MyApp
-/index-project nectar
+/index-project litware
 /index-project MyApp typescript,csharp
 ```
 
@@ -454,7 +454,7 @@ Scans your project, embeds all source files into a per-project vector index, and
 - Vector search — "find the payment processing logic", "where is auth handled?"
 - Graph search — "what imports this module?", "what changes if I modify class Foo?"
 
-**Path resolution:** pass a full path, a short project name (fuzzy matching works — "nectar" finds "NectarBenefits"), or nothing to use the current directory.
+**Path resolution:** pass a full path, a short project name (fuzzy matching works — "litware" finds "LitwareBenefits"), or nothing to use the current directory.
 
 **Quality checks after indexing (7 checks, auto-fixed where possible):**
 - Coverage: detects file types excluded from the index (`.vue`, `.razor`, etc.)

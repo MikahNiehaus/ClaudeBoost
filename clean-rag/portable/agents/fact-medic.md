@@ -61,7 +61,7 @@ stronger verb, and the stronger verb is usually the one that is not true.
 against a team median of 8.6%` losing the median, which turns a rate into an
 implied first place. A number without its denominator is a different claim.
 
-**Proper nouns and technical terms.** `NectarFunction` becoming `Nectar
+**Proper nouns and technical terms.** `LitwareFunction` becoming `Litware
 Function`. `DbContext` becoming `database context`. `PlatePlanner` becoming
 `PlatePlatter`, which is a real misspelling that matches zero commits. Product
 names, file names, class names and library names are all at risk and all

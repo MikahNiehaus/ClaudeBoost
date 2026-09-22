@@ -612,6 +612,96 @@ def _module_available(module: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Claude Code plugins. Mirrors ClaudeBoost's scripts/setup.py PLUGINS table,
+# kept as its own copy for the same standalone reason as MCP_SERVERS above.
+# `marketplace` is what `claude plugin marketplace add` takes, `name` is the
+# plugin@marketplace id `claude plugin install` takes. Both steps are needed;
+# adding the marketplace alone installs nothing.
+# ---------------------------------------------------------------------------
+PLUGINS: list[dict] = [
+    {
+        "name": "ponytail@ponytail",
+        "marketplace": "DietrichGebert/ponytail",
+        "needs_node": True,
+    },
+    # PreToolUse, so an over-long comment is refused rather than written and
+    # then nudged. Python, no node needed.
+    {
+        "name": "pipe-down@claude-pipe-down",
+        "marketplace": "hoo29/claude-pipe-down",
+    },
+]
+
+
+def install_plugins() -> None:
+    """Install every plugin in PLUGINS.
+
+    Idempotent: `claude plugin list` is read once and anything already there is
+    skipped. Best effort, same contract as register_mcp_servers. A plugin's
+    hooks run as the user on every prompt, so each row is a trust decision.
+    """
+    if not PLUGINS:
+        return
+
+    claude = _claude_cmd()
+    if claude is None:
+        _warn("claude CLI not found, skipping plugin install")
+        return
+
+    try:
+        # encoding and errors are load bearing: `claude plugin list` prints a
+        # check mark, and under cp1252 a bare text=True decodes to None, which
+        # silently reinstalls every row on every run.
+        listed = subprocess.run(
+            claude + ["plugin", "list"],
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"claude plugin list failed ({e}), skipping plugin install")
+        return
+
+    if listed.returncode != 0:
+        _warn("claude plugin list failed, skipping plugin install")
+        return
+
+    installed = listed.stdout or ""
+
+    for plugin in PLUGINS:
+        name = plugin["name"]
+        if name in installed:
+            _ok(f"{name} already installed")
+            continue
+
+        # Its lifecycle hooks are Node. Without node they fail on every prompt.
+        if plugin.get("needs_node") and resolve_tool("node") is None:
+            _warn(f"{name} needs node on PATH, skipping")
+            continue
+
+        try:
+            added = subprocess.run(
+                claude + ["plugin", "marketplace", "add", plugin["marketplace"]],
+                capture_output=True, text=True, timeout=120,
+            )
+            if added.returncode != 0:
+                _warn(f"could not add marketplace {plugin['marketplace']}, skipping {name}")
+                continue
+
+            done = subprocess.run(
+                claude + ["plugin", "install", name],
+                capture_output=True, text=True, timeout=180,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"{name} install failed ({e})")
+            continue
+
+        if done.returncode == 0:
+            _ok(f"{name} installed")
+        else:
+            _warn(f"{name} install failed, run: claude plugin install {name}")
+
+
 def install_pptx_tools() -> None:
     """Install what the powerpoint skill needs to build and narrate a deck.
 
@@ -990,6 +1080,10 @@ def set_env_var() -> None:
     # is still room to write a decent summary. setdefault, not assignment: a
     # number the human has already tuned is theirs to keep.
     env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
+    # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
+    # subprocess per write. setdefault, so a human who retunes either keeps it.
+    env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
+    env.setdefault("PIPE_DOWN_LLM", "0")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
     _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")
@@ -1168,10 +1262,21 @@ def setup_graphrag() -> None:
 def setup_clean_rag_venv() -> None:
     """Set up the isolated venv the server's embedding stack runs in.
 
-    Same shape and same reasoning as setup_graphrag above: create it if missing,
-    probe for the package, install only when absent. Idempotent and best effort.
+    Creates the venv if missing, then always runs `pip install -r
+    requirements.txt` against it. That call is idempotent and best effort on
+    its own: pip already skips anything whose pin is already satisfied, so
+    there is no need to hand roll that check.
 
-    Why this exists at all. The server used to import torch, transformers and
+    This used to probe for one package (sentence_transformers) and skip the
+    whole install if it imported, on the theory that meant the venv was fully
+    populated. That broke the moment a second dependency was added to
+    requirements.txt later (textual, for cli/console.py): sentence_transformers
+    still imported fine, so the probe reported "already populated" and pip
+    never ran, leaving textual missing on every machine that had installed
+    before that line was added. Running pip every time is what a normal
+    project does (CI, Docker) for exactly this reason.
+
+    Why the venv exists at all. The server used to import torch, transformers and
     sentence-transformers from whatever interpreter happened to launch it,
     normally the user's global one. Three packages that must agree on versions,
     installed next to everything else on the machine, is a standing conflict. It
@@ -1207,22 +1312,15 @@ def setup_clean_rag_venv() -> None:
         return
 
     try:
-        probe = subprocess.run(
-            [str(venv_py), "-c",
-             "import importlib.util as u; print(u.find_spec('sentence_transformers') is not None)"],
-            capture_output=True, text=True, timeout=30,
+        # torch alone is a few hundred MB, so a first run is the slow step of
+        # the whole install. Long timeout on purpose: a half installed venv is
+        # the state this function exists to avoid creating. A re-run with
+        # everything already satisfied is fast, pip just checks each pin.
+        print("  installing requirements into clean-rag-venv ...")
+        subprocess.run(
+            [str(venv_py), "-m", "pip", "install", "--quiet", "-r", str(reqs)],
+            check=True, timeout=3600,
         )
-        if "True" in probe.stdout:
-            print("  clean-rag-venv already populated")
-        else:
-            # torch alone is a few hundred MB, so this is the slow step of the
-            # whole install. Long timeout on purpose: a half installed venv is
-            # the state this function exists to avoid creating.
-            print("  installing requirements into clean-rag-venv (large download) ...")
-            subprocess.run(
-                [str(venv_py), "-m", "pip", "install", "--quiet", "-r", str(reqs)],
-                check=True, timeout=3600,
-            )
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] clean-rag-venv requirements install failed: {e}")
         print("  the server falls back to the launching interpreter, which may be broken")
@@ -1455,47 +1553,6 @@ def configure_code_pattern_inject_env() -> None:
     _ok("Code pattern injection enabled (CLEAN_RAG_PATTERN_INJECT=true)")
 
 
-def setup_gpu_memory_manager():
-    """Configure GPU memory management for embeddings.
-
-    Copies smart_gpu_indexing.py to LocalAI project and configures
-    dynamic VRAM allocation based on available GPU memory.
-    """
-    try:
-        # Check if LocalAI project exists
-        localai_path = Path.cwd().parent / "LocalAI"
-        if not localai_path.exists():
-            _warn("LocalAI project not found, skipping GPU memory manager setup")
-            return
-
-        # Check if smart_gpu_indexing.py exists locally (in clean-rag)
-        gpu_manager_src = CLEAN_RAG_HOME / "smart_gpu_indexing.py"
-        if not gpu_manager_src.exists():
-            _say("smart_gpu_indexing.py not found in clean-rag directory")
-            _say("GPU memory manager must be set up separately in LocalAI project")
-            return
-
-        # Verify it exists in LocalAI
-        gpu_manager_dst = localai_path / "smart_gpu_indexing.py"
-        if gpu_manager_dst.exists():
-            _ok("GPU memory manager already installed in LocalAI")
-            return
-
-        # Configure Python embedding settings with GPU memory awareness
-        try:
-            from server.embedding import configure_gpu_aware_embedding
-            from server.config import CODE_EMBEDDING_MODEL
-            configure_gpu_aware_embedding(CODE_EMBEDDING_MODEL)
-            _ok("GPU-aware embedding configured for dynamic batch sizing")
-        except Exception as e:
-            _say(f"Optional: GPU-aware embedding setup: {e}")
-            _say("Embeddings will use CPU fallback if GPU memory is insufficient")
-
-    except Exception as e:
-        _warn(f"GPU memory manager setup: {e}")
-        _say("Embeddings will still function with CPU fallback")
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1539,6 +1596,13 @@ def main():
         register_mcp_servers()
     else:
         print("\nStep 2b2: Skipped (--skip-deps)")
+
+    # Step 2b3
+    if not args.skip_deps:
+        print("\nStep 2b3: Installing Claude Code plugins...")
+        install_plugins()
+    else:
+        print("\nStep 2b3: Skipped (--skip-deps)")
 
     # Step 2c
     if not args.skip_deps:
@@ -1585,10 +1649,6 @@ def main():
     # Step 5d
     print("\nStep 5d: Setting up GraphRAG (isolated venv + models; may download)...")
     setup_graphrag()
-
-    # Step 5e
-    print("\nStep 5e: Setting up GPU memory management...")
-    setup_gpu_memory_manager()
 
     # Step 5f
     print("\nStep 5f: Registering spec-compliance-gate hook...")
@@ -1639,11 +1699,10 @@ def main():
     print(f"    PreToolUse:        code-pattern-inject.py (forces research on Edit/Write/MultiEdit)")
     print(f"    UserPromptSubmit:  rag-enforce.py (real-query search, web fallback, git auto-index)")
     print(f"    PostToolUse:       reindex-after-edit.py (keeps index fresh)")
-    print(f"  GPU Memory:  smart_gpu_indexing.py (dynamic VRAM allocation)")
     print(f"  Server:  python {CLEAN_RAG_HOME.as_posix()}/cli/server_ctl.py start")
+    print(f"  Console: python {CLEAN_RAG_HOME.as_posix()}/cli/console.py")
     print()
     print("Start the server to enable RAG-backed research and code quality metrics injection.")
-    print("GPU memory manager provides dynamic batch sizing for embeddings.")
     print("=" * 60)
 
 

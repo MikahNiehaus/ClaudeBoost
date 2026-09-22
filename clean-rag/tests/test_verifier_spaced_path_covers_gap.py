@@ -7,7 +7,7 @@ list came back empty on a genuinely clean, fully evidenced close.
 _is_file_token used to reject any token containing whitespace. A space is legal
 in a filename on both platforms (POSIX permits every byte but "/" and NUL;
 Windows allows spaces outright), so a real path such as
-"C:\\Development\\F and B PWA\\src\\app.py" failed that check, _continuation_files
+"C:\\Development\\X and Y PWA\\src\\app.py" failed that check, _continuation_files
 rejected the whole line on it, and covered_files_in_block returned []. The stamp
 was still written, since real execution proof was present, but with an empty
 covers list, which is the shape HANDOFF and NITS use: loop_stage read
@@ -76,7 +76,7 @@ def run_hook(report: str, agent: str, session: str, clean_rag_home: str):
     )
 
 
-SPACED_PATH = "C:\\Development\\F and B PWA\\src\\app.py"
+SPACED_PATH = "C:\\Development\\X and Y PWA\\src\\app.py"
 
 CLEAN_PASS_WITH_A_SPACED_PATH = (
     "I reviewed the changed file under the spaced-path project directory.\n\n"
@@ -122,7 +122,7 @@ class TestASpacedPathOnAContinuationLine:
 
     def test_a_spaced_path_reaches_check_file_verified(self, tmp_path, monkeypatch):
         """End to end: the recorded name is what the gate matches on."""
-        reviewed = tmp_path / "F and B PWA" / "app.py"
+        reviewed = tmp_path / "X and Y PWA" / "app.py"
         reviewed.parent.mkdir(parents=True)
         reviewed.write_text("# x\n")
         time.sleep(0.3)

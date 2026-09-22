@@ -28,7 +28,7 @@ The live server returns no such key. Called directly:
 ```json
 {"status": "ready", "uptime_s": 108873.4,
  "code_embedding_model": "nomic-ai/CodeRankEmbed",
- "projects": {"count": 13, "entries": {"ascendmobile-79699337": {"project_path": "..."}}}}
+ "projects": {"count": 13, "entries": {"contosomobile-79699337": {"project_path": "..."}}}}
 ```
 
 The real path is `projects.entries.<key>.project_path`. Grepping the response

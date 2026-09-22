@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+
+_PLACEHOLDER_ACCOUNTS = frozenset({"<user>", "user", "username", "youruser", "example"})
 
 
 def _load():
@@ -192,8 +195,18 @@ def test_a_server_that_is_down_yields_no_route_verdict(mod, monkeypatch, tmp_pat
 # --- the audit must be honest about its own scope ------------------------
 
 def test_no_machine_specific_paths_in_the_tool(mod):
-    """The tool ships to other machines, so it must not name this one."""
+    """The tool ships to other machines, so it must not name this one.
+
+    Structural rather than two literal names, for the reason
+    tests/test_no_machine_specific_paths.py records: a literal only ever
+    catches the machine that wrote it, and a second developer's home directory
+    sat in three tracked files the whole time a name check like that was green.
+    Spelling a real account here would also put the leak inside the test for
+    the leak.
+    """
     source = (SCRIPTS_DIR / "audit-hooks.py").read_text(encoding="utf-8")
-    lowered = source.lower()
-    assert "users\\mniehaus" not in lowered and "users/mniehaus" not in lowered
-    assert "onedrive" not in lowered
+    home = re.compile(r"(?:[A-Za-z]:[\\/]+)?(?:users|home)[\\/]+([A-Za-z0-9._-]+)",
+                      re.IGNORECASE)
+    named = {m.group(1).lower() for m in home.finditer(source)}
+    assert not named - _PLACEHOLDER_ACCOUNTS, sorted(named - _PLACEHOLDER_ACCOUNTS)
+    assert "onedrive" not in source.lower()

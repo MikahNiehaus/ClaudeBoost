@@ -54,7 +54,7 @@ def test_a_grpc_service_with_more_proto_than_csharp_still_routes_on_csharp():
     dominant = detect_dominant_language(counts)
     assert dominant == "csharp", (
         f"proto (200) outvoted csharp (50): dominant={dominant!r}. "
-        "This is the exact Nectar failure shape (unvoted extension outvotes "
+        "This is the exact Litware failure shape (unvoted extension outvotes "
         "the real language), just for .proto instead of .html/.yml."
     )
     assert get_model_for_project(counts) == MODEL_SFR
