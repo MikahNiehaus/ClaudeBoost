@@ -43,15 +43,15 @@ class TestGetBoostHome:
 class TestNormalizeCwd:
     def test_backslashes_to_forward(self):
         from workspace_identity import normalize_cwd
-        assert normalize_cwd("C:\\Users\\test\\project") == "C:/Users/test/project"
+        assert normalize_cwd("C:\\Users\\foo\\project") == "C:/Users/foo/project"
 
     def test_trailing_slash_stripped(self):
         from workspace_identity import normalize_cwd
-        assert normalize_cwd("C:/Users/test/project/") == "C:/Users/test/project"
+        assert normalize_cwd("C:/Users/foo/project/") == "C:/Users/foo/project"
 
     def test_already_normalized(self):
         from workspace_identity import normalize_cwd
-        assert normalize_cwd("C:/Users/test") == "C:/Users/test"
+        assert normalize_cwd("C:/Users/foo") == "C:/Users/foo"
 
 
 # ---------------------------------------------------------------------------

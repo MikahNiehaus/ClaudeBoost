@@ -560,15 +560,17 @@ def test_installers_hardcode_no_machine_specific_path():
 
 # --- The safety guidance has to ship, not just exist on one machine ---------
 #
-# Both of these become ~/.claude/CLAUDE.md, which is why the section lives in
-# both. install.bat and install.sh delete the destination and link the repo
-# root copy; clean-rag/install.py's install_user_assets copies the portable one
-# over the same path, and neither installer detects the other. Guidance in only
-# one of them ships on only one of the two routes, and install.bat's `del` then
-# `mklink` actively destroys a section that exists nowhere but the user's own
-# file. That is what happened: the section was written straight into
-# ~/.claude/CLAUDE.md, which is untracked, so no install path carried it.
-INSTALLED_CLAUDE_MDS = ("CLAUDE.md", "clean-rag/portable/CLAUDE.md")
+# One entry, because only one file becomes ~/.claude/CLAUDE.md now. This tuple
+# used to name the repo root copy too, back when install.bat and install.sh
+# linked root while clean-rag/install.py copied portable over the same path and
+# neither installer detected the other. Root is a pointer stub now and both
+# installers link portable, so a second entry here would demand the full rule
+# set live in a file whose whole purpose is to not hold it.
+#
+# The duplication that shape created is the reason the root file is a pointer:
+# the two copies drifted about 160 lines apart in each direction before anyone
+# compared them.
+INSTALLED_CLAUDE_MDS = ("clean-rag/portable/CLAUDE.md",)
 
 MCP_SAFETY_HEADING = "## MCP servers, and using them safely"
 
@@ -599,12 +601,19 @@ def test_shipped_docs_say_where_credentials_belong(rel):
         f"Claude Code never reads that file, so a token set there is invisible.")
 
 
-def test_mcp_safety_section_does_not_drift_between_copies():
-    """Two copies drift. This is what notices, same as test_installer_tables_agree."""
-    first, second = (_mcp_safety_section(r) for r in INSTALLED_CLAUDE_MDS)
-    assert first == second, (
-        f"the MCP safety section differs between {INSTALLED_CLAUDE_MDS[0]} and "
-        f"{INSTALLED_CLAUDE_MDS[1]}")
+def test_the_root_pointer_does_not_carry_the_section_too():
+    """The old drift test, inverted, because there is only one copy to drift now.
+
+    Two copies drifted 160 lines apart in each direction, so the fix was to stop
+    having two. Putting the section back into the root file would restart that,
+    and it would also be paid for on every session: Claude Code loads the user
+    file and the project file together and concatenates them with no dedupe.
+    """
+    root = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert MCP_SAFETY_HEADING not in root, (
+        f"{MCP_SAFETY_HEADING!r} is back in the repo root CLAUDE.md. That file is "
+        f"a pointer at {INSTALLED_CLAUDE_MDS[0]}, which is where the section "
+        f"belongs. Two copies is what this test exists to stop.")
 
 
 def test_env_example_cross_reference_resolves():

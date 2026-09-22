@@ -5,7 +5,7 @@ they landed in the "unknown" bucket, which DOC_LANGUAGES already excluded, so
 resolving them correctly is what re-opened the hole: they started counting as
 code in the vote that picks the embedding model.
 
-Same class of bug as the original Nectar failure, where 3138 unmapped markup
+Same class of bug as the original Litware failure, where 3138 unmapped markup
 files outvoted 1323 real C# files. Written by bad-cop to prove the gap;
 inverted here to assert it is closed.
 """

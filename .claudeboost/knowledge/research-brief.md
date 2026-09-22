@@ -1,7 +1,7 @@
 # Project Research Brief
 
 Last updated: 2026-06-14
-Project: C:/Users/grayw/OneDrive/prj/ClaudeBoost
+Project: C:/Users/<user>/OneDrive/prj/ClaudeBoost
 
 ## Technologies Researched
 
@@ -87,7 +87,7 @@ Project: C:/Users/grayw/OneDrive/prj/ClaudeBoost
 # Run 2 — 2026-06-14
 
 Last updated: 2026-06-14
-Project: C:/Users/grayw/OneDrive/prj/ClaudeBoost
+Project: C:/Users/<user>/OneDrive/prj/ClaudeBoost
 
 ## Technologies Researched
 

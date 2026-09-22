@@ -44,10 +44,13 @@ if [ -e "$CLAUDE_DIR/CLAUDE.md" ] || [ -L "$CLAUDE_DIR/CLAUDE.md" ]; then
         exit 1
     fi
 fi
-if ln -s "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+# clean-rag/portable/CLAUDE.md is the canonical copy, because clean-rag's own
+# installer reads it. The repo root file is only a pointer at it, so linking
+# root here shipped a stub as the whole rule set.
+if ln -s "$BOOST_DIR/clean-rag/portable/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
     echo "        CLAUDE.md linked (auto-updates on git pull)."
 else
-    cp "$BOOST_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
+    cp "$BOOST_DIR/clean-rag/portable/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
     echo "        CLAUDE.md copied (re-run install.sh after git pull to update it)."
 fi
 

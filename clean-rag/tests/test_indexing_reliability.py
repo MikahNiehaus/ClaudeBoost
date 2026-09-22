@@ -158,7 +158,7 @@ class TestStallBudget:
         return mod
 
     def test_outer_cap_is_high_enough_for_the_largest_real_project(self):
-        """Nectar is 4492 files at an observed 3 to 30 files per pause, so
+        """Litware is 4492 files at an observed 3 to 30 files per pause, so
         roughly 900 cycles. The old cap of 200 would have abandoned it."""
         b = self._batch()
         assert b.MAX_PAUSES_PER_PROJECT >= 1000, (

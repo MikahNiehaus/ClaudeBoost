@@ -865,6 +865,35 @@ settings fields already exist for most of it. Hand rolling a solution to a solve
 problem is the failure this whole file is meant to prevent, and it applies to
 tooling and config, not just project code.
 
+### No machine specific paths in anything committed
+
+Never write an absolute path, a home directory, or a username into a file that
+gets committed. Not in code, not in a test fixture, not in a config file, not
+in a comment, not in a doc. Derive the root instead:
+`Path(__file__).resolve().parents[N]` in Python,
+`$(git rev-parse --show-toplevel)` or `${CLAUDEBOOST_HOME}` in shell, and a
+visible placeholder like `C:/Users/<user>` in prose.
+
+This is the rule that already failed, twice, in this repo. Two developers' home
+directories and a client's internal hostnames reached a public repository one
+hardcoded line at a time, and every one of those lines looked harmless on the
+machine that wrote it. `tests/test_no_machine_specific_paths.py` catches the
+shape now, and its own docstring records that "a second developer's home
+directory sat in three tracked files the whole time the suite was green". That
+test scans only tracked files with a known suffix, so it is a net under this
+rule and not a substitute for it.
+
+The trap is that a hardcoded path is never wrong on the machine you are sitting
+at. It fails on someone else's clone, in CI, and in a public diff, which is to
+say it fails everywhere you are not looking. So the check is never "does this
+work here", it is "what does this say about whose machine this is".
+
+One narrow exception. A path typed into a one off Bash command during a live
+session is not committed, and there it should be absolute, because Claude
+Code's simple_expansion scanner prompts on a bare `$VAR` whatever the allow
+list says. Use the `${BRACE}` form or a literal absolute path in that case. The
+moment the same path is written into a file, the rule above applies again.
+
 ### jQuery Ban
 jQuery is banned unless the user explicitly asks for it. Detect `$()`, `jQuery`,
 imports, and CDN tags. Use React hooks, vanilla JS, and native fetch instead.
@@ -909,19 +938,23 @@ Playwright and browser automation reach local machines and named test or dev
 environments. Nothing else. Allowed:
 
 - localhost, 127.0.0.1, 0.0.0.0, `::1`, and `*.local` / `*.test`
-- the Ralph Maestro shared environments, `*.vivery-dev.com`, which covers
-  env-a through env-f and every app hostname on them (`manager.`, `admin.`,
-  `app.`, `api.`, `fn.`, `login.`, `mail.`, `sms.`, and the rest)
+- whatever `.claude/browser-targets.local.json` names. That file is gitignored
+  because your environments are nobody else's business, and
+  `.claude/browser-targets.example.json` documents the shape and the rules an
+  entry has to satisfy. `scripts/bash-guard.py` reads the same file, so the
+  guard and this rule cannot drift apart. With no file present, only the line
+  above is reachable.
 
 Production is never in scope, and neither is any host you have not confirmed is
 a test or dev environment. A hostname is not evidence on its own: `dev` in a
-name proves nothing, and a shared dev environment can still hold real data. The
-Maestro environments run production data snapshots, so treat every write there
-as a write to shared state and get approval first. Read only navigation,
-hovering, and screenshots are fine.
+name proves nothing, and a shared dev environment can still hold real data. A
+lower environment restored from a production snapshot is production data with a
+friendlier name, so treat every write there as a write to shared state and get
+approval first. Read only navigation, hovering, and screenshots are fine.
 
-Two things stay off limits regardless. The Maestro dashboard itself is a
-control plane, never browse it. Corporate identity sign in belongs to the human:
+Two things stay off limits regardless. An environment's own control plane or
+management dashboard is never something to browse. Corporate identity sign in
+belongs to the human:
 drive as far as the SSO prompt and hand over rather than entering someone's
 credentials or approving their MFA.
 

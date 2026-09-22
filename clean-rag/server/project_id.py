@@ -7,7 +7,8 @@ concluded the project had never been indexed, and either returned nothing
 or reindexed from scratch. Nothing errored. Everything derives the name
 from here now.
 
-Names are `<slug>-<hash>`, e.g. `pantryeasy-98eeaa63`. The slug is there so
+Names are `<slug>-<hash>`: `C:\\Development\\myproject` becomes
+`myproject-2d7cff12`. The slug is there so
 a human can tell the directories apart. The hash stays because the slug
 alone collides: two checkouts of one project under different parents share
 a leaf name, and a collision silently overwrites one project's index with
@@ -85,14 +86,14 @@ def slugify_name(name: str) -> str:
 def project_dir_name(project_path) -> str:
     """Directory name under databases/_projects for this project.
 
-    ``<parent>-<leaf>-<hash>``, e.g. ``f-and-b-pwa-nectar-4bea5867``.
+    ``<parent>-<leaf>-<hash>``, e.g. ``x-and-y-pwa-litware-aa295407``.
 
     The parent segment is in the name because the leaf alone was genuinely
-    ambiguous in practice, not hypothetically: this install has
-    ``F and B PWA\\Nectar`` and ``F and B PWA2\\Nectar``, which both slugged to
-    ``nectar-<hash>``. Two directories, same readable part, and the only thing
-    telling them apart was a hash nobody can map back to a path by eye. That
-    defeats the reason the slug exists at all.
+    ambiguous in practice, not hypothetically: two checkouts of one project
+    under sibling parents, ``X and Y PWA\\Litware`` and ``X and Y PWA2\\Litware``,
+    both slugged to ``litware-<hash>``. Two directories, same readable part,
+    and the only thing telling them apart was a hash nobody can map back to a
+    path by eye. That defeats the reason the slug exists at all.
 
     The hash still decides identity. The slug is only ever for humans reading
     a directory listing.
@@ -109,7 +110,7 @@ def project_dir_name(project_path) -> str:
     if parent and parent != leaf and parent not in _GENERIC_PARENTS:
         # Truncate the PARENT, never the combined string. Slicing the join
         # trims from the right, which eats the leaf first: measured, a 59
-        # character parent left zero characters of "Nectar" or "AscendMobile",
+        # character parent left zero characters of "Litware" or "ContosoMobile",
         # so two projects differed only by hash. That is the exact thing the
         # parent prefix was added to prevent.
         #

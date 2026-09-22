@@ -372,42 +372,84 @@ def check_netcat(command: str) -> str | None:
 
 _LOCALHOST_NAMES = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
-# Named test and dev environments this machine is allowed to reach, on top of
-# localhost. Ralph Maestro serves env-a through env-f under vivery-dev.com, and
-# every app on an environment is its own hostname (manager., admin., app., api.,
-# fn., login., mail., sms., sites., widget., link.), so the whole zone is
-# allowed rather than a list that goes stale the first time a new app appears.
-#
-# Every entry MUST start with a dot. The match below is endswith() against that
-# dotted form, and the leading dot is the only thing making it a label boundary
-# rather than a substring: "evil-vivery-dev.com".endswith(".vivery-dev.com") is
-# False because the character before the label is "-". Store "vivery-dev.com"
-# undotted here and that evasion starts working.
-#
-# Do not put an IP range or an IPv6 literal in this set. Suffix matching cannot
-# express either one correctly. Loopback addresses belong in _LOCALHOST_NAMES.
-_ALLOWED_DEV_SUFFIXES = frozenset({".vivery-dev.com", ".local", ".test"})
+# RFC 6761 reserves .test and RFC 6762 reserves .local, so neither can ever be
+# a real organisation's zone. They ship allowed. Every other environment a
+# machine may reach is site specific and names somebody's infrastructure, so it
+# lives in the gitignored file below instead of in tracked source.
+_BUILTIN_DEV_SUFFIXES = frozenset({".local", ".test"})
 
-# Exact hostnames, deliberately NOT suffixes. pantryeasy.com holds production
-# and every lower environment in one zone: api.pantryeasy.com and
-# admin.pantryeasy.com are production, while api-test, api-temp, api-trial and
-# their admin- counterparts are not. A ".pantryeasy.com" entry in the suffix set
-# above would therefore allow production, which is the one thing that must never
-# happen. Each entry here is a full hostname compared with ==, so a new
-# subdomain is denied until someone adds it on purpose.
+# Site specific browser and curl targets. `.claude/browser-targets.example.json`
+# is the committed shape, and carries the rules a new entry has to satisfy.
 #
-# Deliberately absent: api-staging and admin-staging, which are neither test nor
-# dev and carry the closest thing to production data. Also absent: the per
-# tenant temp sites (nourishinghopetemp, loavestemp, waynetwptemp), which serve
-# real customer orgs and do not follow the "-test" naming.
-_ALLOWED_DEV_HOSTS = frozenset({
-    "api-test.pantryeasy.com",
-    "admin-test.pantryeasy.com",
-    "api-temp.pantryeasy.com",
-    "admin-temp.pantryeasy.com",
-    "api-trial.pantryeasy.com",
-    "admin-trial.pantryeasy.com",
-})
+# Absent, unreadable or malformed, this file contributes nothing and the guard
+# allows only localhost plus the two reserved suffixes above. Deny by default is
+# the required direction for an allowlist (OWASP Proactive Controls C5): a
+# config the guard cannot read must never widen what a browser can reach.
+_BROWSER_TARGETS_PATH = os.path.join(
+    _BOOST_HOME, ".claude", "browser-targets.local.json")
+
+_browser_targets: tuple[frozenset[str], frozenset[str]] | None = None
+
+
+def _valid_suffix(entry: str) -> bool:
+    """A suffix entry has to be a dotted zone of at least two labels.
+
+    The leading dot is the only thing making the endswith() below a label
+    boundary rather than a substring: "evil-env-dev.contoso.com" does not end
+    with ".env-dev.contoso.com", because the character before the label is
+    "-". Stored undotted, that evasion starts working.
+
+    Two labels minimum because a bare ".com" would allow the entire TLD, and
+    the whole point of the file is naming one zone at a time.
+    """
+    return (entry.startswith(".")
+            and entry == entry.lower()
+            and entry.isascii()
+            and "/" not in entry
+            and len(entry[1:].split(".")) >= 2
+            and all(entry[1:].split(".")))
+
+
+def _valid_host(entry: str) -> bool:
+    """An exact host entry is a bare hostname, never a URL and never a zone."""
+    return (not entry.startswith(".")
+            and entry == entry.lower()
+            and entry.isascii()
+            and "/" not in entry
+            and ":" not in entry
+            and "." in entry)
+
+
+def _load_browser_targets() -> tuple[frozenset[str], frozenset[str]]:
+    """Read the site config once per process, on the first host actually checked.
+
+    Lazy for the same reason urllib.parse is imported lazily: this hook runs
+    before every Bash call, and most of them carry no URL at all.
+    """
+    global _browser_targets
+    if _browser_targets is not None:
+        return _browser_targets
+
+    suffixes, hosts = set(_BUILTIN_DEV_SUFFIXES), set()
+    try:
+        with open(_BROWSER_TARGETS_PATH, encoding="utf-8") as handle:
+            config = json.load(handle)
+        raw_suffixes = config.get("allowed_suffixes") or []
+        raw_hosts = config.get("allowed_hosts") or []
+        if isinstance(raw_suffixes, list):
+            suffixes.update(e for e in raw_suffixes
+                            if isinstance(e, str) and _valid_suffix(e))
+        if isinstance(raw_hosts, list):
+            hosts.update(e for e in raw_hosts
+                         if isinstance(e, str) and _valid_host(e))
+    except (OSError, ValueError, AttributeError):
+        # No file, bad JSON, wrong shape: keep the builtin set and allow
+        # nothing extra. A guard that cannot read its config has no basis to
+        # widen, which matches this hook's "fail safe" rule at the top.
+        pass
+
+    _browser_targets = (frozenset(suffixes), frozenset(hosts))
+    return _browser_targets
 
 
 def _host_is_allowed_dev_env(host: str) -> bool:
@@ -416,11 +458,11 @@ def _host_is_allowed_dev_env(host: str) -> bool:
     Three normalisations happen before the comparison, and each one closes a
     way of writing the same host that would otherwise read as a different one:
 
-    - Case, because DNS is case insensitive and MANAGER.ENV-E is the same host.
-    - A trailing dot, because "manager.env-e.vivery-dev.com." is a valid FQDN
-      naming that host. Without the strip it fails closed rather than open, but
-      the next person to notice would be tempted to loosen the comparison
-      instead of stripping, which is how the boundary check gets lost.
+    - Case, because DNS is case insensitive and API.EXAMPLE is the same host.
+    - A trailing dot, because "app.env-e.example.com." is a valid FQDN naming
+      that host. Without the strip it fails closed rather than open, but the
+      next person to notice would be tempted to loosen the comparison instead
+      of stripping, which is how the boundary check gets lost.
     - Non ASCII is refused outright. str.lower() does not fold Cyrillic
       homographs, so an IDN lookalike of a real dev domain would otherwise be
       compared as if it were a different string that happens to render the
@@ -430,11 +472,12 @@ def _host_is_allowed_dev_env(host: str) -> bool:
     host = host.lower().rstrip(".")
     if not host or not host.isascii():
         return False
-    if host in _ALLOWED_DEV_HOSTS:
+    suffixes, hosts = _load_browser_targets()
+    if host in hosts:
         return True
     return any(
         host == suffix[1:] or host.endswith(suffix)
-        for suffix in _ALLOWED_DEV_SUFFIXES
+        for suffix in suffixes
     )
 
 # curl flags whose value is request content rather than a destination: a body,
@@ -584,8 +627,8 @@ def check_curl_external(command: str) -> str | None:
         if not _url_host_is_local(url):
             return (
                 "BLOCKED: curl to this URL is not allowed. Only localhost "
-                "(localhost, 127.0.0.1, 0.0.0.0, ::1) and named test or dev "
-                "environments (*.vivery-dev.com, *.local, *.test) are "
+                "(localhost, 127.0.0.1, 0.0.0.0, ::1), *.local, *.test, and "
+                "whatever .claude/browser-targets.local.json names are "
                 f"permitted. Found: {url}"
             )
     return None
@@ -840,7 +883,7 @@ def check_backslash_spaces(command: str) -> str | None:
     if re.search(r"(?<![\"'])\b\S+\\ \S+", _strip_message_values(command)):
         return (
             "BLOCKED: Do not backslash-escape spaces in paths. "
-            "Use double-quoted paths instead: \"/path/F and B PWA/Nectar\". "
+            "Use double-quoted paths instead: \"/path/X and Y PWA/Litware\". "
             "Backslash-escaped whitespace triggers a permission prompt."
         )
     return None
@@ -1488,7 +1531,9 @@ def _binary_name(word: str) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
-_ASSIGNMENT_WORD_RE = re.compile(r"^[A-Za-z_]\w*=")
+# The groups are read by _record_assignments, which needs the value and not
+# just the shape. _strip_wrappers tests the match alone.
+_ASSIGNMENT_WORD_RE = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 
 # A command that hands off to whatever follows it rather than being the thing
 # that runs. claude-code-bash-guardian keeps the same category under the name
@@ -2129,14 +2174,261 @@ _PROTECTED_PATH_RES = (
     # The guard itself, wherever it has been installed or copied to.
     re.compile(r"(?:^|/)bash-guard(?:\.proposed)?\.py$"),
     # Claude Code's own control files: what runs, and what is permitted.
-    re.compile(r"(?:^|/)\.claude/(?:settings[^/]*\.json$|hooks/|agents/)"),
+    # browser-targets belongs here because _load_browser_targets reads it to
+    # decide which hosts curl and browser automation may reach, so a Bash write
+    # to it widens this guard's own allowlist. redacted-terms is the same
+    # shape one layer out: emptying it retires the leak check that reads it.
+    re.compile(r"(?:^|/)\.claude/(?:settings[^/]*\.json$"
+               r"|browser-targets[^/]*\.json$|redacted-terms[^/]*\.json$"
+               r"|hooks(?:/|$)|agents(?:/|$))"),
     # The research and verifier gates.
-    re.compile(r"(?:^|/)clean-rag/hooks/"),
+    re.compile(r"(?:^|/)clean-rag/hooks(?:/|$)"),
     # A relative path has no root to check, so scripts/ and its tests are
     # treated as this project's until proven otherwise. Refusing more is the
     # safe direction for a path whose base is unknown.
-    re.compile(r"^\.?/?scripts/"),
+    re.compile(r"^\.?/?scripts(?:/|$)"),
+    # The directory itself, because moving or deleting it takes every file
+    # above with it: `mv .claude /tmp/backup` left no settings.json, no hooks
+    # and no agents behind, and matched none of the patterns above.
+    re.compile(r"(?:^|/)\.claude/?$"),
 )
+
+# A shell word is not the path it names. Two expansions run before the command
+# does, and both reach a protected file through a spelling that contains none
+# of the literals above. Verified in this project's own Git Bash, on a scratch
+# copy of the file:
+#
+#   echo x > .claude/browser-target*.local.json    overwrote the real file
+#   rm .claude/browser-target{s,q}.local.json      deleted it
+#
+# _ENV_FILE_RE already reads a metacharacter as part of the path it protects.
+# The patterns above were left matching literals, so the same word that reaches
+# a .env was refused and the one that reaches the guard's own config was not.
+_GLOB_META_RE = re.compile(r"[*?\[]")
+
+# Expansions per word. A brace expression is finite but multiplies, and the
+# only thing on the other side of this cap is a word nobody types.
+_BRACE_LIMIT = 64
+
+_STAR = ("star",)       # a run of any length, never crossing a /
+_ANY = ("any",)         # a run of any length, / included
+_ONE = ("one",)         # exactly one character, never a /
+
+
+def _brace_end(word: str, start: int) -> int | None:
+    """Index of the `}` closing the `{` at start, or None if it never closes."""
+    depth = 0
+    for index in range(start, len(word)):
+        if word[index] == "{":
+            depth += 1
+        elif word[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _brace_alternatives(body: str) -> list[str] | None:
+    """What `{...}` stands for, or None when it stands for itself.
+
+    bash expands a brace only when it holds a comma or a range, so `a{s}b` is
+    the literal text `a{s}b` and `a{s,q}b` is two words. Both confirmed by
+    running them.
+    """
+    parts, depth, current = [], 0, ""
+    for char in body:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    if len(parts) > 1:
+        return parts
+
+    match = re.fullmatch(r"(-?\d+)\.\.(-?\d+)|([a-z])\.\.([a-z])", body)
+    if not match:
+        return None
+    if match.group(1) is not None:
+        low, high = int(match.group(1)), int(match.group(2))
+        step = 1 if high >= low else -1
+        values = range(low, high + step, step)
+        return [str(v) for v in values][:_BRACE_LIMIT]
+    low, high = ord(match.group(3)), ord(match.group(4))
+    step = 1 if high >= low else -1
+    return [chr(c) for c in range(low, high + step, step)][:_BRACE_LIMIT]
+
+
+def _brace_expand(word: str) -> list[str]:
+    """Every word bash would produce from this one, the original included."""
+    if "{" not in word:
+        return [word]
+    pending, done = [word], []
+    while pending and len(pending) + len(done) < _BRACE_LIMIT:
+        current = pending.pop()
+        expanded = False
+        for start, char in enumerate(current):
+            if char != "{":
+                continue
+            end = _brace_end(current, start)
+            if end is None:
+                break
+            alternatives = _brace_alternatives(current[start + 1:end])
+            if alternatives is None:
+                continue
+            pending.extend(
+                current[:start] + part + current[end + 1:] for part in alternatives)
+            expanded = True
+            break
+        if not expanded:
+            done.append(current)
+    return done + pending
+
+
+def _glob_tokens(pattern: str, crossing: bool = False) -> tuple:
+    """A glob as tokens this module can compare with another glob.
+
+    A bracket becomes "one character" rather than the set it names. That
+    over-matches, which for a guard is the direction that refuses rather than
+    the one that lets a write through.
+    """
+    tokens, index = [], 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "*":
+            if crossing and pattern.startswith("**", index):
+                tokens.append(_ANY)
+                index += 2
+                continue
+            tokens.append(_STAR)
+        elif char == "?":
+            tokens.append(_ONE)
+        elif char == "[":
+            # A `]` in the first position is a member of the set, not its end,
+            # and so is the one after a negating `!` or `^`.
+            first = index + 1
+            if pattern[first:first + 1] in ("!", "^"):
+                first += 1
+            if pattern[first:first + 1] == "]":
+                first += 1
+            end = pattern.find("]", first)
+            if end == -1:
+                tokens.append(("lit", char))
+            else:
+                tokens.append(_ONE)
+                index = end + 1
+                continue
+        else:
+            tokens.append(("lit", char))
+        index += 1
+    return tuple(tokens)
+
+
+def _globs_overlap(left: tuple, right: tuple) -> bool:
+    """Whether any one path matches both patterns.
+
+    The literal check cannot answer this, because a metacharacter stands where
+    a letter of the protected name should be: `browser-target*.local.json`
+    holds no `browser-targets` substring and expands onto it anyway. Comparing
+    the two patterns answers it without touching the filesystem, which keeps
+    the verdict the same on every machine and in every working tree.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def walk(i: int, j: int) -> bool:
+        key = (i, j)
+        if key in memo:
+            return memo[key]
+        memo[key] = result = decide(i, j)
+        return result
+
+    def decide(i: int, j: int) -> bool:
+        if i == len(left):
+            return all(token in (_STAR, _ANY) for token in right[j:])
+        if j == len(right):
+            return all(token in (_STAR, _ANY) for token in left[i:])
+        head, other = left[i], right[j]
+        head_runs, other_runs = head in (_STAR, _ANY), other in (_STAR, _ANY)
+        if head_runs:
+            if walk(i + 1, j):
+                return True
+            if other_runs or other == _ONE:
+                return walk(i, j + 1)
+            return (other[1] != "/" or head == _ANY) and walk(i, j + 1)
+        if other_runs:
+            if walk(i, j + 1):
+                return True
+            if head == _ONE:
+                return walk(i + 1, j)
+            return (head[1] != "/" or other == _ANY) and walk(i + 1, j)
+        if head == _ONE and other == _ONE:
+            return walk(i + 1, j + 1)
+        if head == _ONE:
+            return other[1] != "/" and walk(i + 1, j + 1)
+        if other == _ONE:
+            return head[1] != "/" and walk(i + 1, j + 1)
+        return head[1] == other[1] and walk(i + 1, j + 1)
+
+    return walk(0, 0)
+
+
+def _at_any_depth(tail: str) -> tuple[str, str]:
+    return tail, "**/" + tail
+
+
+# The same protection as _PROTECTED_PATH_RES, written as globs so a word that
+# is itself a glob can be compared with it. Only a word carrying a
+# metacharacter is matched here; a literal path still goes through the regexes
+# above, which stay the authority. test_bash_guard_expanded_paths.py fails if
+# the two ever disagree about a literal path.
+#
+# Bare `.claude` is deliberately absent. `*` is treated as able to match a
+# leading dot, which bash does not do without dotglob, so a witness that is one
+# name beginning with a dot would read `rm build/*` as reaching `.claude`. The
+# literal regex above still refuses `mv .claude /tmp`.
+#
+# The guard's own file is named at two anchors rather than at any depth, and
+# the difference is the whole usability of this table. `**/bash-guard.py`
+# overlaps `src/*.py`, `docs/*.py` and every other `<dir>/*.py` on the strength
+# of a file that is not there, because the crossing `**` absorbs the word's
+# directory and the word's `*` can spell `bash-guard`. Python is this repo's
+# main language, so that refused ordinary work everywhere. gitignore(5) draws
+# the same line for the same reason: "If there is a separator at the beginning
+# or middle (or both) of the pattern, then the pattern is relative to the
+# directory level ... Otherwise the pattern may also match at any level".
+# Every copy in this tree sits under scripts/ or clean-rag/hooks/, so the two
+# anchors below lose no file that exists. The bare name stays because a
+# relative word has no directory to judge: with cwd unknown, `rm *.py` can be
+# the one inside scripts/, the same way `rm bash-guard.py` can.
+#
+# What that gives up: a glob aimed at a copy of the guard somewhere other than
+# scripts/, clean-rag/hooks/ or .claude/hooks/, such as `rm vendor/bash-guar*.py`.
+# The literal regex above still refuses the spelled-out path.
+_PROTECTED_GLOBS = (
+    "bash-guard.py", "**/scripts/bash-guard.py",
+    "bash-guard.proposed.py", "**/scripts/bash-guard.proposed.py",
+    *_at_any_depth(".claude/settings*.json"),
+    *_at_any_depth(".claude/browser-targets*.json"),
+    *_at_any_depth(".claude/redacted-terms*.json"),
+    *_at_any_depth(".claude/hooks"),
+    *_at_any_depth(".claude/hooks/**"),
+    *_at_any_depth(".claude/agents"),
+    *_at_any_depth(".claude/agents/**"),
+    *_at_any_depth("clean-rag/hooks"),
+    *_at_any_depth("clean-rag/hooks/**"),
+    # scripts/ is anchored at the start of a relative path, the same way its
+    # regex is, so `rm build/*` is not read as reaching some other scripts dir.
+    "scripts", "scripts/**", "./scripts", "./scripts/**",
+    "/scripts", "/scripts/**",
+    _BOOST_SCRIPTS_PREFIX + "**",
+)
+
+_PROTECTED_GLOB_TOKENS = tuple(
+    _glob_tokens(pattern, crossing=True) for pattern in _PROTECTED_GLOBS)
 
 # `.env`, `.env.local`, and the glob pathspecs that reach the same bytes:
 # `git log -p -- "*.env"` prints the content of every .env in the history.
@@ -2192,10 +2484,18 @@ _WRITER_COMMANDS = frozenset({
 # Commands that read their first operands and write only the last one.
 # Measured, not assumed: treating every operand as written refused
 # `cp settings.json settings.json.bak`, an ordinary backup, in the transcripts.
+# A copy leaves the protected file where it was, and its content is readable
+# anyway, so refusing one buys nothing the read rules do not already decide.
 _DESTINATION_ONLY_COMMANDS = frozenset({
-    "cp", "copy", "mv", "move", "rename", "ren", "install", "ln", "mklink",
-    "rsync",
+    "cp", "copy", "install", "ln", "mklink", "rsync",
 })
+
+# Commands that empty the source path as well as filling the destination. The
+# source is a write, and the same outcome as the `rm` these already refuse:
+# `rm scripts/bash-guard.py` was blocked while `mv scripts/bash-guard.py
+# /tmp/backup.py` left the same empty path behind and was not.
+_RELOCATING_COMMANDS = frozenset({"mv", "move", "rename", "ren"})
+_REMOVE_SOURCE_FLAGS = frozenset({"--remove-source-files", "--remove-sent-files"})
 _TARGET_DIRECTORY_FLAGS = ("-t", "--target-directory")
 
 # Stream editors write only when told to. `sed -n '340,400p' <file>` is a pager,
@@ -2226,6 +2526,17 @@ _SED_WRITE_RE = re.compile(
     _SED_ADDRESS + r"(?:[wW][ \t]|" + _SED_SUBSTITUTION + r"[wW])")
 
 
+def _target_directories(words: list[str]) -> list[str]:
+    """Destinations named by a flag rather than by the last operand."""
+    directories = []
+    for index, word in enumerate(words[1:], start=1):
+        if word.startswith("--target-directory="):
+            directories.append(word.split("=", 1)[1])
+        elif word in _TARGET_DIRECTORY_FLAGS and index + 1 < len(words):
+            directories.append(words[index + 1])
+    return directories
+
+
 def _written_operands(words: list[str]) -> list[str]:
     """The operands this command writes, which is not always all of them."""
     name = _binary_name(words[0])
@@ -2243,14 +2554,12 @@ def _written_operands(words: list[str]) -> list[str]:
             return []
         return operands
 
+    if name in _RELOCATING_COMMANDS or (
+            name == "rsync" and any(f in _REMOVE_SOURCE_FLAGS for f in flags)):
+        return operands + _target_directories(words)
+
     if name in _DESTINATION_ONLY_COMMANDS:
-        destinations = operands[-1:]
-        for index, word in enumerate(words[1:], start=1):
-            if word.startswith("--target-directory="):
-                destinations.append(word.split("=", 1)[1])
-            elif word in _TARGET_DIRECTORY_FLAGS and index + 1 < len(words):
-                destinations.append(words[index + 1])
-        return destinations
+        return operands[-1:] + _target_directories(words)
 
     return operands if name in _WRITER_COMMANDS else []
 
@@ -2261,29 +2570,57 @@ def _path_candidates(word: str) -> list[str]:
     A word is not always a bare path. `dd of=<path>` and `--output=<path>` put
     the path after an `=`; git puts it after a `:`, where `git show HEAD:.env`
     prints the real bytes of any .env the history ever held. Reading only the
-    whole word missed all three.
+    whole word missed all three. A brace expression is one word here and
+    several by the time the command runs, so each of those is a path too.
     """
     normalized = word.strip("\"'").replace("\\", "/").lower()
     if not normalized:
         return []
-    candidates = [normalized]
-    if "=" in normalized:
-        candidates.append(normalized.split("=", 1)[1])
-    # git's <ref>:<path>. A single character before the colon is a Windows
-    # drive letter instead, and splitting those turned every C:/... path into a
-    # rooted /... one that matched the relative `scripts/` pattern.
-    head, colon, tail = normalized.partition(":")
-    if colon and tail and len(head) != 1:
-        candidates.append(tail)
+    candidates = []
+    for spelling in _brace_expand(normalized):
+        candidates.append(spelling)
+        if "=" in spelling:
+            candidates.append(spelling.split("=", 1)[1])
+        # git's <ref>:<path>. A single character before the colon is a Windows
+        # drive letter instead, and splitting those turned every C:/... path
+        # into a rooted /... one that matched the relative `scripts/` pattern.
+        head, colon, tail = spelling.partition(":")
+        if colon and tail and len(head) != 1:
+            candidates.append(tail)
     return [c for c in candidates if c]
 
 
+def _matches_protected_literal(path: str) -> bool:
+    return path.startswith(_BOOST_SCRIPTS_PREFIX) or any(
+        pattern.search(path) for pattern in _PROTECTED_PATH_RES)
+
+
+def _expansion_reaches_protected(path: str) -> bool:
+    """Whether a path that still has to expand could land on a protected file.
+
+    A component that is nothing but wildcards names no file in particular, so
+    every protected path is technically within its reach and `rm logs/*` would
+    be refused on the strength of a file that is not there. Such a component is
+    read the other way round: it is protected when the directory holding it is,
+    which is what makes `rm .claude/*` a refusal and `rm logs/*` not.
+    """
+    components = path.split("/")
+    for index, component in enumerate(components):
+        tokens = _glob_tokens(component)
+        if tokens and all(token in (_STAR, _ONE) for token in tokens):
+            prefix = "/".join(components[:index])
+            return bool(prefix) and _matches_protected_literal(prefix)
+    tokens = _glob_tokens(path)
+    return any(_globs_overlap(tokens, witness) for witness in _PROTECTED_GLOB_TOKENS)
+
+
 def _is_protected_path(word: str) -> bool:
-    return any(
-        path.startswith(_BOOST_SCRIPTS_PREFIX)
-        or any(pattern.search(path) for pattern in _PROTECTED_PATH_RES)
-        for path in _path_candidates(word)
-    )
+    for path in _path_candidates(word):
+        if _matches_protected_literal(path):
+            return True
+        if _GLOB_META_RE.search(path) and _expansion_reaches_protected(path):
+            return True
+    return False
 
 
 def _is_env_file(word: str) -> bool:
@@ -2358,6 +2695,76 @@ def _operands_to_skip(segment: str) -> int:
 _REDIRECT_WORDS = frozenset({">", ">>", ">|", ">&", "&>", "&>>"})
 _SOURCE_PATH_RE = re.compile(r"[\w.:/\\@+-]+")
 
+# A parameter expansion, in the two spellings that carry a path: $NAME and
+# ${NAME}. A positional (`$1`) and the special parameters are deliberately
+# absent, because neither has an assignment anywhere in the command to read.
+_VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+
+
+def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
+    """`segment` with every reference to a variable assigned earlier replaced.
+
+    Without this the path checks read `$F` and learn nothing, so
+    `F=scripts/bash-guard.py; rm $F` reached the guard's own file while all
+    eight literal spellings of it were refused. check_env_var_expansion steers
+    toward that exact idiom ("variables you assign earlier in the same command
+    are fine to reference"), which makes reading it the ergonomic half's debt.
+
+    An unknown name is left as written. An environment variable's value is not
+    in the command, so nothing here can resolve it, and a guessed value is
+    worse than a word that stays visibly unreadable. A loop name stands for
+    several values at once and is left alone here for the same reason; the
+    write target check reads all of them.
+
+    Single quotes suppress expansion in the shell, so they suppress it here.
+    """
+    out: list[str] = []
+    index, length, in_double = 0, len(segment), False
+    while index < length:
+        char = segment[index]
+        if char == '"':
+            in_double = not in_double
+        elif char == "'" and not in_double:
+            end = segment.find("'", index + 1)
+            if end == -1:
+                out.append(segment[index:])
+                break
+            out.append(segment[index:end + 1])
+            index = end + 1
+            continue
+        else:
+            match = _VAR_REF_RE.match(segment, index)
+            if match:
+                values = bindings.get(match.group(1) or match.group(2), ())
+                out.append(values[0] if len(values) == 1 else match.group(0))
+                index = match.end()
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _record_assignments(segment: str, bindings: dict[str, list[str]]) -> None:
+    """Add this segment's bindings to `bindings`.
+
+    Every word is read rather than the leading ones only, because `export
+    F=path` puts the assignment behind a command word and binds it just the
+    same for everything that follows.
+
+    A `for` name binds to the whole list it iterates, which is why a value is
+    a list here. `for f in logs/*.log; do rm $f; done` names its own paths, so
+    refusing it for being unreadable would refuse an ordinary loop.
+    """
+    words = _shell_words(segment)
+    for index, word in enumerate(words):
+        match = _ASSIGNMENT_WORD_RE.match(word)
+        if match:
+            bindings[match.group(1)] = [match.group(2)]
+        elif word == "for" and words[index + 2:index + 3] == ["in"]:
+            values = words[index + 3:]
+            if values:
+                bindings[words[index + 1]] = values
+
 
 def check_protected_paths(command: str) -> str | None:
     """Block writes to the guard's own files and reads of any .env, through Bash.
@@ -2367,14 +2774,19 @@ def check_protected_paths(command: str) -> str | None:
     naming the path directly.
     """
     lowered = command.lower()
-    # `$(` and a backtick are in the prefilter because a substitution can
-    # produce a protected path out of a command that names none of the other
-    # tokens: `cp payload.py $(cat target.txt)` mentions nothing at all.
+    # `$` and a backtick are in the prefilter because an expansion can produce a
+    # protected path out of a command that names none of the other tokens:
+    # `cp payload.py $(cat target.txt)` mentions nothing at all, and
+    # `F=bash-guar; rm ${F}d.py` spells the name in two halves. A glob or a
+    # brace is here for the same reason and was not: the tokens below are only
+    # readable while the word is literal, and `mv clean-rag/hook*/x.py` spells
+    # none of them.
     if not any(token in lowered for token in
-               (".env", "scripts/", "scripts\\", "hooks", "settings",
-                "bash-guard", ".claude", "$(", "`")):
+               (".env", "scripts", "hooks", "settings", "bash-guard",
+                ".claude", "$", "`", "*", "?", "[", "{")):
         return None
 
+    bindings: dict[str, str] = {}
     for text, _routed, kind in _scannable_texts(command):
         if kind == "interpreter":
             words = _SOURCE_PATH_RE.findall(text)
@@ -2387,13 +2799,16 @@ def check_protected_paths(command: str) -> str | None:
             continue
 
         for _separator, segment in _split_segments(text):
+            segment = _resolve_variables(segment, bindings)
+            _record_assignments(segment, bindings)
             words = _shell_words(segment)
             problem = _env_read_problem(words, _operands_to_skip(segment))
             if problem:
                 return problem
             for index, word in enumerate(words):
                 if word in _REDIRECT_WORDS and index + 1 < len(words):
-                    problem = _write_target_problem(words[index + 1], "a redirection target")
+                    problem = _write_target_problem(
+                        words[index + 1], "a redirection target", bindings)
                     if problem:
                         return problem
             command_words = _command_words(segment)
@@ -2401,13 +2816,14 @@ def check_protected_paths(command: str) -> str | None:
                 continue
             how = f"written by `{_binary_name(command_words[0])}`"
             for word in _written_operands(command_words):
-                problem = _write_target_problem(word, how)
+                problem = _write_target_problem(word, how, bindings)
                 if problem:
                     return problem
     return None
 
 
-def _write_target_problem(word: str, how: str) -> str | None:
+def _write_target_problem(word: str, how: str,
+                          bindings: dict[str, list[str]] | None = None) -> str | None:
     """The refusal this write target earns, or None.
 
     A target built by a command substitution is refused rather than resolved.
@@ -2416,6 +2832,16 @@ def _write_target_problem(word: str, how: str) -> str | None:
     `$(echo scripts/bash-guard.py)` reached the guard itself while all eight
     literal spellings of the same path were refused.
     """
+    match = _VAR_REF_RE.fullmatch(word)
+    values = (bindings or {}).get(match.group(1) or match.group(2)) if match else None
+    if values:
+        # A loop name, standing for every path its list holds. Each is judged as
+        # if the loop body had written it out.
+        for value in values:
+            problem = _write_target_problem(value, how)
+            if problem:
+                return problem
+        return None
     if _SUBSTITUTION_MARK in word:
         return (
             f"BLOCKED: this command is {how}, and part of the target is built by a "
@@ -2423,6 +2849,18 @@ def _write_target_problem(word: str, how: str) -> str | None:
             "The files that decide what this session may do are protected by path, "
             "and a path this guard cannot read is one it cannot clear. Write the "
             "path literally, or compute the name in a separate command first."
+        )
+    # The whole path is a variable no assignment in this command defines, so it
+    # names a file only the environment knows. Same reasoning as the
+    # substitution above, and narrowed to the whole word on purpose:
+    # `> ${TMPDIR}/out.txt` keeps a literal name and stays readable.
+    if _VAR_REF_RE.fullmatch(word):
+        return (
+            f"BLOCKED: this command is {how}, and the whole target is {word}, whose "
+            "value comes from the environment rather than from the command. A path "
+            "this guard cannot read is one it cannot clear against the files that "
+            "decide what this session may do. Write the path literally, or assign it "
+            "in the same command so it is visible."
         )
     if _is_protected_path(word):
         return _protected_refusal(word, how)
@@ -2434,9 +2872,9 @@ def _protected_refusal(path: str, how: str) -> str:
         f"BLOCKED: {path!r} is {how}, and it is one of the files that decide what "
         "this session is allowed to do (the command guard, the research and "
         "verifier hooks, the settings files, and the tests that keep them honest). "
-        "A guard the session can overwrite is not a guard. Use the Write or Edit "
-        "tool, which prompts the human for these paths, or ask them to make the "
-        "change."
+        "A guard the session can overwrite is not a guard. Bash is the route that "
+        "is closed: make the change with the Edit or Write tool, where the human "
+        "sees the diff, or ask them to make it."
     )
 
 

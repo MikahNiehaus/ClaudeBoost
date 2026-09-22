@@ -202,7 +202,7 @@ def _with_files_total(projects: object) -> dict:
 
     files_indexed and chunks_created count one run of index_project. A project
     whose last sweep found nothing changed writes 0 to both, which is correct
-    and which the console read as EMPTY: AscendMobile rendered EMPTY on 1,072
+    and which the console read as EMPTY: ContosoMobile rendered EMPTY on 1,072
     vectors, 1,486 edges and 223 nodes. The table headers were renamed to
     "Run files" and "Run chunks" after the same misreading and the State cell
     was missed. files_total is the number that cell actually wanted.

@@ -101,7 +101,7 @@ def _state_of(entry: dict, busy_path: str) -> Text:
 
     # files_total, not files_indexed. files_indexed counts one run, so a
     # project whose last sweep found nothing changed wrote 0 and rendered
-    # EMPTY while holding thousands of vectors. AscendMobile showed EMPTY on
+    # EMPTY while holding thousands of vectors. ContosoMobile showed EMPTY on
     # 1,072 vectors and 1,486 edges. The column headers at :356 were renamed
     # to "Run files" after the same misreading, and this cell was missed.
     #
@@ -368,7 +368,7 @@ class ConsoleApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#projects-table", DataTable)
         table.cursor_type = "row"
-        # Two projects share the name AscendMobile and two share Nectar, so the
+        # Two projects share the name ContosoMobile and two share Litware, so the
         # parent directory is what tells them apart.
         for key, label, width in (
             ("state", "State", 9),

@@ -93,7 +93,7 @@ EXIT_RESTART_ME = 75
 #: healthy one waiting for a quiet machine.
 #: Outer backstop only. A project yielding to the machine but still doing work
 #: must not trip this, so it is set far above what any real project needs:
-#: Nectar at 4492 files takes roughly 900 cycles at the observed 3 to 30 files
+#: Litware at 4492 files takes roughly 900 cycles at the observed 3 to 30 files
 #: per pause. It exists so a project that somehow progresses one file per cycle
 #: forever still terminates, which the stall counter alone cannot catch because
 #: any progress resets it.
@@ -311,7 +311,7 @@ async def reindex_project_fully(
             # A pause that indexed files is PROGRESS, not a stall. Counting
             # those against the give up budget is what would have abandoned a
             # healthy project: ClaudeBoost reached 98 of 200 pauses while
-            # steadily doing 3 to 30 files a cycle, and Nectar at 4492 files
+            # steadily doing 3 to 30 files a cycle, and Litware at 4492 files
             # needs roughly 900 such cycles, so it would have been recorded
             # GAVE_UP having never once failed to make progress.
             #

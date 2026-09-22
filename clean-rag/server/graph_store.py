@@ -207,9 +207,9 @@ def _csharp_namespaces(file_map: dict[str, str]) -> set[str]:
     pieces of any directory name.
 
     A .NET folder normally carries the dotted namespace it holds, so
-    "ViveryAscend.API/" is namespace ViveryAscend.API, and "ViveryAscend" is
+    "Contoso.API/" is namespace Contoso.API, and "Contoso" is
     as much a project namespace as the folder is. Without that, "using
-    ViveryAscend.API.Services;" reduces to a first segment of "ViveryAscend",
+    Contoso.API.Services;" reduces to a first segment of "Contoso",
     which matches no folder, and the project's own code gets filed under
     _external_. Measured on 300 real .cs files, that was 507 of the 514
     symbols the fallback marked external.

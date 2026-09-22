@@ -59,7 +59,7 @@ tests the actual exit codes and stderr output exactly as Claude Code sees them.
 
 - CLAUDEBOOST_HOME uses forward slashes (`C:/Users/...`) — backslashes cause issues
 - `$TEMP` resolves to `C:/Users/.../AppData/Local/Temp` — use full absolute paths, not `$TEMP` in Bash
-- Sentinel files: `C:/Users/grayw/AppData/Local/Temp/claudeboost_rag_ok`, `claudeboost_active`
+- Sentinel files: `C:/Users/<user>/AppData/Local/Temp/claudeboost_rag_ok`, `claudeboost_active`
 - `$CLAUDEBOOST_PYTHON` must point to the Python that has mcp-rag-server installed
 - Line endings: scripts/tests/ must use LF (Unix) endings — CRLF causes pytest issues on Windows
 

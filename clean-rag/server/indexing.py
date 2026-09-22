@@ -288,7 +288,7 @@ UNREADABLE_SENTINEL = "__unreadable__"
 #:
 #: Matched by exact name and never by the __dunder__ shape, because real file
 #: paths carry that shape too: __tests__/Foo.test.js is the Jest layout, and 71
-#: of those keys sit in the AscendMobile manifest alone. Exact names cannot
+#: of those keys sit in the ContosoMobile manifest alone. Exact names cannot
 #: collide, since every manifest key ends in a CODE_EXTENSIONS suffix and none
 #: of these hold a dot.
 MANIFEST_METADATA_KEYS = frozenset({

@@ -625,6 +625,12 @@ PLUGINS: list[dict] = [
         "marketplace": "DietrichGebert/ponytail",
         "needs_node": True,
     },
+    # PreToolUse, so an over-long comment is refused rather than written and
+    # then nudged. Python, no node needed.
+    {
+        "name": "pipe-down@claude-pipe-down",
+        "marketplace": "hoo29/claude-pipe-down",
+    },
 ]
 
 
@@ -1074,6 +1080,10 @@ def set_env_var() -> None:
     # is still room to write a decent summary. setdefault, not assignment: a
     # number the human has already tuned is theirs to keep.
     env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
+    # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
+    # subprocess per write. setdefault, so a human who retunes either keeps it.
+    env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
+    env.setdefault("PIPE_DOWN_LLM", "0")
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
     _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")

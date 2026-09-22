@@ -1353,7 +1353,7 @@ When a TC step fails or cannot be executed as written, run this protocol IN ORDE
 
 | Type | Signal |
 |---|---|
-| `ENV_URL` | The URL or endpoint used is rejected because it does not match the external service's required format or domain (e.g., vivery.gogrow.com used where `*.online.tableau.com` is required) |
+| `ENV_URL` | The URL or endpoint used is rejected because it does not match the external service's required format or domain (e.g., app.example.com used where `*.online.tableau.com` is required) |
 | `ENV_AUTH` | Credentials or accounts required by this TC are not provisioned in this environment |
 | `ENV_NETWORK` | External service is unreachable from this host (CDN blocked, firewall, service rejects localhost) |
 | `ENV_SETUP` | Required infrastructure is not running (background job not started, email server offline) |
@@ -1401,7 +1401,7 @@ BLOCKED entry MUST include:
 UNVERIFIABLE entry MUST include:
 - What was tried (list each resolution attempt from Step 2)
 - Why each attempt failed
-- Which environment would unblock it (e.g., "staging with Tableau Connected App registered for manager-test.vivery.org")
+- Which environment would unblock it (e.g., "staging with Tableau Connected App registered for manager-test.example.com")
 - Post-deploy plan: who validates, on which environment, when, and what they will confirm
 
 **A TC marked UNVERIFIABLE without documented resolution attempts is treated as BLOCKED by difficulty — the most common form of QA cheating. The auditor will flag it.**
@@ -1923,7 +1923,7 @@ Write `$WORKSPACE_ABS/report.md`:
 
 | TC-ID | Description | Why Unverifiable | Post-Deploy Validation |
 |-------|-------------|-----------------|----------------------|
-| TC-SDK-001 | Tableau SDK loads successfully | CDN rejects localhost | After deploy to manager-test.vivery.org: QA engineer opens page, confirms dashboard renders within 30s |
+| TC-SDK-001 | Tableau SDK loads successfully | CDN rejects localhost | After deploy to manager-test.example.com: QA engineer opens page, confirms dashboard renders within 30s |
 
 ## Needs-Rerun
 
@@ -1997,7 +1997,7 @@ If no observations: write "No notable observations this session."
 
 | TC-ID | What to Validate | Environment Needed | Assigned To | When |
 |-------|-----------------|-------------------|-------------|------|
-| [TC-SDK-001] | [Tableau dashboard loads, JWT auth chain end-to-end] | [domain registered with Tableau Connected App] | [QA engineer] | [on first deploy to manager-test.vivery.org] |
+| [TC-SDK-001] | [Tableau dashboard loads, JWT auth chain end-to-end] | [domain registered with Tableau Connected App] | [QA engineer] | [on first deploy to manager-test.example.com] |
 
 These items are not bugs — they are genuine environment constraints that prevented local validation. Each must be checked before the feature is considered fully validated.
 ```

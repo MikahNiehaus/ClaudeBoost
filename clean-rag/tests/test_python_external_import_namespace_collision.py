@@ -3,7 +3,7 @@ party package from a project module of its own is language scoped, and this
 pins that scoping.
 
 A .NET folder carries the dotted namespace it holds, so the C# fallback splits
-a dotted directory name ("ViveryAscend.API/" is also namespace "ViveryAscend")
+a dotted directory name ("Contoso.API/" is also namespace "Contoso")
 via _csharp_namespaces. Nothing else may see that split, because a dotted
 directory means nothing of the kind in another language.
 
@@ -47,7 +47,7 @@ def test_dotted_folder_split_is_csharp_only_and_never_language_neutral():
     )
     assert "google.api" in _project_namespaces(file_map)
     assert "google" in _csharp_namespaces(file_map), (
-        "the C# set still needs the split, or 'using ViveryAscend.API.Services;' "
+        "the C# set still needs the split, or 'using Contoso.API.Services;' "
         "files the project's own code under _external_"
     )
 
@@ -89,9 +89,9 @@ def test_a_mixed_language_project_resolves_each_language_by_its_own_set(tmp_path
             edge_type="imports", confidence="EXTRACTED",
         ),
         GraphEdge(
-            source_file="ViveryAscend.API/Controllers/OrderController.cs",
+            source_file="Contoso.API/Controllers/OrderController.cs",
             source_symbol="<module>", target_file="",
-            target_symbol="ViveryAscend.API.Services",
+            target_symbol="Contoso.API.Services",
             edge_type="imports", confidence="EXTRACTED",
         ),
     ])
@@ -99,7 +99,7 @@ def test_a_mixed_language_project_resolves_each_language_by_its_own_set(tmp_path
     _register_file_variants("protos/google.api/service.proto", file_map)
     _register_file_variants("app/storage_client.py", file_map)
     _register_file_variants(
-        "ViveryAscend.API/Controllers/OrderController.cs", file_map,
+        "Contoso.API/Controllers/OrderController.cs", file_map,
     )
 
     store.resolve_target_files(file_map)
@@ -109,9 +109,9 @@ def test_a_mixed_language_project_resolves_each_language_by_its_own_set(tmp_path
         "the Python row must read the plain segment set, got "
         f"{by_symbol['google.cloud']!r}"
     )
-    assert by_symbol["ViveryAscend.API.Services"] == "", (
+    assert by_symbol["Contoso.API.Services"] == "", (
         "the C# row must read the widened set and stay available for "
-        f"resolution, got {by_symbol['ViveryAscend.API.Services']!r}"
+        f"resolution, got {by_symbol['Contoso.API.Services']!r}"
     )
 
 

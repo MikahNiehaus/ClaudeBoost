@@ -298,10 +298,14 @@ def test_no_contradiction_between_language_mismatch_and_framework_exception():
 
 def test_claude_md_adapt_removal_matches_canonical():
     """
-    CLAUDE.md and portable/CLAUDE.md must say 'There is no `adapt` tier' (same phrasing as canonical).
+    portable/CLAUDE.md must say 'There is no `adapt` tier' (same phrasing as canonical).
+
+    The repo root file is not checked, because it is a pointer at the portable
+    copy and holds no rules. It stays in test_no_adapt_in_claude_md_files above,
+    which asserts absence rather than presence and so still passes on a pointer.
     """
     canonical_phrase = "There is no `adapt` tier"
-    for name, text in [("CLAUDE.md", root_claude), ("portable/CLAUDE.md", portable_claude)]:
+    for name, text in [("portable/CLAUDE.md", portable_claude)]:
         assert canonical_phrase in text, (
             f"{name} doesn't contain the canonical phrase {canonical_phrase!r}. "
             "Check the adapt removal sentence matches clean-rag/CLAUDE.md."

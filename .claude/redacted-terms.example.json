@@ -1,0 +1,28 @@
+{
+  "_readme": [
+    "Copy this file to redacted-terms.local.json and fill it in. That name is",
+    "gitignored, which is the point: a test that guards your client and project",
+    "names out of a public repo must not spell them out inside it. Same pattern",
+    "as browser-targets.local.json beside browser-targets.example.json.",
+    "",
+    "tests/test_client_project_codenames_not_scrubbed.py reads it and fails if",
+    "any term appears in a tracked file. With no file present that test skips,",
+    "so a fresh clone on someone else's machine checks nothing of yours.",
+    "",
+    "terms: substrings, matched case insensitively. Put the real client name,",
+    "project codename, or internal folder name here after you replace it in the",
+    "tree, so it cannot come back. One entry per name; a stem like 'Litware'",
+    "already covers 'LitwareBenefits' and 'LitwareFunction'.",
+    "",
+    "Use a fictitious stand-in for the replacement, not another real name.",
+    "Microsoft cleared Contoso, Fabrikam, Litware, Northwind and Woodgrove for",
+    "exactly this, and RFC 2606 reserves example.com / example.org / example.net.",
+    "",
+    "The two entries below are placeholders and appear nowhere in the tree, so",
+    "a straight copy of this file passes. Replace them."
+  ],
+  "terms": [
+    "YourClientName",
+    "YourProjectCodename"
+  ]
+}

@@ -150,7 +150,7 @@ def test_a_file_whose_path_starts_with_two_underscores_is_a_file(key):
     """Not metadata. The two namespaces share one dict and only the writer's
     own names are reserved.
 
-    __tests__/ is the Jest layout and 71 of those keys sit in the AscendMobile
+    __tests__/ is the Jest layout and 71 of those keys sit in the ContosoMobile
     manifest, the project whose row started this. A startswith("__") filter
     counted 304 of its 375 files.
     """
@@ -395,7 +395,7 @@ def state_of():
 
 
 def test_the_reported_row_now_reads_indexed(state_of):
-    """AscendMobile: 0 files this run, 458 in the index, and it said EMPTY."""
+    """ContosoMobile: 0 files this run, 458 in the index, and it said EMPTY."""
     entry = {"project_path": "C:/proj", "files_indexed": 0, "chunks_created": 0,
              "files_total": 458,
              "graph": {"edges_total": 1486, "pagerank_nodes": 223}}

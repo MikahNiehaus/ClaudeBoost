@@ -25,7 +25,7 @@ _PARSERS: dict = {}
 #: The hand kept version of this map was 24 entries, and its gaps were not
 #: cosmetic. Language detection feeds the embedding model router, so an
 #: unmapped extension counted as "unknown", and enough unknowns made "unknown"
-#: win the vote: Nectar's 3138 unmapped .html/.yml/.cshtml files outvoted its
+#: win the vote: Litware's 3138 unmapped .html/.yml/.cshtml files outvoted its
 #: 1323 real C# files and routed the project to bigcode/starencoder, a gated
 #: model that cannot load. Eight of sixteen projects went the same way.
 _EXT_OVERRIDES: dict[str, str] = {

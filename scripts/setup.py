@@ -1115,6 +1115,12 @@ def update_settings() -> None:
     env["CLAUDEBOOST_HOME"] = BOOST_HOME_POSIX
     env["CLAUDEBOOST_PYTHON"] = Path(sys.executable).as_posix()
 
+    # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
+    # subprocess per write. setdefault, not assignment, so a human who retunes
+    # either one keeps their value across re-runs.
+    env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
+    env.setdefault("PIPE_DOWN_LLM", "0")
+
     # clean-rag bundled mode: set CLEAN_RAG_HOME when clean-rag/ is present
     if _clean_rag_detected():
         env["CLEAN_RAG_HOME"] = _clean_rag_home_posix()
@@ -1946,6 +1952,14 @@ PLUGINS = [
         "marketplace": "DietrichGebert/ponytail",
         "why": "stops the agent over-building; MIT",
         "needs_node": True,
+    },
+    # PreToolUse, so an over-long comment is refused rather than written and
+    # then nudged. Python, no node needed. Its LLM judge is on by default and
+    # spawns a claude subprocess per write, so PIPE_DOWN_LLM is set to 0 below.
+    {
+        "name": "pipe-down@claude-pipe-down",
+        "marketplace": "hoo29/claude-pipe-down",
+        "why": "blocks low value and over-long comments before the write; MIT",
     },
 ]
 

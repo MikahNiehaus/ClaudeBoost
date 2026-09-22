@@ -200,7 +200,7 @@ def _is_file_token(token: str) -> bool:
 
     A space in a path is legal, not exotic: POSIX permits every byte but "/" and
     NUL in a filename, and Windows allows spaces outright, so
-    "C:\\Development\\F and B PWA\\src\\app.py" is a path this list has to carry.
+    "C:\\Development\\X and Y PWA\\src\\app.py" is a path this list has to carry.
     Rejecting a token for containing whitespace therefore drops real files.
     Accepting whitespace outright sweeps prose in instead, since a sentence
     below the marker is also one comma-free token.
@@ -215,7 +215,7 @@ def _is_file_token(token: str) -> bool:
     both ends is accepted:
 
         "app.py breaks config.py"   -> ['app.py', 'breaks', 'config.py']
-        "C:/dev/F and B PWA/a.py"   -> ['C:/dev/F', 'and', 'B', 'PWA/a.py']
+        "C:/dev/X and Y PWA/a.py"   -> ['C:/dev/X', 'and', 'Y', 'PWA/a.py']
 
     Two file references separated by a word and one path containing a word are
     close to the same shape, and every rule that separates them buys it with a
