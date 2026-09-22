@@ -1,9 +1,30 @@
-"""The global instructions ship in three places and must agree with the code.
+"""The global instructions ship in one place and must agree with the code.
 
-`CLAUDE.md` exists three times: the repo copy, the canonical `clean-rag/portable/`
-copy that `clean-rag/install.py` deploys, and the installed `~/.claude/CLAUDE.md`
-that Claude Code actually loads. Nothing keeps them in step, and an edit applied
-to one of them is invisible in the other two.
+`clean-rag/portable/CLAUDE.md` is canonical. `clean-rag/install.py:275` copies
+it to `~/.claude/CLAUDE.md`, which is what Claude Code actually loads. Nothing
+keeps those two in step, so an edit to one is invisible in the other, and
+`test_the_installed_copy_matches_the_canonical_one_when_present` is what
+notices.
+
+There used to be a third copy at the repo root, kept deliberately identical.
+It was removed because Claude Code loads the user file and the project file
+together and concatenates them without deduplicating, so every line written in
+both was paid for twice per session and again after every compaction. Measured
+before the split: 789 and 790 lines sharing 630 identical ones, inside an
+instructions attachment costing roughly 45,000 tokens each time it was
+re-injected. The root file is now a pointer, and two tests below hold it to
+that.
+
+Worth recording why the split was a merge rather than a deletion. Neither file
+was a superset when they were finally compared. Each carried about 160 lines
+the other did not, and on both sides that content was live rules: the root copy
+alone had good-cop's obligations, the lesson that execution proves only the
+environment it ran in, the debugging section and the plugins table, while the
+user copy alone had the clean-rag calling contract, the scratchpad and `rm`
+rules, the plain writing section and the real browser scope. Deleting either
+side's duplicate lines would have thrown away whichever one lost. Keeping three
+copies in step by hand is what let them drift that far apart in the first
+place.
 
 Two failures are checked, both of which shipped:
 
@@ -110,6 +131,7 @@ The installed copy under `~/.claude/` is checked when it exists and skipped when
 it does not, so a fresh clone or a CI container still runs the repo half.
 """
 
+import difflib
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -119,8 +141,20 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 INSTALLED_CLAUDE_MD = Path.home() / ".claude" / "CLAUDE.md"
 
-#: The two copies that live in the repo. Both must always exist.
-REPO_COPIES = (REPO / "CLAUDE.md", REPO / "clean-rag" / "portable" / "CLAUDE.md")
+#: The canonical copy in the repo, and the only one. `clean-rag/install.py:275`
+#: copies it to `~/.claude/CLAUDE.md`, so it is what a session actually loads.
+#:
+#: The repo root `CLAUDE.md` used to be a second full copy and is now a pointer,
+#: because Claude Code loads the user file and the project file together and
+#: concatenates them without deduplicating. Two full copies meant every shared
+#: line was paid for twice per session and again after every compaction:
+#: measured at 789 and 790 lines sharing 630 identical ones, inside an
+#: instructions attachment costing roughly 45,000 tokens each time it was
+#: re-injected. `test_root_claude_md_is_a_pointer_not_a_copy` holds that line.
+REPO_COPIES = (REPO / "clean-rag" / "portable" / "CLAUDE.md",)
+
+#: The pointer. Checked for what it must NOT be, rather than what it says.
+ROOT_CLAUDE_MD = REPO / "CLAUDE.md"
 
 #: The state flag `/audit` sets at Phase 0 and clears at Phase 5.
 AUDIT_FLAG = "audit-in-progress.json"
@@ -880,3 +914,69 @@ def test_flag_readers_finds_a_reader_and_ignores_a_bystander(tmp_path):
     found = [p for p in sorted(tmp_path.rglob("*.py"))
              if AUDIT_FLAG in p.read_text(encoding="utf-8")]
     assert found == [reader]
+
+
+def test_root_claude_md_is_a_pointer_not_a_copy():
+    """The repo root CLAUDE.md must not grow back into a second full copy.
+
+    Claude Code loads the user file and the project file together and
+    concatenates them with no deduplication, so anything written in both is
+    paid for twice on every session and again after every compaction. This is
+    the test that notices when someone pastes a section back.
+
+    Size is the check rather than content, because content is exactly what
+    should not be there. The canonical copy is over 900 lines; a pointer that
+    has drifted past a few hundred is a copy again whatever it claims.
+    """
+    assert ROOT_CLAUDE_MD.is_file(), f"{ROOT_CLAUDE_MD} is missing"
+    root = ROOT_CLAUDE_MD.read_text(encoding="utf-8")
+    canonical = REPO_COPIES[0].read_text(encoding="utf-8")
+
+    root_lines = len(root.splitlines())
+    assert root_lines < 200, (
+        f"repo root CLAUDE.md is {root_lines} lines. It is a pointer at the "
+        f"canonical {REPO_COPIES[0].relative_to(REPO).as_posix()}, not a copy "
+        "of it. Anything written in both files is loaded twice every session."
+    )
+    assert root_lines * 4 < len(canonical.splitlines()), (
+        "repo root CLAUDE.md has grown to a sizeable fraction of the canonical "
+        "copy, which is how the duplication came back last time."
+    )
+
+
+def test_root_claude_md_points_at_the_canonical_copy():
+    """A pointer nobody can follow is worse than no pointer.
+
+    Names both places on purpose: the path in the repo that is edited, and the
+    installed path that a session actually reads.
+    """
+    root = ROOT_CLAUDE_MD.read_text(encoding="utf-8")
+    for needed in ("clean-rag/portable/CLAUDE.md", "~/.claude/CLAUDE.md"):
+        assert needed in root, (
+            f"repo root CLAUDE.md never names {needed}, so a reader cannot "
+            "find where the rules actually live."
+        )
+
+
+def test_the_installed_copy_matches_the_canonical_one_when_present():
+    """Drift between the repo's canonical copy and the installed one.
+
+    Skipped rather than failed when the file is absent, because a checkout on a
+    machine that never ran the installer is not a defect. When it IS present it
+    must match, since `install.py` copies one to the other and nothing else
+    keeps them in step.
+    """
+    if not INSTALLED_CLAUDE_MD.is_file():
+        pytest.skip("no installed ~/.claude/CLAUDE.md on this machine")
+    installed = INSTALLED_CLAUDE_MD.read_text(encoding="utf-8")
+    canonical = REPO_COPIES[0].read_text(encoding="utf-8")
+    if installed != canonical:
+        sm = difflib.SequenceMatcher(None, canonical.splitlines(),
+                                     installed.splitlines(), autojunk=False)
+        pytest.fail(
+            "the installed ~/.claude/CLAUDE.md has drifted from "
+            f"{REPO_COPIES[0].relative_to(REPO).as_posix()}: they share "
+            f"{sum(b.size for b in sm.get_matching_blocks())} of "
+            f"{len(canonical.splitlines())} lines. Re-run the installer, or "
+            "copy the canonical file over it."
+        )
