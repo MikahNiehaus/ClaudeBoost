@@ -37,9 +37,7 @@ file exists and compiles.
 
 A `type: "prompt"` hook injects text straight into the model's context every
 time it fires. That text is treated as instruction. If it says
-
-> Key endpoints: POST /context (load agent context), POST /index (reindex files)
-
+`Key endpoints: POST /context (load agent context), POST /index (reindex files)`
 and those routes were removed, then every session begins by being told to call
 two endpoints that return 404. The model tries, fails, and works around it. You
 see flaky behaviour and blame the model.

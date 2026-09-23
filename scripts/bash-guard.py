@@ -2695,10 +2695,162 @@ def _operands_to_skip(segment: str) -> int:
 _REDIRECT_WORDS = frozenset({">", ">>", ">|", ">&", "&>", "&>>"})
 _SOURCE_PATH_RE = re.compile(r"[\w.:/\\@+-]+")
 
-# A parameter expansion, in the two spellings that carry a path: $NAME and
-# ${NAME}. A positional (`$1`) and the special parameters are deliberately
-# absent, because neither has an assignment anywhere in the command to read.
-_VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+# A parameter expansion, read against bash's own grammar rather than against a
+# list of spellings seen so far, because the list is what keeps coming up one
+# short: `${arr[0]}` and `${UNSET:-scripts/bash-guard.py}` both reached this
+# file after nine other spellings of it had been closed one at a time.
+_PARAM_NAME_RE = re.compile(r"[A-Za-z_]\w*")
+
+# The operators that put their own word in the output: ${name:-word},
+# ${name-word}, ${name:=word}, ${name=word}, ${name:+word}, ${name+word}. That
+# word is a path the command writes, spelled entirely inside the braces.
+# GNU Bash Reference Manual, Shell Parameter Expansion.
+_DEFAULT_WORD_RE = re.compile(r"^:?[-=+](.*)$", re.DOTALL)
+# ${name/pattern/string} and ${name//pattern/string} put `string` there too.
+_REPLACEMENT_RE = re.compile(r"^/{1,2}[^/]*/(.*)$", re.DOTALL)
+
+# What an expansion only the environment can resolve stands for. It holds the
+# place so the readable rest of a word survives: `${TMPDIR}/out.txt` still
+# names out.txt. A word that reduces to nothing but this is refused, and so is
+# one whose readable rest names a protected file for some value of the
+# unreadable part, which _marker_reaches_protected below decides.
+_UNREADABLE = "\x00var\x00"
+
+# One word can reach the shell as several strings, the way a brace expression
+# can, and both are capped for the same reason: past the cap is a word nobody
+# types. The depth cap bounds `${a:-${b:-${c}}}`.
+_SPELLING_LIMIT = 24
+_EXPANSION_DEPTH = 4
+
+
+def _split_expansion(text: str, index: int) -> tuple[str | None, str, int] | None:
+    """(parameter name, the rest of the expansion, the index after it).
+
+    The name is None where bash's grammar allows something other than a plain
+    parameter, `${#x}` and `${!x}` and the positionals, because none of those
+    has an assignment in the command to read. The result is None when `index`
+    starts no expansion at all.
+    """
+    if not text.startswith("$", index):
+        return None
+    if not text.startswith("${", index):
+        match = _PARAM_NAME_RE.match(text, index + 1)
+        return (match.group(0), "", match.end()) if match else None
+    depth, cursor, length = 1, index + 2, len(text)
+    while cursor < length and depth:
+        if text.startswith("${", cursor):
+            depth += 1
+            cursor += 2
+            continue
+        if text[cursor] == "}":
+            depth -= 1
+        cursor += 1
+    if depth:
+        return None
+    body = text[index + 2:cursor - 1]
+    match = _PARAM_NAME_RE.match(body)
+    if not match:
+        return None, body, cursor
+    rest = body[match.end():]
+    if rest.startswith("["):
+        # A subscript selects one element of a name this guard binds whole, so
+        # the reference is judged against every element. Refusing on one the
+        # command did not name is the direction a guard can afford.
+        close = rest.find("]")
+        if close != -1:
+            rest = rest[close + 1:]
+    return match.group(0), rest, cursor
+
+
+def _expansion_options(name: str | None, remainder: str,
+                       bindings: dict[str, list[str]], depth: int) -> list[str]:
+    """What this one expansion can put in the output.
+
+    Both halves of `${name:-word}` are kept, because which one bash picks
+    depends on a value that is not in the command.
+    """
+    values = bindings.get(name) if name else None
+    options = list(values) if values else [_UNREADABLE]
+    match = _DEFAULT_WORD_RE.match(remainder) or _REPLACEMENT_RE.match(remainder)
+    if match and match.group(1):
+        options.extend(_expansion_spellings(match.group(1), bindings, depth + 1))
+    return options
+
+
+def _expansion_spellings(word: str, bindings: dict[str, list[str]],
+                         depth: int = 0) -> list[str]:
+    """Every string this word could expand to, with unresolvable parts marked.
+
+    A word is judged as what it becomes, not as the text it is:
+    `rm ${UNSET:-scripts/bash-guard.py}` deletes this file in real bash while
+    naming no protected path any check could match.
+    """
+    if "$" not in word or depth > _EXPANSION_DEPTH:
+        return [word]
+    spellings, literal = [""], []
+    cursor, length = 0, len(word)
+    while cursor < length:
+        parsed = _split_expansion(word, cursor)
+        if parsed is None:
+            literal.append(word[cursor])
+            cursor += 1
+            continue
+        name, remainder, cursor = parsed
+        prefix = "".join(literal)
+        literal = []
+        options = _expansion_options(name, remainder, bindings, depth)
+        spellings = [left + prefix + option
+                     for left in spellings
+                     for option in options][:_SPELLING_LIMIT]
+    tail = "".join(literal)
+    return [left + tail for left in spellings]
+
+
+# What an unknown expansion is read as standing for while the rest of the word
+# is literal. Empty is bash's own answer for an unset name, and the expansion
+# ShellCheck SC2115 exists for: `rm -rf "$x/home"` reaches /home whenever x is
+# unset. The two directory names are the ones whose named children are
+# protected, so the literal half of the word still has to spell the name.
+#
+# `scripts` is deliberately absent even though it is protected the same way.
+# It protects everything beneath it, so reading an unknown prefix as `scripts`
+# refuses `${TMPDIR}/out.txt` and every other ordinary path built on an
+# environment variable, which is the shape this guard measured as routine.
+# What that gives up is named in test_bash_guard_marker_prefix_bypass.py.
+_MARKER_COMPLETIONS = ("", ".claude", "clean-rag")
+
+
+def _marker_reaches_protected(spelling: str) -> str | None:
+    """The protected path a half readable word can land on, or None.
+
+    The unknown half of the word supplies the directories and the literal half
+    supplies the name, which is how `${DIR}/hooks` reaches `.claude/hooks`.
+    `read -r DIR <<< ".claude"` binds DIR inside the same command without
+    writing an assignment this guard can see, and `printf -v DIR .claude` does
+    it again, so a word can carry a name nothing in the command declares.
+
+    A word whose literal half names nothing protected is allowed however the
+    unknown half expands. That is what keeps `${TMPDIR}/out.txt` running, and
+    it is the whole reason the completions above are a short list rather than
+    "any text at all".
+    """
+    if _UNREADABLE not in spelling:
+        return None
+    path = spelling.replace("\\", "/")
+    before = path.split(_UNREADABLE, 1)[0]
+    holding = before.rsplit("/", 1)[0] if "/" in before else ""
+    # An unknown part inside a protected directory is judged the way a wildcard
+    # component there already is, by what holds it. `rm .claude/*` is refused.
+    if holding and _is_protected_path(holding):
+        return holding
+    tail = path.rsplit(_UNREADABLE, 1)[1].lstrip("/")
+    if not tail:
+        return None
+    for completion in _MARKER_COMPLETIONS:
+        landing = f"{completion}/{tail}" if completion else tail
+        if _is_protected_path(landing):
+            return landing
+    return None
 
 
 def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
@@ -2714,7 +2866,8 @@ def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
     in the command, so nothing here can resolve it, and a guessed value is
     worse than a word that stays visibly unreadable. A loop name stands for
     several values at once and is left alone here for the same reason; the
-    write target check reads all of them.
+    write target check reads all of them. So is an expansion carrying a word of
+    its own, `${name:-path}`, which can reach the shell as either half.
 
     Single quotes suppress expansion in the shell, so they suppress it here.
     """
@@ -2733,15 +2886,24 @@ def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
             index = end + 1
             continue
         else:
-            match = _VAR_REF_RE.match(segment, index)
-            if match:
-                values = bindings.get(match.group(1) or match.group(2), ())
-                out.append(values[0] if len(values) == 1 else match.group(0))
-                index = match.end()
+            parsed = _split_expansion(segment, index)
+            if parsed:
+                name, remainder, end = parsed
+                values = bindings.get(name, ()) if name and not remainder else ()
+                out.append(values[0] if len(values) == 1 else segment[index:end])
+                index = end
                 continue
         out.append(char)
         index += 1
     return "".join(out)
+
+
+# The array assignments, all of which bind a name whose expansion is a path:
+# `arr=(a b)`, `arr+=(c)`, `declare -A m=([k]=v)` and the element form
+# `arr[0]=path`. GNU Bash Reference Manual, Arrays.
+_ARRAY_ASSIGNMENT_RE = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)(?:\[[^]]*\])?\+?=\(")
+_ELEMENT_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_]\w*)\[[^]]*\]\+?=(.*)$", re.DOTALL)
+_KEYED_VALUE_RE = re.compile(r"^\[[^]]*\]\+?=(.*)$", re.DOTALL)
 
 
 def _record_assignments(segment: str, bindings: dict[str, list[str]]) -> None:
@@ -2759,11 +2921,61 @@ def _record_assignments(segment: str, bindings: dict[str, list[str]]) -> None:
     for index, word in enumerate(words):
         match = _ASSIGNMENT_WORD_RE.match(word)
         if match:
-            bindings[match.group(1)] = [match.group(2)]
-        elif word == "for" and words[index + 2:index + 3] == ["in"]:
+            # An empty value names no path, and `arr=(a b)` reaches here as a
+            # bare `arr=` once _split_segments has cut the body off at the `(`.
+            # Binding it would erase what _record_array_assignments read.
+            if match.group(2):
+                bindings[match.group(1)] = [match.group(2)]
+            continue
+        element = _ELEMENT_ASSIGNMENT_RE.match(word)
+        if element:
+            bindings.setdefault(element.group(1), []).append(element.group(2))
+            continue
+        if word == "for" and words[index + 2:index + 3] == ["in"]:
             values = words[index + 3:]
             if values:
                 bindings[words[index + 1]] = values
+
+
+def _array_body_end(text: str, start: int) -> int:
+    """The index of the `)` that closes an array assignment body."""
+    depth, quote, index = 1, None, start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if not depth:
+                return index
+        index += 1
+    return len(text)
+
+
+def _record_array_assignments(text: str, bindings: dict[str, list[str]]) -> None:
+    """Bind every array this text assigns, in each spelling bash accepts.
+
+    Read from the whole text rather than a segment because `(` ends a command
+    as far as _split_segments is concerned: `arr=(scripts/bash-guard.py)`
+    arrives as a bare `arr=` and a separate segment holding the path, so the
+    binding is invisible to anything reading one segment at a time.
+
+    Position is not tracked, so a name bound later in the command counts for a
+    reference earlier in it. That over-refuses rather than under-refuses.
+    """
+    for match in _ARRAY_ASSIGNMENT_RE.finditer(text):
+        body = text[match.end():_array_body_end(text, match.end())]
+        values = []
+        for element in _shell_words(body):
+            keyed = _KEYED_VALUE_RE.match(element)
+            values.append(keyed.group(1) if keyed else element)
+        if values:
+            bindings.setdefault(match.group(1), []).extend(values)
 
 
 def check_protected_paths(command: str) -> str | None:
@@ -2786,7 +2998,7 @@ def check_protected_paths(command: str) -> str | None:
                 ".claude", "$", "`", "*", "?", "[", "{")):
         return None
 
-    bindings: dict[str, str] = {}
+    bindings: dict[str, list[str]] = {}
     for text, _routed, kind in _scannable_texts(command):
         if kind == "interpreter":
             words = _SOURCE_PATH_RE.findall(text)
@@ -2798,6 +3010,7 @@ def check_protected_paths(command: str) -> str | None:
                     return _protected_refusal(word, "named inside interpreter source")
             continue
 
+        _record_array_assignments(text, bindings)
         for _separator, segment in _split_segments(text):
             segment = _resolve_variables(segment, bindings)
             _record_assignments(segment, bindings)
@@ -2826,23 +3039,25 @@ def _write_target_problem(word: str, how: str,
                           bindings: dict[str, list[str]] | None = None) -> str | None:
     """The refusal this write target earns, or None.
 
+    The target is judged as every string it can expand to, so a name the
+    command binds is followed into its value and a word written inside the
+    braces is read as the path it becomes. A loop name stands for every path
+    in its list, and each is judged as if the body had written it out.
+
     A target built by a command substitution is refused rather than resolved.
     Nothing bounds what the substitution prints: it can emit a leading
     directory, so no amount of visible text around it rules out a control file.
     `$(echo scripts/bash-guard.py)` reached the guard itself while all eight
     literal spellings of the same path were refused.
     """
-    match = _VAR_REF_RE.fullmatch(word)
-    values = (bindings or {}).get(match.group(1) or match.group(2)) if match else None
-    if values:
-        # A loop name, standing for every path its list holds. Each is judged as
-        # if the loop body had written it out.
-        for value in values:
-            problem = _write_target_problem(value, how)
-            if problem:
-                return problem
-        return None
-    if _SUBSTITUTION_MARK in word:
+    spellings = _expansion_spellings(word, bindings or {})
+    for spelling in spellings:
+        landing = _marker_reaches_protected(spelling)
+        if landing:
+            return _protected_refusal(landing, f"{how} once {word} expands")
+        if _is_protected_path(spelling):
+            return _protected_refusal(spelling, how)
+    if any(_SUBSTITUTION_MARK in spelling for spelling in spellings):
         return (
             f"BLOCKED: this command is {how}, and part of the target is built by a "
             "command substitution, so the path it names is only known once it runs. "
@@ -2850,11 +3065,10 @@ def _write_target_problem(word: str, how: str,
             "and a path this guard cannot read is one it cannot clear. Write the "
             "path literally, or compute the name in a separate command first."
         )
-    # The whole path is a variable no assignment in this command defines, so it
-    # names a file only the environment knows. Same reasoning as the
-    # substitution above, and narrowed to the whole word on purpose:
-    # `> ${TMPDIR}/out.txt` keeps a literal name and stays readable.
-    if _VAR_REF_RE.fullmatch(word):
+    # Nothing in the command defines it, so only the environment knows what it
+    # names. Same reasoning as the substitution above, and narrowed to the
+    # whole word: `> ${TMPDIR}/out.txt` keeps a readable filename.
+    if any(spelling == _UNREADABLE for spelling in spellings):
         return (
             f"BLOCKED: this command is {how}, and the whole target is {word}, whose "
             "value comes from the environment rather than from the command. A path "
@@ -2862,8 +3076,6 @@ def _write_target_problem(word: str, how: str,
             "decide what this session may do. Write the path literally, or assign it "
             "in the same command so it is visible."
         )
-    if _is_protected_path(word):
-        return _protected_refusal(word, how)
     return None
 
 

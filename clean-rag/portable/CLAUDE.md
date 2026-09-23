@@ -448,7 +448,7 @@ scraped topic knowledge base.
   edit, and a full sweep every 10 minutes for outside changes. The server runs
   headed so you can watch it.
 
-If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
+If the server is down, run `/clean-rag-server start`.
 
 ## Plugins
 
@@ -473,6 +473,25 @@ Installed today:
   decides how to check it, so research still runs and bad-cop still runs; the
   ladder just usually means there is less to review. If a turn feels ceremonious
   for a one line change, that is `/ps`, not a reason to switch either off.
+
+- **pipe-down** (`hoo29/claude-pipe-down`, MIT) refuses an Edit or Write that
+  adds an over-long or low value comment. It is `PreToolUse`, which is the
+  whole point: `comment-humanness-check.py` is `PostToolUse`, so its length
+  nudge arrives after the comment is already on disk and gets ignored. Only the
+  dash rule there ever blocked. pipe-down covers 30 plus languages from its own
+  `Lang` table, including `/* */` blocks, which our extractor does not reach.
+
+  Two env vars are set for it, with `setdefault` in both installers so a retune
+  survives a re-run. `PIPE_DOWN_MAX_WORDS` is 20, not its shipped 25, matching
+  the cap our own hook already used. `PIPE_DOWN_LLM` is `0` because it ships
+  **on**: left alone it spawns a `claude -p` Haiku subprocess per write, with a
+  40 second timeout, to judge borderline comments. That is a real latency cost
+  on every edit. Turn it back on only if the regex rules prove too blunt.
+
+  It fails open on a malformed payload and caps itself at
+  `PIPE_DOWN_MAX_DENIALS = 2` per file, so it cannot wedge a session. Verified
+  by driving the real hook rather than reading it: the same 22 word comment is
+  denied at a cap of 20 and allowed at 25, so the setting does real work.
 
 ### Calling it correctly
 
@@ -621,9 +640,8 @@ always valid.
 Spawn agents when they add value: parallelism, isolation, deep specialization.
 Do the work directly when they don't. A one line fix doesn't need an agent.
 
-Specialist agents (architect, reviewer, debug, security, performance, refactor,
-ui, docs, test, and the rest) are available for focused work. They are spawned
-as needed, not on every task.
+The six agents in Model Routing below are spawned as needed, not on every
+task. Any other shipped agent belongs to the skill that spawns it.
 
 ### Never delete scratchpad files. Leave them
 
@@ -664,7 +682,7 @@ the rules look like this.
 - **Opus**: good-cop.
 - **Sonnet**: bad-cop, quick-cop, research-agent, researcher, swiper.
 
-That is the whole roster, 6 agents. A spawn of a name not on this list does not error; it quietly resolves to a generic agent while the session believes it got a specialist.
+That is the pipeline roster, 6 agents. A skill may ship its own helper agent, spawned only from that skill. A spawn of a name with no agent file does not error; it quietly resolves to a generic agent while the session believes it got a specialist.
 
 ### Starting a new build or feature
 

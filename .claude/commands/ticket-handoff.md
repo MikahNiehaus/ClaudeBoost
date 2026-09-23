@@ -240,5 +240,5 @@ Wait for the user's answer — the user is always the source of truth.
 
 If `WORKSPACE_PATH` is empty: note it and continue.
 
-Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+Include `workspace_path="<WORKSPACE_PATH>"` in every agent spawn prompt, so the agent can read that workspace's `ticket.md` and `requirements.md`.
 

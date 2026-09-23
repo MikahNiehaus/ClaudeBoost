@@ -42,7 +42,7 @@ Wait for the user's answer — the user is always the source of truth.
 
 If `WORKSPACE_PATH` is empty: note it and continue.
 
-Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+Include `workspace_path="<WORKSPACE_PATH>"` in every agent spawn prompt, so the agent can read that workspace's `ticket.md` and `requirements.md`.
 
 
 
@@ -447,7 +447,7 @@ Both are invoked with a leading slash, and they live in different places: comman
 | `/clear-safe` | Pre-flight save before `/clear` |
 | `/ps` | Mark the turn trivial. Skips the research gate and the verifier |
 
-36 commands and 25 skills are installed. `/end-to-end-test` and `/review` were listed here and are neither.
+`/end-to-end-test` was listed here and does not exist; it became `/qa`. `/review` is Claude Code's own alias for its built in `/code-review`, not a command this repo ships.
 
 #### Knowledge
 
@@ -605,7 +605,7 @@ Write `$WORKSPACE_ABS/plan.md` using this template:
 **What**: [what this step accomplishes]
 **Command**: `[exact skill or agent action — e.g., /explore my-workspace-id or "spawn bad-cop"]`
 **Agent**: [agent-name (Model)]
-**Knowledge loaded via RAG**: [list knowledge files]
+**RAG queries used**: [search queries run against project or web sources for this step]
 **Output artifact**: [e.g., workspace/$WORKSPACE_ID/plan.md, tests/feature.spec.ts]
 **Depends on**: [Step N, or "none — run first"]
 **Execution**: [sequential | parallel with Step N]
@@ -634,11 +634,11 @@ Write `$WORKSPACE_ABS/plan.md` using this template:
 
 ---
 
-## Knowledge Bases Engaged
+## RAG Sources Consulted
 
-| File | Why Relevant to This Work |
-|------|--------------------------|
-| [knowledge/X.xml] | [specific reason] |
+| Query | Source | Why Relevant to This Work |
+|-------|--------|--------------------------|
+| [search query text] | project:<path> or web-search | [specific reason] |
 
 ---
 

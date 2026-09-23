@@ -1,6 +1,6 @@
 # ClaudeBoost Setup Guide
 
-Complete setup instructions for ClaudeBoost — agents, knowledge bases, RAG search, and slash commands.
+Complete setup instructions for ClaudeBoost: agents, hooks, local code search, and slash commands.
 
 ## Quick Setup
 
@@ -35,76 +35,50 @@ Both wrappers delegate to `scripts/setup.py` — the single cross-platform insta
 
 > **TTS scope**: `/speak` is wired for Windows and macOS only. Linux installs everything else but `/speak` is a no-op on that platform.
 
-This does everything in one step:
+In one run it:
 
-| Step | What it does | Where it goes |
-|------|-------------|---------------|
-| 1 | Installs RAG server package | pip (editable install) |
-| 2 | Registers RAG MCP server globally | `~/.claude.json` (mcpServers) |
-| 3 | Hardlinks CLAUDE.md globally (auto-updates on edit) | `~/.claude/CLAUDE.md` |
-| 4 | Links 36 slash commands | `~/.claude/commands/` |
-| 5 | Builds RAG vector index | `mcp-rag-server/.rag-index/` |
+| What it does | Where it goes |
+|-------------|---------------|
+| Registers the hooks | `~/.claude/settings.json` |
+| Links the slash commands | `~/.claude/commands/` |
+| Installs agents, skills and `CLAUDE.md` from `clean-rag/portable/` | `~/.claude/` |
+| Builds clean-rag its own virtualenv and installs the embedding stack | `clean-rag/clean-rag-venv/` |
+| Starts clean-rag, the search server | `http://127.0.0.1:8613` |
+| Indexes the ClaudeBoost repo as a project | `POST /index-project` |
+| Registers the MCP servers and plugins | `~/.claude.json` |
 
-The installer output should show all steps completing:
-```
-[1/4] Registering RAG MCP server...        MCP server registered globally.
-        CLAUDE.md linked to ~/.claude/CLAUDE.md (auto-updates).
-[2/4] Installing slash commands...          Slash commands linked.
-[3/4] Building initial RAG index...
-Indexed 68 files, 736 chunks
-         Index built successfully.
-```
-
-**Important**: The installer sets `RAG_PROJECT_ROOT` to your ClaudeBoost directory so the
-RAG server can find the index and XML files from any project. If you move ClaudeBoost to
-a different location, re-run `install.bat` (Windows) or `./install.sh` (macOS/Linux) to update the path.
+**Important**: The installer sets `CLAUDEBOOST_HOME` to your ClaudeBoost directory. If you
+move ClaudeBoost, re-run `install.bat` (Windows) or `./install.sh` (macOS/Linux).
 
 ### 3. Verify
 
-Open any project in Claude Code and try:
-- `/boost` — starts the RAG server and primes the session
+Open any project in Claude Code and run:
+- `/clean-rag-server status` to check the search server
+- `/boost` to verify all systems
 
-Verify the RAG server directly:
+Or check the server directly:
 ```
-GET http://127.0.0.1:8612/status
+GET http://127.0.0.1:8613/status
 ```
-Should return `{"status":"ready"}` with collection chunk counts.
+It returns `"status"` plus every registered project under `projects.entries`.
 
-That's it. Every Claude Code session now has:
-- Semantic search over 109 knowledge files (55 domain, 21 language, 33 framework) and 25 agent XML files
-- Global CLAUDE.md telling Claude when and how to use RAG
-- 36 slash commands for task management
+### Indexing a project
 
-### How RAG works after install
+Run `/index-project <path>` in Claude Code, or call
+`POST http://127.0.0.1:8613/index-project` with `{"project_path": "<abs path>"}`.
+Only changed files are re-indexed. After that the index keeps itself fresh: it
+reindexes after every edit and sweeps every 10 minutes for outside changes.
 
-The RAG MCP server starts automatically when Claude Code opens any project.
-
-- **On startup**: indexes any new or changed files in agents/, knowledge/
-- **Auto-watcher**: monitors agents/ and knowledge/ for file changes — re-indexes within 2 seconds
-- **No manual action needed**: just work normally, the index stays up to date
-
-### Re-indexing manually
-
-If you need to force a full re-index:
-- From Claude Code: `POST http://127.0.0.1:8612/index` with `{"force": true}`
-- From terminal: re-run `install.bat` (rebuilds the index from scratch)
-
-Only changed files get re-indexed normally (incremental via SHA-256 hash comparison).
-
-### What gets indexed
-
-| Scope | Source files | What's in them |
-|-------|------------|----------------|
-| knowledge | `knowledge/*.xml` (109 files: 55 domain, 21 lang, 33 fw) | Coding standards, security, architecture, debugging, language/framework guides, etc. |
-| agents | `agents/*.xml` (25 files) | Agent definitions with capabilities, guidelines, output formats |
+There is no topic knowledge base and no agents index. Search runs over your own
+indexed projects and the live web. `clean-rag/CLAUDE.md` has the full route table.
 
 ## Verification Checklist
 
 ```bash
-rag_status                    # In Claude Code — shows collection counts
-rag_search "SQL injection"    # Should return security.xml results
-ls ~/.claude/commands/        # Slash commands
-cat ~/.claude/CLAUDE.md       # Global orchestration rules with RAG instructions
+curl -s http://127.0.0.1:8613/status   # Server health and registered projects
+ls ~/.claude/agents/                   # Installed agents
+ls ~/.claude/commands/                 # Slash commands
+cat ~/.claude/CLAUDE.md                # Global orchestration rules
 ```
 
 ## Current Tested Versions
@@ -114,4 +88,4 @@ As of 2026-06-04:
 - **Claude Code**: v2.1.88
 - **Model**: claude-opus-4-6
 - **sentence-transformers**: 3.0+ (BAAI/bge-base-en-v1.5, 768 dimensions)
-- **ChromaDB**: 0.5+ (embedded SQLite mode)
+- **sqlite-vec**: 0.1.9+ (vector store)

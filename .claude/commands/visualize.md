@@ -10,7 +10,7 @@ Generate a professional interactive diagram as a self-contained HTML file and op
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
-Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+Call `GET http://127.0.0.1:8613/status`. If it fails: stop and tell the user "RAG is not connected. Run /clean-rag-server start before using this skill."
 
 **0b — Verify project is indexed** (required for codebase search to work):
 

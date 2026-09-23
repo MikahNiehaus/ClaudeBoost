@@ -3,7 +3,7 @@ restart-rag.py — last resort killer for a stuck RAG server process.
 
 The RAG server is a standalone HTTP daemon on port 8613, not an MCP process.
 
-Use clean-rag/cli/server_ctl.py, or /rag in Claude Code, not this script:
+Use clean-rag/cli/server_ctl.py, or /clean-rag-server in Claude Code, not this script:
 
     python clean-rag/cli/server_ctl.py restart
     python clean-rag/cli/server_ctl.py stop
@@ -92,7 +92,7 @@ def main() -> int:
     if not new_pids:
         print("RAG server stopped. Restart with:")
         print("  python clean-rag/cli/server_ctl.py start")
-        print("Or run /rag in Claude Code.")
+        print("Or run /clean-rag-server start in Claude Code.")
     elif new_pids == pids:
         print("Warning: same PID still running — SIGTERM may have been ignored")
     else:

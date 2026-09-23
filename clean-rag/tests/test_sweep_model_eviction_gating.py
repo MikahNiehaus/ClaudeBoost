@@ -1,21 +1,29 @@
-"""Tests for gating auto_reindex_loop's model_cache.evict_all() on real work.
+"""The auto reindex sweep must never evict a model at a group boundary.
 
 server/auto_reindex.py:auto_reindex_loop groups projects by embedding model
-(server/reindex_unit.py:plan_sweep) and used to evict every resident model the
-instant the model changed, with no regard for whether the group that just
-finished actually did anything. A sweep that skipped every project because
-another job held the index lock still threw away a model a concurrently
-running /index-project was actively embedding with -- reloading
-Salesforce/SFR-Embedding-Code-400M_R costs 135s, and this fired 4 times in
-104 minutes during one real reindex (about 8.6 percent of its wall clock).
+(server/reindex_unit.py:plan_sweep). It used to call model_cache.evict_all()
+whenever the model changed between consecutive projects, first unconditionally
+and later gated on whether the finishing group had done real work. Both
+versions are gone, and the reason is measured rather than stylistic.
 
-The fix adds a `group_did_work` accumulator, true only when at least one
-project in the CURRENT model group actually held the lock and did real work
-(`_sweep_project` returned True), reset at every group boundary. These tests
-drive the real `auto_reindex_loop` coroutine end to end, with the registry,
-the plan, the per-project sweep, and the model cache all faked, so the
-assertions are about the loop's own control flow rather than about a
-reimplementation of it.
+torch does not return CPU allocator arenas to the OS. Every evict and reload
+cycle therefore left roughly 1.7 GB behind permanently, by this project's own
+measurement recorded on ModelCache.evict_all. The sweep ran six of those cycles
+an hour, and the server process reached 18.8 GB RSS on a 32 GB machine with
+free RAM at 0 MB. There is no in process remedy on Windows: malloc_trim is a
+glibc export, and Microsoft documents HeapCompact as reporting the largest free
+block without compacting further.
+
+Residency was never the sweep's job to bound anyway. ModelCache._enforce_max_
+resident caps it at DEFAULT_MAX_RESIDENT on every single load, which is why the
+removed call described itself as a release sooner optimisation rather than a
+safety net. Removing it means the cap evicts strictly less often.
+
+These tests drive the real auto_reindex_loop coroutine end to end, with the
+registry, the plan, the per project sweep and the model cache all faked, so the
+assertions are about the loop's own control flow rather than a reimplementation
+of it. The last two prove the removal is a real behaviour change and that the
+cap it relies on actually holds.
 """
 import sys
 from pathlib import Path
@@ -46,8 +54,7 @@ def reset_auto_reindex():
 
 
 def _wire_common(monkeypatch, planned_sequence, registry_sequence):
-    """Patch everything auto_reindex_loop touches except the eviction and
-    accumulator logic under test.
+    """Patch everything auto_reindex_loop touches except the model cache.
 
     planned_sequence: list of `list[PlannedProject]`, one per real sweep.
     registry_sequence: list of truthy dict stand-ins, one per real sweep.
@@ -113,17 +120,38 @@ async def _run_sweeps(monkeypatch, planned_sequence, proceeded_map, exception_ma
 
 
 # ---------------------------------------------------------------------------
-# The production bug this diff fixes: every project skipped, group boundaries
-# crossed, and nothing is evicted.
+# The core contract, stated six ways because the removed code had six
+# different paths that could reach an eviction.
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_every_group_does_real_work_and_nothing_is_ever_evicted(
+    monkeypatch, reset_auto_reindex,
+):
+    """The case the old gate deliberately evicted on, and the one that drove
+    RSS to 18 GB. Three model groups, every project doing real work, two
+    boundaries crossed. Under the previous rule this evicted twice."""
+    planned = [
+        PlannedProject("p1", "/p1", "modelA", 1),
+        PlannedProject("p2", "/p2", "modelA", 1),
+        PlannedProject("p3", "/p3", "modelB", 1),
+        PlannedProject("p4", "/p4", "modelB", 1),
+        PlannedProject("p5", "/p5", "modelC", 1),
+    ]
+    evict_all, call_log = await _run_sweeps(
+        monkeypatch, [planned],
+        proceeded_map={"p1": True, "p2": True, "p3": True, "p4": True, "p5": True},
+    )
+    assert call_log == ["p1", "p2", "p3", "p4", "p5"], "sweep did not visit every project"
+    evict_all.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_all_skipped_across_several_group_boundaries_never_evicts(
     monkeypatch, reset_auto_reindex,
 ):
-    """The exact production scenario: a manual /index-project holds the lock,
-    every project returns False, several model group boundaries are crossed.
-    evict_all must never be called."""
+    """A manual /index-project holds the lock, every project returns False,
+    several model group boundaries are crossed."""
     planned = [
         PlannedProject("p1", "/p1", "modelA", 1),
         PlannedProject("p2", "/p2", "modelA", 1),
@@ -137,83 +165,27 @@ async def test_all_skipped_across_several_group_boundaries_never_evicts(
     evict_all.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Property 1: a group that did real work still evicts at the next boundary.
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
-async def test_group_that_did_work_evicts_at_the_next_boundary(monkeypatch, reset_auto_reindex):
+async def test_mixed_work_and_skips_never_evicts(monkeypatch, reset_auto_reindex):
+    """An earlier project in a group works and the last one before the
+    boundary skips. The old accumulator existed precisely to evict here."""
     planned = [
         PlannedProject("p1", "/p1", "modelA", 1),
-        PlannedProject("p2", "/p2", "modelB", 1),
-    ]
-    evict_all, _ = await _run_sweeps(monkeypatch, [planned], proceeded_map={"p1": True})
-    evict_all.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Property 3: the case a naive "gate on the immediately prior project alone"
-# gets wrong -- an EARLIER project in the group did work, the LAST one before
-# the boundary skipped, and the boundary must still evict.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_earlier_project_worked_last_one_skipped_still_evicts(
-    monkeypatch, reset_auto_reindex,
-):
-    planned = [
-        PlannedProject("p1", "/p1", "modelA", 1),  # does work
-        PlannedProject("p2", "/p2", "modelA", 1),  # skips, last in group
-        PlannedProject("p3", "/p3", "modelB", 1),  # boundary
+        PlannedProject("p2", "/p2", "modelA", 1),
+        PlannedProject("p3", "/p3", "modelB", 1),
     ]
     evict_all, call_log = await _run_sweeps(
         monkeypatch, [planned], proceeded_map={"p1": True, "p2": False},
     )
     assert call_log == ["p1", "p2", "p3"]
-    evict_all.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Property 4: work in one group must not leak into the boundary out of the
-# NEXT group. Group A worked, group B (a single project) did not; crossing
-# out of B must not evict.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_group_did_work_resets_at_every_boundary(monkeypatch, reset_auto_reindex):
-    planned = [
-        PlannedProject("p1", "/p1", "modelA", 1),  # works -> evicts at A/B boundary
-        PlannedProject("p2", "/p2", "modelB", 1),  # skips
-        PlannedProject("p3", "/p3", "modelC", 1),  # B/C boundary must NOT evict
-    ]
-    evict_all, _ = await _run_sweeps(
-        monkeypatch, [planned], proceeded_map={"p1": True, "p2": False},
-    )
-    assert evict_all.call_count == 1, (
-        "expected exactly one eviction (A->B); group B's idle boundary into C "
-        "must not evict a second time"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Property 6: no eviction before the first group (last_model is None).
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_no_eviction_on_the_first_group(monkeypatch, reset_auto_reindex):
-    planned = [PlannedProject("p1", "/p1", "modelA", 1)]
-    evict_all, _ = await _run_sweeps(monkeypatch, [planned], proceeded_map={"p1": True})
     evict_all.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Single project per model group must behave exactly like gating on the
-# immediately prior project's `proceeded` alone -- the accumulator changes
-# nothing for the degenerate case.
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
-async def test_singleton_groups_match_gating_on_proceeded_alone(monkeypatch, reset_auto_reindex):
+async def test_singleton_groups_never_evict(monkeypatch, reset_auto_reindex):
+    """One project per model, so every step is a boundary. The worst case for
+    the old rule, since a sweep of 14 projects across 3 models crosses a
+    boundary on most iterations."""
     planned = [
         PlannedProject("p1", "/p1", "m1", 1),
         PlannedProject("p2", "/p2", "m2", 1),
@@ -222,17 +194,30 @@ async def test_singleton_groups_match_gating_on_proceeded_alone(monkeypatch, res
     evict_all, _ = await _run_sweeps(
         monkeypatch, [planned], proceeded_map={"p1": True, "p2": False, "p3": True},
     )
-    # m1->m2 boundary: gate reads p1's True -> evict.
-    # m2->m3 boundary: gate reads p2's False -> no evict.
-    # p3's True never reaches a boundary check (sweep ends after it).
-    assert evict_all.call_count == 1
+    evict_all.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_work_does_not_leak_into_the_next_sweep(monkeypatch, reset_auto_reindex):
+    """Two consecutive sweeps, work in the first one, boundary in the second.
+    Nothing carried across a sweep may reintroduce an eviction."""
+    sweep1 = [PlannedProject("s1p1", "/s1p1", "modelA", 1)]
+    sweep2 = [
+        PlannedProject("s2p1", "/s2p1", "modelA", 1),
+        PlannedProject("s2p2", "/s2p2", "modelB", 1),
+    ]
+    evict_all, call_log = await _run_sweeps(
+        monkeypatch, [sweep1, sweep2],
+        proceeded_map={"s1p1": True, "s2p1": True},
+    )
+    assert call_log == ["s1p1", "s2p1", "s2p2"]
+    evict_all.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# The exception path. `proceeded` is assigned inside the try, and the new
-# accumulator line sits after `if proceeded:` but still inside the same try.
-# Confirm: (a) an exception on one project does not kill the sweep for the
-# rest, (b) it does not silently corrupt group_did_work either direction.
+# Loop integrity. Removing the eviction must not have disturbed the paths that
+# shared its enclosing block, and the removed accumulator was assigned inside
+# the same `try` as `proceeded`.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -240,9 +225,9 @@ async def test_exception_on_one_project_does_not_kill_the_rest_of_the_sweep(
     monkeypatch, reset_auto_reindex,
 ):
     planned = [
-        PlannedProject("p1", "/p1", "modelA", 1),  # raises
-        PlannedProject("p2", "/p2", "modelA", 1),  # does real work
-        PlannedProject("p3", "/p3", "modelB", 1),  # boundary
+        PlannedProject("p1", "/p1", "modelA", 1),
+        PlannedProject("p2", "/p2", "modelA", 1),
+        PlannedProject("p3", "/p3", "modelB", 1),
     ]
     evict_all, call_log = await _run_sweeps(
         monkeypatch, [planned],
@@ -250,53 +235,22 @@ async def test_exception_on_one_project_does_not_kill_the_rest_of_the_sweep(
         exception_map={"p1": RuntimeError("boom")},
     )
     assert call_log == ["p1", "p2", "p3"], (
-        "an exception on p1 must not stop the loop from reaching p2 and p3 -- "
-        "if `proceeded` referenced before assignment raised UnboundLocalError "
-        "this would truncate here"
+        "an exception on p1 must not stop the loop from reaching p2 and p3. A "
+        "reference to a name deleted alongside the eviction would raise "
+        "UnboundLocalError or NameError and truncate here"
     )
-    evict_all.assert_called_once()  # p2's real work still evicts at the A/B boundary
+    evict_all.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_exception_after_real_work_does_not_erase_group_did_work(
-    monkeypatch, reset_auto_reindex,
-):
-    """p1 does real work, p2 raises before the accumulator line runs. The
-    earlier work must still be remembered at the boundary -- the accumulator
-    line sitting inside the try must not mean an exception downstream resets
-    it, since the line never executes at all on that iteration (the
-    exception is raised by the `await _sweep_project(...)` call itself,
-    which is the right-hand side of the assignment, so control jumps straight
-    to `except` without touching `group_did_work`)."""
-    planned = [
-        PlannedProject("p1", "/p1", "modelA", 1),  # does real work
-        PlannedProject("p2", "/p2", "modelA", 1),  # raises
-        PlannedProject("p3", "/p3", "modelB", 1),  # boundary
-    ]
-    evict_all, call_log = await _run_sweeps(
-        monkeypatch, [planned],
-        proceeded_map={"p1": True},
-        exception_map={"p2": RuntimeError("boom")},
-    )
-    assert call_log == ["p1", "p2", "p3"]
-    evict_all.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# `break` on pressure happens before the eviction check for the project that
-# would have crossed the boundary. Confirm an abandoned sweep never evicts
-# on the project it never got to.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_break_on_pressure_before_a_boundary_never_evicts(monkeypatch, reset_auto_reindex):
+async def test_break_on_pressure_stops_the_sweep_early(monkeypatch, reset_auto_reindex):
+    """Headroom fails as p3 is about to be considered, so the sweep abandons
+    the rest. The projects already visited must stand."""
     planned = [
         PlannedProject("p1", "/p1", "modelA", 1),
         PlannedProject("p2", "/p2", "modelA", 1),
-        PlannedProject("p3", "/p3", "modelB", 1),  # would cross the boundary
+        PlannedProject("p3", "/p3", "modelB", 1),
     ]
-    # Headroom ok for p1 and p2, pressured right as p3 is about to be
-    # considered -- the break happens before p3's eviction check ever runs.
     evict_all, call_log = await _run_sweeps(
         monkeypatch, [planned],
         proceeded_map={"p1": True, "p2": True},
@@ -306,69 +260,22 @@ async def test_break_on_pressure_before_a_boundary_never_evicts(monkeypatch, res
     evict_all.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# group_did_work must not leak across separate sweeps (separate `while True`
-# iterations). It is reinitialised to False every sweep, so work recorded in
-# sweep 1 must have no bearing on sweep 2's first boundary.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_group_did_work_does_not_leak_into_the_next_sweep(monkeypatch, reset_auto_reindex):
-    sweep1 = [PlannedProject("s1p1", "/s1p1", "modelA", 1)]  # does work, single group, no boundary
-    sweep2 = [
-        PlannedProject("s2p1", "/s2p1", "modelA", 1),  # skips
-        PlannedProject("s2p2", "/s2p2", "modelB", 1),  # boundary -- must not evict
-    ]
-    evict_all, call_log = await _run_sweeps(
-        monkeypatch, [sweep1, sweep2],
-        proceeded_map={"s1p1": True, "s2p1": False},
-    )
-    assert call_log == ["s1p1", "s2p1", "s2p2"]
-    evict_all.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Differential check against the diff's own `-` lines: the OLD rule was a
-# single unconditional `if last_model is not None and project.model !=
-# last_model: evict_all()`, with no `group_did_work` at all. Simulating that
-# exact removed rule against the same "all skipped" input the first test
-# uses proves the old code really did have the bug the fix claims to close,
-# and that the new code's behavior is a real divergence, not a no-op change.
-# ---------------------------------------------------------------------------
-
-def _old_rule_boundaries_that_would_evict(models: list[str]) -> int:
-    """A direct transcription of the removed line
-    (`if last_model is not None and project.model != last_model: evict_all()`),
-    with no gating on whether the group did any work. Used only to prove the
-    old code's behavior on the same scenario, never as a correctness
-    reference for the new code."""
-    last_model = None
-    evictions = 0
-    for model in models:
-        if last_model is not None and model != last_model:
-            evictions += 1
-        last_model = model
-    return evictions
-
-
-# ---------------------------------------------------------------------------
-# Property 8, second half: a plain embedder with no evict_all attribute must
-# still be swallowed by `except AttributeError`, unchanged from before this
-# diff, even when group_did_work is True and the eviction is actually
-# attempted.
-# ---------------------------------------------------------------------------
-
 class _PlainEmbedder:
-    """Stands in for a bare embedder passed instead of a ModelCache -- no
-    evict_all method at all, so calling it raises AttributeError."""
+    """Stands in for a bare embedder passed instead of a ModelCache. It has no
+    evict_all method at all, so any surviving call site would raise
+    AttributeError rather than fail silently."""
 
 
 @pytest.mark.asyncio
-async def test_plain_embedder_without_evict_all_does_not_crash_the_sweep(
+async def test_plain_embedder_without_evict_all_completes_the_sweep(
     monkeypatch, reset_auto_reindex,
 ):
+    """The old code wrapped its eviction in `except AttributeError`, which
+    would have hidden a stray call. Without that wrapper, an embedder lacking
+    the method turns any surviving call into a visible failure, so a clean
+    sweep here is real evidence that no call site remains."""
     planned = [
-        PlannedProject("p1", "/p1", "modelA", 1),  # does work -> eviction attempted at boundary
+        PlannedProject("p1", "/p1", "modelA", 1),
         PlannedProject("p2", "/p2", "modelB", 1),
     ]
     _wire_common(monkeypatch, [planned], [{"__nonempty__": True}])
@@ -387,17 +294,54 @@ async def test_plain_embedder_without_evict_all_does_not_crash_the_sweep(
         await auto_reindex.auto_reindex_loop(lambda: plain_embedder)
 
     assert call_log == ["p1", "p2"], (
-        "the AttributeError from evict_all() must be swallowed, not propagate "
-        "and truncate the sweep"
+        "the sweep must cross the modelA to modelB boundary untouched"
     )
 
 
-def test_old_ungated_rule_would_have_evicted_on_the_all_skipped_scenario():
+# ---------------------------------------------------------------------------
+# Proof that the removal is a real change, and proof that the cap it leans on
+# actually holds. Without the second of these, the first only shows that the
+# sweep stopped evicting, not that residency is still bounded.
+# ---------------------------------------------------------------------------
+
+def _old_rule_boundaries_that_would_evict(models: list[str]) -> int:
+    """A direct transcription of the removed boundary test, with no gating.
+    Used only to show what the old code did on a given sweep order, never as a
+    correctness reference for the new code."""
+    last_model = None
+    evictions = 0
+    for model in models:
+        if last_model is not None and model != last_model:
+            evictions += 1
+        last_model = model
+    return evictions
+
+
+def test_the_removed_rule_would_have_evicted_on_a_working_sweep():
+    """The differential check. On the same input as the first test, the old
+    rule crossed two boundaries and evicted at both, so the new assertion of
+    zero evictions is a genuine divergence rather than a test that was always
+    going to pass."""
     models = ["modelA", "modelA", "modelB", "modelB", "modelC"]
     assert _old_rule_boundaries_that_would_evict(models) == 2, (
-        "sanity check on the transcription of the removed line: it must cross "
-        "exactly two boundaries (A->B, B->C) regardless of whether any project "
-        "in either group did work -- this is the bug the new group_did_work "
-        "gate exists to close, confirmed against the real loop in "
-        "test_all_skipped_across_several_group_boundaries_never_evicts"
+        "sanity check on the transcription: two boundaries, A to B and B to C"
+    )
+
+
+def test_model_cache_caps_residency_without_any_help_from_the_sweep():
+    """The safety net the removal depends on. If this ever stops holding, the
+    sweep's eviction was load bearing after all and removing it was wrong."""
+    from server.lang_router import ModelCache
+
+    cache = ModelCache(max_resident=2)
+    for name in ("m1", "m2", "m3", "m4"):
+        cache._cache[name] = object()
+        cache._enforce_max_resident(keep=name)
+        assert len(cache._cache) <= 2, (
+            f"residency reached {len(cache._cache)} after adding {name}, so "
+            "_enforce_max_resident is not bounding the cache on its own"
+        )
+
+    assert cache.loaded_models() == ["m3", "m4"], (
+        "the cap must drop least recently used first, keeping the newest two"
     )

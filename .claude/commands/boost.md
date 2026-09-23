@@ -68,7 +68,7 @@ except ImportError:
 Write `"${CLAUDEBOOST_HOME}/state/cb_onnx_check.py"`:
 ```python
 import pathlib
-cfg = pathlib.Path(__file__).parent.parent / "mcp-rag-server" / ".env"
+cfg = pathlib.Path(__file__).parent.parent / "clean-rag" / ".env"
 device = "cpu"
 try:
     for line in open(cfg):

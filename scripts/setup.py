@@ -1355,7 +1355,7 @@ def _prime_rag_session() -> None:
         sentinel.touch()
         _ok(f"RAG sentinel written: {sentinel}")
     except OSError as e:
-        _warn(f"Could not write RAG sentinel ({e}) — run /rag after setup to prime the session")
+        _warn(f"Could not write RAG sentinel ({e}) — run /boost after setup to prime the session")
         return
 
     # Warm the embedder with a real search. This used to POST /context, an
@@ -1382,20 +1382,20 @@ def _prime_rag_session() -> None:
             hits = len(data.get("results", []))
             _ok(f"RAG session primed ({hits} results)")
     except Exception as e:
-        _warn(f"RAG prime failed ({e}) — model may still be loading, run /rag if needed")
+        _warn(f"RAG prime failed ({e}) — model may still be loading, run /boost if needed")
 
 
 # ---------------------------------------------------------------------------
-# RAG index seed: index ClaudeBoost knowledge bases after server starts so
+# RAG index seed: index the ClaudeBoost repo as a project after server starts so
 # /search works immediately after install without requiring the user to run
-# /index-boost or /boost first.
+# /index-project or /boost first.
 # ---------------------------------------------------------------------------
 def _seed_rag_index() -> None:
     import json as _json
     import urllib.error
     import urllib.request
 
-    _info("Indexing ClaudeBoost knowledge bases (agents/ + knowledge/)...")
+    _info("Indexing the ClaudeBoost repo as a project...")
     try:
         body = _json.dumps({
             "project_path": BOOST_HOME_POSIX,
@@ -1411,13 +1411,13 @@ def _seed_rag_index() -> None:
             unchanged = data.get("files_unchanged", 0)
             failed = data.get("files_failed", 0)
             if failed:
-                _warn(f"Knowledge bases indexed with errors: {indexed} new, {unchanged} unchanged, {failed} failed")
-                _warn("  Run /index-boost in Claude Code to retry failed files")
+                _warn(f"ClaudeBoost indexed with errors: {indexed} new, {unchanged} unchanged, {failed} failed")
+                _warn(f"  Run /index-project {BOOST_HOME_POSIX} in Claude Code to retry failed files")
             else:
-                _ok(f"Knowledge bases indexed: {indexed} new, {unchanged} unchanged")
+                _ok(f"ClaudeBoost indexed: {indexed} new, {unchanged} unchanged")
     except Exception as e:
-        _warn(f"Knowledge base indexing failed ({e})")
-        _warn("  Run /index-boost in Claude Code to index manually")
+        _warn(f"ClaudeBoost indexing failed ({e})")
+        _warn(f"  Run /index-project {BOOST_HOME_POSIX} in Claude Code to index manually")
 
 
 # ---------------------------------------------------------------------------
@@ -2312,7 +2312,7 @@ def main() -> int:
     print( "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, "
            "PreCompact, UserPromptSubmit, Stop)")
     _say("\nNext steps:", "yellow")
-    print("  1. Run /rag in Claude Code to verify the RAG server")
+    print("  1. Run /clean-rag-server status in Claude Code to verify the RAG server")
     print("  2. Run /boost to verify all systems")
     if not IS_LINUX:
         print("  3. Run /speak on to enable text-to-speech")

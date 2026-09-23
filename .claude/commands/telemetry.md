@@ -135,16 +135,14 @@ RAG Usage (from rag-usage.jsonl)
 
   By endpoint:
     /search         : N  (vector: N, graph: N, both: N)
-    /context        : N
+    /index-project  : N
     /status         : N
-    /index          : N
+    /web-search     : N
     (others)        : N
 
-  By scope:
-    codebase                    : N
-    agents                      : N
-    knowledge                   : N
-    /context (multi-source)     : N  (scope=null — searches all collections)
+  By source (from each /search call's `sources` list):
+    project:<path>  : N  (one row per project)
+    docs:<topic>    : N
 
   Avg chunks returned  : <mean chunks_returned across /search calls>
   Errors (4xx/5xx)     : <count where status_code >= 400>

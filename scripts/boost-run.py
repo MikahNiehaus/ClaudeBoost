@@ -157,7 +157,7 @@ def step_rag() -> dict:
             pass
         time.sleep(2)
     if not status or status.get("status") != "ready":
-        print("  RAG: NOT READY — server did not respond. Run /rag and retry.")
+        print("  RAG: NOT READY — server did not respond. Run /clean-rag-server start and retry.")
         return out
 
     # The HTTP layer answers before the embedding model has loaded, so indexing

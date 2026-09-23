@@ -531,13 +531,6 @@ async def auto_reindex_loop(get_model_cache) -> None:
             # evict and reload the same models repeatedly. Same plan the batch
             # driver uses, so the two cannot disagree about ordering.
             planned = plan_sweep(registry)
-            last_model: str | None = None
-            #: Did ANY project in the current model group actually do work? Not
-            #: the last one alone. plan_sweep groups several projects under one
-            #: model, and the eviction below fires once per group boundary, so a
-            #: group whose earlier members worked and whose last member skipped
-            #: would read as idle if this were a single project flag.
-            group_did_work = False
             for project in planned:
                 # Checked in the same place as headroom, for the same reason: a
                 # sweep runs for hours and the human can ask for the machine
@@ -555,31 +548,19 @@ async def auto_reindex_loop(get_model_cache) -> None:
                     )
                     break
 
-                # Finished with the previous model group: let it go rather than
-                # holding it for the rest of the sweep. This process cannot exit
-                # to reclaim memory the way the batch driver can, so evicting
-                # what it demonstrably no longer needs is the only lever it has.
-                #
-                # Only when the group actually did work. evict_all throws away
-                # every resident model, including one a concurrently running
-                # /index-project is embedding with right now, and reloading SFR
-                # costs 135s. A sweep that skipped every project on a busy lock
-                # has nothing to release and no reason to charge the running job
-                # for it. Measured before this gate: 4 evictions in 104 minutes
-                # during one reindex, about 8.6 percent of its wall clock.
-                #
-                # Safe to skip, never unbounded: ModelCache._enforce_max_resident
-                # caps residency at DEFAULT_MAX_RESIDENT on every load, and
-                # evict_all's own docstring says bounding is the caller's job.
-                # This is a release sooner optimisation, not the safety net.
-                if last_model is not None and project.model != last_model and group_did_work:
-                    try:
-                        model_cache.evict_all()
-                    except AttributeError:
-                        pass  # a plain embedder was passed, nothing to evict
-                if last_model is not None and project.model != last_model:
-                    group_did_work = False
-                last_model = project.model
+                # Nothing is evicted at the model group boundary any more,
+                # because the call that used to sit here made memory worse
+                # rather than better. torch never returns CPU arenas to the OS,
+                # so every evict and reload cycle left roughly 1.7 GB behind by
+                # this project's own measurement, and the sweep ran six of them
+                # an hour until the process reached 18 GB RSS. Residency was
+                # already bounded by ModelCache._enforce_max_resident on every
+                # load, which is the only guarantee the call ever gave; its own
+                # comment called it a release sooner optimisation rather than a
+                # safety net. There is no in process fix for the residue on
+                # Windows, because malloc_trim is glibc only and HeapCompact
+                # does not return committed pages, so evicting less often is
+                # the whole lever.
 
                 entry = registry.get(project.pid) or {"project_path": project.path}
                 try:
@@ -602,9 +583,6 @@ async def auto_reindex_loop(get_model_cache) -> None:
                     if proceeded:
                         _release_project_resources(project.pid)
                         swept += 1
-                    # Accumulated across the whole model group, never reset per
-                    # project, so the eviction above sees the group's real state.
-                    group_did_work = group_did_work or proceeded
                 except Exception as e:
                     # One bad project must not kill the loop for the others, or
                     # a single unreadable repo silently stops all reindexing

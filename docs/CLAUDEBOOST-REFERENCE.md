@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08 (counts updated 2026-07-05)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 109 knowledge XMLs (55 domain + 21 lang + 33 framework), 36 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** Hook registrations, the six pipeline agents, slash commands, settings.json hooks registration, state files, and the clean-rag search server on port 8613.
 
 ---
 
@@ -1106,7 +1106,7 @@ not run in time.
 ## 8. Search backend
 
 **One server, port 8613.** `clean-rag/`, started by
-`clean-rag/cli/server_ctl.py start` or `/rag`. It runs headed so you can watch
+`clean-rag/cli/server_ctl.py start` or `/clean-rag-server start`. It runs headed so you can watch
 it.
 
 There is no MCP RAG server and no `mcp-rag-server/` directory. This section used

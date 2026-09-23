@@ -725,6 +725,9 @@ Output:
 
 ## Phase 5: Report
 
+This grade is advisory. It is not a `VERIFIED:` stamp, so it does not satisfy the
+verifier gate (`clean-rag/hooks/verifier_state.py`). Spawn `bad-cop` when you need the stamp.
+
 Gate: confirm evaluator returned a result. If not, spawn it now.
 
 Output the full evaluator report. Lead with grade → blockers → warnings → nits → test summary.

@@ -26,7 +26,7 @@ Set `PROJECT_PATH` to the detected value.
 
 Call `POST http://127.0.0.1:8613/search with {"query":"final quality gate before pushing work","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /clean-rag-server start before using this skill."
 
 ---
 

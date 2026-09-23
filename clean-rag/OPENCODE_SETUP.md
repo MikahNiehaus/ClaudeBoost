@@ -281,6 +281,6 @@ All tool calls are logged to `/tmp/opencode_mcp_server.log`:
 
 ## Support
 
-- For RAG issues: `/rag` in Claude Code
+- For RAG issues: `/clean-rag-server start` or `/fix-rag` in Claude Code
 - For OpenCode issues: see OpenCode documentation
 - For metrics computation bugs: file an issue with the file path + language

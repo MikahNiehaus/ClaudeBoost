@@ -280,8 +280,8 @@ def install_user_assets() -> None:
 
     # Agents. researcher and swiper are the two the research gate counts
     # (RESEARCH_AGENTS in hooks/research_state.py). bad-cop reviews afterward and
-    # good-cop fixes what it finds. research-agent and verifier-agent used to be
-    # named here and neither ships any more.
+    # good-cop fixes what it finds. research-agent ships too, because the global
+    # CLAUDE.md roster names it. verifier-agent no longer ships.
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
@@ -294,6 +294,15 @@ def install_user_assets() -> None:
                         ignore=shutil.ignore_patterns("__pycache__"))
         names = sorted(d.name for d in skills_src.iterdir() if d.is_dir())
         _ok(f"installed .claude/skills ({len(names)}: {', '.join(names)})")
+        # copytree never prunes, so an installed-only skill never reaches a fresh
+        # install. "synced" is Claude's own folder.
+        extra = sorted(
+            d.name for d in (CLAUDE_DIR / "skills").iterdir()
+            if d.is_dir() and d.name not in names and d.name != "synced"
+        )
+        if extra:
+            _warn("installed but not shipped, copy into clean-rag/portable/skills/ "
+                  f"or a fresh install loses them: {', '.join(extra)}")
 
 
 # ---------------------------------------------------------------------------

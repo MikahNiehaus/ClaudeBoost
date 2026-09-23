@@ -219,6 +219,79 @@ class TestAVariableCarriesTheProtectedPath:
         assert guard.evaluate("F=build.log; grep -r 'rm $F' docs") is None
 
 
+class TestAnArrayOrADefaultCarriesTheProtectedPath:
+    """The two spellings left after the plain `$F` case was closed.
+
+    A shell array is an ordinary assignment and every reference to one is a
+    variable reference, and `${name:-word}` puts the word itself in the output
+    when the name is unset. Both reach the guard's own file in one command that
+    spells no protected path anywhere a literal check can see it. Confirmed in
+    this project's Git Bash, which prints scripts/bash-guard.py for every
+    expansion below:
+
+        arr=(scripts/bash-guard.py); echo "${arr[0]}"
+        declare -A m=([k]=scripts/bash-guard.py); echo "${m[k]}"
+        unset X; echo "${X:-scripts/bash-guard.py}"
+    """
+
+    @pytest.mark.parametrize("command", [
+        "arr=(scripts/bash-guard.py); rm ${arr[0]}",
+        "arr=(scripts/bash-guard.py); rm $arr",
+        "arr=(scripts/bash-guard.py); rm ${arr[@]}",
+        "arr=(scripts/bash-guard.py); rm ${arr[*]}",
+        "arr=(a.log scripts/bash-guard.py); rm ${arr[@]}",
+        "declare -A m=([k]=scripts/bash-guard.py); rm ${m[k]}",
+        # A key holding its own `=`. Without _KEYED_VALUE_RE the element keeps
+        # its `[key]=` wrapper, _path_candidates splits at the first `=`, which
+        # is the one inside the brackets, and the leftover `b]=` sits where the
+        # `.claude/` anchor has to start.
+        "declare -A m=([a=b]=.claude/settings.json); echo x > ${m[a=b]}",
+        "declare -a a=(scripts/bash-guard.py); mv ${a[0]} /tmp/x.py",
+        "arr[0]=scripts/bash-guard.py; rm ${arr[0]}",
+        "arr=(); arr+=(scripts/bash-guard.py); rm ${arr[0]}",
+        "arr=(.claude/settings.json); echo x > ${arr[0]}",
+    ])
+    def test_an_array_element_is_the_path_it_holds(self, guard, command):
+        assert guard.evaluate(command) is not None
+
+    @pytest.mark.parametrize("command", [
+        "rm ${UNSET_VAR:-scripts/bash-guard.py}",
+        "rm ${UNSET_VAR-scripts/bash-guard.py}",
+        "X=1; rm ${X:+scripts/bash-guard.py}",
+        "rm ${UNSET_VAR:=scripts/bash-guard.py}",
+        "rm ${UNSET:-scripts}/bash-guard.py",
+        "rm ${X:-${Y:-scripts/bash-guard.py}}",
+    ])
+    def test_a_word_written_inside_the_braces_is_a_path(self, guard, command):
+        assert guard.evaluate(command) is not None
+
+    def test_a_subscript_does_not_hide_the_default_behind_it(self, guard):
+        """`${arr[0]:-path}` carries its subscript and its default in the same
+        braces, so a reader that stops at the `[` never reaches the path."""
+        assert guard.evaluate(
+            "arr=(a.log); rm ${arr[0]:-scripts/bash-guard.py}") is not None
+
+    @pytest.mark.parametrize("command", [
+        "arr=(.env); cat ${arr[0]}",
+        "secrets[0]=.env; grep KEY ${secrets[0]}",
+    ])
+    def test_an_env_file_is_read_through_an_array_too(self, guard, command):
+        assert guard.evaluate(command) is not None
+
+    @pytest.mark.parametrize("command", [
+        "files=(a.log b.log); rm ${files[@]}",
+        "declare -a keep=(notes.md); mv ${keep[0]} /tmp/notes.md",
+        "out=(build.log); echo x > ${out[0]}",
+        "arr=(logs/one.log); rm ${arr[0]}",
+        "rm ${LOGDIR:-logs}/*.log",
+    ])
+    def test_an_array_of_ordinary_paths_still_runs(self, guard, command):
+        """The array has to be read, not just refused for being an array.
+        Dropping the bindings would turn every one of these into a refusal for
+        a path the command names in full."""
+        assert guard.evaluate(command) is None
+
+
 class TestTheTwoProtectionTablesAgree:
     """_PROTECTED_PATH_RES is the authority for a literal path and
     _PROTECTED_GLOBS is the one a glob is compared against. Two tables drift.

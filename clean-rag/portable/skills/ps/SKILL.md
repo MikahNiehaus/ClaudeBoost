@@ -21,7 +21,7 @@ can see the whole picture, makes that call instead.
 `$ARGUMENTS` is the task or question. Just do it, directly and concisely:
 
 - No research-agent. The gate won't block edits this turn, so don't spawn one.
-- No verifier-agent. The Stop hook won't nudge for one this turn.
+- No bad-cop review. The Stop hook won't nudge for one this turn.
 - Still leave a runnable check if you write real logic. Quick doesn't mean reckless:
   `/ps` skips the research and the review, not basic care. Something with a branch or
   a loop still gets the one small assert that proves it.

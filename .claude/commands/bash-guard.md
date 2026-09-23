@@ -49,5 +49,5 @@ Parse `$ARGUMENTS` and run the toggle script. Default to `status` when empty.
   Claude Code session so the new env value is picked up.
 - This only affects `bash-guard.py`. The other PreToolUse guards (`git-guard.py`,
   `consult-gate.py`, `agent-spawn-gate.py`) are unaffected.
-- `/setup` does not turn the guard back on by itself, but `/uninstall` clears the
+- `scripts/setup.py` does not turn the guard back on by itself, but `/uninstall` clears the
   `CLAUDEBOOST_BASH_GUARD` key along with the rest of ClaudeBoost's env.
