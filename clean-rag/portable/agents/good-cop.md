@@ -9,7 +9,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "python \"$CLEAN_RAG_HOME/hooks/verify-loop-git-guard.py\""
+          command: "if command -v \"$CLAUDEBOOST_PYTHON\" >/dev/null 2>&1; then \"$CLAUDEBOOST_PYTHON\" \"$CLEAN_RAG_HOME/portable/hook-run.py\" --fail-closed \"$CLEAN_RAG_HOME/hooks/verify-loop-git-guard.py\"; elif command -v python3 >/dev/null 2>&1; then python3 \"$CLEAN_RAG_HOME/portable/hook-run.py\" --fail-closed \"$CLEAN_RAG_HOME/hooks/verify-loop-git-guard.py\"; elif command -v python >/dev/null 2>&1; then python \"$CLEAN_RAG_HOME/portable/hook-run.py\" --fail-closed \"$CLEAN_RAG_HOME/hooks/verify-loop-git-guard.py\"; else py \"$CLEAN_RAG_HOME/portable/hook-run.py\" --fail-closed \"$CLEAN_RAG_HOME/hooks/verify-loop-git-guard.py\" || exit 2; fi"
 ---
 
 You take what bad-cop actually broke and make it right. Your job is not to

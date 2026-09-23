@@ -1,0 +1,44 @@
+Metadata-Version: 2.4
+Name: rag-server
+Version: 0.1.0
+Summary: HTTP RAG server for ClaudeBoost - semantic search over knowledge bases and agent definitions
+Requires-Python: >=3.11
+Requires-Dist: chromadb<2.0,>=1.5.9
+Requires-Dist: chroma-hnswlib>=0.7.6
+Requires-Dist: sentence-transformers>=3.0
+Requires-Dist: watchdog>=4.0
+Requires-Dist: pathspec>=0.12
+Requires-Dist: tree-sitter>=0.23
+Requires-Dist: tree-sitter-python
+Requires-Dist: tree-sitter-javascript
+Requires-Dist: tree-sitter-typescript
+Requires-Dist: tree-sitter-c
+Requires-Dist: tree-sitter-cpp
+Requires-Dist: tree-sitter-go
+Requires-Dist: tree-sitter-rust
+Requires-Dist: tree-sitter-java
+Requires-Dist: tree-sitter-ruby
+Requires-Dist: tree-sitter-bash
+Requires-Dist: tree-sitter-lua
+Requires-Dist: tree-sitter-kotlin
+Requires-Dist: tree-sitter-swift
+Requires-Dist: tree-sitter-php
+Requires-Dist: tree-sitter-c-sharp
+Requires-Dist: httpx>=0.27
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: lxml>=5.0
+Requires-Dist: pymupdf>=1.24
+Requires-Dist: html2text>=2024.2
+Requires-Dist: networkx>=3.0
+Requires-Dist: starlette>=0.37
+Requires-Dist: uvicorn[standard]>=0.29
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24; extra == "dev"
+Provides-Extra: graph
+Requires-Dist: graspologic>=3.0; extra == "graph"
+Requires-Dist: networkx>=3.0; extra == "graph"
+Provides-Extra: ollama
+Requires-Dist: ollama>=0.3; extra == "ollama"
+Provides-Extra: scip
+Requires-Dist: scip-python>=0.3; extra == "scip"

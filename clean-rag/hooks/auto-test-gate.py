@@ -24,6 +24,8 @@ before. The rules, in order:
 Exit codes: 0 allows the stop, 2 blocks it and shows stderr to the model.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess

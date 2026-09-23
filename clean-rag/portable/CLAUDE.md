@@ -223,7 +223,8 @@ Passing tests are necessary, not proof the tests catch bugs. For non trivial log
 on a real bug surface, after the tests pass run the mutation check on just the
 files you changed: `POST http://127.0.0.1:8613/mutation-test` with
 `{"project_path": "<abs>", "changed_files": [...]}`. It runs the language's real
-mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a
+mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`, `gremlins`) and returns a kill
+score; a
 surviving mutant is a test that would pass on broken code, so tighten it. When the
 edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat

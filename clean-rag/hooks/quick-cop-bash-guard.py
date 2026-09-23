@@ -22,6 +22,8 @@ quick-cop's report comes back, not at some later point.
 Exit codes: 0 allows, 2 blocks with the stderr message shown to the agent.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import shlex

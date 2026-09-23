@@ -2451,7 +2451,7 @@ Passing tests are necessary, not proof the tests catch bugs. Run the mutation ch
 ```
 POST http://127.0.0.1:8613/mutation-test {"project_path":"<WORKSPACE_ROOT>","changed_files":["<files from GENERAL_TARGET>"]}
 ```
-This runs the language's real mutation tool (`mutmut` for Python, `StrykerJS` for JS/TS, `cargo-mutants` for Rust) and returns a kill score. A surviving mutant is a test that would pass on broken code — tighten the test to kill it.
+This runs the language's real mutation tool (`mutmut` for Python, `StrykerJS` for JS/TS, `cargo-mutants` for Rust, `gremlins` for Go) and returns a kill score. A surviving mutant is a test that would pass on broken code — tighten the test to kill it.
 
 Record the kill score in `$WORKSPACE_ABS/static-results.md` under "Mutation Check":
 ```

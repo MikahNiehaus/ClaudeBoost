@@ -20,10 +20,9 @@ output:
 
 Every test below fails on at least one of those four. The last group is the
 different kind of check: it pins the figures quoted in the doc to the recorded
-output of the scripts, which is what makes "every number in §7 is reproducible"
-a checked property rather than an intention. The original §7.2 table -- 78.8% /
-21.2% -- was produced by no committed code at all and did not match the wire
-bytes it claimed to describe.
+output of the scripts. The original §7.2 table -- 78.8% / 21.2% -- was produced
+by no committed code at all and did not match the wire bytes it claimed to
+describe.
 
 Those pins address each figure to the place that states it -- a table cell by row
 and column, a prose figure by a figure-free anchor on its own line -- rather than
@@ -31,6 +30,33 @@ asking whether the numeral occurs somewhere in the document. §7's figures repea
 legitimately, so a whole-document substring check does not pin them: with `11.8%`
 written in four places, corrupting the single §7.3 cell a reader makes the
 decision from left three correct copies standing and the suite stayed green.
+
+What is pinned: every figure §7 states as a measurement of `stage1_results.json`,
+`control_results.json` or `hookblock_results.json`, at every place it is stated --
+including the header's summary and §6's -- in the form the doc writes it, rounded
+or ranged. Five kinds of numeral in §7 are not pinned, because no recorded run
+produces them:
+
+- figures measured by other work, or code literals read from other source:
+  `session-primer.py`'s 5,751 -> 729 chars (the injection-budget commits),
+  `results[:3]` and `content[:250]` (`rag-enforce.py`), `indent=2`, and
+  `lossless_min_savings_ratio = 0.15` with the 15% it implies (headroom's
+  `config.py`, as are `bias`'s `>1`/`<1`);
+- the environment: the evaluation date, `headroom-ai` 0.37.0, Python 3.13, and
+  the tokenizer path's own names and multiplier (`cl100k_base`, x1.1, UTF-8);
+- numerals written as words -- "three indexed projects", "six points", "a quarter
+  of a point", "between a third and two fifths" -- and the one figure the doc
+  marks approximate, `~15KB` of framing;
+- §7.4's excerpt of one payload's crushed output, which quotes bytes from a
+  capture under `payloads_wire/`. Those captures hold source from private repos
+  and are untracked, so nothing in a clean checkout can re-derive them;
+- section numbers, list numbers, cross-references and file names (§4, §7.3,
+  "item 1", "Stage 1", `stage1_results.json`).
+
+One figure is pinned only as part of a longer string: line 317 writes `0.00`
+twice, as "exactly 0.00" and as the bottom of the spread, and a line-addressed
+substring cannot tell them apart, so the clause is pinned whole instead of each
+numeral separately.
 
 `metrics` and `retention` are importable here only because they are stdlib-only.
 `measure.py` and `control.py` import `headroom`, which lives in an isolated 3.13
@@ -380,6 +406,40 @@ def test_recorded_totals_are_the_sum_of_the_recorded_rows():
             + totals["framing_bytes"]) == totals["wire_bytes"]
 
 
+def test_the_input_scale_in_the_doc_matches_the_recorded_run():
+    """The size of the measured input, stated in §7's Setup and twice more.
+
+    Every figure in §7 is a share or a count of these: the §7.2 partition divides
+    by the 200,059 bytes, and every `x/18` in §7.3 counts against these payloads.
+    All of them were unpinned, and both totals are written in two places, so a
+    whole-document check would have been satisfied by either copy.
+    """
+    data = stage1()
+    totals, rows = data["totals"], data["eligible"]
+    blocks = json.loads(HOOKBLOCK.read_text())["blocks"]
+    doc = DOC.read_text()
+
+    _assert_on_line(doc, "core JSON compression needs none of them",
+                    f"{len(rows)} real")
+    _assert_on_line(doc, "exact wire bytes", f"{totals['results']} results")
+    _assert_on_line(doc, "exact wire bytes", f"{totals['wire_bytes']:,}")
+    _assert_on_line(doc, "across three indexed projects",
+                    f"{totals['tokens_before']:,} tokens")
+    _assert_on_line(doc, "across three indexed projects", f"plus {len(blocks)} real")
+
+    # §7.1's conclusion, the payload size the rest of the section is about. This
+    # wrapped line holds nothing figure-free but "payloads,", so the anchor is
+    # generic; a second one appearing in the doc fails the pin rather than
+    # silently addressing the wrong line.
+    wire = [r["wire_bytes"] for r in rows]
+    _assert_on_line(doc, "payloads,",
+                    f"{min(wire) / 1000:.0f}–{max(wire) / 1000:.0f}KB")
+
+    # §7.2 restates both totals in the sentence introducing the partition.
+    _assert_on_line(doc, "partitioned exhaustively", f"{totals['wire_bytes']:,}")
+    _assert_on_line(doc, "partitioned exhaustively", f"{totals['results']} results")
+
+
 def test_the_byte_shares_in_the_doc_match_the_recorded_totals():
     """§7.2's partition table, cell by cell. The figures it replaced -- 145,025 /
     78.8% and 39,122 / 21.2% -- were consistent with each other but not with the
@@ -465,13 +525,56 @@ def test_the_control_figures_in_the_doc_match_the_recorded_run():
     assert "+0.4 pts" not in doc
 
 
+def test_the_paired_comparison_prose_in_the_doc_matches_the_recorded_run():
+    """§7.3's paragraph on why the comparison is paired, two lines under its table.
+
+    `0.40` and `48%` are the second mutation in this module's docstring -- the
+    wrong statistic and the size of the error it caused -- and both were unpinned.
+    The pinned cell beside them holds the correct `+0.27 pts`, so corrupting the
+    prose that names the wrong one left the whole suite green.
+    """
+    rows = control()
+    doc = DOC.read_text()
+    non_table = [r for r in rows if not r["table"]]
+    gains = [r["headroom_gain_pts"] for r in non_table]
+
+    paired = statistics.median(gains)
+    unpaired = (statistics.median(r["crush_pct"] for r in non_table)
+                - statistics.median(r["compact_pct"] for r in non_table))
+    # "48% too high" is the relative error of the wrong statistic against the
+    # right one, (approx - true) / true -- Wikipedia, Approximation error.
+    overstated = (unpaired - paired) / paired * 100
+    zeros = [g for g in gains if g == 0.0]
+
+    _assert_on_line(doc, "Subtracting the columns gives", f"{unpaired:.2f}")
+    _assert_on_line(doc, "too high and is what an earlier version",
+                    f"{overstated:.0f}%")
+    _assert_on_line(doc, "too high and is what an earlier version",
+                    f"{len(zeros)} of the {len(gains)}")
+    # Both 0.00s on this line at once: pinning the bare figure would be satisfied
+    # by the other copy of it a few words away.
+    _assert_on_line(doc, "the spread is",
+                    f"exactly {min(gains):.2f}; the spread is "
+                    f"{min(gains):.2f} to {max(gains):.2f}")
+
+    # "exactly 0.00" has to be exact, not rounded down to it, or the doc is wrong
+    # about the four rows headroom did nothing at all to.
+    assert len(zeros) == sum(1 for g in gains if f"{g:.2f}" == "0.00"), gains
+    # And there has to be an overstatement for 48% to be the size of.
+    assert unpaired > paired, (unpaired, paired)
+
+
 def test_the_prose_restating_the_control_figures_agrees_with_the_tables():
-    """The verdict and the summary quote §7.3's two headline figures again.
+    """The verdict and the summary quote §7.3's headline figures again.
 
     These are the copies that masked the defect: with `11.8%` written in four
     places, a whole-document substring check passed while the §7.3 cell read
     11.9%. Each restatement is pinned to its own sentence, so a figure that drifts
     in the summary fails there rather than being covered by the table.
+
+    The restatements are rounded harder than the cells they come from -- 72%, 76%,
+    "up to 20%" -- which is how they escaped the cell pins. Each is derived from
+    the same recorded rows and formatted the way the doc writes it.
     """
     rows = control()
     doc = DOC.read_text()
@@ -479,13 +582,30 @@ def test_the_prose_restating_the_control_figures_agrees_with_the_tables():
     compaction = _spread(rows, "compact_pct")["median"]
     non_table = [r for r in rows if not r["table"]]
     contribution = statistics.median(r["headroom_gain_pts"] for r in non_table)
+    share = len(non_table) / len(rows) * 100
+    best_compaction = max(r["compact_pct"] for r in rows)
+    aggressive = statistics.median(
+        r["by_preset"]["aggressive"]["saved_pct"] for r in rows)
 
     _assert_on_line(doc, "points over a one-line change",
                     f"{contribution:.2f} points")
     _assert_on_line(doc, "available from compacting our own JSON", compaction)
     _assert_on_line(doc, "serve compact JSON from clean-rag",
                     f"Median {compaction}")
+    _assert_on_line(doc, "serve compact JSON from clean-rag",
+                    f"up to {best_compaction:.0f}%")
     _assert_on_line(doc, "from compact JSON. Do not adopt headroom", compaction)
+
+    # The share of payloads headroom did nothing meaningful to: §7.3's own
+    # sentence, the verdict's item 2, and §6.
+    for anchor in ("of real payloads headroom adds", "over item 1 on",
+                   "a one-line change with no dependency"):
+        _assert_on_line(doc, anchor, f"{share:.0f}%")
+
+    # And what the preset that does compress saves, restated in §7.5 and §6.
+    for anchor in ("the aggressive preset's median",
+                   "Tuned to the setting that does compress"):
+        _assert_on_line(doc, anchor, f"{aggressive:.0f}%")
 
 
 def test_the_preset_sweep_in_the_doc_matches_the_recorded_run():
@@ -514,11 +634,67 @@ def test_the_preset_sweep_in_the_doc_matches_the_recorded_run():
               for column, counts in _PRESET_COUNTS.items()],
         )
 
+    # The sentence under the table restates that count as prose.
+    _assert_on_line(doc, "There is no setting that compresses", f"on all {n}")
+
     aggressive = [r["by_preset"]["aggressive"] for r in rows]
     assert all(c["strategy"] == "lossless:table" for c in aggressive)
     assert not any(c["retention"] == "PASS" for c in aggressive)
     assert all(c["ccr_placeholders"] > 0 for c in aggressive)
     assert "50.0" not in doc
+
+
+def test_the_compression_win_in_the_doc_matches_the_recorded_run():
+    """§7.4's first half: how much the payloads headroom does compress gave up.
+
+    Both figures were unpinned. The 100% is the claim that keeps "lossless"
+    honest -- metadata values survive the table transform as text -- and §7.3's
+    cells say nothing about it.
+    """
+    rows = control()
+    table = [r for r in rows if r["table"]]
+    doc = DOC.read_text()
+
+    # control's unrounded crush_pct, not stage1's 1-decimal copy of it: 78.48 and
+    # 88.16 round with no tie, and a tie rounds to even (round(), Built-in
+    # Functions), which would leave the pin resting on the rounding mode.
+    saved = [r["crush_pct"] for r in table]
+    _assert_on_line(doc, "payloads compress",
+                    f"{min(saved):.0f}–{max(saved):.0f}%")
+
+    # Only the stage1 run records survival, so this pin crosses files -- sound
+    # only because both runs measured the same payloads.
+    eligible = stage1()["eligible"]
+    assert sorted(r["file"] for r in eligible) == sorted(r["file"] for r in rows)
+    survival = [r["smartcrusher"]["distinctive_survival_pct"] for r in eligible
+                if r["smartcrusher"]["strategy"].startswith("lossless:table")]
+    assert len(survival) == len(table), (len(survival), len(table))
+    assert len(set(survival)) == 1, survival
+    _assert_on_line(doc, "distinctive strings matched", f"{survival[0]:.0f}%")
+
+
+def test_the_retention_counts_in_the_doc_match_the_recorded_run():
+    """§7.4's verdict: how many payloads failed the gate, at both ends of the dial.
+
+    These are the counts the "do not adopt" call rests on, and the only copy the
+    suite reached was the `13/18` cell in §7.3's sweep table two pages up.
+    """
+    rows = control()
+    n = len(rows)
+    doc = DOC.read_text()
+
+    default = [r["by_preset"]["moderate"] for r in rows]
+    fails = sum(1 for c in default if c["retention"].startswith("FAIL"))
+    passes = sum(1 for c in default if c["retention"] == "PASS")
+    assert fails + passes == n, default
+    _assert_on_line(doc, "the result at the default bias is",
+                    f"FAIL on {fails}/{n}, PASS on {passes}/{n}")
+    # The same sentence ends by counting the passes again.
+    _assert_on_line(doc, "the result at the default bias is", f"and the {passes}")
+
+    forced = [r["by_preset"]["aggressive"] for r in rows]
+    forced_fails = sum(1 for c in forced if c["retention"].startswith("FAIL"))
+    _assert_on_line(doc, "preset it is", f"FAIL on {forced_fails}/{n}")
 
 
 def test_the_hook_block_figures_in_the_doc_match_the_recorded_run():

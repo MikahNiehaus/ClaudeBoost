@@ -8,42 +8,34 @@ knowledge base. Works standalone or with Gas Town.
 
 Every edit to a code file is checked against whether `researcher` or `swiper`
 has run this session and declared that it covered that file, and nudges toward
-research when neither has. Those two are the only agents the gate counts
-(`RESEARCH_AGENTS` in `clean-rag/hooks/research_state.py`); `research-agent`
-does not satisfy it. Coverage persists across follow-up messages and expires
-after one hour (`TURN_MAX_AGE_S = 3600`) or when new research lands on top.
-
-The gate used to block the edit. It doesn't now. `clean-rag/hooks/research-gate.py`
-exits 0 on every payload shape, by decision: an unresearched edit is
-recoverable, so it gets a nudge and an honest audit trail rather than a
-refusal. The first block attempt also predated the session scoping above, so
-coverage was wiped by every follow-up message and the gate fired on files
-swiper had just covered.
-
-What can't be faked is the record, not the refusal. Only Claude Code can start
-an agent, and a PostToolUse hook stamps the coverage after the agent finishes,
-so "I researched it" is never what gets written down.
+research when neither has. The gate does not block: `research-gate.py` exits 0
+on every payload shape, by decision — an unresearched edit is recoverable, so
+it gets a nudge and an honest audit trail rather than a refusal. Coverage
+persists across follow-up messages (not reset on every message) and expires
+after one hour of inactivity or when new research runs. What can't be faked is
+the record, not a refusal: only Claude Code can start an agent, and a
+PostToolUse hook stamps the coverage after the agent finishes, so "I
+researched it" is never what gets written down.
 
 When the gate nudges toward research:
 
-1. **Spawn `researcher` and/or `swiper`** (Sonnet). Tell them what you're
-   changing, why, and the code you intend to write. Both cover depth and breadth
-   and report with sources and a `COVERS:` line naming the files they covered.
-   That scope is what the audit trail
-   checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
-   Wait for it before editing anyway; that's still the point. Spawn it in the
-   foreground (`run_in_background: false`), never backgrounded — a backgrounded
-   completion arrives later as a `TaskNotificationMessage`, not a tool result, so
-   the hook that stamps the turn record never fires for it and the record never
-   shows the coverage no matter how long you wait.
+1. **Spawn `researcher` and/or `swiper`** (Sonnet, foreground). Tell them what
+   you're changing, why, and the code you intend to write. Both cover depth and
+   breadth and report with sources and a `COVERS:` line naming the files they
+   covered. That scope is what the audit trail checks; nothing refuses the edit,
+   but an uncovered file shows up as uncovered. Wait for them before editing
+   anyway; that's still the point. Spawn in the foreground (`run_in_background:
+   false`), never backgrounded — a backgrounded completion arrives later as a
+   `TaskNotificationMessage`, not a tool result, so the hook that stamps the turn
+   record never fires for it and the gate never sees the coverage.
    Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
    smallest set of changes that fixes the actual issue — no rewrite, no restyle,
    no swapped libraries or approaches, no added structure the reference didn't
    have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
    allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
-2. There is no cheap triage tier anymore. The old one decided whether a change
-   needed research WITHOUT reading the code, and that blind guess was wrong often
+2. There is no cheap triage tier. The old one decided whether a change needed
+   research WITHOUT reading the code, and that blind guess was wrong often
    enough to remove. researcher and swiper look first, so their judgment is
    grounded. They do real research every time they run; do not build a
    triviality shortcut into them or any other agent.
@@ -139,21 +131,20 @@ you wrote is correct. To actually know, after writing any non trivial logic:
   Give both of them the
   requirements, the correctness properties, and the diff, never your reasoning
   for the change, since that reasoning is exactly what biases a reviewer into
-  agreeing. If researcher or swiper grounded the build in a real GitHub reference (a
+  agreeing. If research-agent grounded the build in a real GitHub reference (a
   `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted), pass that
   snippet forward into their correctness properties too, not just its
   description. Neither has web fetch access on purpose, only search, so this is
   the only way a real reference reaches their review; do not give either its own
   GitHub/web fetch access, that would duplicate the one injection-exposed agent
-  this codebase deliberately keeps to one. `clean-rag/hooks/verifier-gate.py`
+  this codebase deliberately keeps to one. `hooks/verifier-gate.py`
   (a Stop hook) asks for a real stamp but never refuses the stop: it exits 0
   always and writes its nudge to stderr, naming the unverified files and who to
   spawn. bad-cop provides the terminal stamp — either directly on a clean
   initial pass, or after a final re-check that finds nothing following
   good-cop's fix — writing a `VERIFIED:` line naming the files it covered,
   checked per file the same way the research gate checks `COVERS:`, invalidated
-  if a file is edited again after being reviewed (an mtime comparison in
-  `clean-rag/hooks/verifier_state.py`). `clean-rag/hooks/high_stakes.py`
+  if a file is edited again after being reviewed. `high_stakes.py`
   labels which surface it touched so the review points at the sharpest risk. A
   `/ps` turn skips both, the same quick mode escape that skips the research gate.
 
@@ -214,21 +205,13 @@ uncommitted in the working tree; the lesson was never generalised to the
 environment.
 
 
-This verify step is partly enforced, and `clean-rag/hooks/auto-test-gate.py` is
-the one Stop hook in this family that genuinely blocks. It runs the project's
-tests when code changed this turn, and if they really fail it blocks the stop
-(exit 2) and hands you back the real failure output to fix from. It is loop
-safe: it honors `stop_hook_active`, caps at `MAX_BLOCKS_PER_SESSION = 2`, and
-allows on anything ambiguous (no tests, a missing runner, an environment
-problem). So on a project with tests you will often get the actual assertion
-diff or stack trace pushed back at you automatically. Fix from that, do not
-self review.
-
-Note the split, because it is deliberate and easy to misread. A test failure is
-objective and cheap to check, so it blocks. A review verdict is a judgment call,
-so it nudges and routes through fresh context subagents instead. Do not
-"upgrade" the research or verifier gate to a hard block; see the recorded
-decision at the end of this section.
+This verify step is now partly enforced. `hooks/auto-test-gate.py` (a Stop hook)
+runs the project's tests when code changed this turn, and if they really fail it
+blocks the stop once and hands you back the real failure output to fix from. It is
+loop safe: it honors `stop_hook_active`, caps blocks per session, and allows on
+anything ambiguous (no tests, a missing runner, an environment problem). So on a
+project with tests you will often get the actual assertion diff or stack trace
+pushed back at you automatically. Fix from that, do not self review.
 
 If the logic you changed has no test at all, writing one IS part of verifying it,
 not an optional extra. Do not skip verification because none exists, that is the
@@ -240,103 +223,12 @@ Passing tests are necessary, not proof the tests catch bugs. For non trivial log
 on a real bug surface, after the tests pass run the mutation check on just the
 files you changed: `POST http://127.0.0.1:8613/mutation-test` with
 `{"project_path": "<abs>", "changed_files": [...]}`. It runs the language's real
-mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a
+mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`, `gremlins`) and returns a kill
+score; a
 surviving mutant is a test that would pass on broken code, so tighten it. When the
 edge cases matter, let the language's property based library (`Hypothesis`,
 `fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
 guessing which inputs to test, which is the weak version the research warned about.
-
-### Every QA session ends with bad-cop judging it. This is not optional
-
-Running `/qa`, or doing any QA by hand, is not finished when the tests are done.
-It is finished when a fresh context has judged the evidence. A QA session cannot
-audit its own artifacts for the same reason you do not self review your own
-diff: it knows what it meant to prove, so it reads its own evidence as proving
-it.
-
-When the testing is done, spawn **`bad-cop` with `MODE: evidence-judge`** and
-hand it exactly three things:
-
-1. The requirements **verbatim**, the pasted ticket or the user's actual words,
-   never your paraphrase of the goal.
-2. Every proof artifact path: logs, captures, screenshots, the report itself.
-3. The tool inventory the QA session had available.
-
-Give it the correctness properties and what to attack. Never give it your
-reasoning about why you think the QA was sufficient, since that reasoning is
-what talks a reviewer into agreeing.
-
-It stamps `FULLY VERIFIED` or `TEST AGAIN` with specific gaps. On `TEST AGAIN`
-you retest those gaps and send it back. **The loop ends only when bad-cop stamps
-`FULLY VERIFIED`, never when the QA session declares itself satisfied.**
-
-Then check bad-cop's own claims the same way you check good-cop's: open the
-artifacts it cites, do not take its summary on trust.
-
-This catches a class of failure green results never surface, because every one
-of these looks like a pass from inside the session:
-
-- **Persistence claimed from a screenshot** with no server read-back. A value
-  rendered in a form is not a value in the database.
-- **Results that exist only as prose** in the report, with no capture on disk.
-  If it is not in an artifact it was not measured, whatever the table says.
-- **A build identifier quoted without resolving it.** Confirm the commit is a
-  real object in the repo. A dashboard's "version" field is often an internal
-  build id and not a commit at all.
-- **Comparing two runs that tested different code.** Before attributing a
-  behaviour change to the environment or to test technique, diff the commits.
-  This is the one that most often produces a confident wrong conclusion.
-- **A blank or mistargeted screenshot** passing as evidence because nobody
-  opened it. Open every image you save.
-- **Measurement windows too short for a deployed backend.** A response under
-  100ms locally can take ten seconds deployed, so a window sized for local turns
-  a success into a phantom failure or an unresolved null.
-- **Verifying a fix in a minified bundle by grepping identifier names.** Local
-  names are renamed and comments stripped, so the grep reads zero for a fix that
-  is present. Grep an object property, which survives, then read the code around
-  it.
-- **A marker check that covers only half the change.** Confirm the marker you
-  chose actually appears in every file the diff touched.
-
-`quick-cop` is the cheap non blocking version for a single "it is done" claim.
-It stamps nothing and never substitutes for bad-cop on a full QA session.
-
-### Recorded decision: no blocking external model reviewer on Stop
-
-Considered and declined, 2026-08-18. The proposal was a Stop hook that shells a
-separate model (`claude -p`, `codex exec`, `gemini`) at `git diff HEAD` and
-blocks the turn on a FAIL verdict. Do not build it. The reasons, in order of
-weight:
-
-- A hard blocking reviewer was already built on this exact surface and reverted
-  twice. `clean-rag/hooks/verifier-gate.py` records both reverts in its own
-  docstring.
-- Anthropic's own `security-guidance` plugin does this, and it only works
-  because of three things a hand rolled version has none of: `asyncRewake`
-  instead of a synchronous block, a `MAX_STOP_HOOK_FIRINGS` cap, and a
-  continuation suffix so the model does not abandon the user's original request
-  after being blocked.
-- `abiswas97/gemini-plugin-cc` warns in its own README that this class of hook
-  "can create a long-running Claude/Gemini loop. Only enable it when actively
-  monitoring the session."
-- Claude Code re-runs every Stop hook on every Stop event. A new blocking hook
-  without a `stop_hook_active` guard loops against `auto-test-gate.py` and
-  `stop-context-guard.py`.
-- The review responsibility is already owned by bad-cop and good-cop, which are
-  fresh context subagents. A second reviewer on the same Stop event duplicates
-  or contradicts them.
-
-If the goal ever becomes security specific review, adopt the whole plugin
-(`/plugin install security-guidance@claude-plugins-official`, `SECURITY_REVIEW_MODEL`
-selects the reviewer) rather than writing a hook. If only a Stop hook loop guard
-is wanted for some other purpose, `hamelsmu/claude-review-loop`'s `stop-hook.sh`
-is the reference for the retry and fail open state machine, MIT licensed.
-
-Two corrections to the advice that prompted this, for anyone who reads it later:
-the Stop payload carries `transcript_path` but no changed files list, so a hook
-must derive that itself with `git status --porcelain`; and launching `claude -p`
-from inside a live session requires unsetting `CLAUDECODE` in the child env
-(`scripts/chat-watcher.py` does this).
 
 ## Debugging, testing and QA
 
@@ -378,6 +270,57 @@ client. A wrong statement against real data is not recoverable by a retry.
 Running `/qa` gives the full session: inventory, a risk ranked test plan, and
 execution with evidence. `/debug` is the focused single bug path. Both enumerate
 the debugging tools already, and both point back at this same skill.
+
+### Every QA session ends with bad-cop judging it. This is not optional
+
+A QA session cannot audit its own evidence, for the same reason you do not self
+review your own diff. It knows what it meant to prove, so it reads its own
+artifacts as if they prove it. Finishing the tests is not finishing the QA.
+
+So when the testing is done, spawn **`bad-cop` with `MODE: evidence-judge`** and
+hand it exactly three things:
+
+1. The requirements **verbatim**, the pasted ticket or the user's actual words,
+   never your paraphrase of the goal.
+2. Every proof artifact path: logs, captures, screenshots, the report itself.
+3. The tool inventory the QA session had available.
+
+Give it the correctness properties and what to attack. Never give it your
+reasoning about why you think the QA was sufficient. That reasoning is exactly
+what talks a reviewer into agreeing.
+
+It stamps `FULLY VERIFIED` or `TEST AGAIN` with specific gaps. On `TEST AGAIN`
+you retest those gaps and send it back. **The loop ends only when bad-cop stamps
+`FULLY VERIFIED`, never when the QA session declares itself satisfied.**
+
+This catches a specific class of failure that green results never surface,
+because every one of these looks like a pass from inside the session:
+
+- **Persistence claimed from a screenshot** with no server read-back. A value
+  rendered in a form is not a value in the database.
+- **Results that exist only as prose** in the report, with no capture on disk.
+  If it is not in an artifact, it was not measured, whatever the table says.
+- **A build identifier quoted without resolving it.** Check the commit is a real
+  object in the repo. A dashboard's "version" field is often an internal build
+  id and not a commit at all.
+- **Comparing two runs that tested different code.** Before attributing a
+  behaviour change to the environment or to test technique, diff the commits.
+  This is the one that most often produces a confident wrong conclusion.
+- **A blank or mistargeted screenshot** passing as evidence because nobody
+  opened it. Open every image you save.
+- **Measurement windows too short for a deployed backend.** A response that took
+  under 100ms locally can take ten seconds deployed, so a capture window sized
+  for local turns a success into a phantom failure or an unresolved null.
+- **Verifying a fix in a minified bundle by grepping identifier names.** Local
+  names are renamed and comments stripped, so the grep reads zero for a fix that
+  is present. Grep an object property, which survives, then read the code around
+  it.
+- **A marker check that only covers half the change.** Confirm the marker you
+  chose actually appears in every file the diff touched.
+
+Cheap, non blocking alternative for a smaller claim: `quick-cop` checks whether
+one specific "it is done" statement is true. It stamps nothing and never
+substitutes for bad-cop's judgement on a full QA session.
 
 ## UI / Frontend Work
 
@@ -483,43 +426,6 @@ tests, docs, renames in one file.
 cost work. `/consult` restores CONSULT.
 
 ## Hard Rules (non negotiable)
-
-### Never start an app without naming the environment
-Starting a local app is the single most dangerous routine command, because the
-damage comes from what you *omit*, not from anything visibly dangerous you type.
-
-Always name the environment explicitly, and never pass a flag that skips the
-launch profile:
-
-```
-ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="https://localhost:PORT" \
-  dotnet run --project "<path to csproj>"
-```
-
-Then read the startup log and confirm `Hosting environment: Development` before
-opening a browser or running any test against it. Anything else is a stop.
-
-Why this is a hard rule: ASP.NET Core defaults to **Production** whenever
-`ASPNETCORE_ENVIRONMENT` is unset. `dotnet run --no-launch-profile` skips
-`launchSettings.json`, which is usually the only thing setting that variable, so
-config binds `appsettings.json` instead of `appsettings.Development.json`. On a
-real project that routinely means the production database and the production
-secret store, reached from a dev machine, with no prompt and no warning.
-
-Do not count on a failure to save you. Whether such a run actually connects
-depends on incidental things like credential resolution order, which is not a
-safeguard and can change without notice.
-
-Note what makes this class hard to catch: the dangerous command contains no
-dangerous looking token at all. Do not rely on a command "looking risky" to
-decide whether to check the environment. `scripts/bash-guard.py` blocks the known
-shapes (`check_production_environment`), but it only knows the flags already
-discovered, so the rule above is what actually generalizes.
-
-The same reasoning applies to any framework with an environment default: Rails
-`RAILS_ENV`, Django `DJANGO_SETTINGS_MODULE`, Node `NODE_ENV`, Spring
-`SPRING_PROFILES_ACTIVE`. Name it, then verify it from the app's own startup
-output rather than from what you intended.
 
 ### jQuery Ban
 jQuery is banned unless the user explicitly asks for it. Detect `$()`, `jQuery`,

@@ -459,6 +459,34 @@ def _wrap_compound(command: str, runner: str) -> str:
     return _BRANCH_INTERPRETER.sub(wrap_branch, command)
 
 
+def _cr_py_cmd(script: str) -> str:
+    """Hook command that invokes a clean-rag script, with a working interpreter.
+
+    Cloned from scripts/setup.py:_py_cmd, which is the form this repo already
+    ships and already has coverage for (clean-rag/tests/test_hook_command_wrapping.py
+    locks it in as _canonical()). Every register_*_hook() used to emit a bare
+    `python "$CLEAN_RAG_HOME/hooks/foo.py"`, and _wrap_command keeps whatever
+    interpreter it is handed. On a machine with no `python` on PATH -- which is
+    every modern macOS with only Homebrew's python3 -- that is exit 127, so the
+    hook silently did nothing while still looking registered.
+
+    Resolves via `command -v` (an existence check, not an execution) so the
+    script is never run twice: `A || B` cannot tell "interpreter missing" from
+    "the gate deliberately exited 2 to block this tool call".
+
+    Emitted WITHOUT the hook-run.py runner on purpose. _wrap_command sees an
+    if/elif chain and hands it to _wrap_compound, which splices the runner into
+    each branch and skips branches that already carry one. Emitting it here too
+    would depend on that idempotence rather than the documented contract.
+    """
+    return (
+        f'if command -v "$CLAUDEBOOST_PYTHON" >/dev/null 2>&1; then "$CLAUDEBOOST_PYTHON" {script}; '
+        f'elif command -v python3 >/dev/null 2>&1; then python3 {script}; '
+        f'elif command -v python >/dev/null 2>&1; then python {script}; '
+        f'else py {script}; fi'
+    )
+
+
 def _wrap_command(command: str, runner: str | None = None) -> str:
     """Route a hook command through hook-run.py so a branch switch can't brick Claude.
 
@@ -685,7 +713,7 @@ def _register_hook(
 # ---------------------------------------------------------------------------
 def register_graph_context_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/graph-context-inject.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/graph-context-inject.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -773,7 +801,7 @@ def register_session_prompt() -> None:
 def register_rag_enforce_hook() -> None:
     settings = read_json(SETTINGS_PATH)
     # Use env var for portability across machines
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/rag-enforce.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/rag-enforce.py"')
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -789,7 +817,7 @@ def register_rag_enforce_hook() -> None:
 def register_reindex_hook() -> None:
     settings = read_json(SETTINGS_PATH)
     # Use env var for portability across machines
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/reindex-after-edit.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/reindex-after-edit.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -804,7 +832,7 @@ def register_verify_after_edit_hook() -> None:
     # The post write half of the gate: after code is written, nudge to verify it
     # by running a check, not by self reviewing. See verify-after-edit.py.
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verify-after-edit.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/verify-after-edit.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -820,7 +848,7 @@ def register_record_edit_hook() -> None:
     # session cwd is not the repo being edited. See record-edit.py and
     # turn_edits.py.
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/record-edit.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/record-edit.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -965,7 +993,7 @@ def register_spec_compliance_gate_hook() -> None:
     satisfy what was actually asked for.
     """
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/scripts/spec-compliance-gate.py"')
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -983,7 +1011,7 @@ def register_spec_compliance_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_auto_test_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/auto-test-gate.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/auto-test-gate.py"')
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -1001,7 +1029,7 @@ def register_auto_test_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_verifier_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-gate.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/verifier-gate.py"')
     hook_entry = {
         "hooks": [{"type": "command", "command": hook_command}],
     }
@@ -1019,13 +1047,25 @@ def register_verifier_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_verifier_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/verifier-record.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/verifier-record.py"')
+    # SubagentStop, not PostToolUse on Task. PostToolUse fires when the Task
+    # tool call RETURNS, and the harness runs subagents asynchronously, so that
+    # is launch time: tool_response is {agentId, outputFile, status:
+    # async_launched, ...} with no report in it. Every stamp written that way
+    # recorded an empty scope, so no file was ever seen as covered.
+    # SubagentStop fires on real completion and carries the finished report in
+    # last_assistant_message.
+    #
+    # Matcher is "*" rather than the agent names: one observed SubagentStop
+    # payload arrived with an empty agent_type, which a name matcher would drop
+    # silently. The hook already filters on its own agent set, so the filtering
+    # stays in one place.
     hook_entry = {
-        "matcher": "Task|Agent",
+        "matcher": "*",
         "hooks": [{"type": "command", "command": hook_command}],
     }
     _register_hook(
-        settings, "PostToolUse", VERIFIER_RECORD_SENTINEL,
+        settings, "SubagentStop", VERIFIER_RECORD_SENTINEL,
         hook_entry, label="verifier-record",
     )
 
@@ -1036,7 +1076,7 @@ def register_verifier_record_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_lint_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/lint-gate.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/lint-gate.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1096,7 +1136,7 @@ def register_code_pattern_inject_hook() -> None:
     and research injection. Non-blocking in background threads.
     """
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/code-pattern-inject.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1117,7 +1157,7 @@ def register_code_pattern_inject_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_gate_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/research-gate.py"')
     hook_entry = {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1135,7 +1175,7 @@ def register_research_gate_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_gate_bash_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-gate-bash.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/research-gate-bash.py"')
     hook_entry = {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": hook_command}],
@@ -1153,13 +1193,25 @@ def register_research_gate_bash_hook() -> None:
 # ---------------------------------------------------------------------------
 def register_research_record_hook() -> None:
     settings = read_json(SETTINGS_PATH)
-    hook_command = 'python "$CLEAN_RAG_HOME/hooks/research-record.py"'
+    hook_command = _cr_py_cmd('"$CLEAN_RAG_HOME/hooks/research-record.py"')
+    # SubagentStop, not PostToolUse on Task. PostToolUse fires when the Task
+    # tool call RETURNS, and the harness runs subagents asynchronously, so that
+    # is launch time: tool_response is {agentId, outputFile, status:
+    # async_launched, ...} with no report in it. Every stamp written that way
+    # recorded an empty scope, so no file was ever seen as covered.
+    # SubagentStop fires on real completion and carries the finished report in
+    # last_assistant_message.
+    #
+    # Matcher is "*" rather than the agent names: one observed SubagentStop
+    # payload arrived with an empty agent_type, which a name matcher would drop
+    # silently. The hook already filters on its own agent set, so the filtering
+    # stays in one place.
     hook_entry = {
-        "matcher": "Task|Agent",
+        "matcher": "*",
         "hooks": [{"type": "command", "command": hook_command}],
     }
     _register_hook(
-        settings, "PostToolUse", RESEARCH_RECORD_SENTINEL,
+        settings, "SubagentStop", RESEARCH_RECORD_SENTINEL,
         hook_entry, label="research-record",
     )
 

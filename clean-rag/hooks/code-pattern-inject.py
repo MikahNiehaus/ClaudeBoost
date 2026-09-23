@@ -10,6 +10,8 @@ Exit codes:
   0 = always (PreToolUse hooks should not block the edit itself)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
