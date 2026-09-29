@@ -171,6 +171,18 @@ Two consequences worth knowing:
   each other, and a range let them drift apart until every embedding load failed.
   Bump them together or not at all.
 
+**Optional: per-prompt model routing with jev-router.** ClaudeBoost assigns a
+fixed model to each agent. [jev-router](https://github.com/gargpratyush/jev-router)
+instead picks Haiku, Sonnet, Opus or Fable for each prompt in the main
+conversation. It is off by default because it sends the text of every prompt to
+TypeSafe's hosted Jev service. To install it, run
+`CLAUDEBOOST_WITH_JEV_ROUTER=1 ./install.sh` (Windows:
+`set CLAUDEBOOST_WITH_JEV_ROUTER=1` then `.\install.bat`), put `JEV_API_KEY=...` in
+`~/.jev-router.env`, and launch with `jev-claude` instead of `claude`.
+ClaudeBoost's hooks still run underneath it. It needs Node.js 20.12+. There are
+no published measurements of how much it saves. Switching models mid-session
+also discards the prompt cache, so compare `/cost` before relying on it.
+
 ### Uninstall
 
 `uninstall.sh` / `uninstall.bat` (or the `/uninstall` slash command) reverse `setup.py`.

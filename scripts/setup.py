@@ -1700,6 +1700,44 @@ def install_mermaid_cli() -> None:
               "bin directory to PATH (`npm bin -g`) and restart your terminal.")
 
 
+def install_jev_router() -> None:
+    """Opt-in: jev-claude sends prompt text to a third party.
+
+    Probe with shutil.which only; `jev-claude --version` would launch claude.
+    """
+    opt_in = os.environ.get("CLAUDEBOOST_WITH_JEV_ROUTER", "").strip().lower()
+    if opt_in in ("", "0", "false", "no", "off"):
+        _skip("jev-router (opt-in: set CLAUDEBOOST_WITH_JEV_ROUTER=1 to install)")
+        return
+
+    _info("\nVerifying jev-router (jev-claude)...")
+    if shutil.which("jev-claude"):
+        _ok("jev-router already installed")
+    elif not shutil.which("npm"):
+        _warn("npm not found - skipping jev-router. Install Node.js 20.12+ and "
+              "run: npm install -g jev-router")
+        return
+    else:
+        _info("Installing jev-router...")
+        npm = shutil.which("npm") or "npm"
+        rc, out = run_cmd([npm, "install", "-g", "jev-router"])
+        if rc != 0:
+            _warn("jev-router install failed - run: npm install -g jev-router "
+                  "(requires Node.js 20.12+)")
+            if out:
+                _warn(out[-800:])
+            return
+        if not shutil.which("jev-claude"):
+            _warn("jev-router installed but `jev-claude` is not on PATH. Add npm's "
+                  "global bin directory to PATH and restart your terminal.")
+            return
+        _ok("jev-router installed")
+
+    _warn("jev-claude sends each prompt's text to TypeSafe's Jev service to "
+          "choose a model. Set JEV_API_KEY in ~/.jev-router.env, then launch "
+          "with `jev-claude` instead of `claude`. Requires Node.js 20.12+.")
+
+
 # ---------------------------------------------------------------------------
 # netcoredbg: download from Samsung GitHub releases so mcp-debugger can step
 # through .NET/C# code. Skipped when dotnet SDK is not installed.
@@ -1908,6 +1946,7 @@ def main() -> int:
     register_mcp_servers()
     install_edge_tts()
     install_mermaid_cli()
+    install_jev_router()
     install_netcoredbg()
     install_clean_rag()
     install_session_restore_task()
