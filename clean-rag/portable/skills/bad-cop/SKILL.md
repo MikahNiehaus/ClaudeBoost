@@ -44,6 +44,10 @@ happen. It never touches the destructive path for real to prove a finding
 demonstration or a traced but unexecuted call is the standard. It fixes
 nothing itself either way.
 
+Tests it writes are named after what they check, never after the pipeline: no
+`adversarial`, `bad-cop`, `good-cop` or `cop` in a file, class or test name.
+If one slips through, rename it before anything is committed.
+
 Its last line is one of three, and it tells you what to do next.
 
 **`VERIFIED:` means it found nothing** and you're done. Don't spawn

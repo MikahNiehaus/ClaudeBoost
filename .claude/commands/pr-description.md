@@ -90,7 +90,7 @@ ls workspace/*/ticket.md 2>/dev/null | head -5
 
 Read the matching workspace ticket.md if it exists. This provides acceptance criteria and ticket context.
 
-**2c — Look up Jira base URL from project config.**
+**2c — Look up the ticket base URL from project config.**
 
 Find the repo root:
 ```bash
@@ -99,21 +99,23 @@ git rev-parse --show-toplevel
 
 Check for `<repo-root>/.claude/pr-config.md` (gitignored alongside `settings.local.json` — holds project-specific config that shouldn't be committed). Read it if it exists and look for a line of the form:
 ```
-jira_base_url: https://your-company.atlassian.net/browse
+ticket_base_url: https://your-company.example.com/browse
 ```
 
-If `jira_base_url` is found and a ticket ID was extracted from the branch name, construct the full URL as `{jira_base_url}/{TICKET-ID}`. Do NOT ask the user.
+Accept `jira_base_url` as the same key, because older config files on disk still spell it that way.
 
-If `.claude/pr-config.md` does not exist or has no `jira_base_url` line:
+If a base URL is found and a ticket ID was extracted from the branch name, construct the full URL as `{ticket_base_url}/{TICKET-ID}`. Do NOT ask the user.
+
+If `.claude/pr-config.md` does not exist or has neither key:
 - If a ticket ID was found: ask:
   ```
-  What is the Jira base URL for this project? (e.g. https://company.atlassian.net/browse)
+  What is the ticket base URL for this project? (e.g. https://company.example.com/browse)
   Or say "none" to leave the ticket link blank.
   ```
   Construct the full URL as `{answer}/{TICKET-ID}`.
 - If no ticket ID found anywhere (no branch pattern match, no workspace file, no commit message reference): ask:
   ```
-  What is the Jira ticket URL? (e.g. https://company.atlassian.net/browse/PROJ-1234)
+  What is the ticket URL? (e.g. https://company.example.com/browse/PROJ-1234)
   Or say "none" to leave it blank.
   ```
 
@@ -167,6 +169,28 @@ ls workspace/*/bug\ fix/ 2>/dev/null | head -10
 - Use commas and periods instead of dashes
 - Say "tested locally" for testing — never mention Playwright or automation tools
 
+### Human voice (applies to every prose section)
+
+A PR description is read by a colleague, so it has to read as though a
+colleague wrote it. Invoke the `human-voice` skill and write the prose under
+its rules rather than restating them here. The short version, so you know what
+it is checking for:
+
+- Say what changed and why, in the order a reviewer needs it. Point first.
+- One idea per sentence. Vary sentence length so the rhythm is not uniform,
+  which is the strongest machine tell there is.
+- No throat clearing openers ("This PR aims to", "In order to"), no closing
+  wrapper ("Overall, this change improves"), no restating the title.
+- No filler intensifiers ("very", "significantly", "robust", "seamless",
+  "comprehensive", "leverage", "utilize", "ensure").
+- Name the actor and use concrete verbs. "The filter dropped archived groups"
+  beats "a determination was made regarding the exclusion of archived groups".
+- Say plainly what is not covered, what was skipped, and what is still
+  uncertain. A description that claims more than was done is the failure this
+  section exists to stop.
+- Write only what is true of this change. If a sentence could be pasted into
+  any other PR unchanged, cut it.
+
 ### Type of Change checkboxes
 Check the appropriate box(es) based on the diff.
 
@@ -206,4 +230,16 @@ The title is outside the code block so it can be read at a glance. The template 
 2. Does any prose paragraph have a line break inside it? Join into one line.
 3. Does any prose paragraph start with a space or indent? Remove it.
 4. Is the title under 72 chars and lowercase? Fix if not.
-5. Does the Jira URL section have a real URL? If not, ask before outputting.
+5. Does the ticket URL section have a real URL? If not, ask before outputting.
+6. Run the human voice linter on the prose sections, not on the whole template,
+   because the checkboxes and the template's own headings are not prose and
+   will flag as structure:
+
+   ```bash
+   printf '%s\n' "<the Description, How Has This Been Tested and Additional Notes paragraphs>" \
+     | python ~/.claude/skills/human-voice/scripts/lint.py - --short
+   ```
+
+   Exit 0 is clean, exit 1 means it found flags. Read the flags, fix the prose,
+   and run it again. Do not output a description that still flags, and do not
+   silence a flag by deleting the sentence that carries the meaning.

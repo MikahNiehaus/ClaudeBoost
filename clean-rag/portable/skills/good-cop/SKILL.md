@@ -43,6 +43,10 @@ If it finds more issues, spawn good-cop again. The loop (bad-cop → good-cop
 → bad-cop) continues until bad-cop stamps `VERIFIED:` on a clean pass —
 that is the only terminal condition, not good-cop claiming done.
 
+Test names stay about behaviour: no `adversarial`, `bad-cop`, `good-cop` or
+`cop` in a file, class or test name. good-cop renames any it finds before it
+stamps.
+
 ## What this is not
 
 Not a rubber stamp on bad-cop's findings. good-cop reproduces each finding

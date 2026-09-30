@@ -58,6 +58,12 @@ RN DevTools replaced Flipper (removed from templates in RN 0.74) and talks CDP
 to Hermes. So the JS side is reachable through `chrome-devtools` at the URL
 Metro prints on start — there is no RN-specific MCP server worth installing.
 
+To drive the app itself (install a build, tap, type, screenshot, read device
+logs and crashes), use `mobile-mcp`. It works on Android emulators and devices
+through `adb` on any OS. iOS simulators and devices need a Mac with Xcode, so
+from Windows or Linux an Android build of the same code is the only native
+target.
+
 ```bash
 npx react-native log-android          # Metro + native log tail
 npx react-native log-ios

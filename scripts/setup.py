@@ -1506,6 +1506,15 @@ MCP_SERVERS: list[dict] = [
         "needs": "npx",
         "why": "network capture, performance traces, Lighthouse, Hermes/React Native over CDP",
     },
+    {
+        "name": "mobile-mcp",
+        "label": "Mobile MCP",
+        "args": ["npx", "-y", "@mobilenext/mobile-mcp@latest"],
+        "needs": "npx",
+        # Telemetry to PostHog and Scarf is on by default upstream.
+        "env": {"MOBILEMCP_DISABLE_TELEMETRY": "1"},
+        "why": "drive Android emulators and devices (adb) and iOS simulators (Xcode): tap, type, screenshot, logs",
+    },
     # --- Code intelligence -------------------------------------------------
     {
         "name": "serena",

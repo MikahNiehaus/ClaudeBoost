@@ -402,7 +402,8 @@ through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
 **Reach for the debugger over print statements.** `mcp-debugger` covers Python,
 Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
 `start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
-performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
+performance work is `chrome-devtools`. Driving a mobile app is `mobile-mcp`.
+Coverage is `test-coverage`. Native C/C++
 is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
 registered, so run the installer; every server comes from one table there.
 
@@ -570,6 +571,13 @@ What each one is for, and the specific thing to watch:
 - **jupyter** produces executable `.ipynb` evidence a human can re-run. It
   executes code, so treat it as a real execution surface. Gated on
   `JUPYTER_TOKEN`; without a live Jupyter it is skipped.
+- **mobile-mcp** drives a real mobile app: install a build, tap, type,
+  screenshot, read device logs and crashes. Android works through `adb` on any
+  OS; iOS needs a Mac with Xcode. It acts on the device for real, including
+  uninstalling apps, replacing the clipboard and overriding GPS, so point it at
+  an emulator or a test device, never a personal phone. Upstream telemetry is
+  on by default, so the row sets `MOBILEMCP_DISABLE_TELEMETRY=1` in its own
+  `env`.
 - **github** does PRs, issues and Actions as structured calls. Use a fine
   grained PAT scoped to the repos you actually want reachable, never a classic
   token with full `repo`. It can merge, push and close for real. Its secret
