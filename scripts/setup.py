@@ -351,14 +351,8 @@ HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
 
 
 def _statusline_cmd() -> str:
-    """Build the status line command with same fallback chain as _py_cmd."""
-    script = '"$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
-    return (
-        f'"$CLAUDEBOOST_PYTHON" {script}'
-        f' || python {script}'
-        f' || python3 {script}'
-        f' || py {script}'
-    )
+    """RAG health + Claude subscription usage, merged, never blocking."""
+    return 'bash "$CLAUDEBOOST_HOME/scripts/statusline-merged.sh"'
 
 
 def _load_settings() -> dict:
@@ -1136,7 +1130,7 @@ def update_settings() -> None:
     home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
     _ok(f"claudeboost-home.txt written: {home_file}")
 
-    # statusLine — always use the Python-based RAG health script (cross-platform)
+    # statusLine — RAG health + Claude subscription usage, merged
     new_sl_cmd = _statusline_cmd()
     sl = settings.get("statusLine")
     if isinstance(sl, dict) and sl.get("command") == new_sl_cmd:
@@ -2023,6 +2017,66 @@ def install_plugins() -> None:
                 _warn(out.strip()[:300])
 
 
+# squeez: Apache-2.0 output compression. Not a plugin; its own installer sets it up.
+def install_squeez() -> None:
+    _info("\nVerifying squeez (context compression)...")
+    home_bin = Path.home() / ".claude" / "squeez" / "bin" / (
+        "squeez.exe" if IS_WINDOWS else "squeez"
+    )
+    squeez_bin = str(home_bin) if home_bin.exists() else shutil.which("squeez")
+
+    if not squeez_bin:
+        bash = shutil.which("bash")
+        if not bash:
+            _warn("squeez needs Git Bash (bash not on PATH) - skipping. "
+                  "Install manually: https://github.com/claudioemmanuel/squeez")
+            return
+        rc, out = run_cmd([bash, "-c",
+            "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/main/install.sh | sh"])
+        if rc != 0:
+            _warn(f"squeez install failed (exit {rc}) - skipping")
+            if out:
+                _warn(out.strip()[:300])
+            return
+        squeez_bin = str(home_bin) if home_bin.exists() else shutil.which("squeez")
+        if not squeez_bin:
+            _warn("squeez installed but binary not found - run `squeez setup` manually")
+            return
+
+    rc, out = run_cmd([squeez_bin, "setup"])
+    if rc == 0:
+        _ok("squeez installed - compresses redundant tool output, never blocking")
+    else:
+        _warn(f"squeez setup failed (exit {rc}); run manually: {squeez_bin} setup")
+        if out:
+            _warn(out.strip()[:300])
+        return
+
+    _harden_squeez_config()
+
+
+def _harden_squeez_config() -> None:
+    """Default persona is 'ultra' (rewrites response wording) and buddy is
+    on (it overwrote our statusLine once). Force both off; setdefault would
+    not fix an already-bad default squeez itself ships."""
+    cfg = Path.home() / ".claude" / "squeez" / "config.ini"
+    if not cfg.exists():
+        return
+    text = cfg.read_text(encoding="utf-8")
+    patched = re.sub(r"(?m)^persona\s*=.*$", "persona = off", text)
+    patched = re.sub(r"(?m)^buddy\s*=.*$", "buddy = false", patched)
+    if patched != text:
+        cfg.write_text(patched, encoding="utf-8")
+        _ok("squeez persona/buddy disabled (no output rewriting, no statusLine takeover)")
+
+    settings = read_json(SETTINGS_PATH, {})
+    line = settings.get("statusLine", {}).get("command", "")
+    if "squeez" in line and "statusline-merged" not in line:
+        settings["statusLine"] = {"type": "command", "command": _statusline_cmd()}
+        write_json(SETTINGS_PATH, settings)
+        _ok("statusLine restored (squeez setup had overwritten it)")
+
+
 # ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
@@ -2308,6 +2362,7 @@ def main() -> int:
     install_rag_server()
     register_mcp_servers()
     install_plugins()
+    install_squeez()
     install_edge_tts()
     install_mermaid_cli()
     install_netcoredbg()

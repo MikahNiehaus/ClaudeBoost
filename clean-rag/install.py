@@ -714,6 +714,75 @@ def install_plugins() -> None:
             _warn(f"{name} install failed, run: claude plugin install {name}")
 
 
+# squeez: Apache-2.0 output compression. Not a plugin; its own installer sets it up.
+def install_squeez() -> None:
+    home_bin = Path.home() / ".claude" / "squeez" / "bin" / (
+        "squeez.exe" if os.name == "nt" else "squeez"
+    )
+    squeez_bin = str(home_bin) if home_bin.exists() else resolve_tool("squeez")
+
+    if not squeez_bin:
+        bash = resolve_tool("bash")
+        if not bash:
+            _warn("squeez needs Git Bash (bash not on PATH), skipping. "
+                  "Install manually: https://github.com/claudioemmanuel/squeez")
+            return
+        try:
+            installed = subprocess.run(
+                [bash, "-c",
+                 "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/"
+                 "main/install.sh | sh"],
+                capture_output=True, text=True, timeout=180,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"squeez install failed ({e}), skipping")
+            return
+        if installed.returncode != 0:
+            _warn("squeez install failed, skipping")
+            return
+        squeez_bin = str(home_bin) if home_bin.exists() else resolve_tool("squeez")
+        if not squeez_bin:
+            _warn("squeez installed but binary not found, run `squeez setup` manually")
+            return
+
+    try:
+        done = subprocess.run(
+            [squeez_bin, "setup"], capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"squeez setup failed ({e})")
+        return
+    if done.returncode != 0:
+        _warn(f"squeez setup failed, run manually: {squeez_bin} setup")
+        return
+    _ok("squeez installed, compresses redundant tool output, never blocking")
+    _harden_squeez_config()
+
+
+def _harden_squeez_config() -> None:
+    """Default persona is 'ultra' (rewrites response wording) and buddy is
+    on (it overwrote our statusLine once). Force both off; setdefault would
+    not fix an already-bad default squeez itself ships."""
+    cfg = Path.home() / ".claude" / "squeez" / "config.ini"
+    if cfg.exists():
+        text = cfg.read_text(encoding="utf-8")
+        patched = re.sub(r"(?m)^persona\s*=.*$", "persona = off", text)
+        patched = re.sub(r"(?m)^buddy\s*=.*$", "buddy = false", patched)
+        if patched != text:
+            cfg.write_text(patched, encoding="utf-8")
+            _ok("squeez persona/buddy disabled (no output rewriting, no statusLine takeover)")
+
+    settings = read_json(SETTINGS_PATH, {})
+    line = settings.get("statusLine", {}).get("command", "")
+    if "squeez" in line and "statusline-merged" not in line:
+        settings["statusLine"] = {
+            "type": "command",
+            "command": 'bash "$CLAUDEBOOST_HOME/scripts/statusline-merged.sh"',
+        }
+        write_json(SETTINGS_PATH, settings)
+        _ok("statusLine restored (squeez setup had overwritten it)")
+
+
 def install_pptx_tools() -> None:
     """Install what the powerpoint skill needs to build and narrate a deck.
 
@@ -1088,10 +1157,11 @@ def set_env_var() -> None:
     # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
     # Code's own autocompact logic can't see through settings.json.
     env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
-    # Compact at 60% rather than the default, so compaction happens while there
-    # is still room to write a decent summary. setdefault, not assignment: a
-    # number the human has already tuned is theirs to keep.
-    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
+    # 90%, matching docs/CLAUDEBOOST-REFERENCE.md. Best effort only,
+    # see anthropics/claude-code#63186.
+    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+    # Ponytail's own subprocess reads this var directly, unaffected by #63186.
+    env.setdefault("PONYTAIL_DEFAULT_MODE", "lite")
     # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
     # subprocess per write. setdefault, so a human who retunes either keeps it.
     env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
@@ -1099,6 +1169,7 @@ def set_env_var() -> None:
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
     _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")
+    _ok(f"Ponytail default mode {env['PONYTAIL_DEFAULT_MODE']}")
 
 
 def protect_research_state() -> None:
@@ -1615,6 +1686,12 @@ def main():
         install_plugins()
     else:
         print("\nStep 2b3: Skipped (--skip-deps)")
+
+    if not args.skip_deps:
+        print("\nStep 2b4: Installing squeez (context compression)...")
+        install_squeez()
+    else:
+        print("\nStep 2b4: Skipped (--skip-deps)")
 
     # Step 2c
     if not args.skip_deps:
