@@ -118,6 +118,8 @@ def step_banner() -> None:
 
 
 def step_privacy() -> None:
+    # Report only. DISABLE_TELEMETRY must stay unset: while it is set,
+    # `claude remote-control` refuses to start (it needs feature flags).
     on = []
     for var in ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"):
         on.append(f"{var}={'1' if os.environ.get(var) else 'unset'}")
