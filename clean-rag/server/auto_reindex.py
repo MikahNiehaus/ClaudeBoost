@@ -85,6 +85,37 @@ def set_paused(paused: bool) -> bool:
     return _paused
 
 
+#: Set by POST /sweep-pause {"hours_only": true}. Memory only, for the same
+#: reason as _paused.
+_hours_only = False
+
+#: Local clock work hours that sweeps stay out of when _hours_only is on. End is exclusive.
+WORK_HOURS = (9, 17)
+
+
+def is_hours_only() -> bool:
+    return _hours_only
+
+
+def set_hours_only(on: bool) -> bool:
+    """Keep sweeps out of WORK_HOURS or lift the limit, returning the state in force."""
+    global _hours_only
+    _hours_only = bool(on)
+    logger.info("Indexing sweeps held off during work hours: %s", _hours_only)
+    return _hours_only
+
+
+def in_work_hours(now: "time.struct_time | None" = None) -> bool:
+    """True when the hours limit is on and the local clock is inside work hours.
+
+    Read fresh on every check, so a DST change corrects itself on the next tick.
+    """
+    if not _hours_only:
+        return False
+    hour = (now or time.localtime()).tm_hour
+    return WORK_HOURS[0] <= hour < WORK_HOURS[1]
+
+
 #: Re-exported from reindex_unit so the batch driver and this loop cannot drift
 #: apart. Kept importable from here because that is where callers and tests
 #: already reach for it.
@@ -487,6 +518,9 @@ async def auto_reindex_loop(get_model_cache) -> None:
         if is_paused():
             logger.debug("Indexing paused, skipping this sweep")
             continue
+        if in_work_hours():
+            logger.debug("Inside work hours, skipping this sweep")
+            continue
 
         model_cache = get_model_cache()
         # `is None`, not truthiness. ModelCache defines __len__ but not
@@ -537,6 +571,9 @@ async def auto_reindex_loop(get_model_cache) -> None:
                 # back at any point in it.
                 if is_paused():
                     logger.info("Indexing paused, abandoning the rest of this sweep")
+                    break
+                if in_work_hours():
+                    logger.info("Work hours started, abandoning the rest of this sweep")
                     break
 
                 # Re-check between projects, not just once up front. A sweep

@@ -2,10 +2,14 @@
 
 import logging
 import os
+import subprocess
 import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# The server has no console, so without this Windows opens a visible one per child process.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _MODULE_DIR = Path(__file__).resolve().parent          # clean-rag/server/
 

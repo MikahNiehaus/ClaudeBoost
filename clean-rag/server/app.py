@@ -22,6 +22,7 @@ from .config import (
     DEFAULT_MIN_SCORE,
     DEFAULT_SEARCH_LIMIT,
     MAX_RESIDENT_MODELS,
+    NO_WINDOW,
     STANDALONE_PORT,
     STATE_DIR,
     CODE_EMBEDDING_MODEL,
@@ -229,6 +230,8 @@ def _with_files_total(projects: object) -> dict:
 
 async def handle_status(request: web.Request) -> web.Response:
     """GET /status: server health, model status, indexed projects."""
+    from .auto_reindex import is_hours_only, is_paused
+
     projects = _with_files_total(_list_projects())
 
     loaded = _model_cache is not None and len(_model_cache) > 0
@@ -255,6 +258,9 @@ async def handle_status(request: web.Request) -> web.Response:
         },
         "clean_rag_home": str(CLEAN_RAG_HOME),
         "ram_mb": _get_ram_mb(),
+        # So a console opened later shows the real toggle state.
+        "paused": is_paused(),
+        "hours_only": is_hours_only(),
     }
     # Only while still broken. A handler that later retried the load and
     # succeeded flips status to ready, and a stale error string next to it
@@ -1063,7 +1069,7 @@ def _run_project_tests(project_path: str) -> dict:
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), shell=True, capture_output=True, text=True,
-            timeout=120, env=env, errors="replace",
+            timeout=120, env=env, errors="replace", creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") + (e.stderr or "") if isinstance(e.stdout, str) else ""
@@ -1557,26 +1563,37 @@ async def handle_sweep_pause(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:  # noqa: BLE001 - any unparseable body is just a bad request
         body = {}
-    if not isinstance(body, dict) or "paused" not in body:
+    fields = ("paused", "hours_only")
+    # bool only, because bool("false") is True and would do the opposite.
+    if (
+        not isinstance(body, dict)
+        or not any(k in body for k in fields)
+        or any(k in body and not isinstance(body[k], bool) for k in fields)
+    ):
         return _json_response(
-            {"error": "send {\"paused\": true} or {\"paused\": false}"}, status=400,
+            {"error": "send {\"paused\": bool} and/or {\"hours_only\": bool}"}, status=400,
         )
 
     # Imported here, not at module scope, matching how the startup hook reaches
     # for this module at app.py:1581.
-    from .auto_reindex import set_paused
-
-    paused = set_paused(bool(body["paused"]))
+    from .auto_reindex import is_hours_only, is_paused, set_hours_only, set_paused
 
     evicted = []
-    if paused and _model_cache is not None:
-        evicted = _model_cache.loaded_models()
-        _model_cache.evict_all()
-        logger.info("Paused: evicted %d model(s) to give the RAM back", len(evicted))
+    if "paused" in body:
+        paused = set_paused(body["paused"])
+        if paused and _model_cache is not None:
+            evicted = _model_cache.loaded_models()
+            _model_cache.evict_all()
+            logger.info("Paused: evicted %d model(s) to give the RAM back", len(evicted))
+    else:
+        paused = is_paused()
+
+    hours_only = set_hours_only(body["hours_only"]) if "hours_only" in body else is_hours_only()
 
     operation, project = _current_index_lock()
     return _json_response({
         "paused": paused,
+        "hours_only": hours_only,
         "models_evicted": evicted,
         # True while a project that was already underway finishes.
         "indexing_still_finishing": bool(operation),

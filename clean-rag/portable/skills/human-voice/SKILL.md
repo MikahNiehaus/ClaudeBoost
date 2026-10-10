@@ -46,6 +46,65 @@ followed less often than one loaded on purpose.
 A quick pass is `patterns.md` alone. Resolve bundled command and example paths
 from this skill directory.
 
+### A quick pass does not clear the human voice check
+
+`patterns.md` plus a clean `lint.py` run is not a finished audit of anything:
+not a document, not a chat reply, not a PR description or a code comment or a
+commit message. Treating it as one is the failure mode this section exists to
+stop. Both layers check vocabulary and a handful of local shapes. Neither reads
+structure, and `patterns-full.md` says structure is the strongest signal a
+detector has:
+
+> **Structure is the #1 detection signal.** AI detection tools (including
+> Pangram, which trains a classifier on 28M human documents) weight structural
+> regularity higher than vocabulary. [...] If you fix every word on the Tier 1
+> list but leave the rhythm untouched, the text still reads as AI-generated.
+
+**Measured here, 2026-09-11.** A 503-word technical document scored `Structural
+flags: 0   Vocabulary flags: 0   Notes: 0` and printed `Clean.` GPTZero's Model
+4.9b then rated the same text **100% AI, 0% mixed, 0% human**, "highly
+confident". Nothing in the quick pass had fired. What the full file caught on a
+second look: thirteen consecutive `**Label.** Gloss.` list items (the
+`List-label periods` rule, which names that exact shape), the same thirteen
+under `Inline-header lists`, four list entries built on one repeated skeleton
+(`Same-opener sentence runs`), eight headings in 664 words (`Excessive
+structure`), and six `X rather than Y` constructions. Three distinct pattern
+categories plus uniform structure is the documented threshold for rewriting
+rather than patching, and the quick pass reported none of it.
+
+**It happened again, 2026-10-07.** A 912-word documentation page for
+clean-rag scored `Clean.` and GPTZero rated it 100% AI. Only the quick pass had
+run. It had ten headings, near-identical two-sentence paragraphs, and a "The
+first pass... The second pass... The third pass..." run that nothing flagged.
+
+So the full audit is mandatory, not optional, whenever the writing leaves the
+conversation: a published page, documentation, a message to a colleague, a PR
+description, a comment someone else will read. Running it fully means all of
+these:
+
+1. Read `patterns-full.md`, not only `patterns.md`.
+2. Count headings against words, check paragraph lengths for sameness, and look
+   for repeated sentence openers and skeletons.
+3. Run the paragraph-reshuffle test. If sections could swap order unnoticed,
+   rebuild them so each one leads from the last.
+4. Rewrite, then do the second-pass audit on the rewrite.
+
+The full audit makes the writing better. It does not make it pass GPTZero, and
+never say it will. The same clean-rag page went 100% AI after the full rewrite
+too. Perplexity detectors stay pinned through rewrites; see the measurements
+under "Aggressive register mode" below. Tell the writer that plainly instead of
+promising a score.
+
+The quick pass is for a draft nobody has seen yet.
+
+**`lint.py` printing `Clean.` means its checks did not fire.** It is not a
+verdict on the writing, and no run of it should be reported as though the text
+passed an audit.
+
+The same holds for prose written without invoking this skill at all. Passing
+`human-voice-guard.py`, the Stop hook that blocks 39 tell words in chat, says
+only that none of those 39 words appeared. It reads no structure either.
+
 ## The bundled scorer, and what it is not
 
 `scripts/lint.py` is vendored from `hamidkkhan/write-like-human`, MIT, pure

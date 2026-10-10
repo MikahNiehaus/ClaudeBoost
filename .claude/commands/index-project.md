@@ -78,6 +78,17 @@ python "$CLEAN_RAG_HOME/cli/server_ctl.py" start
 
 **2. Resolve the project path.** Must be absolute, and must exist. See the two rules above. If the argument is fuzzy and more than one candidate matches, use AskUserQuestion rather than guessing.
 
+**2b. Check for a `.ragignore`, and create one if there is none.**
+
+`<project>/.ragignore` lists what the index must leave out, in gitignore syntax. Unlike `.gitignore`, it also drops files git tracks (`ragignored()` in `server/file_scan.py`), which is the only way to keep committed noise out of the index.
+
+If the file exists, read it and say in one line what it excludes. If it does not, create it before indexing:
+
+1. See what would be indexed: `git -C <path> ls-files`, counted by top level directory and by extension. For a folder that is not a git repo, list it.
+2. Pick the directories that are not hand written source: generated clients and code, vendored or copied libraries, test fixtures and seed data, large data files, minified bundles, exported reports. Name only directories that actually exist. Leave out what `SKIP_DIRS` and `SKIP_FILES` already skip.
+3. Write `.ragignore` with one entry per line and a `#` comment saying what each group is. A file with only a header comment is a valid result when nothing qualifies.
+4. Show the user the file and say it is new and theirs to commit or not.
+
 **3. Index it.**
 
 ```bash

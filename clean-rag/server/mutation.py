@@ -31,6 +31,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .config import NO_WINDOW
+
 # Mutation runs the whole suite once per mutant, so even a handful of files takes
 # minutes, not seconds. This is the hard outer backstop; each tool also gets a
 # timeout of its own where it supports one.
@@ -96,7 +98,7 @@ def _run(argv, cwd, timeout=DEFAULT_TIMEOUT_S):
     env = {**os.environ, "CI": "true"}
     return subprocess.run(
         argv, cwd=str(cwd), shell=False, capture_output=True, text=True,
-        timeout=timeout, env=env, errors="replace",
+        timeout=timeout, env=env, errors="replace", creationflags=NO_WINDOW,
     )
 
 
