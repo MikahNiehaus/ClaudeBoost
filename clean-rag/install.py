@@ -286,7 +286,7 @@ def install_user_assets() -> None:
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
     # Skills. Copied whole, so a skill can carry a scripts/ subfolder (the
-    # powerpoint skill does). __pycache__ is excluded: running the skill's
+    # presentation skill does). __pycache__ is excluded: running the skill's
     # helper leaves bytecode in the repo copy that has no business shipping.
     skills_src = portable / "skills"
     if skills_src.is_dir():
@@ -607,7 +607,7 @@ def register_mcp_servers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 2c: Install deck tooling for the powerpoint skill (best effort)
+# Step 2c: Install deck tooling for the presentation skill (best effort)
 # ---------------------------------------------------------------------------
 def _module_available(module: str) -> bool:
     """Is an importable module already present for this interpreter?
@@ -616,7 +616,7 @@ def _module_available(module: str) -> bool:
     answers without spawning anything, so it cannot hang the installer the way
     `python -c "import x"` can when a package blocks at import time. find_spec
     locates the module without executing it, which is also why it is what the
-    powerpoint skill's own helper uses (pptx_env._have_module).
+    presentation skill's own helper uses (pptx_env._have_module).
     """
     try:
         return importlib.util.find_spec(module) is not None
@@ -784,7 +784,7 @@ def _harden_squeez_config() -> None:
 
 
 def install_pptx_tools() -> None:
-    """Install what the powerpoint skill needs to build and narrate a deck.
+    """Install what the presentation skill needs to build and narrate a deck.
 
     Best effort, same contract as install_npm_qa_tools: warn and continue,
     never abort. python-pptx builds the deck and edge-tts voices the optional
@@ -813,7 +813,7 @@ def install_pptx_tools() -> None:
 
     # Native tools. The skill's own helper knows the per-OS search paths, so
     # ask it rather than duplicating that list here.
-    helper = CLEAN_RAG_HOME / "portable" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    helper = CLEAN_RAG_HOME / "portable" / "skills" / "presentation" / "scripts" / "pptx_env.py"
     natives = [
         ("soffice", "LibreOffice", "render and video",
          "winget install TheDocumentFoundation.LibreOffice | brew install --cask libreoffice | apt install libreoffice"),
@@ -823,7 +823,7 @@ def install_pptx_tools() -> None:
          "winget install Gyan.FFmpeg | brew install ffmpeg | apt install ffmpeg"),
     ]
     if not helper.is_file():
-        _warn("powerpoint skill helper not found, skipping native tool detection")
+        _warn("presentation skill helper not found, skipping native tool detection")
         return
     for probe, label, purpose, how in natives:
         try:
@@ -837,7 +837,7 @@ def install_pptx_tools() -> None:
         if result.returncode == 0:
             _ok(f"{label} found at {result.stdout.strip()}")
         else:
-            _warn(f"{label} not found, powerpoint skill loses {purpose}")
+            _warn(f"{label} not found, presentation skill loses {purpose}")
             _say(f"  {how}")
 
 
@@ -1695,7 +1695,7 @@ def main():
 
     # Step 2c
     if not args.skip_deps:
-        print("\nStep 2c: Installing deck tooling for the powerpoint skill...")
+        print("\nStep 2c: Installing deck tooling for the presentation skill...")
         install_pptx_tools()
     else:
         print("\nStep 2c: Skipped (--skip-deps)")

@@ -53,7 +53,7 @@ sitting in the root listing.
 ### `plans/` is scratch that the test suite runs
 
 Seven tracked files: `debug_mcp_refs.py`, `test_install_qa_tools.py`,
-`test_powerpoint_env.py`, `test_skill_frontmatter.py`,
+`test_presentation_env.py`, `test_skill_frontmatter.py`,
 `test_walkthrough_url_validation.py`, and two `.js` walkthrough probes.
 
 `pytest.ini` excludes `workspace` from collection but not `plans`, so a root run

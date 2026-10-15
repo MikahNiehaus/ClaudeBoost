@@ -6,7 +6,7 @@ than a typo. Two things are pinned:
 
 * every `pptx_env.py <subcommand>` named in prose, in either skill that names
   one, is a subcommand the script dispatches, read out of `main()` rather than
-  mirrored into a list here. `/start` delegates its step 2c to the `powerpoint`
+  mirrored into a list here. `/start` delegates its step 2c to the `presentation`
   skill, so a stale subcommand in either file breaks the same run
 * the steps stay in the order the procedure depends on — the teaching video is
   built from both research reports and shown before the consult, so it has to
@@ -21,8 +21,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 PORTABLE = REPO / "clean-rag" / "portable"
 START_SKILL = PORTABLE / "skills" / "start" / "SKILL.md"
-POWERPOINT_SKILL = PORTABLE / "skills" / "powerpoint" / "SKILL.md"
-PPTX_ENV = PORTABLE / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+PRESENTATION_SKILL = PORTABLE / "skills" / "presentation" / "SKILL.md"
+PPTX_ENV = PORTABLE / "skills" / "presentation" / "scripts" / "pptx_env.py"
 
 #: Both files name subcommands, in two conventions each: `pptx_env.py doctor`
 #: inside one code span, and `"${HOME}/.../pptx_env.py" doctor` where the quote
@@ -32,7 +32,7 @@ PPTX_ENV = PORTABLE / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
 NAMED_SUBCOMMAND = re.compile(r'pptx_env\.py"?\s+([a-z][a-z0-9_-]*)')
 
 #: Every skill file that tells a session to run the helper.
-SKILLS_NAMING_SUBCOMMANDS = (START_SKILL, POWERPOINT_SKILL)
+SKILLS_NAMING_SUBCOMMANDS = (START_SKILL, PRESENTATION_SKILL)
 
 
 def dispatched_subcommands(source: str) -> set[str]:
@@ -92,9 +92,9 @@ def test_a_renamed_subcommand_is_caught():
 
 
 def test_subcommand_regex_reads_both_quoting_conventions():
-    """start/SKILL.md writes it bare; powerpoint/SKILL.md closes a quoted path first."""
+    """start/SKILL.md writes it bare; presentation/SKILL.md closes a quoted path first."""
     bare = 'Run `pptx_env.py doctor` first.'
-    quoted = 'python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" topdf deck.pptx'
+    quoted = 'python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" topdf deck.pptx'
     assert set(NAMED_SUBCOMMAND.findall(bare)) == {"doctor"}
     assert set(NAMED_SUBCOMMAND.findall(quoted)) == {"topdf"}
 

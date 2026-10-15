@@ -14,7 +14,7 @@ whole time the suite was green. These patterns are structural instead, so a
 username nobody has seen yet still fails.
 
 This is the repo-wide version of the per-skill check in
-plans/test_powerpoint_env.py (t_no_machine_specific_paths). It scans what git
+plans/test_presentation_env.py (t_no_machine_specific_paths). It scans what git
 tracks, so generated output (~/.claude/settings.json, .rag-index, state/)
 is out of scope by construction -- clean-rag/install.py deliberately writes
 absolute per-machine paths there and must keep doing so.

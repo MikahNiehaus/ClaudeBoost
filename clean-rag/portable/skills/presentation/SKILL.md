@@ -1,16 +1,26 @@
 ---
-name: powerpoint
-description: WHEN the user asks for a slide deck, a presentation, a PowerPoint, a .pptx, or asks to turn an explanation of any topic into slides; build the deck into the active workspace with python-pptx, render every slide and actually look at it before handing it over, then open it. Also covers narrating a finished deck to an mp4 with per slide voiceover and crossfades. USE whenever a .pptx is an input or an output, whatever the subject matter.
-allowed-tools: Read, Write, Edit, Bash, Glob
+name: presentation
+description: WHEN the user asks for a presentation, a narrated explainer or walkthrough video, a slide deck, a PowerPoint or a .pptx, or asks to turn an explanation of any topic into slides. Builds a narrated explainer mp4 from HTML slides around real proof, with highlights timed to the voice; or a .pptx with python-pptx, rendered and looked at before handing it over. USE whenever a presentation, an explainer video or a .pptx is an input or an output, whatever the subject matter.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
-# powerpoint
+# presentation
 
-Builds a deck on any topic into the active workspace, checks it by rendering it
-and looking at the images, and opens it. Optionally narrates it to an mp4.
+Builds a presentation on any topic into the active workspace, checks it by
+rendering it and looking at the images, and opens it.
 
 Topic agnostic. Nothing here knows or cares what the deck is about; the subject
 comes from the user.
+
+## Two outputs
+
+- **An explainer video** when the point is to explain something to people: how
+  a system works, what a change does, a walkthrough. HTML slides built around
+  real evidence, narrated beat by beat, assembled into an mp4. See "Explainer
+  video" below. This is the default when the user says presentation or video
+  and does not ask for a file format.
+- **A .pptx** when the user asks for PowerPoint, a .pptx, or a deck they will
+  edit or present live. Steps 1 to 5 below.
 
 ## The helper script
 
@@ -18,7 +28,7 @@ Every command below calls one bundled script. It is installed alongside this
 file, so the path is stable:
 
 ```
-${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py
+${HOME}/.claude/skills/presentation/scripts/pptx_env.py
 ```
 
 Use that path verbatim, in braces and inside double quotes, exactly as written
@@ -26,14 +36,14 @@ in each block below. There is no `CLAUDE_SKILL_DIR` environment variable in
 Claude Code; a command written against one resolves to nothing and fails. If
 this skill was installed somewhere other than `~/.claude/skills` (a plugin
 marketplace checkout, for instance), find it once with Glob on
-`**/skills/powerpoint/scripts/pptx_env.py` and substitute that path throughout.
+`**/skills/presentation/scripts/pptx_env.py` and substitute that path throughout.
 
 Run `pptx_env.py --help` for the full command list.
 
 ## Step 1: check the environment
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" doctor
 ```
 
 Prints each dependency, what it is for, the install command if it is missing,
@@ -44,7 +54,7 @@ which step the user loses and carry on rather than stopping.
 ## Step 2: decide where the file goes
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" workspace
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" workspace
 ```
 
 Prints JSON with `workspace_path` and `project_path`. Write the deck to
@@ -107,8 +117,8 @@ overflow are geometric facts about the rendered output; they are not visible in
 the code that produced it.
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" topdf deck.pptx ./render
-"$(python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" pdftoppm)" -png -r 200 ./render/deck.pdf ./render/slide
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" topdf deck.pptx ./render
+"$(python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" pdftoppm)" -png -r 200 ./render/deck.pdf ./render/slide
 ```
 
 The second command asks the helper for poppler's absolute path first, because
@@ -225,7 +235,7 @@ Render to PNG and place the image. Do not rebuild the diagram out of pptx
 shapes.
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" mermaid diagram.mmd out.png 3
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" mermaid diagram.mmd out.png 3
 ```
 
 The third argument is a scale factor, and 3 holds up at projector size. `doctor`
@@ -397,12 +407,104 @@ mp3's duration against the sum of the tracks before moving it.
 ## Step 5: open it
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open deck.pptx
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" open deck.pptx
 ```
 
 `os.startfile` on Windows, `open` on macOS, `xdg-open` elsewhere. Exits
 non-zero instead of raising when the platform has no handler, so a headless
 machine does not take the run down with it.
+
+## Explainer video
+
+Narrated HTML slides at 1920x1080, one still per narration beat, cross faded
+into an mp4. The engine is `scripts/narrate.py`; `example_deck.py` shows every
+building block on two slides.
+
+### What makes an explainer good
+
+These rules come from what viewers rejected in earlier videos and from the
+research on multimedia learning (Mayer, *Multimedia Learning*, 3rd ed., 2021).
+
+- **Show proof, not pictures of ideas.** Every slide shows a real artifact: a
+   tight crop of a real screenshot, the real text of a real page, real command
+   output captured when the deck is built. No charts, no mermaid, no clip art.
+   A diagram is allowed only when the subject has no screen at all.
+- **One point per slide.** The title states it as a plain sentence: "The code
+   decides what shipped", not "Reconciliation".
+- **Highlights land on the spoken word.** Narration is split into beats. Each
+   highlight or outline box carries the number of the beat whose sentence names
+   it, so it appears as the voice gets there (temporal contiguity).
+- **Never put the spoken sentence on screen.** The side panel holds a two to
+   four word label per beat. Text that repeats the narration lowers learning
+   (redundancy).
+- **Cut decoration.** No background art, gradients or animated entrances
+   (coherence).
+- **Write for the ear.** Contractions, short sentences, the words a colleague
+   would say out loud. Open with what the thing is and why anyone cares. End
+   with what to do next, then stop.
+- **Pace.** The engine speaks at about 150 to 165 words a minute. 450 to 640
+   words is about four minutes; a short feature video is 250 to 450.
+- **Every claim has a source**: a file and line, a command's output, a real
+   document. Never round a fact up to sound better.
+- **Privacy.** No real person's details and no secrets in any frame. Crop them
+   out or use covered images.
+
+### Making one
+
+**Gather the real material.** List what the video can show: screenshots that
+exist, the real pages, commands whose output proves a point. Read each in
+full. A point with no artifact gets one or gets cut.
+
+**Write a fact sheet.** Per slide: the title sentence, the artifact, the
+beats, and the source of every fact. Keep it as `facts.md` beside the deck.
+
+**Write the deck file**, a Python file in the workspace. It sets `BRAND`
+(small name top left), optionally `NAME`, `VOICE`, `RATE` and `CSS`, and
+`slides()` returning dicts with `title`, `body` (HTML), `say` (list of
+beats), `labels` (`{beat: "short label"}`), and optionally `kind="title"` and
+`scroll` (`{beat: pixels}` for a tall `.scroll` block). Helpers come from
+`from narrate import ...`: `page` (a markdown section as HTML, images
+resolved), `section`, `mark`, `mark_row`, `crop`, `shot` (a screenshot with
+outline boxes per beat), `terminal` (real command output, lines optionally
+highlighted per beat) and `img`. Layout classes are in `scripts/slide.css`:
+`sheet` (with `tall`, `small`, `index`), `pair` for a before and after, and
+`term`. Run any command the slide shows inside the deck file and assert its
+result, so a slide never shows stale output.
+
+**Render and look.**
+
+```bash
+python "${HOME}/.claude/skills/presentation/scripts/narrate.py" deck.py
+```
+
+It fails if a highlight names a beat that does not exist, writes
+`<name>.script.md` with the narration, renders every beat into
+`<name>-render/` plus a `contact.png` of all of them. Open the contact sheet,
+then every still that could be wrong: unreadable text, a cut off sheet, a
+highlight on the wrong beat, a box off its control. Fix and render again.
+
+**Read the script as speech** and cut what only a writer would write.
+
+**Fact check in a fresh context.** Spawn `quick-cop` or another agent that
+did not write the deck, with the script, the fact sheet and the source
+paths, never your reasoning. Fix what does not hold and render again.
+
+**Narrate.**
+
+```bash
+python "${HOME}/.claude/skills/presentation/scripts/narrate.py" deck.py video
+```
+
+Needs `edge-tts`, `markdown` and `pillow`, ffmpeg, and a Chromium (the same
+resolver as `pptx_env.py browser`; set `CHROME` to override). Each beat is
+synthesised with a 60 second bound, trimmed, given a short lead and pause,
+and the stills cross fade in time with it. It asserts video and audio match
+the narration length before moving the mp4 out of its scratch directory, so
+a failure leaves no partial file.
+
+**Open it** with `pptx_env.py open` and say its length and path.
+
+Slides load their font from Google Fonts. Offline, Chrome falls back to a system font without warning, so render online for a consistent look.
 
 ## Do not
 

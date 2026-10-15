@@ -299,7 +299,7 @@ def test_proof_deck_phase_only_uses_real_pptx_subcommands():
     used = set(re.findall(r'pptx_env\.py" (\w+)', text))
     assert used, "Phase 7 names no pptx_env.py subcommands"
 
-    script = pathlib.Path.home() / ".claude" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    script = pathlib.Path.home() / ".claude" / "skills" / "presentation" / "scripts" / "pptx_env.py"
     if not script.exists():
         return  # skill not installed on this machine; nothing to check against
 

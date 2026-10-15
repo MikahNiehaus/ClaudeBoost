@@ -537,7 +537,7 @@ fallback at 7f.
 **0h-i — Dependency check.**
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" doctor
 ```
 
 `ffmpeg` and `edge-tts` gate this phase. If either is missing: set
@@ -3195,7 +3195,7 @@ there, edge-tts was down for the whole run and the builder already said so.
 ### 7e — Open it
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4"
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4"
 ```
 
 Print:
@@ -3217,7 +3217,7 @@ case fell outside the recording.
 
 Say plainly, first, that there is no video walkthrough for this session and why.
 Then build the still-image deck so the session still hands over something
-inspectable. Call `Skill(skill="powerpoint")` and follow its process. Walk
+inspectable. Call `Skill(skill="presentation")` and follow its process. Walk
 `report.md`'s Evidence Index in `plan.md` order: one slide per test case carrying
 the requirement clause it proves, Expected and Observed from `plan.md`, the
 `TC-NNN-after.png` screenshot placed with `add_picture`, and the real variable

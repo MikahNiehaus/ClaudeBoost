@@ -8,14 +8,14 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 
 A narrated video for a pull request. Two questions only: how is it built, and how do we know it works.
 
-## Build it on the powerpoint skill, do not reimplement
+## Build it on the presentation skill, do not reimplement
 
-`~/.claude/skills/powerpoint/SKILL.md` already knows how to build a deck, render it, look at it, narrate it
+`~/.claude/skills/presentation/SKILL.md` already knows how to build a deck, render it, look at it, narrate it
 and open it. Read it first and use its helper for every environment question:
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" workspace
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" workspace
 ```
 
 This file only adds what is specific to a PR video. Everything about python-pptx behaviour, slide sizing and
@@ -71,7 +71,7 @@ A 2560 px capture placed at 12.1 in needs 212 dpi minimum. Use 288 to be safe, w
 3840 px, then downsample to 1920.
 
 ```bash
-PDFTOPPM="$(python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" pdftoppm)"
+PDFTOPPM="$(python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" pdftoppm)"
 "$PDFTOPPM" -png -r 288 deck.pdf render/slide
 ```
 
@@ -94,7 +94,7 @@ so the words on screen and the words spoken cannot drift.
 Written to be heard, not read. The viewer cannot see a presenter, so each entry has to carry the whole point of
 its slide on its own.
 
-Voice and pacing, plus the crossfade offset maths and the duration assertion, are all in the powerpoint skill.
+Voice and pacing, plus the crossfade offset maths and the duration assertion, are all in the presentation skill.
 Follow it rather than inventing a second pipeline.
 
 ## Verify before handing it over

@@ -83,7 +83,7 @@ summary — name the actual findings.
 **2c. Build the teaching video before you consult.** Every `/start` produces
 one, including the automatic call from `workspace.md` Phase 6.5. It exists so
 the human learns the architecture and the practice rather than only receiving
-code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
+code. Use the `presentation` skill, and narrate it to an mp4 per that skill's
 "Narrating it to an mp4" section. Two sections, in this order:
 
 1. **The questions you are about to ask in step 3**, one slide each, with your
@@ -99,7 +99,7 @@ code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
 
 Every fact in the deck comes from researcher's or swiper's actual report. Do
 not invent a statistic, a benchmark, or a best practice to fill a slide. That
-is the rule the `powerpoint` skill already states about charts, applied to the
+is the rule the `presentation` skill already states about charts, applied to the
 whole deck.
 
 Run `pptx_env.py doctor` first. Narration needs `edge-tts`, ffmpeg and
@@ -122,7 +122,7 @@ the slide, say the mp4 was not produced and why, and hand over the deck.
 Present but stalled has to end where absent already ends, which takes one more
 step than abandoning does on its own: edge-tts and ffmpeg both stream their
 output to disk, so a run killed at any point leaves a real truncated file. The
-`powerpoint` skill therefore runs the whole narration pipeline inside one
+`presentation` skill therefore runs the whole narration pipeline inside one
 scratch directory that goes away on every failure path, and only a finished,
 `ffprobe`-checked mp4 gets moved into the workspace.
 
