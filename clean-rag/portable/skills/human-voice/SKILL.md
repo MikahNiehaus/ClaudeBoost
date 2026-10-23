@@ -14,6 +14,14 @@ also MIT. Local changes: a two-field frontmatter, Node passages replaced with
 manual instructions, measured notes on the bundled scorer, mode-gated reference
 loading, and the corroboration gate in `references/patterns.md`.
 
+## User rules, always on (added 2026-10-21)
+
+These apply to every rewrite, before any other rule in this skill.
+
+- **Fonts match the default.** Use whatever font the medium normally uses, like the email client's default, the doc's body font, or plain text in chat. No custom fonts, font sizes, colors or styled HTML unless asked.
+- **No colons and no dashes in prose.** Rewrite the sentence instead. Allowed only when truly needed, such as a quote, a time like 7:30, a URL, an address, a code sample or a label the reader must copy exactly.
+- **No hyphens in compound words.** Write "follow up", "move out", "two week", "well known", not "follow-up", "move-out". Join or split the words, or reword.
+
 ## What this skill is and isn't
 
 A writing-quality tool, not a verdict. These patterns are commoner in LLM output,

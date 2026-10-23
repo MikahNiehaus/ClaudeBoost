@@ -821,6 +821,13 @@ def _install_all_hooks(settings: dict) -> None:
         "hooks": [{"type": "command", "command": _py_cmd("bash-guard.py")}],
     }, sentinel="bash-guard.py", label="Bash guard (command-type)")
 
+    _install_hook(settings, "UserPromptSubmit", {
+        "hooks": [{"type": "command", "command": _py_cmd("github-write-gate.py")}],
+    }, sentinel="github-write-gate.py", label="GitHub write approval (UserPromptSubmit)")
+    _install_hook(settings, "PreToolUse", {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": _py_cmd("github-write-gate.py")}],
+    }, sentinel="github-write-gate.py", label="GitHub write gate (PreToolUse)")
     # --- PreToolUse: process-kill safety ---
     _install_hook(settings, "PreToolUse", {
         "matcher": "Bash(pkill*)|Bash(killall*)|Bash(*Stop-Process*)|Bash(*taskkill*/IM*)",
@@ -1056,6 +1063,9 @@ _GIT_DENY = [
     "Bash(git clean -fdx **)",
     "Bash(git clean -fxd **)",
     "Bash(git reset --hard HEAD~ **)",
+    # The 3.14 approval; bash-guard covers Bash, these cover the file tools.
+    "Edit(~/.claude/state/github-write-approval.json)",
+    "Write(~/.claude/state/github-write-approval.json)",
 ]
 
 _BASH_CATCHALL = "Bash"

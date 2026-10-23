@@ -841,6 +841,26 @@ discovered, so rule above is what generalizes.
 `SPRING_PROFILES_ACTIVE`. Name it, then verify it from app's own startup
 output rather than from what you intended.
 
+### GitHub writes: state safety and reversibility, then wait for 3.14
+
+Non-dangerous, non-read-only GitHub operations are allowed. Examples: `git add`
+`git commit`plain `git push` (no force), `git remote add` `gh pr create`
+`edit`  `close` `gh issue create`  `close` `gh gist create`  `edit`
+`gh repo create --private`.
+
+Before each one, send two short lines and stop:
+
+1. **Safety**: what it touches and who can see it.
+2. **Reversibility**: how to undo it, or "not reversible".
+
+Then wait. Run it only after human types `3.14` as message. Their original
+request is not approval, `3.14` covers only operations named in
+two lines above it.
+
+Still never run, with or without `3.14`force push, `git reset --hard`
+`git branch -D` `git clean -fdx` `gh pr merge` `gh release` `gh gist delete`
+`gh repo delete`or any push to public repo. Those stay in `deny`.
+
 ### Plain writing (enforced by output style, not by hope)
 Everything you write, chat replies, drafted comments, PR descriptions, docs, is
 plain and short. One idea per sentence. Point first, never built up to. No throat
@@ -959,23 +979,21 @@ bypass it until upstream fixes it.
 
 ## Browser Testing Safety
 
-Playwright and browser automation reach local machines and named test or dev
-environments. Nothing else. Allowed:
+Playwright and browser automation may go to any site task needs. When
+production and dev environment both exist, always default to dev. Use
+production only when user specifically says to use production, in their own
+words, for that task. That approval does not carry to next task.
 
-- localhost, 127.0.0.1, 0.0.0.0, `::1` `*.local` / `*.test`
-- whatever `.claude/browser-targets.local.json` names. That file is gitignored
-  because your environments are nobody else's business,
-  `.claude/browser-targets.example.json` documents shape and rules
-  entry has to satisfy. `scripts/bash-guard.py` reads same file,
-  guard and this rule cannot drift apart. With no file present, only line
-  above is reachable.
+- localhost, 127.0.0.1, 0.0.0.0, `::1` `*.local` / `*.test` are always fine.
+- `.claude/browser-targets.local.json` (gitignored) can still name extra hosts.
+  `scripts/bash-guard.py` reads it for curl, so that check is unchanged.
 
-Production is never in scope, and neither is any host you have not confirmed is
- test or dev environment. hostname is not evidence on its own: `dev` in
-name proves nothing, and shared dev environment can still hold real data.
-lower environment restored from production snapshot is production data with
-friendlier name, so treat every write there as write to shared state and get
-approval first. Read only navigation, hovering, and screenshots are fine.
+hostname is not evidence on its own: `dev` in name proves nothing, and shared
+dev environment can still hold real data. lower environment restored from
+production snapshot is production data with friendlier name, so treat every
+write there as write to shared state and get approval first. When there is no
+dev environment, ask before writing anything; read only navigation, hovering,
+and screenshots are fine.
 
 Two things stay off limits regardless. environment's own control plane
 management dashboard is never something to browse. Corporate identity sign in

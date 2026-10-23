@@ -1426,6 +1426,8 @@ def _shell_words(text: str) -> list[str]:
             run = i
             while i < n and text[i] in _REDIRECT_CHARS:
                 i += 1
+            if text[i - 1] == ">" and text.startswith("|", i):
+                i += 1
             words.append(text[run:i])
             continue
         else:
@@ -1448,6 +1450,14 @@ def _read_substitution(text: str, start: int) -> tuple[str, int]:
                 return text[start:i], i + 1
         i += 1
     return text[start:], n
+
+
+def _escaped(text: str, i: int) -> bool:
+    """Whether text[i] follows an odd run of backslashes, so bash reads it literally."""
+    run = 0
+    while run < i and text[i - run - 1] == "\\":
+        run += 1
+    return run % 2 == 1
 
 
 def _split_segments(text: str, depth: int = 0) -> list[tuple[str, str]]:
@@ -1477,12 +1487,13 @@ def _split_segments(text: str, depth: int = 0) -> list[tuple[str, str]]:
                 quote = None
             i += 1
             continue
-        if quote is None and char == "'":
+        # An escaped quote is literal; treating it as opening one hides what follows.
+        if quote is None and char == "'" and not _escaped(text, i):
             quote = "'"
             current.append(char)
             i += 1
             continue
-        if char == '"':
+        if char == '"' and not _escaped(text, i):
             quote = None if quote == '"' else '"'
             current.append(char)
             i += 1
@@ -1504,7 +1515,10 @@ def _split_segments(text: str, depth: int = 0) -> list[tuple[str, str]]:
             current.append(_SUBSTITUTION_MARK)
             i = end + 1
             continue
-        if quote is None and char in _SEGMENT_OPERATOR_CHARS:
+        # `>|` is a redirect that ignores noclobber, not a pipe (bash(1) REDIRECTION).
+        clobber = (char == "|" and i > 0 and text[i - 1] == ">"
+                   and not _escaped(text, i - 1))
+        if quote is None and char in _SEGMENT_OPERATOR_CHARS and not clobber:
             segments.append((separator, "".join(current)))
             current = []
             run = i
@@ -1613,7 +1627,7 @@ def _without_redirections(words: list[str]) -> list[str]:
         if skip:
             skip = False
             continue
-        if word and set(word) <= set(_REDIRECT_CHARS):
+        if word == ">|" or (word and set(word) <= set(_REDIRECT_CHARS)):
             # The descriptor flushed as its own word just before the operator.
             if kept and kept[-1].isdigit():
                 kept.pop()
@@ -1900,7 +1914,121 @@ def _git_ref_problem(verb: str, args: list[str]) -> str | None:
     return None
 
 
-def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
+SESSION_ID = ""
+_GIT_APPROVED_VERBS = frozenset({"add", "commit", "push", "init"})
+# Exact spellings only: rename the current branch to main, track origin/main.
+_BRANCH_APPROVED_ARGS = (["-M", "main"], ["-m", "main"], ["-u", "origin/main"])
+# Allowlisted because git accepts any unique long option prefix (gitcli(7)).
+_PUSH_SAFE_FLAGS = frozenset({
+    "-u", "--set-upstream", "--tags", "--follow-tags", "-n", "--dry-run",
+    "-v", "--verbose", "-q", "--quiet", "--progress", "--no-progress", "--porcelain",
+})
+_PUSH_REMOTE_RE = re.compile(r"^\w[\w.-]*$")
+# No `+`, no glob, and a source is required: `:dst` deletes dst (git-push(1)).
+_PUSH_REFSPEC_RE = re.compile(r"^\w[\w./@~-]*(?::\w[\w./-]*)?$")
+_GH_APPROVED = frozenset({
+    ("pr", "create"), ("pr", "edit"), ("pr", "close"),
+    ("issue", "create"), ("issue", "close"),
+    ("gist", "create"), ("gist", "edit"), ("repo", "create"),
+})
+_GH_VISIBILITY_FLAGS = frozenset({"--private", "--public", "--internal", "--visibility"})
+# Inside double quotes only these three still expand.
+_UNQUOTED_SHELL_CHARS = frozenset("$`\\<>|&;(){}*?[]\n")
+_DQUOTED_SHELL_CHARS = frozenset("$`\\")
+_APPROVED_WRAPPED = (
+    "This write is approved with 3.14, but only as one plain Bash call spelled "
+    "literally: no chaining, wrapper, quoting of the command name, substitution, "
+    "expansion, glob or redirect. Otherwise the ask rule never fires."
+)
+
+
+def _plain_command(text: str, lead: list[str]) -> bool:
+    """True when `text` is one command starting literally with `lead` and
+    containing nothing the shell would expand, glob, redirect or chain."""
+    quote = None
+    for char in text:
+        if quote == "'":
+            quote = None if char == "'" else quote
+        elif quote == '"':
+            if char == '"':
+                quote = None
+            elif char in _DQUOTED_SHELL_CHARS:
+                return False
+        elif char in "'\"":
+            quote = char
+        elif char in _UNQUOTED_SHELL_CHARS:
+            return False
+    return quote is None and text.split()[:len(lead)] == lead
+
+
+def _command_lead(name: str, words: list[str]) -> list[str]:
+    """`git <verb>`, `git remote add` or `gh <noun> <verb>`, spelled as the
+    ask rules expect it."""
+    positionals = [w.lower() for w in words[1:] if not w.startswith("-")]
+    count = 2 if name == "gh" or positionals[:1] == ["remote"] else 1
+    return [name] + positionals[:count]
+
+
+def _push_args_safe(args: list[str]) -> bool:
+    positionals = [a for a in args if not a.startswith("-")]
+    if any(a.startswith("-") and a not in _PUSH_SAFE_FLAGS for a in args):
+        return False
+    if positionals and not _PUSH_REMOTE_RE.match(positionals[0]):
+        return False
+    return all(_PUSH_REFSPEC_RE.match(r) for r in positionals[1:])
+
+
+def _gh_args_safe(pair: tuple[str, ...], args: list[str]) -> bool:
+    if pair == ("pr", "close"):
+        # pflag also reads -d inside a shorthand cluster such as -dc.
+        return not any(a.split("=", 1)[0] == "--delete-branch"
+                       or (a.startswith("-") and not a.startswith("--") and "d" in a)
+                       for a in args)
+    if pair == ("repo", "create"):
+        visibility = [a for a in args if a.split("=", 1)[0] in _GH_VISIBILITY_FLAGS]
+        return visibility == ["--private"]
+    if pair == ("gist", "create"):
+        # Gists are secret by default; any short cluster holding p may be -p.
+        return not any(a.split("=", 1)[0] == "--public"
+                       or (a.startswith("-") and not a.startswith("--") and "p" in a)
+                       for a in args)
+    return True
+
+
+def _gate_approved() -> bool:
+    """Whether the human typed 3.14 this session, read from github-write-gate.py."""
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "github-write-gate.py")
+    spec = importlib.util.spec_from_file_location("github_write_gate", path)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    return gate._approved(SESSION_ID)
+
+
+def _git_write_approved(verb: str, args: list[str]) -> bool:
+    if verb == "remote":
+        listed = args[:1] == ["add"]
+    elif verb == "branch":
+        listed = args in _BRANCH_APPROVED_ARGS
+    else:
+        listed = verb in _GIT_APPROVED_VERBS
+    if not listed:
+        return False
+    if verb == "push" and not _push_args_safe(args):
+        return False
+    return _gate_approved()
+
+
+def _gh_write_approved(positionals: list[str], args: list[str]) -> bool:
+    pair = tuple(p.lower() for p in positionals[:2])
+    if pair not in _GH_APPROVED or not _gh_args_safe(pair, args):
+        return False
+    return _gate_approved()
+
+
+def _git_verb_problem(verb: str, args: list[str], wrapped: bool,
+                      plain: bool = False) -> str | None:
     """Why this git verb is not a read, or None when it is one."""
     unsafe = [a for a in args if a.split("=", 1)[0] in _GIT_UNSAFE_VERB_FLAGS]
     if unsafe:
@@ -1908,6 +2036,8 @@ def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
             f"`git {verb} {unsafe[0]}` writes a file or runs an external program "
             "chosen by configuration, which is a write however read-only the verb is."
         )
+    if _git_write_approved(verb, args):
+        return None if plain and not wrapped else _APPROVED_WRAPPED
     if verb in _GIT_READ_SUBCOMMANDS:
         return _git_subcommand_problem(verb, args)
     if verb == "config":
@@ -1939,7 +2069,7 @@ _GH_READ_VERBS = frozenset({"view", "list", "diff", "checks", "status", "downloa
 _GH_READ_COMMANDS = frozenset({"status", "version", "search", "help"})
 
 
-def _gh_problem(args: list[str]) -> str | None:
+def _gh_problem(args: list[str], wrapped: bool = True, plain: bool = False) -> str | None:
     """Why this gh invocation is not a read, or None when it is one."""
     positionals = [a for a in args if not a.startswith("-")]
     if not positionals:
@@ -1957,6 +2087,8 @@ def _gh_problem(args: list[str]) -> str | None:
     verb = positionals[1].lower()
     if verb in _GH_READ_VERBS:
         return None
+    if _gh_write_approved(positionals, args):
+        return None if plain and not wrapped else _APPROVED_WRAPPED
     return (
         f"`gh {first} {verb}` is not one of the read-only gh verbs "
         f"({', '.join(sorted(_GH_READ_VERBS))})."
@@ -2038,6 +2170,7 @@ def check_git_gh_verbs(command: str) -> str | None:
                 continue
             name = _binary_name(words[0])
             wrapped = routed or bool(separator.strip("\n")) or _is_wrapped(segment)
+            plain = not routed and _plain_command(text, _command_lead(name, words))
             if name == "git":
                 flag_problem, verb_index = _git_global_flag_problem(words[1:])
                 if flag_problem:
@@ -2045,11 +2178,11 @@ def check_git_gh_verbs(command: str) -> str | None:
                 verb_args = words[1 + verb_index:]
                 if not verb_args:
                     continue
-                problem = _git_verb_problem(verb_args[0].lower(), verb_args[1:], wrapped)
+                problem = _git_verb_problem(verb_args[0].lower(), verb_args[1:], wrapped, plain)
                 if problem:
                     return _refuse(segment, problem)
             elif name == "gh":
-                problem = _gh_problem(words[1:])
+                problem = _gh_problem(words[1:], wrapped, plain)
                 if problem:
                     return _refuse(segment, problem)
     return None
@@ -2183,6 +2316,10 @@ _PROTECTED_PATH_RES = (
                r"|hooks(?:/|$)|agents(?:/|$))"),
     # The research and verifier gates.
     re.compile(r"(?:^|/)clean-rag/hooks(?:/|$)"),
+    # The 3.14 approval; writing it would let the model approve itself.
+    re.compile(r"(?:^|/)github-write-approval\.json$"),
+    # Its whole directory, so a copy into it cannot land the name by glob.
+    re.compile(r"(?:^|/)\.claude/state(?:/|$)"),
     # A relative path has no root to check, so scripts/ and its tests are
     # treated as this project's until proven otherwise. Refusing more is the
     # safe direction for a path whose base is unknown.
@@ -2420,6 +2557,8 @@ _PROTECTED_GLOBS = (
     *_at_any_depth(".claude/agents/**"),
     *_at_any_depth("clean-rag/hooks"),
     *_at_any_depth("clean-rag/hooks/**"),
+    *_at_any_depth(".claude/state"),
+    *_at_any_depth(".claude/state/**"),
     # scripts/ is anchored at the start of a relative path, the same way its
     # regex is, so `rm build/*` is not read as reaching some other scripts dir.
     "scripts", "scripts/**", "./scripts", "./scripts/**",
@@ -2526,15 +2665,38 @@ _SED_WRITE_RE = re.compile(
     _SED_ADDRESS + r"(?:[wW][ \t]|" + _SED_SUBSTITUTION + r"[wW])")
 
 
-def _target_directories(words: list[str]) -> list[str]:
-    """Destinations named by a flag rather than by the last operand."""
+# Downloaders write where a flag says, never to an operand. curl(1) -o,
+# --output, --output-dir; wget(1) -O, --output-document, -P, --directory-prefix.
+_OUTPUT_FLAGS = {
+    "curl": ("-o", "--output", "--output-dir"),
+    "wget": ("-O", "--output-document", "-P", "--directory-prefix"),
+}
+
+
+def _target_directories(words: list[str],
+                        flags: tuple[str, ...] = _TARGET_DIRECTORY_FLAGS,
+                        clustered: bool = False) -> list[str]:
+    """Destinations named by a flag rather than by the last operand.
+
+    Clusters are read only when asked: rsync's `-t` is --times, not a target.
+    """
+    letters = [f[1] for f in flags if len(f) == 2] if clustered else []
     directories = []
     for index, word in enumerate(words[1:], start=1):
-        if word.startswith("--target-directory="):
-            directories.append(word.split("=", 1)[1])
-        elif word in _TARGET_DIRECTORY_FLAGS and index + 1 < len(words):
-            directories.append(words[index + 1])
-    return directories
+        name, equals, value = word.partition("=")
+        following = words[index + 1] if index + 1 < len(words) else None
+        if equals and name in flags and name.startswith("--"):
+            directories.append(value)
+        elif word in flags:
+            if following is not None:
+                directories.append(following)
+        elif word.startswith("-") and not word.startswith("--"):
+            # A short flag inside a cluster: `-sSo out`, `-oout`.
+            cut = min((word.find(l, 1) for l in letters if l in word[1:]), default=-1)
+            if cut != -1:
+                rest = word[cut + 1:]
+                directories.append(rest if rest else following or "")
+    return [d for d in directories if d]
 
 
 def _written_operands(words: list[str]) -> list[str]:
@@ -2561,6 +2723,9 @@ def _written_operands(words: list[str]) -> list[str]:
     if name in _DESTINATION_ONLY_COMMANDS:
         return operands[-1:] + _target_directories(words)
 
+    if name in _OUTPUT_FLAGS:
+        return _target_directories(words, _OUTPUT_FLAGS[name], clustered=True)
+
     return operands if name in _WRITER_COMMANDS else []
 
 
@@ -2573,11 +2738,16 @@ def _path_candidates(word: str) -> list[str]:
     whole word missed all three. A brace expression is one word here and
     several by the time the command runs, so each of those is a path too.
     """
-    normalized = word.strip("\"'").replace("\\", "/").lower()
+    stripped = word.strip("\"'").lower()
+    normalized = stripped.replace("\\", "/")
     if not normalized:
         return []
+    # Git Bash reads `approva\l` as an escaped `l`, not a Windows separator.
+    spellings = [normalized]
+    if "\\" in stripped:
+        spellings.append(stripped.replace("\\", ""))
     candidates = []
-    for spelling in _brace_expand(normalized):
+    for spelling in (s for each in spellings for s in _brace_expand(each)):
         candidates.append(spelling)
         if "=" in spelling:
             candidates.append(spelling.split("=", 1)[1])
@@ -2694,6 +2864,8 @@ def _operands_to_skip(segment: str) -> int:
 
 _REDIRECT_WORDS = frozenset({">", ">>", ">|", ">&", "&>", "&>>"})
 _SOURCE_PATH_RE = re.compile(r"[\w.:/\\@+-]+")
+# Glue between adjacent string literals. A name split by a variable stays hidden.
+_LITERAL_GLUE_RE = re.compile(r"""['"]\s*(?:\+|\.\.?)?\s*['"]""")
 
 # A parameter expansion, read against bash's own grammar rather than against a
 # list of spellings seen so far, because the list is what keeps coming up one
@@ -2985,7 +3157,8 @@ def check_protected_paths(command: str) -> str | None:
     command whose arguments are files it modifies, and an interpreter payload
     naming the path directly.
     """
-    lowered = command.lower()
+    # Quotes and escapes come off first, as the shell removes them: `appro''val`.
+    lowered = re.sub(r"[\\'\"]", "", _LITERAL_GLUE_RE.sub("", command.lower()))
     # `$` and a backtick are in the prefilter because an expansion can produce a
     # protected path out of a command that names none of the other tokens:
     # `cp payload.py $(cat target.txt)` mentions nothing at all, and
@@ -2995,13 +3168,15 @@ def check_protected_paths(command: str) -> str | None:
     # none of them.
     if not any(token in lowered for token in
                (".env", "scripts", "hooks", "settings", "bash-guard",
-                ".claude", "$", "`", "*", "?", "[", "{")):
+                ".claude", "github-write-approval",
+                "$", "`", "*", "?", "[", "{")):
         return None
 
     bindings: dict[str, list[str]] = {}
     for text, _routed, kind in _scannable_texts(command):
         if kind == "interpreter":
-            words = _SOURCE_PATH_RE.findall(text)
+            joined = _LITERAL_GLUE_RE.sub("", text)
+            words = _SOURCE_PATH_RE.findall(text) + _SOURCE_PATH_RE.findall(joined)
             problem = _env_read_problem(words)
             if problem:
                 return problem
@@ -3271,6 +3446,8 @@ def main() -> int:
     if not command:
         return 0
 
+    global SESSION_ID
+    SESSION_ID = payload.get("session_id", "") if isinstance(payload, dict) else ""
     message = evaluate(command)
     if message:
         print(message, file=sys.stderr)

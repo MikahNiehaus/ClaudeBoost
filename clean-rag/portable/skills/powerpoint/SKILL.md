@@ -1,6 +1,6 @@
 ---
 name: powerpoint
-description: WHEN the user asks for a slide deck, a presentation, a PowerPoint, a .pptx, or asks to turn an explanation of any topic into slides; build the deck into the active workspace with python-pptx, render every slide and actually look at it before handing it over, then open it. Also covers narrating a finished deck to an mp4 with per slide voiceover and crossfades. USE whenever a .pptx is an input or an output, whatever the subject matter.
+description: WHEN the user asks for a slide deck, a presentation, a PowerPoint, a .pptx, or asks to turn an explanation of any topic into slides; build the deck into the active workspace with python-pptx, render every slide and actually look at it before handing it over, then open it. Also covers narrating a finished deck to an mp4 with per slide voiceover and crossfades, and building animated explainer videos where worked examples play out on screen in time with the narration. USE whenever a .pptx is an input or an output, whatever the subject matter.
 allowed-tools: Read, Write, Edit, Bash, Glob
 ---
 
@@ -393,6 +393,74 @@ one that was checked.
 For audio only, skip the video work and concatenate the narration to an mp3
 with a chapter marker per slide. Same scratch directory, same gate: check the
 mp3's duration against the sum of the tracks before moving it.
+
+## Animated explainer videos
+
+Use this when the user wants the presentation to SHOW the idea working, not list it:
+a query scoring documents, a packet moving through stages, a graph being walked,
+code typing in, a chat exchange, bars growing. The `video/` folder beside this
+file is a Remotion project that does it. The audio is the master clock. The
+video is silent H.264 1080p30 with word highlighted captions, and every scene
+starts on the word where its subject is spoken.
+
+Needs Node 18 or newer, Python 3.10 or newer, `ffmpeg` and `ffprobe` on PATH, and
+`pip install faster-whisper numpy`. Check each one and say plainly which is
+missing instead of skipping a step.
+
+### The pipeline
+
+Copy `${HOME}/.claude/skills/powerpoint/video/` into the workspace first and
+work in the copy, then run `npm install` there once. Folders it expects:
+`audio/<name>.mp3`, `scripts/<name>.md` (spoken text after a `# Script` line,
+paragraphs split by blank lines), `storyboards/`, `align/`, `map/`, `out/`.
+
+1. Write the narration script. Voice it to `audio/<name>.mp3` with whatever TTS
+   the user has. Write numbers the way they are spoken. A card may still show
+   digits: `validate.py` accepts `10` on a card when the script says `ten` or
+   `10`. Spell out a number the way `map.py` does (`two thousand twenty six`,
+   not `twenty twenty six`), or the check will not find it.
+2. `python align.py audio/<name>.mp3 align/<name>.json` gets word times from
+   faster-whisper.
+3. `python map.py <name>` maps those times onto the script words and paragraphs.
+4. `python outline.py <name>` prints every spoken paragraph with a word index
+   marker every five words. Read `STORYBOARD_BRIEF.md` in full, then write
+   `storyboards/<name>.json` from the outline.
+5. `python validate.py <name>` until it prints OK. It checks scene kinds,
+   field presence and shape (types, index ranges, score 0 to 1), at least four
+   worked examples, timing order, cue order, scene length (2 to 45 seconds),
+   banned punctuation, card text length, items of at most seven words, code
+   scenes of at most 8 lines of 60 characters, and that every number on a card
+   is spoken.
+6. `python render.py <name>`. A full render takes minutes and the shell may time
+   out, so launch it detached and poll its log.
+7. `python finalize.py --mux` remuxes with faststart, adds the narration, and
+   gates the result: video stream duration within one frame plus 0.05 seconds
+   of the audio, `moov` before
+   `mdat`, keyframe gap at most one second, size at most 150 MB. Final files land
+   in `final/`. It exits non zero if any talk failed or nothing was found.
+
+### What makes it good
+
+- Fifteen scene kinds. Plain ones: `title`, `bullets`, `flow`, `compare`, `stat`,
+  `steps`, `term`, `graph`, `quote`. Worked examples: `search`, `walk`, `trace`,
+  `code`, `chat`, `bars`. The brief lists every field.
+- At least four worked example scenes per video, placed where the narration
+  explains a mechanism. Sample values inside them are illustration, so make them
+  plausible and never present them as a real benchmark.
+- A new scene every 8 to 25 seconds. `cues` time each list item to the word that
+  names it.
+- Never put a number, name or claim on a card that the narration does not say.
+- Look at frames before handing it over. Render a short range with
+  `python render.py <name> --frames 450-451 --out chk.mp4`, pull a PNG with
+  `ffmpeg -y -i out/chk.mp4 -frames:v 1 out/chk.png`, and read it. Check the
+  three scenes with the most text.
+- Do not open the finished video for the user unless they ask.
+
+The Remotion code in `video/src/` (`theme.ts` for palette, `scenes.tsx` and
+`demos.tsx` for scene kinds) is meant to be edited. Restyle `theme.ts` to match
+the user's brand. A new scene kind needs four edits: the component, its entry in `MAP` in
+`scenes.tsx`, its item count in `Episode.tsx` (so cues spread evenly), and its
+field list in `KINDS` in `validate.py`, plus `types.ts` if it adds fields.
 
 ## Step 5: open it
 

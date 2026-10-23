@@ -1,6 +1,6 @@
 ---
 name: start
-description: Kick off a new build or feature the deliberate way. Spawns researcher first (codebase structure plus real engineering standards), then swiper informed by that (what can be swiped, never written by swiper itself), then builds a narrated teaching video of the open questions and the architecture, then consults the user with real options before any code gets written.
+description: Kick off a new build or feature the deliberate way. Spawns researcher first (codebase structure plus real engineering standards), then swiper informed by that (what can be swiped, never written by swiper itself), then, only when invoked with --mp4, builds a narrated teaching video of the open questions and the architecture, then consults the user with real options before any code gets written.
 ---
 
 # /start
@@ -19,6 +19,11 @@ one-off spawn, not to turn this into a dumb pipe.
 
 `$ARGUMENTS` is the task. If it's empty, use whatever the user was just
 describing, and say what you took it to mean.
+
+**`--mp4` flag.** If `$ARGUMENTS` contains `--mp4`, strip it from the task and
+build the teaching video in step 2c. Without it, skip 2c entirely: no deck, no
+narration, no `doctor` run. Go from the 2b summary straight to the consult in
+step 3. Do not offer or ask about the video; the flag is the only switch.
 
 Researcher and swiper both still run in full for a genuine new build or
 feature; that's the same "no cheap triage tier" rule swiper already follows,
@@ -80,8 +85,8 @@ is skipped reasoning, not CONSULT. The summary is how you prove you read both
 reports before forming the options. "Based on research findings" is not a
 summary — name the actual findings.
 
-**2c. Build the teaching video before you consult.** Every `/start` produces
-one, including the automatic call from `workspace.md` Phase 6.5. It exists so
+**2c. Build the teaching video before you consult. Only with `--mp4`.** Without
+the flag, skip this whole step. With it, it exists so
 the human learns the architecture and the practice rather than only receiving
 code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
 "Narrating it to an mp4" section. Two sections, in this order:
