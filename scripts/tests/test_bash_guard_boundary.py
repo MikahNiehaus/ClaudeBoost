@@ -223,35 +223,86 @@ class TestGitVerbGate:
         # The four the 820-entry deny list still missed.
         "git commit-graph write",
         "git multi-pack-index write",
-        "git maintenance run",
         "git credential approve",
         "git credential reject",
         # Plumbing that stages or writes objects.
-        "git update-index --add x.py",
         "git hash-object -w x.py",
         "git write-tree",
-        "git symbolic-ref HEAD refs/heads/x",
-        # Refs created by a bare positional, which no literal rule can tell
-        # apart from the listing form.
-        "git branch newbranch",
-        "git tag v1.0",
-        "git branch -D old",
-        "git branch -f main HEAD~1",
-        # Config written with no scope flag at all.
+        # These run an arbitrary command that gets no prompt of its own.
+        "git submodule foreach 'echo x'",
+        "git bisect run make test",
+        'git rebase -x "git push" main',
+        # git accepts unique long prefixes, stuck values and grouped shorts.
+        "git rebase -x'git push' HEAD~1",
+        "git rebase -qx 'git push' HEAD~1",
+        "git rebase --ex 'git push' HEAD~1",
+        "git rebase --exe='git push' HEAD~1",
+        "git clone -u 'sh -c x' ./a b",
+        "git clone --upload-p x a b",
+        "git pull --upload-p x",
+        "git fetch --upload x a",
+        "git ls-remote --upload x a",
+        "git ls-remote --upl x a",
+        "git ls-remote --u x a",
+        "git ls-remote --exec=x a",
+        "git push --receive-pack=x origin",
+        "git push --rec x origin",
+        "git push --exe=x origin",
+        "git grep -iO x",
+        # Config names programs that a later read runs, such as core.fsmonitor.
         'git config user.email "x@y.z"',
         "git config --global core.editor vim",
-        # Mixed verbs, write side.
-        "git stash",
-        "git stash push -m wip",
-        "git submodule foreach 'echo x'",
-        "git remote add origin https://example.com/x.git",
-        "git reflog expire --all",
-        "git worktree add ../wt",
+        "git config core.fsmonitor 'git push'",
+        "git clone -c core.fsmonitor=x a b",
+        "git clone --config=core.fsmonitor=x a b",
+        "git clone --template=t a b",
         # A user alias resolves to anything, so an unknown verb is not safe.
         "git co main",
         "git please-just-do-it",
     ])
     def test_a_git_write_is_blocked(self, command):
+        block(command)
+
+    @pytest.mark.parametrize("command", [
+        "git maintenance run",
+        "git update-index --add x.py",
+        "git symbolic-ref HEAD refs/heads/x",
+        "git branch newbranch",
+        "git tag v1.0",
+        "git branch -D old",
+        "git branch -f main HEAD~1",
+        "git stash",
+        "git stash push -m wip",
+        "git remote add origin https://example.com/x.git",
+        "git reflog expire --all",
+        "git worktree add ../wt",
+        "git switch -c feature",
+        "git commit -am x",
+        "git rebase -i HEAD~2",
+        "git clone -q --depth 1 https://example.com/x.git",
+        "git cherry-pick -x abc123",
+        "git push",
+        "git push origin main",
+        "git push -u origin feature",
+        'git -C "/some/repo" push origin feature',
+        "git -C ../repo push --force-with-lease origin feature",
+    ])
+    def test_a_git_write_reaches_its_prompt(self, command):
+        allow(command)
+
+    @pytest.mark.parametrize("command", [
+        "echo hi && git commit -am x",
+        "/usr/bin/git stash",
+        "bash -c 'git switch main'",
+        "echo hi && git push",
+        "bash -c 'git push'",
+        "sh -c 'git push origin main'",
+        "xargs git push",
+        "/usr/bin/git push",
+        "git -c user.name=x push",
+        "timeout 30 git push origin main",
+    ])
+    def test_a_git_write_behind_a_wrapper_is_blocked(self, command):
         block(command)
 
     @pytest.mark.parametrize("command", [
@@ -380,9 +431,20 @@ class TestGitVerbGate:
 
     def test_stripping_a_redirect_does_not_hide_a_real_ref_write(self):
         """The strip removes the operator and its target, never an operand."""
-        block("git branch newthing")
-        block("git branch newthing 2>/dev/null")
-        block("git tag v1.0.0 2>/dev/null")
+        block("git config user.name newthing")
+        block("git config user.name newthing 2>/dev/null")
+        block("git config --add user.name newthing 2>/dev/null")
+
+    def test_a_push_verdict_ignores_the_transcript_and_the_caller(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                          "message": {"role": "user", "content": "3.14"}}),
+                              encoding="utf-8")
+        for extra in ({}, {"transcript_path": str(transcript)},
+                      {"transcript_path": str(tmp_path / "missing.jsonl"), "agent_id": "a"}):
+            for command, code in (("git push origin main", 0), ("xargs git push", 2)):
+                payload = {**_bash(command), **extra}
+                assert run_hook("bash-guard.py", payload).returncode == code, (command, extra)
 
 
 class TestGhVerbGate:
@@ -686,7 +748,7 @@ class TestFailSafe:
         off the whole boundary is not a boundary."""
         for value in ("off", "0", "false", "disabled", "no", "OFF"):
             result = run_hook(
-                "bash-guard.py", _bash("git commit -am x"),
+                "bash-guard.py", _bash("git config user.name x"),
                 env_overrides={"CLAUDEBOOST_BASH_GUARD": value})
             assert result.returncode == 2, (
                 f"CLAUDEBOOST_BASH_GUARD={value!r} must not disable the verb gate")

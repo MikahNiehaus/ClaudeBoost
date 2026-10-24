@@ -13,7 +13,7 @@ Arguments: $ARGUMENTS
 
 ## Template Structure
 
-The team Confluence handoff template (from https://upstreamimpact.atlassian.net/wiki/spaces/UI/pages/1268318209) has these sections:
+The team Confluence handoff template has these sections:
 
 ```
 Ticket Handoff: [Ticket ID]: [Ticket Title]
@@ -111,7 +111,7 @@ If `$ARGUMENTS` contains pasted Jira content:
 
 Use everything gathered to fill out the template. Rules:
 - Date is always today (use current date from context)
-- "Handoff from" is always Mikah Niehaus
+- "Handoff from" is the git user from `git config user.name`
 - "Branch" comes from `git branch --show-current`
 - "Key files changed" lists only files specific to THIS ticket's work — never include .gitignore
 - Status at a Glance: one honest paragraph — what works, what doesn't, what's still pending
@@ -213,7 +213,7 @@ Note: Always use the Write tool for both files and the `-File` flag for executio
 
 Tell the user:
 - The handoff doc is ready and copied to clipboard
-- Paste it directly into the Confluence page at https://upstreamimpact.atlassian.net/wiki/spaces/UI/pages/1268318209
+- Paste it directly into the team Confluence handoff page
 - Note any sections they should manually fill in (e.g. Acceptance Criteria if not obvious from context)
 
 

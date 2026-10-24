@@ -1690,11 +1690,20 @@ _GIT_READ_VERBS = frozenset({
     "verify-tag", "version", "whatchanged",
 })
 
-# Recorded decision, not an oversight: `git fetch` stays a prompt rather than a
-# block. It writes only remote-tracking refs and ran 47 times in the
-# transcripts. It is allowed only unwrapped, because a wrapped fetch is exactly
-# the shape that skips the prompt this decision relies on.
-_GIT_PROMPT_VERBS = frozenset({"fetch"})
+# Writes get a prompt, unwrapped only. lfs, aliases and config stay blocked because they can run anything.
+_GIT_PROMPT_VERBS = frozenset({
+    "add", "am", "apply", "bisect", "branch", "checkout", "cherry-pick",
+    "clean", "clone", "commit", "fetch", "gc", "init",
+    "maintenance", "merge", "mv", "notes", "prune", "pull", "push", "rebase",
+    "reflog", "remote", "rerere", "reset", "restore", "revert", "rm",
+    "sparse-checkout", "stash", "submodule", "switch", "symbolic-ref", "tag",
+    "update-index", "update-ref", "worktree",
+})
+
+_GIT_PROMPT_RUNS_COMMAND = {
+    "bisect": frozenset({"run"}),
+    "submodule": frozenset({"foreach"}),
+}
 
 # Verbs that are part read and part write. The empty string means the bare verb
 # with no subcommand: `git remote` lists, `git reflog` shows, `git submodule`
@@ -1747,6 +1756,13 @@ _GIT_UNSAFE_VERB_FLAGS = frozenset({
     "--output", "--open-files-in-pager", "--upload-pack", "--receive-pack",
     "--exec", "--ext-diff",
 })
+
+# Per verb, because `-u` and `-x` are harmless elsewhere. clone can set fsmonitor or a hook.
+_GIT_UNSAFE_FLAGS_BY_VERB = {
+    "clone": (frozenset({"--config", "--template"}), "cu"),
+    "grep": (frozenset(), "O"),
+    "rebase": (frozenset(), "x"),
+}
 
 _GIT_BRANCH_WRITE_FLAGS = frozenset({
     "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "-t",
@@ -1900,14 +1916,49 @@ def _git_ref_problem(verb: str, args: list[str]) -> str | None:
     return None
 
 
+def _unsafe_git_flag(verb: str, args: list[str]) -> str | None:
+    """The first unsafe flag in any spelling gitcli(7) accepts: a unique long
+    prefix (`--ex`), a stuck value (`-xcmd`) or a grouped short (`-qx`)."""
+    extra_long, short_letters = _GIT_UNSAFE_FLAGS_BY_VERB.get(verb, (frozenset(), ""))
+    long_flags = _GIT_UNSAFE_VERB_FLAGS | extra_long
+    for word in args:
+        if word.startswith("--"):
+            name = word.split("=", 1)[0]
+            if len(name) > 2 and any(flag.startswith(name) for flag in long_flags):
+                return word
+        elif word.startswith("-") and any(c in short_letters for c in word[1:]):
+            return word
+    return None
+
+
 def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
-    """Why this git verb is not a read, or None when it is one."""
-    unsafe = [a for a in args if a.split("=", 1)[0] in _GIT_UNSAFE_VERB_FLAGS]
+    """Why this git command may not run, or None when it is a read or a write
+    that will get its permission prompt."""
+    unsafe = _unsafe_git_flag(verb, args)
     if unsafe:
         return (
-            f"`git {verb} {unsafe[0]}` writes a file or runs an external program "
-            "chosen by configuration, which is a write however read-only the verb is."
+            f"`git {verb} {unsafe}` writes a file or runs an external program, "
+            "which is a write however read-only the verb is."
         )
+    problem = _git_read_problem(verb, args)
+    if problem is None or verb not in _GIT_PROMPT_VERBS:
+        return problem
+    subs = _positional_args(args, _GIT_REF_VALUE_FLAGS)
+    sub = subs[0].lower() if subs else ""
+    if sub in _GIT_PROMPT_RUNS_COMMAND.get(verb, ()):
+        return (f"`git {verb} {sub}` runs an arbitrary command that gets no "
+                "permission prompt of its own.")
+    if wrapped:
+        return (
+            f"`git {verb}` is allowed to reach its permission prompt, but only "
+            "when it is the command being run. Behind a wrapper the prompt "
+            "never fires, because permission rules match the raw command by prefix."
+        )
+    return None
+
+
+def _git_read_problem(verb: str, args: list[str]) -> str | None:
+    """Why this git verb is not a read, or None when it is one."""
     if verb in _GIT_READ_SUBCOMMANDS:
         return _git_subcommand_problem(verb, args)
     if verb == "config":
@@ -1915,17 +1966,9 @@ def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
     if verb in ("branch", "tag"):
         return _git_ref_problem(verb, args)
     if verb in _GIT_READ_VERBS:
-        if verb == "grep" and any(a.startswith("-O") for a in args):
-            return "`git grep -O` runs the pager as a command."
         return None
     if verb in _GIT_PROMPT_VERBS:
-        if wrapped:
-            return (
-                f"`git {verb}` is allowed to reach its permission prompt, but only "
-                "when it is the command being run. Behind a wrapper the prompt "
-                "never fires, because permission rules match the raw command by prefix."
-            )
-        return None
+        return f"`git {verb}` writes locally."
     return (
         f"`git {verb}` is not on the read-only allowlist. Git has around 150 "
         "commands and a user alias resolves to any of them, so this guard lists "
@@ -2014,13 +2057,26 @@ def _scannable_texts(command: str) -> list[tuple[str, bool, str]]:
     return texts
 
 
+# Allow-listed because any other spelling misses the ask rule's prefix.
+_GIT_ASK_RULE_RE = re.compile(
+    r"git(?: -C (?:\"[^\"]*\"|'[^']*'|[^\s\"']+))? ([a-z][a-z-]*)(?=\s|$)")
+
+
+def _matches_git_ask_rule(segment: str, verb: str) -> bool:
+    """True when the raw segment starts `git <verb>` or `git -C <path> <verb>`,
+    the only spellings the git ask rules match by prefix."""
+    match = _GIT_ASK_RULE_RE.match(segment.lstrip())
+    return bool(match) and match.group(1) == verb
+
+
 def check_git_gh_verbs(command: str) -> str | None:
     """Block any git or gh invocation that is not a read.
 
     This is the requirement stated as a property rather than as a list: a git
     command that writes the index, working tree, refs, a remote, config, the
-    stash, the object store or the credential store must be unable to run, so
-    it is handed to the human instead. Read-only git keeps working silently.
+    stash, the object store or the credential store runs only in a spelling the
+    ask rules match, so the permission prompt fires. A gh write is blocked.
+    Read-only git keeps working silently.
     """
     lowered = command.lower()
     if "git" not in lowered and "gh" not in lowered:
@@ -2045,7 +2101,9 @@ def check_git_gh_verbs(command: str) -> str | None:
                 verb_args = words[1 + verb_index:]
                 if not verb_args:
                     continue
-                problem = _git_verb_problem(verb_args[0].lower(), verb_args[1:], wrapped)
+                verb = verb_args[0].lower()
+                wrapped = wrapped or not _matches_git_ask_rule(segment, verb)
+                problem = _git_verb_problem(verb, verb_args[1:], wrapped)
                 if problem:
                     return _refuse(segment, problem)
             elif name == "gh":
@@ -2155,8 +2213,9 @@ def check_argument_feeder(command: str) -> str | None:
 def _refuse(what: str, why: str) -> str:
     return (
         f"BLOCKED: {why} Found in: {what.strip()[:120]!r}. "
-        "Read-only git and gh run with no prompt; a write is handed to the human "
-        "instead. Put the command on the clipboard for them, or ask them to run it."
+        "Read-only git and gh run with no prompt. A git write (switch, stash, "
+        "commit, push and the like) runs as its own plain command and gets the "
+        "normal permission prompt. A gh write is the human's to run."
     )
 
 

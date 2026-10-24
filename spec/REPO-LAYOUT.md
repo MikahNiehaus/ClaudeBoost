@@ -22,11 +22,11 @@ changes case:
 |---|---|---|
 | `scripts/*.py` | `~/.claude/settings.json` hook commands, written as `"$CLAUDEBOOST_HOME/scripts/<name>.py"` (`scripts/setup.py:406`) | Every hook firing that script errors until the user re-runs `scripts/setup.py` |
 | `clean-rag/hooks/*.py` | Same mechanism, `base_dir="clean-rag/hooks"` (`scripts/setup.py:774`) | Same |
-| `.claude/commands/` | `~/.claude/commands` is a symlink to this directory (confirmed on disk: `commands -> /c/Development/ClaudeBoost/.claude/commands/`) | Every slash command in every project disappears the moment the directory is renamed. No re-install is needed to break it, and none to notice |
+| `.claude/commands/` | `~/.claude/commands` is a symlink to this directory (confirmed on disk: `commands -> <clone>/.claude/commands/`) | Every slash command in every project disappears the moment the directory is renamed. No re-install is needed to break it, and none to notice |
 | `clean-rag/portable/` | `clean-rag/install.py::install_user_assets()` copies agents and skills from here into `~/.claude/agents/` and `~/.claude/skills/`. `scripts/setup.py::install_clean_rag()` runs that installer as a subprocess, so setup.py is the entry point but not the copier | The next install copies nothing, or copies a stale tree. The current session keeps working, so the breakage stays invisible until someone else installs |
 
 The repo root itself may move. `~/.claude/claudeboost-home.txt` holds
-`C:/Development/ClaudeBoost` and `$CLAUDEBOOST_HOME` resolves from the setup
+the clone path and `$CLAUDEBOOST_HOME` resolves from the setup
 script's own location, so relocating the clone and re-running setup is
 supported. Moving a file within the clone is what is not.
 

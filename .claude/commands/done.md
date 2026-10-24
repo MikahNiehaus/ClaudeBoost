@@ -13,8 +13,7 @@ Arguments: $ARGUMENTS
 **This command never runs a git command that writes.** Staging, committing and
 pushing are the user's to run. Every write command in this file is put on the
 clipboard and described, not executed. `git add`, `git commit` and `git push`
-are denied by the permission config, so attempting one fails rather than
-prompting.
+would only reach a permission prompt, so this command hands them over instead.
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 

@@ -59,7 +59,7 @@ def _stderr_of(result) -> str:
 # expect returncode 0 when its vehicle is `git commit -m "..."`. The bite is
 # unchanged: the refusal must come from the verb gate and not from the check
 # under test, so a curl or backslash false positive still fails the assertion.
-_VERB_GATE_REFUSAL = "read-only allowlist"
+_VERB_GATE_REFUSAL = "Read-only git and gh run with no prompt"
 
 
 def allow_except_git_write(command: str):
@@ -147,21 +147,22 @@ class TestRoutedWritesAreBlocked:
 # ALLOW: a direct write must reach the ask rule, not this hook
 # ===========================================================================
 
-class TestDirectWritesAreRefusedByTheVerbGate:
+class TestDirectWrites:
     @pytest.mark.parametrize("command", [
         'git push origin main',
         'git push --force origin main',
         'git -C "/repo/with a space" push origin main',
+    ])
+    def test_direct_git_push_reaches_its_prompt(self, command):
+        """Permission rules judge the unwrapped form by prefix, so the guard
+        steps aside and leaves the push to the ask and deny rules."""
+        allow(command)
+
+    @pytest.mark.parametrize("command", [
         'gh pr create --title x',
         'gh api /repos/x/y',
     ])
-    def test_direct_write_is_refused(self, command):
-        """These used to pass through so the permission prompt could fire.
-
-        They no longer do. A prompt is an approval the session can give itself,
-        and the requirement is that a git or gh write cannot run at all and is
-        handed to the human instead. check_routed_git_write still leaves a
-        direct write alone; the verb gate behind it is what refuses this."""
+    def test_direct_gh_write_is_refused(self, command):
         block(command)
 
 

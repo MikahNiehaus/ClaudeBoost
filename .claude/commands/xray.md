@@ -1,5 +1,5 @@
 ---
-description: Code X-ray — quick A-F grade by default; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator; add --fix to auto-fix all findings
+description: Code X-ray — quick A-F grade by default, checked by an Opus validator; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator; add --fix to auto-fix all findings
 allowed-tools: Read, Write, Bash, Glob, Grep, Agent, Edit
 argument-hint: [--staged | --branch | --pr <url>] [--deep] [--fix]
 ---
@@ -235,8 +235,9 @@ Verdict: FAIL
 
 ## Evidence Verification
 
-Spawn a single `quick-cop`. Its job is to disprove the findings, not to
-confirm them. Hand it the findings and the diff. Never hand it your reasoning
+Spawn a single `quick-cop` with `model: "opus"`, even with no findings,
+because a quick review still gets an Opus validator. Its job is to disprove
+the findings, not to confirm them. Hand it the findings and the diff. Never hand it your reasoning
 for why a finding is real, since that reasoning is what talks a reviewer into
 agreeing with you.
 
@@ -247,10 +248,12 @@ clause, a role check, or dead code that blocks the path first, (3) say whether
 the stated severity survives. Report each one as CONFIRMED, REFUTED, or
 CONFIRMED BUT NARROWER with the precondition named. Give me the strongest
 argument against each finding that you found. If a trigger needs specific
-steps, spell out the exact sequence. Under 600 tokens."
+steps, spell out the exact sequence. Then read the diff once for a CRITICAL or
+MAJOR the review missed, and report any with file:line. Under 600 tokens."
 
 Apply what comes back before you print the grade. NARROWER lowers the severity,
-and the grade moves with it. REFUTED removes the finding. Never report a
+and the grade moves with it. REFUTED removes the finding. A missed finding it
+reports goes in after you read the cited line yourself. Never report a
 finding at a severity quick-cop did not sustain, and say plainly when a
 verdict changed your first read.
 
