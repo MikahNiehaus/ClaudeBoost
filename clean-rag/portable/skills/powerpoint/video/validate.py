@@ -1,10 +1,10 @@
 """python validate.py name [name2 ...]  checks storyboards/<name>.json against map/<name>.json."""
-import json
+import math
 import re
 import sys
 from pathlib import Path
 
-from map import ONES, TENS, num_words
+from map import ONES, TENS, load_json, run, spell
 
 ROOT = Path(__file__).resolve().parent
 KINDS = {
@@ -20,19 +20,29 @@ MAX_ITEM_WORDS = 7
 WHO = {"user", "attacker", "model", "system"}
 BAD = re.compile(r"[:–—]|(?<=\w)-(?=\w)|\d+ episodes|episode \d+ of")
 CODE_BAD = re.compile(r"[–—]|(?<=\w)-(?=\w)")
+# white-space pre draws these as extra rows or 8 column tabs inside one fixed height row.
+CODE_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
 # The code panel holds about 9 lines of 75 Consolas characters, clipped past that.
 MAX_CODE_LINES = 8
 MAX_CODE_CHARS = 60
 NUM_WORDS = set(ONES) | set(TENS[2:]) | {"hundred", "thousand", "point"}
 OPTIONAL_TEXT = ("heading", "subtitle", "note", "by", "loop", "unit")
+# Indexes and layout, not card text, so the number spoken rule never reads them.
+STRUCTURE = {"kind", "layout", "lines", "para", "w", "cues", "edges", "path", "pick"}
 
 
 def num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """Finite only: json.dumps writes inf and nan as Infinity and NaN, which JSON.parse rejects."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:  # an int beyond float range
+        return False
 
 
 def idx(v, n):
-    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < n
+    return whole(v) and 0 <= v < n
 
 
 def strs(v):
@@ -108,6 +118,8 @@ def code(s):
     for ln in lines:
         if len(ln) > MAX_CODE_CHARS:
             e.append(f"code line over {MAX_CODE_CHARS} characters {ln[:40]!r}")
+        if CODE_CTRL.search(ln):
+            e.append(f"tab, line break or control character in code line {ln[:40]!r}, use one entry per line and spaces")
         if CODE_BAD.search(ln):
             e.append(f"dash or hyphenated word in code line {ln!r}")
     return e
@@ -153,17 +165,16 @@ def texts(s):
             for x in v:
                 walk(x)
         elif isinstance(v, dict):
-            for k, x in v.items():
-                if k not in ("kind", "layout", "lines"):
-                    walk(x)
-    walk({k: v for k, v in s.items() if k not in ("para", "w", "cues")})
+            for x in v.values():
+                walk(x)
+    walk({k: v for k, v in s.items() if k not in STRUCTURE})
     return out
 
 
 def spelled(text):
     """Words of text with digits spelled out the way map.py aligns them, so 10 and ten compare equal."""
     text = re.sub(r"(\d+)\.(\d+)", lambda m: f"{m[1]} point {' '.join(m[2])}", text.lower().replace(",", ""))
-    text = re.sub(r"\d+", lambda m: f" {num_words(int(m[0]))} ", text)
+    text = re.sub(r"\d+", lambda m: f" {spell(m[0])} ", text)
     return re.findall(r"[a-z]+", text)
 
 
@@ -181,10 +192,24 @@ def whole(v):
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def shape_errors(k, s):
+    """Missing fields, wrong shapes, then item length, as messages without the scene prefix."""
+    missing = [f"missing {f}" for f in KINDS[k] if f not in s]
+    if missing:
+        return missing
+    e = SHAPES[k](s) + [f"{f} must be a string" for f in OPTIONAL_TEXT if f in s and not is_str(s[f])]
+    return e or [f"item over {MAX_ITEM_WORDS} words {it!r}" for it in items(k, s) if len(it.split()) > MAX_ITEM_WORDS]
+
+
+def cue_errors(cs, n_words):
+    if not (isinstance(cs, list) and all(whole(c) for c in cs)):
+        return [f"cues must be a list of word indexes {cs!r}"]
+    e = need(all(b > a for a, b in zip(cs, cs[1:])), f"cues must be strictly increasing {cs}")
+    return e + [f"cue {c} out of range" for c in cs if not 0 <= c < n_words]
+
+
 def check(ep):
-    sb = json.loads((ROOT / "storyboards" / f"{ep}.json").read_text(encoding="utf-8"))
-    mp = json.loads((ROOT / "map" / f"{ep}.json").read_text(encoding="utf-8"))
-    return check_data(sb, mp)
+    return check_data(load_json(ROOT / "storyboards" / f"{ep}.json"), load_json(ROOT / "map" / f"{ep}.json"))
 
 
 def check_data(sb, mp):
@@ -206,16 +231,9 @@ def check_data(sb, mp):
         if not isinstance(k, str) or k not in KINDS:
             errs.append(f"scene {i}: bad kind {k!r}")
             continue
-        missing = [f for f in KINDS[k] if f not in s]
-        errs += [f"scene {i} {k}: missing {f}" for f in missing]
-        bad_shape = [] if missing else SHAPES[k](s)
-        bad_shape += [f"{f} must be a string" for f in OPTIONAL_TEXT if f in s and not is_str(s[f])]
+        bad_shape = shape_errors(k, s)
         errs += [f"scene {i} {k}: {x}" for x in bad_shape]
-        if not missing and not bad_shape:
-            examples += k in EXAMPLE
-            for it in items(k, s):
-                if len(it.split()) > MAX_ITEM_WORDS:
-                    errs.append(f"scene {i} {k}: item over {MAX_ITEM_WORDS} words {it!r}")
+        examples += k in EXAMPLE and not bad_shape
         para = s.get("para")
         p = paras.get(para) if whole(para) else None
         if p is None or not p["spoken"]:
@@ -231,15 +249,7 @@ def check_data(sb, mp):
             errs.append(f"scene {i}: starts at {t:.1f}s before previous {last:.1f}s")
         last = t
         ts.append(t)
-        cs = s.get("cues", [])
-        if not (isinstance(cs, list) and all(whole(c) for c in cs)):
-            errs.append(f"scene {i}: cues must be a list of word indexes {cs!r}")
-        else:
-            if any(b <= a for a, b in zip(cs, cs[1:])):
-                errs.append(f"scene {i}: cues must be strictly increasing {cs}")
-            for c in cs:
-                if not (0 <= c < n_words):
-                    errs.append(f"scene {i}: cue {c} out of range")
+        errs += [f"scene {i}: {x}" for x in cue_errors(s.get("cues", []), n_words)]
         for tx in texts(s):
             if BAD.search(tx):
                 errs.append(f"scene {i}: banned punctuation or count text in {tx!r}")
@@ -262,7 +272,9 @@ def check_data(sb, mp):
     return errs, len(scenes)
 
 
-if __name__ == "__main__":
+def main():
+    if not sys.argv[1:]:
+        sys.exit(__doc__)
     bad = 0
     for ep in sys.argv[1:]:
         e, n = check(ep)
@@ -271,3 +283,7 @@ if __name__ == "__main__":
             print("  ", x)
         bad += bool(e)
     sys.exit(1 if bad else 0)
+
+
+if __name__ == "__main__":
+    run(main)

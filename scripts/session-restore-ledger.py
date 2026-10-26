@@ -13,8 +13,6 @@ Fields recorded per session:
     sessionId   the id `claude --resume <id>` takes
     cwd         the directory the tab must open in
     name        display name, for the tab title
-    launchFlags flags the resume needs re passed, because --resume does not
-                carry --add-dir, --mcp-config, --settings or --plugin-dir
 """
 from __future__ import annotations
 
@@ -34,17 +32,13 @@ from session_restore_state import (  # noqa: E402
     update_ledger,
 )
 
-# Flags that `claude --resume` does not restore by itself. If the session was
-# started with any of them, the reopened tab needs them passed again or it comes
-# back with a different configuration than it had.
-_CARRIED_FLAGS = (
-    "--add-dir",
-    "--mcp-config",
-    "--settings",
-    "--plugin-dir",
-    "--fallback-model",
-    "--permission-mode",
-)
+def _payload_sid(payload: dict) -> str:
+    """First non-blank string id under either key, else empty."""
+    for key in ("session_id", "sessionId"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
 
 
 def _resolve(payload: dict) -> tuple[str, str]:
@@ -55,14 +49,14 @@ def _resolve(payload: dict) -> tuple[str, str]:
     cwd, and finally os.getcwd() stands in. A wrong cwd would reopen the wrong
     directory, so an entry with no cwd at all is dropped rather than guessed.
     """
-    sid = str(payload.get("session_id") or payload.get("sessionId") or "").strip()
+    sid = _payload_sid(payload)
     cwd = str(payload.get("cwd") or "").strip()
 
     if sid and cwd:
         return sid, cwd
 
     for s in live_sessions():
-        if sid and s["sessionId"] == sid:
+        if sid and s["sessionId"].lower() == sid.lower():
             return sid, (cwd or s["cwd"])
         if not sid and cwd and s["cwd"] == cwd:
             return s["sessionId"], cwd
@@ -75,31 +69,9 @@ def _resolve(payload: dict) -> tuple[str, str]:
 def _name_for(sid: str, cwd: str) -> str:
     """Prefer the name Claude Code derived for the session, else the folder."""
     for s in live_sessions():
-        if s["sessionId"] == sid and s.get("name"):
+        if s["sessionId"].lower() == sid.lower() and s.get("name"):
             return s["name"]
     return Path(cwd).name or cwd
-
-
-def _launch_flags() -> list[str]:
-    """Flags from this process's own command line that a resume must repeat.
-
-    Read from the claude entry in the live registry when available. Falls back
-    to an empty list, which is correct for a plain `claude` launch.
-    """
-    flags: list[str] = []
-    argv = os.environ.get("CLAUDE_CODE_ENTRYPOINT_ARGV", "")
-    if not argv:
-        return flags
-    parts = argv.split()
-    i = 0
-    while i < len(parts):
-        if parts[i] in _CARRIED_FLAGS:
-            flags.append(parts[i])
-            if i + 1 < len(parts) and not parts[i + 1].startswith("-"):
-                flags.append(parts[i + 1])
-                i += 1
-        i += 1
-    return flags
 
 
 def handle_start(payload: dict) -> None:
@@ -115,7 +87,6 @@ def handle_start(payload: dict) -> None:
         "sessionId": sid,
         "cwd": str(Path(cwd)),
         "name": _name_for(sid, cwd),
-        "launchFlags": _launch_flags(),
         "startedAt": now_iso(),
         "lastSeen": now_iso(),
         "lastSeenEpoch": time.time(),
@@ -123,8 +94,11 @@ def handle_start(payload: dict) -> None:
 
     def mutate(data: dict) -> None:
         sessions = data.setdefault("sessions", {})
-        existing = sessions.get(sid)
-        if existing:
+        twins = [k for k in sessions if k.lower() == sid.lower()]
+        existing = sessions.get(sid) or (sessions.get(twins[0]) if twins else None)
+        for k in twins:
+            sessions.pop(k, None)
+        if isinstance(existing, dict):
             # A resumed session fires SessionStart again. Keep the original
             # startedAt so the stale check measures real age, not last resume.
             entry["startedAt"] = existing.get("startedAt", entry["startedAt"])
@@ -135,14 +109,26 @@ def handle_start(payload: dict) -> None:
 
 
 def handle_end(payload: dict) -> None:
+    given = _payload_sid(payload)
     sid, cwd = _resolve(payload)
     reason = str(payload.get("reason") or "")
-    if not sid:
+    # No cwd-matching fallback on end: guessing could drop a different live session.
+    if not sid or not given:
         log("SessionEnd with no session id, ledger unchanged")
         return
 
+    # "other" is what a window close or logoff sends, so it is not a deliberate exit.
+    if reason == "other":
+        log(f"kept {sid[:8]} (reason: other)")
+        return
+    if sum(1 for s in live_sessions() if s["sessionId"].lower() == sid.lower()) > 1:
+        log(f"kept {sid[:8]}, another process still runs it")
+        return
+
     def mutate(data: dict) -> None:
-        data.get("sessions", {}).pop(sid, None)
+        sessions = data.get("sessions", {})
+        for k in [k for k in sessions if k.lower() == sid.lower()]:
+            sessions.pop(k, None)
 
     update_ledger(mutate)
     log(f"removed {sid[:8]} (reason: {reason or 'unspecified'})")

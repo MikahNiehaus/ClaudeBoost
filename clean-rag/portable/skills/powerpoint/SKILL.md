@@ -429,8 +429,8 @@ paragraphs split by blank lines), `storyboards/`, `align/`, `map/`, `out/`.
    field presence and shape (types, index ranges, score 0 to 1), at least four
    worked examples, timing order, cue order, scene length (2 to 45 seconds),
    banned punctuation, card text length, items of at most seven words, code
-   scenes of at most 8 lines of 60 characters, and that every number on a card
-   is spoken.
+   scenes of at most 8 lines of 60 characters with no tabs or line breaks inside
+   a line, finite numbers only, and that every number on a card is spoken.
 6. `python render.py <name>`. A full render takes minutes and the shell may time
    out, so launch it detached and poll its log.
 7. `python finalize.py --mux` remuxes with faststart, adds the narration, and
@@ -458,9 +458,11 @@ paragraphs split by blank lines), `storyboards/`, `align/`, `map/`, `out/`.
 
 The Remotion code in `video/src/` (`theme.ts` for palette, `scenes.tsx` and
 `demos.tsx` for scene kinds) is meant to be edited. Restyle `theme.ts` to match
-the user's brand. A new scene kind needs four edits: the component, its entry in `MAP` in
-`scenes.tsx`, its item count in `Episode.tsx` (so cues spread evenly), and its
-field list in `KINDS` in `validate.py`, plus `types.ts` if it adds fields.
+the user's brand. A new scene kind needs five edits: the component, its entry in `MAP` in
+`scenes.tsx`, its item count in `Episode.tsx` (so cues spread evenly), its
+field list in `KINDS` and its shape check in `SHAPES` in `validate.py`, plus
+`types.ts` if it adds fields. A field holding indexes rather than card text also
+goes in `STRUCTURE`, or the spoken number check reads it.
 
 ## Step 5: open it
 

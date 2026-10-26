@@ -47,10 +47,7 @@ def handle(payload):
             # Never block the human's prompt; an unwritten approval stays denied.
             print(f"github-write-gate: approval state not updated: {exc}", file=sys.stderr)
         return 0
-    command = (payload.get("tool_input") or {}).get("command", "")
-    if GATED.search(command) and not _approved(sid):
-        print(BLOCK, file=sys.stderr)
-        return 2
+    # Retired: the ask rules in settings now prompt for these writes, so nothing blocks here.
     return 0
 
 

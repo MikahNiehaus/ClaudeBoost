@@ -35,7 +35,8 @@ SID_B = "bbbbbbbb-1111-2222-3333-444444444444"
 
 
 def _env(home: Path) -> dict:
-    return hook_env({"CLAUDEBOOST_HOME": str(home)})
+    # The profile too, or the scripts read the real ~/.claude transcripts and live sessions.
+    return hook_env({"CLAUDEBOOST_HOME": str(home), "USERPROFILE": str(home), "HOME": str(home)})
 
 
 def run_ledger(home: Path, payload: dict | str) -> subprocess.CompletedProcess:
@@ -207,7 +208,7 @@ class TestRestorePlanning:
         run_ledger(home, {"hook_event_name": "SessionStart",
                         "session_id": SID_B, "cwd": str(home / "Proj B With Spaces")})
         r = run_restore(home, "--dry-run", "--force")
-        assert "--resume" in r.stdout or "--continue" in r.stdout
+        assert f"--resume {SID_B}" in r.stdout
         assert "Proj B With Spaces" in r.stdout
 
     def test_status_exits_zero_on_an_empty_ledger(self, home):
@@ -225,6 +226,269 @@ class TestRestorePlanning:
         r = run_restore(home, "--dry-run", "--force")
         assert "SOME-OTHER-PC" in r.stdout
         assert "Nothing to restore" in r.stdout
+
+
+class TestEndReasons:
+    """A window close or logoff sends reason "other". That is not a deliberate exit."""
+
+    def _start(self, home):
+        run_ledger(home, {"hook_event_name": "SessionStart",
+                        "session_id": SID_A, "cwd": str(home / "ProjA")})
+
+    def test_other_keeps_the_entry(self, home):
+        self._start(home)
+        run_ledger(home, {"hook_event_name": "SessionEnd", "session_id": SID_A,
+                        "cwd": str(home / "ProjA"), "reason": "other"})
+        assert SID_A in sessions(home)
+
+    def test_a_deliberate_exit_removes_it(self, home):
+        self._start(home)
+        run_ledger(home, {"hook_event_name": "SessionEnd", "session_id": SID_A,
+                        "cwd": str(home / "ProjA"), "reason": "prompt_input_exit"})
+        assert SID_A not in sessions(home)
+
+
+@pytest.fixture
+def restore_mod(home, monkeypatch):
+    """session-restore.py imported against a throwaway home and profile."""
+    import importlib.util
+    monkeypatch.setenv("CLAUDEBOOST_HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    spec = importlib.util.spec_from_file_location("session_restore_under_test", RESTORE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    import session_restore_state
+    monkeypatch.setattr(session_restore_state, "BOOST_HOME", home)
+    return mod
+
+
+class TestStartupHardening:
+    def test_already_open_matches_session_id_not_directory(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [
+            {"sessionId": SID_A, "cwd": str(home / "ProjA"), "name": "a"}])
+        assert restore_mod._already_open(SID_A)
+        assert not restore_mod._already_open(SID_B)
+
+    def test_force_still_skips_a_live_session(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [
+            {"sessionId": SID_A, "cwd": str(home / "ProjA"), "name": "a"}])
+        for sid in (SID_A, SID_B):
+            run_ledger(home, {"hook_event_name": "SessionStart",
+                            "session_id": sid, "cwd": str(home / "ProjA")})
+        keep, _ = restore_mod._plan(force=True)
+        assert [e["sessionId"] for e in keep] == [SID_B]
+
+    @staticmethod
+    def _project_dir(restore_mod, home, cwd):
+        d = home / ".claude" / "projects" / restore_mod.re.sub(r"[^A-Za-z0-9]", "-", cwd)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_a_lost_transcript_is_not_resumable_even_with_others_present(self, restore_mod, home):
+        proj = self._project_dir(restore_mod, home, str(home / "ProjA"))
+        assert not restore_mod._resumable(str(home / "ProjA"), SID_A)
+        (proj / "other.jsonl").write_text("{}", encoding="utf-8")
+        assert not restore_mod._resumable(str(home / "ProjA"), SID_A)
+
+    def test_a_transcript_under_a_hashed_directory_is_found(self, restore_mod, home):
+        (home / "ProjA").mkdir(exist_ok=True)
+        hashed = self._project_dir(restore_mod, home, "C--very-long-path-abc123")
+        (hashed / f"{SID_A}.jsonl").write_text("{}", encoding="utf-8")
+        assert restore_mod._transcript_exists(str(home / "ProjA"), SID_A) is True
+        assert restore_mod._transcript_exists(str(home / "ProjA"), SID_B) is False
+
+    def test_lost_transcript_beside_a_live_session_is_skipped_not_continued(
+            self, restore_mod, monkeypatch, home):
+        """--continue there would resume the live session's transcript as a second process."""
+        cwd = str(home / "ProjA")
+        (self._project_dir(restore_mod, home, cwd) / f"{SID_A}.jsonl").write_text("{}")
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [
+            {"sessionId": SID_A, "cwd": cwd, "name": "a"}])
+        for sid in (SID_A, SID_B):
+            run_ledger(home, {"hook_event_name": "SessionStart", "session_id": sid, "cwd": cwd})
+        keep, notes = restore_mod._plan(force=True)
+        assert keep == []
+        assert any("no transcript" in n for n in notes)
+        assert "--continue" not in restore_mod._resume_args({"sessionId": SID_B, "cwd": cwd})
+
+    def test_an_unrelated_new_session_in_the_same_dir_does_not_count_as_started(
+            self, restore_mod, monkeypatch, home):
+        cwd = str(home / "ProjA")
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [
+            {"sessionId": "someone-else", "cwd": cwd, "name": "x"}])
+        a = {"sessionId": SID_A, "cwd": cwd}
+        b = {"sessionId": SID_B, "cwd": cwd}
+        assert restore_mod._wait_started([a, b], 0) == [a, b]
+
+    def test_a_semicolon_in_a_name_or_dir_cannot_split_the_wt_command(
+            self, restore_mod, monkeypatch, home):
+        calls = []
+        monkeypatch.setattr(restore_mod.subprocess, "Popen",
+                            lambda argv, **kw: calls.append(argv))
+        items = [({"cwd": str(home / "a;b"), "name": "x; new-tab calc"}, Path("a.bat")),
+                 ({"cwd": str(home / "ProjA"), "name": "y"}, Path("b.bat"))]
+        restore_mod._launch_wt_batch("wt.exe", items)
+        argv = calls[0]
+        assert argv.count(";") == 1
+        assert not [a for a in argv if a != ";" and ";" in a]
+        assert str(home / "ProjA") in argv
+
+    @staticmethod
+    def _run_tab(restore_mod, home, name, cwd, stub_dir=None, remove_cwd=False, **extra):
+        """Run the tab script under real cmd with a stub claude that records where it ran.
+
+        where is None when the stub never ran.
+        """
+        stub_dir = stub_dir or home
+        stub_dir.mkdir(exist_ok=True)
+        stub = stub_dir / "stub-claude.cmd"
+        stub.write_text('@cd > "%~dp0where.txt"\r\n@echo STUB %*\r\n', encoding="utf-8")
+        cwd.mkdir(exist_ok=True)
+        script = restore_mod._write_tab_script(
+            0, {"cwd": str(cwd), "name": name, "sessionId": SID_A, **extra}, str(stub))
+        if remove_cwd:
+            cwd.rmdir()
+        r = subprocess.run(["cmd", "/c", str(script)], capture_output=True, cwd=str(home))
+        marker = stub_dir / "where.txt"
+        where = marker.read_text(encoding="utf-8").strip() if marker.exists() else None
+        return (r.stdout + r.stderr).decode("utf-8", "replace"), where
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="runs the tab script under cmd")
+    def test_a_folder_gone_at_launch_stops_the_tab_instead_of_running_elsewhere(
+            self, restore_mod, home):
+        out, where = self._run_tab(restore_mod, home, "t", home / "gone;dir", remove_cwd=True)
+        assert where is None, f"claude ran in {where}"
+        assert "Folder not found" in out
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="runs the tab script under cmd")
+    @pytest.mark.parametrize("flags", [
+        ["--add-dir", "x&echo INJECTED"], ["--settings", "a>leak.txt"], ["--add-dir", "%COMSPEC%"],
+    ])
+    def test_ledger_launch_flags_never_reach_the_command_line(self, restore_mod, home, flags):
+        out, _ = self._run_tab(restore_mod, home, "t", home / "ProjA", launchFlags=flags)
+        assert "INJECTED" not in out
+        assert not list(home.rglob("leak.txt"))
+        assert f"STUB --resume {SID_A}\r\n" in out
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="runs the tab script under cmd")
+    @pytest.mark.parametrize("folder", ["p%COMSPEC%q", "p^q", "a&b ^c%x%"])
+    def test_a_claude_shim_in_an_awkward_folder_still_runs(self, restore_mod, home, folder):
+        _, where = self._run_tab(restore_mod, home, "t", home / "ProjA", stub_dir=home / folder)
+        assert where == str(home / "ProjA")
+
+    def test_a_session_id_that_is_not_a_uuid_is_skipped(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [])
+        for sid in ("x&echo INJECTED", SID_A):
+            run_ledger(home, {"hook_event_name": "SessionStart",
+                              "session_id": sid, "cwd": str(home / "ProjA")})
+        keep, notes = restore_mod._plan(force=True)
+        assert [e["sessionId"] for e in keep] == [SID_A]
+        assert any("not a UUID" in n for n in notes)
+
+    def test_an_uppercase_ledger_id_still_matches_a_live_session(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions",
+                            lambda: [{"sessionId": SID_A.lower(), "cwd": str(home / "ProjA")}])
+        assert restore_mod._already_open(SID_A.upper())
+
+    def test_an_uppercase_live_id_still_matches_a_ledger_id(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions",
+                            lambda: [{"sessionId": SID_A.upper(), "cwd": str(home / "ProjA")}])
+        assert restore_mod._already_open(SID_A)
+
+    @pytest.mark.parametrize("live_id,ledger_id", [(SID_A, SID_A.upper()), (SID_A.upper(), SID_A)])
+    def test_a_started_session_counts_whatever_case_its_id_is_in(
+            self, restore_mod, monkeypatch, home, live_id, ledger_id):
+        monkeypatch.setattr(restore_mod, "live_sessions",
+                            lambda: [{"sessionId": live_id, "cwd": str(home / "ProjA")}])
+        assert restore_mod._wait_started([{"sessionId": ledger_id}], 0) == []
+
+    def test_ids_differing_only_in_case_open_one_tab(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [])
+        for sid in (SID_A.upper(), SID_A):
+            run_ledger(home, {"hook_event_name": "SessionStart",
+                              "session_id": sid, "cwd": str(home / "ProjA")})
+        keep, _ = restore_mod._plan(force=True)
+        assert len(keep) == 1
+
+    def test_a_uuid_with_trailing_text_is_skipped(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [])
+        run_ledger(home, {"hook_event_name": "SessionStart",
+                          "session_id": f"{SID_A} & calc", "cwd": str(home / "ProjA")})
+        keep, notes = restore_mod._plan(force=True)
+        assert keep == []
+        assert any("not a UUID" in n for n in notes)
+
+    @pytest.mark.parametrize("cwd", ['C:\\a"b', "C:\\a\r\nb", "C:\\a\x1fb"])
+    def test_a_directory_with_quote_or_control_characters_is_skipped(self, restore_mod, monkeypatch, cwd):
+        entry = {"sessionId": SID_A, "cwd": cwd, "name": "n", "lastSeenEpoch": time.time()}
+        ledger = {"sessions": {"s": entry}}
+        monkeypatch.setattr(restore_mod, "read_ledger", lambda: ledger)
+        monkeypatch.setattr(restore_mod, "prune_stale", lambda data: 0)
+        keep, notes = restore_mod._plan(force=True)
+        assert keep == []
+        assert any("unsafe characters" in n for n in notes)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="runs the tab script under cmd")
+    @pytest.mark.parametrize("name", [
+        "a | echo INJECTED", "a\r\necho INJECTED", "a & echo INJECTED",
+        "a > leak.txt", "a < nul", "x %COMSPEC% ^", 'q" & echo INJECTED',
+    ])
+    def test_a_session_name_cannot_run_or_redirect_anything(self, restore_mod, home, name):
+        out, where = self._run_tab(restore_mod, home, name, home / "ProjA")
+        assert "INJECTED" not in out
+        assert not list(home.rglob("leak.txt"))
+        assert f"STUB --resume {SID_A}" in out
+        assert where == str(home / "ProjA")
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="runs the tab script under cmd")
+    @pytest.mark.parametrize("folder", ["café 中", "x%COMSPEC%y", "a&b ^c"])
+    def test_the_tab_opens_in_its_own_folder_whatever_it_is_named(
+            self, restore_mod, home, folder):
+        _, where = self._run_tab(restore_mod, home, "t", home / folder)
+        assert where == str(home / folder)
+
+    def test_retry_skips_a_session_that_came_up_after_the_last_poll(
+            self, restore_mod, monkeypatch, home):
+        cwd = str(home / "ProjA")
+        live: list[dict] = []
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: list(live))
+        run_ledger(home, {"hook_event_name": "SessionStart", "session_id": SID_A, "cwd": cwd})
+        monkeypatch.setattr(restore_mod, "find_claude", lambda: "claude.exe")
+        monkeypatch.setattr(restore_mod, "find_terminal", lambda: ("wt", "wt.exe"))
+        monkeypatch.setattr(restore_mod, "boot_id", lambda: "boot-1")
+        monkeypatch.setattr(restore_mod, "START_WAIT_SECONDS", 0)
+        monkeypatch.setattr(restore_mod, "_launch_wt_batch", lambda *a: None)
+        relaunched = []
+        monkeypatch.setattr(restore_mod, "_launch", lambda e, *a, **k: relaunched.append(e))
+        real_wait = restore_mod._wait_started
+
+        def wait_then_register(entries, *rest):
+            pending = real_wait(entries, *rest)
+            live.append({"sessionId": SID_A, "cwd": cwd, "name": "a"})
+            return pending
+
+        monkeypatch.setattr(restore_mod, "_wait_started", wait_then_register)
+        restore_mod.restore(force=True, dry_run=False)
+        assert relaunched == []
+
+    def test_wt_opens_every_tab_in_one_call(self, restore_mod, monkeypatch, home):
+        calls = []
+        monkeypatch.setattr(restore_mod.subprocess, "Popen",
+                            lambda argv, **kw: calls.append(argv))
+        items = [({"cwd": str(home / "ProjA"), "name": "a"}, Path("a.bat")),
+                 ({"cwd": str(home / "Proj B With Spaces"), "name": "b"}, Path("b.bat"))]
+        restore_mod._launch_wt_batch("wt.exe", items)
+        assert len(calls) == 1
+        assert calls[0].count("new-tab") == 2 and calls[0].count(";") == 1
+
+    def test_wait_started_reports_the_session_that_never_came_up(self, restore_mod, monkeypatch, home):
+        monkeypatch.setattr(restore_mod, "live_sessions", lambda: [
+            {"sessionId": SID_A, "cwd": str(home / "ProjA"), "name": "a"}])
+        up = {"sessionId": SID_A, "cwd": str(home / "ProjA")}
+        down = {"sessionId": SID_B, "cwd": str(home / "ProjA")}
+        assert restore_mod._wait_started([up, down], 0) == [down]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="pythonw.exe is Windows only")

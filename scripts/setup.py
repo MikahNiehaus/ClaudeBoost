@@ -1520,15 +1520,15 @@ MCP_SERVERS: list[dict] = [
         "why": "drive Android emulators and devices (adb) and iOS simulators (Xcode): tap, type, screenshot, logs",
     },
     # --- Code intelligence -------------------------------------------------
-    {
-        "name": "serena",
-        "label": "Serena (LSP symbol tools)",
-        "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
-                 "serena", "start-mcp-server"],
-        "needs": "uvx",
-        "hint": UV_HINT,
-        "why": "real symbol references, call hierarchy and rename via language servers",
-    },
+    # {
+    #     "name": "serena",  # disabled: needs more research
+    #     "label": "Serena (LSP symbol tools)",
+    #     "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
+    #              "serena", "start-mcp-server"],
+    #     "needs": "uvx",
+    #     "hint": UV_HINT,
+    #     "why": "real symbol references, call hierarchy and rename via language servers",
+    # },
     {
         "name": "ast-grep",
         "label": "ast-grep MCP",

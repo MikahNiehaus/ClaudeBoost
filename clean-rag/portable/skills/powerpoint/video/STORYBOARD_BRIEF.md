@@ -32,7 +32,7 @@ Kinds and fields:
 - `search` (worked example): `query`, `docs` (3 to 5 of `{text, score}`, score 0 to 1), `pick` (indexes of the top hits). Shows a query scoring documents. Cues reveal each document.
 - `walk` (worked example): `nodes`, `edges`, `path` (node indexes visited in order, at least 2), `layout` (`cycle` or `star`). A highlight travels node by node along the path. Cues time each step.
 - `trace` (worked example): `nodes` (3 to 4 stages), `data` (one short sample value per stage, same count). A packet moves through the stages and the sample value for each stage appears. Cues time each stage.
-- `code` (worked example): `lines` (1 to 8 lines of at most 60 characters, indent with spaces). Lines type in one by one. Cues time each line.
+- `code` (worked example): `lines` (1 to 8 lines of at most 60 characters, one entry per line, indent with spaces, no tabs or line breaks inside an entry). Lines type in one by one. Cues time each line.
 - `chat` (worked example): `messages` (list of `{who, text}`, who is `user`, `attacker`, `model` or `system`). Bubbles type out. Cues time each message.
 - `bars` (worked example): `bars` (list of `{label, value}`), `max?`, `unit?`. Bars grow at their cues. Use only for numbers the narration says.
 

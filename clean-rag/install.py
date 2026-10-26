@@ -389,9 +389,10 @@ MCP_SERVERS: list[dict] = [
     {"name": "mobile-mcp",
      "args": ["npx", "-y", "@mobilenext/mobile-mcp@latest"], "needs": "npx",
      "env": {"MOBILEMCP_DISABLE_TELEMETRY": "1"}},
-    {"name": "serena",
-     "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
-              "serena", "start-mcp-server"], "needs": "uvx"},
+    # Disabled: needs more research before it goes back in.
+    # {"name": "serena",
+    #  "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
+    #           "serena", "start-mcp-server"], "needs": "uvx"},
     {"name": "ast-grep", "args": ["uvx", "ast-grep-mcp"], "needs": "uvx"},
     {"name": "context7",
      "args": ["npx", "-y", "@upstash/context7-mcp"], "needs": "npx"},

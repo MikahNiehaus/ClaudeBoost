@@ -6,6 +6,7 @@ Reads align/<name>.json and scripts/<name>.md (spoken text after a "# Script" li
 import difflib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,9 +30,33 @@ def num_words(n):
     return r + ("" if n % 1000 == 0 else " " + num_words(n % 1000))
 
 
+def spell(digits):
+    """num_words for a digit string, read digit by digit past 15 digits so int() and recursion stay bounded."""
+    if len(digits) > 15:
+        return " ".join(ONES[int(d)] for d in digits)
+    return num_words(int(digits))
+
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sys.exit(f"{path.parent.name}/{path.name} not found")
+    except ValueError as e:
+        sys.exit(f"{path.parent.name}/{path.name} is not valid JSON: {e}")
+
+
+def run(main):
+    """Calls main, so malformed input ends as one line on stderr and exit 1 instead of a traceback."""
+    try:
+        main()
+    except (OSError, ValueError, LookupError, TypeError) as e:
+        sys.exit(f"{Path(sys.argv[0]).name}: bad input, {type(e).__name__} {e}")
+
+
 def norm(w):
     w = w.lower().replace("-", "").replace("%", " percent ")
-    w = re.sub(r"\d+", lambda m: " " + num_words(int(m.group())) + " ", w)
+    w = re.sub(r"\d+", lambda m: " " + spell(m.group()) + " ", w)
     w = re.sub(r"[^a-z ]", "", w)
     return w.replace(" ", "")
 
@@ -54,7 +79,7 @@ def silence_ends(mp3):
 def build(ep):
     mp3 = CONTENT / f"{ep}.mp3"
     script = SCRIPTS / f"{ep}.md"
-    al = json.loads((ROOT / "align" / f"{ep}.json").read_text(encoding="utf-8"))
+    al = load_json(ROOT / "align" / f"{ep}.json")
     wh = []
     for w in al["words"]:
         t = w["w"].strip()
@@ -138,7 +163,15 @@ def build(ep):
     return result
 
 
-if __name__ == "__main__":
+def main():
     eps = sys.argv[1:] or sorted(p.stem for p in (ROOT / "align").glob("*.json"))
+    if not eps:
+        sys.exit("no align/*.json to map. Run align.py first.")
+    if not shutil.which("ffmpeg"):
+        sys.exit("ffmpeg not on PATH. Install ffmpeg.")
     for e in eps:
         build(e)
+
+
+if __name__ == "__main__":
+    run(main)

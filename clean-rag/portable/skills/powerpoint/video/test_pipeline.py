@@ -1,5 +1,6 @@
 """python -m pytest test_pipeline.py  checks validate.py rules and the render and finalize output gates."""
 import copy
+import json
 import os
 import shutil
 import subprocess
@@ -69,6 +70,18 @@ def test_malformed_timing_fields_are_errors_not_crashes(change):
     assert errors(1, **change)
 
 
+@pytest.mark.parametrize("change,want", [
+    ({"cues": [3, 2]}, "strictly increasing"), ({"cues": [3, 3]}, "strictly increasing"), ({"cues": [20]}, "cue 20 out of range"),
+    ({"items": ["one two three four five six seven eight"]}, "item over 7 words"),
+])
+def test_cue_order_range_and_item_length(change, want):
+    assert any(want in e for e in errors(1, **change))
+
+
+def test_valid_cues_pass():
+    assert errors(1, cues=[0, 5, 19]) == []
+
+
 def test_scene_that_is_not_an_object():
     scenes = copy.deepcopy(SCENES)
     scenes[1] = "bullets"
@@ -106,10 +119,82 @@ def test_numbers_in_heading_are_gated():
     assert any("number 7 not spoken" in e for e in errors(1, heading="7 rules"))
 
 
+@pytest.mark.parametrize("i,change,want", [
+    (7, {"bars": [{"label": "a", "value": float("inf")}]}, "bars must be"),
+    (7, {"bars": json.loads('[{"label": "a", "value": 1e999}]')}, "bars must be"),
+    (7, {"bars": [{"label": "a", "value": 10 ** 400}]}, "bars must be"),
+    (7, {"max": float("inf")}, "max, or the largest"),
+    (2, {"value": float("nan")}, "value must be"),
+    (2, {"value": float("-inf")}, "value must be"),
+    (3, {"docs": [{"text": "a", "score": float("nan")}]}, "docs must be"),
+])
+def test_non_finite_numbers_are_rejected(i, change, want):
+    assert any(want in e for e in errors(i, **change))
+
+
+def test_graph_edge_indexes_are_not_card_numbers():
+    graph = {"kind": "graph", "nodes": ["a", "b", "c"], "edges": [[0, 1], [1, 2]], "layout": "cycle"}
+    assert errors(1, **graph) == []
+    assert any("number 7 not spoken" in e for e in errors(1, **graph, heading="7 hops"))
+
+
+@pytest.mark.parametrize("line", ["a\n" * 30, "\t" * 60, "x\ry", "a b", "a\x00"])
+def test_code_line_with_tab_or_line_break_is_rejected(line):
+    assert any("tab, line break or control character" in e for e in errors(6, lines=[line]))
+
+
+@pytest.mark.parametrize("digits", [3000, 5000])
+def test_long_digit_runs_are_errors_not_crashes(digits):
+    assert any("not spoken" in e for e in errors(1, heading="9" * digits))
+
+
+def write(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+
+
+@pytest.mark.parametrize("args,files,want", [
+    (["validate.py"], {}, "python validate.py name"),
+    (["validate.py", "nope"], {}, "storyboards/nope.json not found"),
+    (["validate.py", "x"], {"storyboards/x.json": "{bad", "map/x.json": "{}"}, "storyboards/x.json is not valid JSON"),
+    (["validate.py", "x"], {"storyboards/x.json": '{"scenes": []}', "map/x.json": '{"duration": 1}'}, "KeyError 'paragraphs'"),
+    (["outline.py"], {}, "python outline.py name"),
+    (["outline.py", "nope"], {}, "map/nope.json not found"),
+    pytest.param(["map.py", "nope"], {}, "align/nope.json not found", marks=needs_ffmpeg),
+    (["map.py"], {}, "no align/*.json"),
+    (["render.py"], {}, "the following arguments are required"),
+    (["render.py", "nope"], {}, "storyboards/nope.json not found"),
+    (["render.py", "x"], {"storyboards/x.json": '{"scenes": [{"value": Infinity}]}', "map/x.json": '{"duration": 1, "paragraphs": []}'},
+     "Out of range float"),
+    (["align.py"], {}, "python align.py"),
+    pytest.param(["align.py", "x.mp3", "y.json"], {"x.mp3": "junk"}, "ffmpeg could not decode", marks=needs_ffmpeg),
+    (["finalize.py", "--mx"], {}, "usage: python finalize.py"),
+])
+def test_bad_input_exits_non_zero_with_one_line(tmp_path, args, files, want):
+    copy_scripts(tmp_path)
+    for name, body in files.items():
+        write(tmp_path / name, body)
+    tools = [Path(t).parent for t in (FFMPEG, shutil.which("ffprobe")) if t]
+    r = subprocess.run([sys.executable, *args], cwd=tmp_path, env=clean_env(*tools), capture_output=True, text=True)
+    assert r.returncode != 0 and want in r.stderr and "Traceback" not in r.stderr, r.stderr
+
+
+@needs_ffmpeg
+def test_finalize_reports_audio_without_duration(tmp_path):
+    copy_scripts(tmp_path)
+    write(tmp_path / "audio" / "demo.mp3", "junk")
+    (tmp_path / "out").mkdir()
+    make(tmp_path / "out" / "demo.mp4", 2, video=True)
+    env = clean_env(Path(FFMPEG).parent, Path(shutil.which("ffprobe")).parent)
+    r = subprocess.run([sys.executable, "finalize.py"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert r.returncode == 1 and "audio has no duration" in r.stdout and "Traceback" not in r.stderr, r.stdout + r.stderr
+    assert not (tmp_path / "out" / "demo.fast.mp4").exists()
+
+
 def clean_env(*dirs):
     env = {"PATH": os.pathsep.join(str(d) for d in dirs)}
-    if os.name == "nt":
-        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    if os.name == "nt":  # Python on Windows cannot start without it
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     return env
 
 
@@ -125,20 +210,31 @@ def stub_npx(bin_dir):
     return log
 
 
+SCRIPTS = ("align.py", "map.py", "outline.py", "validate.py", "render.py", "finalize.py")
+
+
+def copy_scripts(dst):
+    for f in SCRIPTS:
+        shutil.copy(HERE / f, dst)
+
+
 @pytest.mark.parametrize("args,want", [
     (["--frames", "450-451", "--out", "chk.mp4"], "chk.mp4"),
     (["--frames", "450-451"], "demo.frames-450-451.mp4"),
     ([], "demo.mp4"),
+    (["--sb", "other"], "demo.sb-other.mp4"),
 ])
 def test_render_frame_range_never_takes_the_full_render_name(tmp_path, args, want):
-    shutil.copy(HERE / "render.py", tmp_path)
+    copy_scripts(tmp_path)
     for d, body in (("storyboards", '{"scenes":[]}'), ("map", '{"duration":1,"paragraphs":[]}')):
         (tmp_path / d).mkdir()
         (tmp_path / d / "demo.json").write_text(body)
+        (tmp_path / d / "other.json").write_text(body)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = stub_npx(bin_dir)
-    env = clean_env(bin_dir, "/bin", "/usr/bin") if os.name != "nt" else clean_env(bin_dir)
+    sh = shutil.which("sh")
+    env = clean_env(bin_dir) if os.name == "nt" else clean_env(bin_dir, Path(sh).parent)
     r = subprocess.run([sys.executable, "render.py", "demo", *args], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     out = Path(log.read_text().split(" Episode ", 1)[1].split(" --props=", 1)[0])

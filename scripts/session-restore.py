@@ -127,6 +127,8 @@ WT_WINDOW = "claudeboost-restore"
 # the documented fix for that race.
 LOGON_DELAY_SECONDS = 90
 
+START_WAIT_SECONDS = 90
+
 # getattr, not sys.stdout.isatty(), because a replaced or exotic stream may not
 # implement isatty at all. Colour is cosmetic and must never be a failure point.
 _USE_COLOR = bool(getattr(sys.stdout, "isatty", lambda: False)()) \
@@ -155,35 +157,43 @@ def _info(msg: str) -> None: _say(msg, "cyan")
 # Which entries to reopen
 # ---------------------------------------------------------------------------
 def _transcript_exists(cwd: str, session_id: str) -> bool | None:
-    """Does the transcript for this session still exist on disk?
+    """Does ~/.claude/projects/<mangled cwd>/<session id>.jsonl exist?
 
-    Claude Code stores it at ~/.claude/projects/<mangled cwd>/<session id>.jsonl
-    where the mangling replaces every non alphanumeric character with a dash.
-    Very long paths are truncated and hashed instead, so a missing project
-    directory is not proof of a missing session.
-
-    Returns True (present), False (project dir exists but this session does
-    not) or None (cannot tell). Only a hard False downgrades the tab to
-    --continue, because guessing wrong loses the exact session the user wanted.
+    Long paths are hashed, so a miss checks every project directory.
+    None means no projects directory exists, so it cannot tell.
     """
+    root = Path.home() / ".claude" / "projects"
+    name = f"{session_id}.jsonl"
     mangled = re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
-    project_dir = Path.home() / ".claude" / "projects" / mangled
-    if not project_dir.is_dir():
+    if (root / mangled / name).is_file():
+        return True
+    try:
+        return any((d / name).is_file() for d in root.iterdir() if d.is_dir())
+    except OSError:
         return None
-    return (project_dir / f"{session_id}.jsonl").is_file()
 
 
-def _already_open(cwd: str) -> bool:
-    """True if a Claude session is already live in this directory.
+def _id_key(session_id: object) -> str:
+    """Every id comparison goes through here, since UUID hex is case insensitive (RFC 9562 4)."""
+    return str(session_id or "").lower()
 
-    Stops a manual restore run mid day from doubling every tab, and stops the
-    scheduled task from piling on if it somehow fires twice.
+
+def _already_open(session_id: str) -> bool:
+    """True if this exact session is live. By id, since sessions share folders."""
+    want = _id_key(session_id)
+    return any(_id_key(s["sessionId"]) == want for s in live_sessions())
+
+
+def _resumable(cwd: str, session_id: str) -> bool:
+    """False only when the transcript is provably gone.
+
+    Never fall back to --continue: it resumes the newest transcript there,
+    often a session already live, so it opens a duplicate.
     """
-    target = str(Path(cwd)).rstrip("\\/").lower()
-    for s in live_sessions():
-        if str(Path(s["cwd"])).rstrip("\\/").lower() == target:
-            return True
-    return False
+    return _transcript_exists(cwd, session_id) is not False
+
+
+_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 def _plan(force: bool = False) -> tuple[list[dict], list[str]]:
@@ -204,17 +214,32 @@ def _plan(force: bool = False) -> tuple[list[dict], list[str]]:
     entries.sort(key=lambda e: str(e.get("startedAt") or ""))
 
     keep: list[dict] = []
+    seen: set[str] = set()
     for e in entries:
         cwd = str(e.get("cwd") or "")
         sid = str(e.get("sessionId") or "")
         if not cwd or not sid:
             notes.append("entry with no cwd or session id")
             continue
+        # The id lands unquoted in the tab batch file, so only a UUID may pass.
+        if not _UUID.fullmatch(sid):
+            notes.append(f"{e.get('name', '?')}: session id is not a UUID, skipped")
+            continue
+        if _id_key(sid) in seen:
+            notes.append(f"{e.get('name', sid[:8])}: listed twice, opened once")
+            continue
+        seen.add(_id_key(sid))
+        if '"' in cwd or any(ord(c) < 32 for c in cwd):
+            notes.append(f"{e.get('name', sid[:8])}: unsafe characters in directory, skipped")
+            continue
         if not Path(cwd).is_dir():
             notes.append(f"{e.get('name', sid[:8])}: directory gone ({cwd})")
             continue
-        if not force and _already_open(cwd):
-            notes.append(f"{e.get('name', sid[:8])}: already open in {cwd}")
+        if _already_open(sid):
+            notes.append(f"{e.get('name', sid[:8])}: already open")
+            continue
+        if not _resumable(cwd, sid):
+            notes.append(f"{e.get('name', sid[:8])}: no transcript to resume ({cwd})")
             continue
         keep.append(e)
     return keep, notes
@@ -222,16 +247,7 @@ def _plan(force: bool = False) -> tuple[list[dict], list[str]]:
 
 def _resume_args(entry: dict) -> list[str]:
     """The claude arguments for one tab."""
-    sid = str(entry.get("sessionId") or "")
-    cwd = str(entry.get("cwd") or "")
-    flags = [str(f) for f in (entry.get("launchFlags") or [])]
-
-    if _transcript_exists(cwd, sid) is False:
-        # The project directory is there but this transcript is not, so the
-        # session was cleaned up (cleanupPeriodDays, default 30). Fall back to
-        # the newest session in that directory rather than failing to open.
-        return ["--continue", *flags]
-    return ["--resume", sid, *flags]
+    return ["--resume", str(entry.get("sessionId") or "")]
 
 
 # ---------------------------------------------------------------------------
@@ -242,18 +258,26 @@ def _write_tab_script(index: int, entry: dict, claude: str) -> Path:
     cwd = str(Path(entry["cwd"]))
     name = str(entry.get("name") or Path(cwd).name)
     args = " ".join(_resume_args(entry))
-    safe_title = name.replace("%", "").replace("&", " ").replace('"', "")
+    # Allowlist, because cmd has no quoting that makes an unquoted title line safe.
+    safe_title = " ".join(re.sub(r"[^\w .,#+@-]", " ", name).split()) or "claude"
+    # %% because percent expansion runs even inside quotes; quotes cover & | < > ^.
+    q_cwd, q_claude = cwd.replace("%", "%%"), claude.replace("%", "%%")
 
     # A .cmd or .bat shim invoked from a batch file without `call` transfers
     # control and never comes back, so the tab would end up in a broken state.
     invoke = "call " if needs_call(claude) else ""
 
+    # The path rides in a variable because `call` expands % twice and doubles quoted ^.
+    ref = "%%CB_CLAUDE%%" if invoke else "%CB_CLAUDE%"
     script = tabs_dir() / f"tab-{index:02d}.bat"
     script.write_text(
         "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
         f"title {safe_title}\r\n"
-        f'cd /d "{cwd}"\r\n'
-        f'{invoke}"{claude}" {args}\r\n',
+        f'set "CB_CLAUDE={q_claude}"\r\n'
+        # Without this, a missing folder runs claude in the launcher's folder.
+        f'cd /d "{q_cwd}" || (echo Folder not found, claude not started.& exit /b 1)\r\n'
+        f'{invoke}"{ref}" {args}\r\n',
         encoding="utf-8",
     )
     return script
@@ -304,9 +328,7 @@ def _launch(entry: dict, script: Path, kind: str, term: str, first: bool) -> boo
     comspec = os.environ.get("COMSPEC") or "cmd.exe"
 
     if kind == "wt":
-        argv = [term, "-w", WT_WINDOW, "new-tab",
-                "-d", cwd, "--title", title,
-                comspec, "/k", str(script)]
+        argv = [term, "-w", WT_WINDOW, *_wt_tab_args(cwd, title, comspec, script)]
     elif kind == "cmd":
         argv = [term, "/k", str(script)]
     else:
@@ -336,6 +358,47 @@ def _launch(entry: dict, script: Path, kind: str, term: str, first: bool) -> boo
     return True
 
 
+def _wt_tab_args(cwd: str, title: str, comspec: str, script: Path) -> list[str]:
+    """One new-tab subcommand. wt splits on `;` inside any argument (microsoft/terminal#13264).
+
+    So titles lose semicolons, and such a cwd is left to the tab script's own cd.
+    """
+    where = [] if ";" in cwd else ["-d", cwd]
+    return ["new-tab", *where, "--title", title.replace(";", " "), comspec, "/k", str(script)]
+
+
+def _launch_wt_batch(term: str, items: list[tuple[dict, Path]]) -> None:
+    """Open every tab with one wt call, so no tab can lose a race to the window."""
+    comspec = os.environ.get("COMSPEC") or "cmd.exe"
+    argv = [term, "-w", WT_WINDOW]
+    for n, (e, script) in enumerate(items):
+        cwd = str(Path(e["cwd"]))
+        title = str(e.get("name") or Path(cwd).name)
+        if n:
+            argv.append(";")
+        argv += _wt_tab_args(cwd, title, comspec, script)
+    flags = 0
+    if IS_WINDOWS:
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    try:
+        subprocess.Popen(argv, creationflags=flags, close_fds=True, env=_child_env())
+    except Exception as exc:
+        log(f"wt batch launch failed: {exc}")
+
+
+def _wait_started(entries: list[dict], timeout: float) -> list[dict]:
+    """Poll the live registry until each entry's session is up. Returns the ones that never were."""
+    deadline = time.time() + timeout
+    pending = list(entries)
+    while pending:
+        ids = {_id_key(s["sessionId"]) for s in live_sessions()}
+        pending = [e for e in pending if _id_key(e.get("sessionId")) not in ids]
+        if not pending or time.time() >= deadline:
+            break
+        time.sleep(3)
+    return pending
+
+
 def seed(dry_run: bool) -> int:
     """Fill the ledger from the sessions open right now.
 
@@ -358,12 +421,14 @@ def seed(dry_run: bool) -> int:
     def mutate(data: dict) -> None:
         sessions = data.setdefault("sessions", {})
         for s in live:
-            existing = sessions.get(s["sessionId"], {})
+            twins = [k for k in sessions if _id_key(k) == _id_key(s["sessionId"])]
+            existing = next((sessions[k] for k in twins if isinstance(sessions[k], dict)), {})
+            for k in twins:
+                sessions.pop(k, None)
             sessions[s["sessionId"]] = {
                 "sessionId": s["sessionId"],
                 "cwd": str(Path(s["cwd"])),
                 "name": s["name"],
-                "launchFlags": existing.get("launchFlags", []),
                 "startedAt": existing.get("startedAt", now_iso()),
                 "lastSeen": now_iso(),
                 "lastSeenEpoch": time.time(),
@@ -416,18 +481,37 @@ def restore(force: bool, dry_run: bool) -> int:
         _info(f"tab scripts would go in: {tabs_dir()}")
         return 0
 
+    scripts = [(e, _write_tab_script(i, e, claude)) for i, e in enumerate(entries, 1)]
+
+    if kind == "wt":
+        _launch_wt_batch(term, scripts)
+    else:
+        for n, (e, script) in enumerate(scripts):
+            _launch(e, script, kind, term, first=(n == 0))
+
+    pending = _wait_started(entries, START_WAIT_SECONDS)
+    for e in pending:
+        # A slow start can register after the last poll, and a retry would duplicate it.
+        if _already_open(str(e.get("sessionId") or "")):
+            continue
+        _warn(f"{e.get('name', '?')} did not start, retrying")
+        script = next(s for en, s in scripts if en is e)
+        _launch(e, script, kind, term, first=False)
+    if pending:
+        pending = _wait_started(pending, START_WAIT_SECONDS)
+
+    failed = {id(e) for e in pending}
     opened = 0
-    for i, e in enumerate(entries, 1):
-        script = _write_tab_script(i, e, claude)
-        if _launch(e, script, kind, term, first=(opened == 0)):
+    for e in entries:
+        if id(e) in failed:
+            _err(f"{e.get('name', '?')} never started ({e['cwd']})")
+        else:
             opened += 1
             _ok(f"{e.get('name', '?')}  ->  {e['cwd']}")
-        else:
-            _err(f"could not open {e.get('name', '?')}")
 
     def mark(data: dict) -> None:
         data["lastRestore"] = {
-            "bootId": current_boot,
+            "bootId": current_boot if not failed else None,
             "at": now_iso(),
             "opened": opened,
         }
@@ -460,7 +544,7 @@ def status() -> int:
 
     print(f"\nledger entries: {len(sessions)}")
     for e in sessions.values():
-        live = "live" if _already_open(str(e.get("cwd") or "")) else "    "
+        live = "live" if _already_open(str(e.get("sessionId") or "")) else "    "
         print(f"  [{live}] {str(e.get('name') or '?'):<28} {e.get('cwd')}")
 
     live = live_sessions()

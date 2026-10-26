@@ -4,6 +4,8 @@ ROOT = Path(__file__).resolve().parent
 AUDIO = ROOT / "audio"
 FINAL = ROOT / "final"
 MUX = "--mux" in sys.argv  # put the narration into the mp4 so it plays anywhere
+if set(sys.argv[1:]) - {"--mux"}:
+    sys.exit("usage: python finalize.py [--mux]")
 OUT = ROOT / "out"
 missing = [t for t in ("ffmpeg", "ffprobe") if not shutil.which(t)]
 if missing:
@@ -42,7 +44,11 @@ for mp3 in mp3s:
     except (TypeError, ValueError):
         tmp.unlink(missing_ok=True)
         bad.append((ep, "video stream has no duration")); continue
-    ad = float(probe(mp3, "-show_entries", "format=duration")["format"]["duration"])
+    try:
+        ad = float(probe(mp3, "-show_entries", "format=duration").get("format", {}).get("duration"))
+    except (TypeError, ValueError):
+        tmp.unlink(missing_ok=True)
+        bad.append((ep, "audio has no duration")); continue
     pk = probe(tmp, "-select_streams", "v:0", "-skip_frame", "nokey", "-show_entries", "frame=pts_time")
     ts = [float(f["pts_time"]) for f in pk.get("frames", []) if "pts_time" in f]
     gap = max((b - a for a, b in zip(ts, ts[1:])), default=99)
