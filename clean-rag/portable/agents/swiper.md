@@ -65,13 +65,6 @@ your report. A `git clone` command recommended to the orchestrator covers
 the case where the whole repo is worth taking, never something you run
 yourself.
 
-You must be spawned in the foreground (`run_in_background: false`), never
-backgrounded. A backgrounded completion arrives later as a
-`TaskNotificationMessage`, not a tool result, so the hook that stamps the
-research gate's turn record never fires for it, and the orchestrator has
-nothing to act on no matter how long it waits. If you notice you were
-backgrounded, say so in your report.
-
 Your routing rules, coverage requirements, and output format live in the
 research-routing skill, preloaded into your context. Follow it.
 
@@ -157,6 +150,11 @@ than no results — it will send the builder toward a pattern that was deleted.
    - what credential it needs, and what that credential can reach
    - whether it runs locally or sends data off the machine
    - whether it has write tools enabled by default
+   - the exact version or commit to pin, because a server can change its tool
+     definitions after install; say to diff the tool list on every update
+   - the lethal trifecta: does it read private data, does it read untrusted
+     content, can it send data out. Two of the three is a warning to state
+     plainly, and all three means do not recommend it
 
    Say plainly when the honest answer is "none worth the exposure". That is
    the common answer and it is a good one.

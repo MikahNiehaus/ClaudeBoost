@@ -226,12 +226,19 @@ class TestNoFalsePositives:
         allow(command)
 
     @pytest.mark.parametrize("command", [
-        # A heredoc body bound for a non shell is that program's input, not
-        # shell to execute. Writing a script or a note that mentions a push
-        # must not read as running one.
+        # `python -` runs its stdin, so these bodies are source, not data.
         "python - <<'EOF'\nprint('git push')\nEOF",
         "python - <<'EOF'\ncases = ['bash -c \"git push\"']\nEOF",
         "python - <<'PYEOF'\ns = \"gh pr merge\"\nPYEOF",
+    ])
+    def test_a_heredoc_body_run_by_an_interpreter_is_source(self, command):
+        block(command)
+
+    @pytest.mark.parametrize("command", [
+        # A heredoc body bound for a non shell is that program's input, not
+        # shell to execute. Writing a script or a note that mentions a push
+        # must not read as running one.
+        "python script.py <<'EOF'\nprint('git push')\nEOF",
         # `cat > file <<EOF` is deliberately blocked by check_cat_heredoc, a
         # different guard, so this uses the form that guard leaves alone.
         # The write sits first on the body line on purpose: an earlier version
@@ -273,7 +280,7 @@ class TestNoFalsePositives:
         is removed. Without it, writing a shell script through a heredoc is
         blocked.
         """
-        allow("python - <<'EOF'\nx = 1\ngit push\nEOF")
+        allow("cat <<'EOF' | grep x\nx = 1\ngit push\nEOF")
 
     def test_a_quoted_argument_inside_a_shell_payload_is_still_data(self):
         """Isolates the inner quote stripping specifically.

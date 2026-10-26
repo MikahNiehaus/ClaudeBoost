@@ -35,14 +35,14 @@ good-cop only runs when bad-cop found something Critical or High. A clean
 adversarial pass closes itself out, and so does a run whose findings are all
 Nit severity: you apply those yourself and re-run bad-cop for the stamp.
 
-**1. Spawn `researcher`** (foreground). Give it the task and, if you already
+**1. Spawn `researcher`** and wait for its report. Give it the task and, if you already
 know some, 3 to 5 aspects. It indexes and searches the project itself
 (triggering `/index-project` if needed), reads both the vector and import
 graph, reaches for the `graphrag` skill on a genuinely cross file behavior
 question, and checks the general standard for this class of change against a
-real source, not memory. Wait for it.
+real source, not memory.
 
-**2. Spawn `swiper`** (foreground), only after researcher reports. Hand it
+**2. Spawn `swiper`** only after researcher reports. Hand it
 researcher's findings along with the task, so it doesn't recommend swiping
 something the project already has a pattern for. Swiper checks whether this
 already exists (project, stdlib, a dependency, GitHub, StackOverflow) and
@@ -110,6 +110,8 @@ that the mp4 was not produced. Never hand over a silent deck as though it were
 the narrated video.
 
 `doctor` answers whether a dependency is installed, not whether it responds.
+Narration sends each slide's text off the machine, so keep ticket, customer
+and credential text out of the narration script.
 Narration is an outbound call to Microsoft's TTS endpoint once per slide, and
 `edge_tts.Communicate` bounds only the socket (`sock_connect=10`,
 `sock_read=60`) while leaving `total=None`, so an endpoint that stays connected
@@ -172,7 +174,9 @@ summary of that re-check too. If bad-cop finds nothing and stamps
 `VERIFIED:`, the loop ends. If it finds more issues, relay them and spawn
 good-cop again. The loop (bad-cop → good-cop → bad-cop) continues until
 bad-cop stamps `VERIFIED:` on a clean pass — that is the only terminal
-condition. The user should never have to ask what happened in QA; each
+condition. Three rounds is the normal shape. At five, stop and ask the user,
+naming the finding that keeps coming back, because a loop that has not
+converged by then will not converge by running longer. The user should never have to ask what happened in QA; each
 round's output should be visible in the conversation before the turn ends.
 
 ## What this is not

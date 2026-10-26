@@ -15,8 +15,7 @@ just the codebase and standards pass.
 `$ARGUMENTS` is the task or question. If it's empty, use whatever the user
 was just describing.
 
-Spawn `researcher` (foreground, `run_in_background: false`, never
-backgrounded). Give it the task and, if you already know some, 3 to 5
+Spawn `researcher` and wait for its report. Give it the task and, if you already know some, 3 to 5
 aspects. It indexes and searches the project itself (triggering
 `/index-project` if the index is missing or stale), reads both the vector
 and import graph, reaches for the `graphrag` skill on a genuinely cross file

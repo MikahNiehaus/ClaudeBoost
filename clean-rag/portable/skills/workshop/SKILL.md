@@ -180,7 +180,7 @@ agents. Step 3 is unrunnable without it.
 
 ## Step 2, bad-cop attacks it
 
-Spawn `bad-cop`, foreground, `run_in_background: false`. Never backgrounded.
+Spawn `bad-cop` and wait for its report before doing anything else. The Agent tool has no foreground option, so waiting is your job.
 
 **Give it the question, the answer, the facts, and the correctness properties.
 Never the rationale.** Handing a reviewer your reasoning is handing it the

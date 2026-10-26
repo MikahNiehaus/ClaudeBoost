@@ -18,8 +18,7 @@ Opus fix pass for polish.
 ## What to do
 
 `$ARGUMENTS` is bad-cop's findings, or empty to mean "whatever bad-cop just
-reported." Spawn `good-cop` (foreground, `run_in_background: false`, never
-backgrounded). Give it five things and only five: bad-cop's `REVIEW SCOPE:`
+reported." Spawn `good-cop` and wait for its report. Give it five things and only five: bad-cop's `REVIEW SCOPE:`
 line and resolved file list copied verbatim, the requirements, the correctness
 properties, the diff or code under review, and bad-cop's findings with their
 real execution output. Not the original author's reasoning for the change.

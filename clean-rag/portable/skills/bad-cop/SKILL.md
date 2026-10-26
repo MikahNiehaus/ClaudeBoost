@@ -24,7 +24,7 @@ describing a surface. Empty is the common case and means the diff: the
 uncommitted working tree, or the branch against its merge base when the tree is
 clean.
 
-Spawn `bad-cop` (foreground, `run_in_background: false`, never backgrounded).
+Spawn `bad-cop` and wait for its report.
 Give it four things and only four: the review scope, the requirements, the
 correctness properties the change is supposed to satisfy, and the actual diff or
 code under review. Not your reasoning for the change, that's exactly what

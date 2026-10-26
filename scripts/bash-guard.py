@@ -961,8 +961,15 @@ _SHELL_EXEC_HEAD_RE = re.compile(
 # php spells the flag -r, and it is listed separately rather than folded into
 # the alternation because node's own -r preloads a module (`node -r
 # ts-node/register app.js`), which is an operand and not source.
+# Only W, X and Q take an argument; -c, -m and -- end CPython option parsing.
 _INTERPRETER_EXEC_HEAD_RE = re.compile(
-    r"\b(?:python[\d.]*|perl|ruby|node|php|Rscript)\s+-(?:c|e)\b"
+    r"(?:\bpython[\d.]*t?d?|\bpypy[\d.]*|\bpythonw|(?<![\w.-])py)(?:\.exe)?"
+    r"(?:\s+-(?:V:\S+|\d[\d.]*(?:-[A-Za-z\d]+)?))?"
+    r"(?:\s+-(?-i:[^\s\-cmWXQ\"'])*(?-i:[WXQ])(?:\S+|\s+\S+)"
+    r"|\s+-(?-i:[^\s\-cmWXQ\"'])+"
+    r"|\s+--check-hash-based-pycs\s+\S+|\s+--[A-Za-z][\w-]*)*"
+    r"\s+-[A-Za-z]*c\b"
+    r"|\b(?:perl|ruby|node|php|Rscript)\s+-(?:c|e)\b"
     r"|\bphp(?:\.exe)?\s+-r\b",
     re.IGNORECASE,
 )
@@ -1039,17 +1046,17 @@ def _in_command_position(text: str, index: int) -> bool:
 # `<<tag` is a redirection operator, not the whole line. POSIX 2.7.4: the body
 # "shall begin after the next <newline>", so anything else on that line -- a
 # redirect, a pipe, a background '&', a comment, a second heredoc operator --
-# sits legally between the tag and the newline. `tail` absorbs it. Requiring
+# sits legally between the tag and the newline. _heredoc_lines reads it. Requiring
 # the newline immediately after the tag instead made `cat <<EOF > f.txt` and
 # `cat <<EOF | grep x` match nothing at all, so their bodies were scanned as
 # command text and an ordinary heredoc was refused.
 #
-# `tail` is not skipped over, it is read: a shell named there executes the body
+# That text is not skipped over, it is read: a shell named there executes the body
 # just as surely as one named before the << does (`cat <<EOF | bash`), so it
 # joins the head in the shell check below.
 #
 # The lookaround excludes `<<<`, which is a herestring and has no body. Without
-# it the widened tail lets `cat <<<EOF | x` match and blank the rest of the
+# it `cat <<<EOF | x` would match and blank the rest of the
 # command, which is the allow-more direction.
 #
 # The `\b` after the tag is load bearing, and it is the same defect the
@@ -1063,10 +1070,7 @@ def _in_command_position(text: str, index: int) -> bool:
 # That restored 930ms to 0.4ms. `\b` rather than `\w*+`, because possessive
 # quantifiers need Python 3.11 and this tree's floor is 3.9.
 _HEREDOC_RE = re.compile(
-    r"(?<!<)<<(?!<)-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)\b(?P=q)"
-    r"(?P<tail>[^\n]*)\r?\n(?P<body>.*?)(?:^[ \t]*(?P=tag)\b|\Z)",
-    re.DOTALL | re.MULTILINE,
-)
+    r"(?<!<)<<(?!<)-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)\b(?P=q)")
 _SHELL_WORD_RE = re.compile(r"(?:^|[/\\])(?:ba|z|k|da)?sh(?:\.exe)?$", re.IGNORECASE)
 
 # Word boundaries on the operator line. str.split() breaks on whitespace only,
@@ -1098,6 +1102,12 @@ _ROUTER_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bash reserved words that leave the next word in command position (Bash manual
+# 3.2.4 pipelines, 3.2.5 compound commands, 3.2.6 coprocesses).
+_RESERVED_COMMAND_PREFIXES = frozenset({
+    "!", "{", "coproc", "do", "elif", "else", "if", "then", "time", "until", "while",
+})
+
 
 def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     """Is a shell the command name on this heredoc's operator line?
@@ -1112,7 +1122,7 @@ def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     """
     for segment in _OPERATOR_SEGMENT_SPLIT_RE.split(operator_line):
         for token in segment.split():
-            if _ROUTER_WORD_RE.fullmatch(token):
+            if token in _RESERVED_COMMAND_PREFIXES or _ROUTER_WORD_RE.fullmatch(token):
                 continue
             # The first token that is not a prefix is the command name; what
             # follows it are that command's arguments, not another name.
@@ -1122,34 +1132,197 @@ def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     return False
 
 
+# The `n` or `{varname}` of `[n]<<word` (Bash manual 3.6), else read as a script name.
+_HEREDOC_FD_RE = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
+
+
+def _heredoc_fd_start(command: str, line_start: int, op_start: int) -> int:
+    """Where the `[n]` of `[n]<<word` begins, else `op_start`.
+
+    Walks back over one word, so many operators on one line stay linear.
+    """
+    i = op_start
+    while i > line_start and (command[i - 1].isalnum() or command[i - 1] in "_{}"):
+        i -= 1
+    at_boundary = i == line_start or command[i - 1].isspace() or command[i - 1] in ";|&()<>"
+    if at_boundary and _HEREDOC_FD_RE.fullmatch(command, i, op_start):
+        return i
+    return op_start
+
+
+def _heredoc_lines(command: str):
+    """(line start, line end, [(operator, body start, body end)]) per line.
+
+    Bodies follow in operator order, each ending at its own delimiter
+    (POSIX 2.7.4).
+    """
+    pos = 0
+    while True:
+        first = _HEREDOC_RE.search(command, pos)
+        if first is None:
+            return
+        line_end = command.find("\n", first.end())
+        if line_end == -1:
+            return
+        line_start = command.rfind("\n", 0, first.start()) + 1
+        heredocs = []
+        cursor = line_end + 1
+        for op in [first, *_HEREDOC_RE.finditer(command, first.end(), line_end)]:
+            delimiter = re.compile(r"^[ \t]*" + re.escape(op.group("tag")) + r"\b",
+                                   re.MULTILINE).search(command, cursor)
+            if delimiter is None:
+                heredocs.append((op, cursor, len(command)))
+                cursor = pos = len(command)
+                continue
+            heredocs.append((op, cursor, delimiter.start()))
+            pos = delimiter.end()
+            next_line = command.find("\n", pos)
+            cursor = len(command) if next_line == -1 else next_line + 1
+        yield line_start, line_end, heredocs
+
+
+_HEREDOC_MARK_RE = re.compile(r"\x01(\d+)\x01")
+
+# A lone `&` does not end a pipeline here, because `2>&1` splits on it too.
+_PIPELINE_ENDS = (";", "\n", "&&", "||")
+
+
+def _heredocs_fed_to_interpreter(marked_line: str) -> set:
+    """Indices of the marked heredocs whose pipeline has an interpreter reading
+    stdin as source. `cat <<A | python -` feeds A to python; `cat <<A; python
+    <<B` does not.
+    """
+    fed = set()
+    group: list[str] = []
+    for separator, segment in _split_segments(marked_line) + [(";", "")]:
+        if group and any(end in separator for end in _PIPELINE_ENDS):
+            if any(_interpreter_reads_stdin_as_source(_HEREDOC_MARK_RE.sub(" ", seg))
+                   for seg in group):
+                fed.update(int(k) for seg in group for k in _HEREDOC_MARK_RE.findall(seg))
+            group = []
+        group.append(segment)
+    return fed
+
+
+def _classified_heredocs(command: str):
+    """(body start, body end, a shell is on its line, an interpreter reads it)."""
+    if "<<" not in command:
+        # Cheap reject so the common case never enters the regex at all.
+        return
+    for line_start, line_end, heredocs in _heredoc_lines(command):
+        pieces, prev = [], line_start
+        for k, (op, _start, _end) in enumerate(heredocs):
+            fd_start = max(prev, _heredoc_fd_start(command, line_start, op.start()))
+            pieces.append(command[prev:fd_start])
+            pieces.append(" \x01%d\x01 " % k)
+            prev = op.end()
+        pieces.append(command[prev:line_end])
+        marked = "".join(pieces)
+        line = _HEREDOC_MARK_RE.sub(" ", marked)
+        # Whole line, not pipeline, so `cat <<EOF >f; bash f` still counts.
+        shell = (any(_SHELL_WORD_RE.search(word)
+                     for word in _OPERATOR_LINE_SPLIT_RE.split(line))
+                 # The split keeps quotes on, so it misses `cat <<EOF | "bash"`.
+                 or _shell_reads_body_in_command_position(line))
+        fed = _heredocs_fed_to_interpreter(marked)
+        for k, (_op, start, end) in enumerate(heredocs):
+            yield start, end, shell, k in fed
+
+
 def _heredoc_data_spans(command: str) -> list[tuple[int, int]]:
     """Spans of heredoc bodies that are data rather than shell source.
 
-    Only the first heredoc on an operator line is classified. POSIX 2.7.4 says
-    a second `<<` on the same line takes the body after the first one's
-    terminator, and following that queue is more machinery than the shape is
-    worth; the later bodies stay scannable instead, which refuses more rather
-    than allowing more.
+    A body an interpreter reads as source is not data either;
+    _interpreter_stdin_sources scans it.
     """
-    spans = []
-    if "<<" not in command:
-        # Cheap reject so the common case never enters the regex at all.
-        return spans
-    for m in _HEREDOC_RE.finditer(command):
-        # Everything on the operator line except the operator itself: the
-        # receiving command before the <<, and whatever follows the tag.
-        line_start = command.rfind("\n", 0, m.start()) + 1
-        operator_line = command[line_start:m.start()] + " " + m.group("tail")
-        # If a shell is the thing reading it, the body really is executed.
-        if any(_SHELL_WORD_RE.search(word)
-               for word in _OPERATOR_LINE_SPLIT_RE.split(operator_line)):
+    return [(start, end) for start, end, shell, fed in _classified_heredocs(command)
+            if not shell and not fed]
+
+
+# Per interpreter: inline source letters, letters taking a value, and their long forms.
+_STDIN_SOURCE_FLAGS = {
+    "python": ("cm", "WXQ", (), ("--check-hash-based-pycs",)),
+    "perl": ("eE", "IMm", (), ()),
+    "ruby": ("e", "IrCEF", (), ()),
+    "node": ("ep", "rC", ("--eval", "--print"),
+             ("--require", "--import", "--loader", "--experimental-loader",
+              "--conditions", "--input-type")),
+    "php": ("rRBEFf", "dczt", (), ()),
+    "rscript": ("e", "", (), ()),
+}
+_PY_SELECTOR_RE = re.compile(r"-(?:V:\S+|\d[\d.]*(?:-[A-Za-z\d]+)?)")
+
+
+def _interpreter_reads_stdin_as_source(segment: str) -> bool:
+    """Does this command run stdin as program source, as `python -` does?
+
+    Skipping a value option wrongly can only hide a script name, which
+    refuses more rather than less.
+    """
+    words = _command_words(segment)
+    if not words:
+        return False
+    name = _binary_name(words[0])
+    if not _INTERPRETER_NAME_RE.match(name):
+        return False
+    family = "python" if name.startswith("py") else name
+    if family not in _STDIN_SOURCE_FLAGS:
+        return False
+    inline, valued, long_inline, long_valued = _STDIN_SOURCE_FLAGS[family]
+    args = iter(words[1:])
+    for arg in args:
+        if arg == "--":
+            return next(args, "-") == "-"
+        if arg == "-":
+            return True
+        if not arg.startswith("-"):
+            return False
+        if arg.startswith("--"):
+            option = arg.split("=", 1)[0]
+            if option in long_inline:
+                return False
+            if option in long_valued and "=" not in arg:
+                next(args, None)
             continue
-        # The split above tests words with their quotes still attached, so it
-        # misses `cat <<EOF | "bash"`, which really does execute the body.
-        if _shell_reads_body_in_command_position(operator_line):
+        if family == "python" and _PY_SELECTOR_RE.fullmatch(arg):
             continue
-        spans.append((m.start("body"), m.end("body")))
-    return spans
+        for i, letter in enumerate(arg[1:], 1):
+            if letter in inline:
+                return False
+            if letter in valued:
+                if i == len(arg) - 1:
+                    next(args, None)
+                break
+    return True
+
+
+def _interpreter_stdin_sources(command: str) -> list[str]:
+    """Source an interpreter reads from stdin: a heredoc, a here-string, or
+    `echo ... | python`. Input from a file or another program is not visible.
+    """
+    sources = [command[start:end]
+               for start, end, _shell, fed in _classified_heredocs(command) if fed]
+    if "<<<" not in command and "|" not in command:
+        return sources
+    # Split once. Re-splitting the line in front of every `<<<` measured 11s
+    # for 4000 of them on one 24KB line.
+    segments = _split_segments(command)
+    if "<<<" in command:
+        for _s, segment in segments:
+            if "<<<" not in segment or not _interpreter_reads_stdin_as_source(segment):
+                continue
+            # The here-string is one word after quote removal (Bash manual 3.6.7).
+            words = _shell_words(segment)
+            sources.extend(target for operator, target in zip(words, words[1:])
+                           if operator == "<<<")
+    if "|" in command:
+        for (_s, feeder), (separator, reader) in zip(segments, segments[1:]):
+            if separator.strip() != "|" or not _interpreter_reads_stdin_as_source(reader):
+                continue
+            words = _command_words(feeder)
+            if words and _binary_name(words[0]) in ("echo", "printf"):
+                sources.append(" ".join(words[1:]))
+    return sources
 
 
 def _quoted_spans(command: str) -> list[tuple[int, int]]:
@@ -1191,6 +1364,9 @@ def _executor_payloads(command: str, depth: int = 0) -> list[str]:
         # A wrapper nested this deep is pathological. Stop rather than recurse
         # without bound on a crafted input.
         return payloads
+    for source in _interpreter_stdin_sources(command):
+        payloads.append((source, "interpreter"))
+        payloads.extend(_executor_payloads(source, depth + 1))
     spans = _quoted_spans(command)
     for head in _EXECUTOR_HEAD_RE.finditer(command):
         # An executor named inside a string is being quoted, not run.
@@ -1541,10 +1717,13 @@ _ASSIGNMENT_WORD_RE = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 # denylist that reads only the first word is bypassed by putting any of these
 # in front of it. `start` and `wt.exe` are Windows spellings of the same idea.
 _WRAPPER_WORDS = frozenset({
-    "builtin", "chroot", "command", "do", "doas", "else", "elif", "env",
-    "exec", "ionice", "nice", "nohup", "parallel", "setsid", "start", "stdbuf",
-    "sudo", "then", "time", "timeout", "watch", "wt", "xargs",
-})
+    "builtin", "chroot", "command", "doas", "env", "exec", "function", "ionice",
+    "nice", "nohup", "parallel", "setsid", "start", "stdbuf", "sudo", "timeout",
+    "watch", "wt", "xargs",
+}) | _RESERVED_COMMAND_PREFIXES
+
+# `coproc NAME {` and `function NAME {` name the group; the name is not run.
+_NAMED_GROUP_WORDS = frozenset({"coproc", "function"})
 
 # The wrappers that do not just hand off, they append arguments of their own.
 # POSIX: xargs "shall construct a command line consisting of the utility and
@@ -1589,6 +1768,8 @@ def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
         if name in _WRAPPER_WORDS:
             stripped.append(name)
             index += 1
+            if name in _NAMED_GROUP_WORDS and words[index + 1:index + 2] == ["{"]:
+                index += 1
             feeder = name in _ARG_FEEDER_WORDS
             while index < len(words) and _WRAPPER_OPERAND_RE.match(words[index]):
                 takes_value = feeder and words[index] in _FEEDER_VALUE_FLAGS
@@ -1761,6 +1942,7 @@ _GIT_UNSAFE_VERB_FLAGS = frozenset({
 _GIT_UNSAFE_FLAGS_BY_VERB = {
     "clone": (frozenset({"--config", "--template"}), "cu"),
     "grep": (frozenset(), "O"),
+    "init": (frozenset({"--template"}), ""),
     "rebase": (frozenset(), "x"),
 }
 
@@ -2147,7 +2329,7 @@ _FED_ARG = "\x00fed\x00"
 _FED_ARGS = [_FED_ARG, _FED_ARG]
 
 _INTERPRETER_NAME_RE = re.compile(
-    r"^(?:python[\d.]*|perl|ruby|node|deno|bun|php|rscript)$", re.IGNORECASE)
+    r"^(?:python[\d.]*t?d?|pythonw|py|pypy[\d.]*|perl|ruby|node|deno|bun|php|rscript)$", re.IGNORECASE)
 
 
 def _fed_git_problem(words: list[str]) -> str | None:

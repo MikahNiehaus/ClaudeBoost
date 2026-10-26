@@ -15,7 +15,7 @@ says finding facts is your job and never the user's, and to dispatch a sub agent
 rather than asking for something you could look up. In this project those agents
 are `researcher` (the codebase, the import graph, the general engineering
 standard) and `swiper` (does this already exist, in the project, the stdlib, a
-dependency, GitHub, StackOverflow). Spawn them in the foreground. Do not block
+dependency, GitHub, StackOverflow). Spawn them. Do not block
 the whole frontier on them: a running exploration is an unsettled prerequisite,
 so only the questions downstream of it wait, and the rest of the frontier gets
 asked now.
