@@ -2108,6 +2108,35 @@ It runs one of two ways, decided once before either one starts: a single quick
 check for an ordinary session, or the full adversarial loop for a high stakes
 one. Which path ran, and why, goes in the 5e report either way.
 
+**On either path, check the judge's own claims.** When the judge answers, open
+the artifacts it cites, the same way you check good-cop's diff. Do not take its
+summary on trust.
+
+Check every proof against these failures on either path. They never show up as
+red, because each looks like a pass from inside the session:
+
+- **Persistence claimed from a screenshot** with no server read-back. A value
+  rendered in a form is not a value in the database.
+- **Results that exist only as prose** in the report, with no capture on disk.
+  If it is not in an artifact it was not measured, whatever the table says.
+- **A build identifier quoted without resolving it.** Confirm the commit is a
+  real object in the repo. A dashboard's "version" field is often an internal
+  build id and not a commit at all.
+- **Comparing two runs that tested different code.** Before attributing a
+  behaviour change to the environment or to test technique, diff the commits.
+  This is the one that most often produces a confident wrong conclusion.
+- **A blank or mistargeted screenshot** passing as evidence because nobody
+  opened it. Open every image you save.
+- **Measurement windows too short for a deployed backend.** A response under
+  100ms locally can take ten seconds deployed, so a window sized for local turns
+  a success into a phantom failure or an unresolved null.
+- **Verifying a fix in a minified bundle by grepping identifier names.** Local
+  names are renamed and comments stripped, so the grep reads zero for a fix that
+  is present. Grep an object property, which survives, then read the code
+  around it.
+- **A marker check that covers only half the change.** Confirm the marker you
+  chose actually appears in every file the diff touched.
+
 #### 5d-0 — Decide: lite check or full loop
 
 Detection is deterministic — the same keyword and path labeler the verifier
