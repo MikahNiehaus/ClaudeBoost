@@ -293,7 +293,7 @@ def _project_root(start_path: str = ".") -> str | None:
        it keeps the only step that stats every registered project off the two
        cases that answer for free.
     4. The nearest .git, correct only when a repo holds exactly one project.
-       It resolved C:/Development/Domain to C:/Development and started a 10,361
+       It resolved a project to its parent folder and started a 10,361
        file index of every project on the machine, so it ranks last.
 
     A path or None, never an exception: this runs inside a UserPromptSubmit
@@ -360,7 +360,7 @@ def _has_real_index(entries: dict, git_root: str) -> bool:
 
     files_indexed > 0 is the second half of the test and it is not optional. A
     registry row is a claim that a project exists, not evidence it has any data.
-    The row for C:/Development/Domain carried files_indexed 0, a null indexed_at
+    One project's row carried files_indexed 0, a null indexed_at
     and no directory on disk at all, left behind by an older version of the
     /index-project skill that registered a path without indexing it. Matching on
     path alone reported that project as searchable and stopped queueing it, so
@@ -448,7 +448,7 @@ def _git_project_context(port: str, git_root: str | None) -> str:
 
     # A root holding other registered projects is a container, not a project.
     # Auto indexing it reindexes every project inside it a second time under a
-    # path nothing searches: 10,361 files for C:/Development against Domain's
+    # path nothing searches: 10,361 files for the parent against one project's
     # 1,697, holding the one global index lock for hours and answering 423 to
     # every other index call in the meantime. That ran for over an hour here, so
     # this refuses out loud and names the fix rather than failing quietly.

@@ -1511,15 +1511,6 @@ MCP_SERVERS: list[dict] = [
     },
     # --- Code intelligence -------------------------------------------------
     {
-        "name": "serena",
-        "label": "Serena (LSP symbol tools)",
-        "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
-                 "serena", "start-mcp-server"],
-        "needs": "uvx",
-        "hint": UV_HINT,
-        "why": "real symbol references, call hierarchy and rename via language servers",
-    },
-    {
         "name": "ast-grep",
         "label": "ast-grep MCP",
         "args": ["uvx", "ast-grep-mcp"],

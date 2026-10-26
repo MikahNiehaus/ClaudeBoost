@@ -84,10 +84,10 @@ def _run_git_project_context(rag_enforce, status_body, git_root):
 class TestClosestRegisteredProjectWins:
     def test_nested_registered_project_beats_the_repo_that_contains_it(self, rag_enforce, home):
         """The concrete case named in the requirements: cwd
-        <repo>/Domain must resolve to <repo>/Domain, not to <repo>, which is
+        <repo>/MyApp must resolve to <repo>/MyApp, not to <repo>, which is
         the nearest ancestor holding a .git."""
-        development = home / "Development"
-        domain = development / "Domain"
+        development = home / "Projects"
+        domain = development / "MyApp"
         domain.mkdir(parents=True)
         (development / ".git").mkdir()
         _write_registry(home, {"h1": {"project_path": str(domain), "files_indexed": 1697}})
@@ -97,7 +97,7 @@ class TestClosestRegisteredProjectWins:
 
         git_root_only = rag_enforce._find_git_root(str(domain))
         assert git_root_only == str(development.resolve()), (
-            "sanity: the plain git walk really does climb past Domain to the "
+            "sanity: the plain git walk really does climb past MyApp to the "
             "containing repo, which is the exact wrong answer _project_root "
             "exists to avoid"
         )
@@ -122,13 +122,13 @@ class TestClosestRegisteredProjectWins:
         are all the same project. Paths reach the registry from /index-project
         callers, not only from this hook, so the spelling is not ours to
         assume."""
-        project = home / "Development" / "Domain"
+        project = home / "Projects" / "MyApp"
         project.mkdir(parents=True)
         for label, spelling in [
             ("upper case", str(project).upper()),
             ("forward slashes", str(project).replace("\\", "/")),
             ("trailing separator", str(project) + "\\"),
-            ("dot dot segment", str(project / ".." / "Domain")),
+            ("dot dot segment", str(project / ".." / "MyApp")),
         ]:
             _write_registry(home, {"h1": {"project_path": spelling}})
             assert rag_enforce._project_root(str(project)) == str(project.resolve()), label
@@ -142,20 +142,20 @@ class TestNormPath:
 
     def test_the_same_path_spelled_differently_normalizes_the_same(self, rag_enforce):
         forms = [
-            "C:\\Development\\Domain",
-            "c:\\development\\domain",
-            "C:/Development/Domain",
-            "C:\\Development\\Domain\\",
-            "C:\\Development\\.\\Domain",
-            "C:\\Development\\Other\\..\\Domain",
-            "C:\\Development\\\\Domain",
+            "C:\\Projects\\MyApp",
+            "c:\\projects\\myapp",
+            "C:/Projects/MyApp",
+            "C:\\Projects\\MyApp\\",
+            "C:\\Projects\\.\\MyApp",
+            "C:\\Projects\\Other\\..\\MyApp",
+            "C:\\Projects\\\\MyApp",
         ]
         normalized = {rag_enforce._norm_path(f) for f in forms}
         assert len(normalized) == 1, f"expected one normal form, got {normalized}"
 
     def test_different_paths_stay_different(self, rag_enforce):
-        assert rag_enforce._norm_path("C:\\Development\\Domain") != rag_enforce._norm_path(
-            "C:\\Development\\DomainOther"
+        assert rag_enforce._norm_path("C:\\Projects\\MyApp") != rag_enforce._norm_path(
+            "C:\\Projects\\MyAppOther"
         )
 
     def test_empty_is_empty_and_never_a_relative_dot(self, rag_enforce):
@@ -463,12 +463,12 @@ class TestRegisteredProjectsRegistry:
 class TestRegisteredProjectsUnder:
     def test_excludes_root_itself_and_a_prefix_matching_sibling(self, rag_enforce, home):
         """Attacks case, trailing separators, dotted segments, and the sibling
-        whose name merely starts with the root's name (C:\\DevelopmentOther
-        against root C:\\Development)."""
-        root = home / "Development"
-        child = root / "Domain"
+        whose name merely starts with the root's name (C:\\ProjectsOther
+        against root C:\\Projects)."""
+        root = home / "Projects"
+        child = root / "MyApp"
         child.mkdir(parents=True)
-        sibling = home / "DevelopmentOther"
+        sibling = home / "ProjectsOther"
         sibling_child = sibling / "proj"
         sibling_child.mkdir(parents=True)
 
@@ -484,7 +484,7 @@ class TestRegisteredProjectsUnder:
         assert any(Path(r) == child.resolve() for r in result), (
             "a true descendant must be included"
         )
-        assert not any("DevelopmentOther" in r for r in result), (
+        assert not any("ProjectsOther" in r for r in result), (
             "a sibling whose name starts with the root's name must not be "
             "mistaken for a descendant"
         )
@@ -493,8 +493,8 @@ class TestRegisteredProjectsUnder:
         )
 
     def test_root_argument_case_and_trailing_separator_do_not_change_the_answer(self, rag_enforce, home):
-        root = home / "Development"
-        child = root / "Domain"
+        root = home / "Projects"
+        child = root / "MyApp"
         child.mkdir(parents=True)
         _write_registry(home, {"a": {"project_path": str(child)}})
 
@@ -531,8 +531,8 @@ class TestIndexedDecisionEndToEnd:
     refuse: no subprocess, a real message naming the way forward."""
 
     def _run(self, rag_enforce, home, monkeypatch, files_indexed_value):
-        container = home / "Development"
-        child = container / "Domain"
+        container = home / "Projects"
+        child = container / "MyApp"
         child.mkdir(parents=True)
 
         entries = {
@@ -650,8 +650,8 @@ class TestIndexedDecisionEndToEnd:
         comment says it exists to prevent) makes this test fail, by manually
         replaying the mutated expression against the same fixture data rather
         than mutating the source file on disk."""
-        container = home / "Development"
-        child = container / "Domain"
+        container = home / "Projects"
+        child = container / "MyApp"
         child.mkdir(parents=True)
         entries = {
             "container": {"project_path": str(container), "files_indexed": 0},
@@ -696,7 +696,7 @@ class TestOneProjectPerPrompt:
         # for the search to happen at all.
         monkeypatch.setenv("CLEAN_RAG_PROMPT_SEARCH", "1")
 
-        cwd = home / "Development" / "Domain"
+        cwd = home / "Projects" / "MyApp"
         cwd.mkdir(parents=True)
         (cwd.parent / ".git").mkdir()
 
@@ -796,7 +796,7 @@ class TestProjectRootCostDoesNotGrowWithTheRegistry:
         string comparison answers at the first level. Folding the spellings only
         the filesystem knows about has to stay on the branch that comparison
         misses, or every prompt is back to a syscall per registered project."""
-        project = home / "Domain"
+        project = home / "MyApp"
         project.mkdir()
 
         def time_for(n):

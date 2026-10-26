@@ -22,7 +22,7 @@ This targets clean-rag on **port 8613**. It used to index into the ClaudeBoost R
 
 **Always pass an absolute path.** `handle_index_project` never calls `.resolve()` and never checks `is_absolute()` (`server/app.py:493-527`). A relative path that happens to exist relative to **the server's** working directory, not yours, is indexed without any error, and `project_id.py:100` then names the index directory after whatever the server resolved. That is a silently wrong project, which is worse than a refusal. There is no response field that reveals it.
 
-**Never index a directory that contains other registered projects.** One index per project. A parent directory means every project inside it gets embedded a second time under a path nothing searches, and it holds the global index lock for hours while doing it. Indexing `C:\Development` meant 10,361 files against `C:\Development\Domain`'s 1,697, and every other index call got a 423 for the duration. If cwd is a subdirectory of a big repo, drop a `.ragroot` file in the folder that is actually the project, or name the path explicitly.
+**Never index a directory that contains other registered projects.** One index per project. A parent directory means every project inside it gets embedded a second time under a path nothing searches, and it holds the global index lock for hours while doing it. Indexing a parent folder once meant 10,361 files against one project's 1,697, and every other index call got a 423 for the duration. If cwd is a subdirectory of a big repo, drop a `.ragroot` file in the folder that is actually the project, or name the path explicitly.
 
 ## Where everything goes
 
