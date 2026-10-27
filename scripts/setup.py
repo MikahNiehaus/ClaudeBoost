@@ -24,6 +24,7 @@ What it does:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import platform
@@ -42,6 +43,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude_cli import claude_cmd  # noqa: E402
+from plugin_hooks import HOOKS, PROMPT_SENTINELS, entry as hook_entry, summary_lines  # noqa: E402
+
+PLUGIN_ID = "claudeboost@claudeboost-local"
 
 # Windows consoles default to cp1252. run_cmd decodes child output as UTF-8,
 # and relaying it (the ollama pull spinner emits braille) raised
@@ -351,14 +355,8 @@ HOOK_RUNNER = Path.home() / ".claude" / "hook-run.py"
 
 
 def _statusline_cmd() -> str:
-    """Build the status line command with same fallback chain as _py_cmd."""
-    script = '"$CLAUDEBOOST_HOME/scripts/rag-statusline.py"'
-    return (
-        f'"$CLAUDEBOOST_PYTHON" {script}'
-        f' || python {script}'
-        f' || python3 {script}'
-        f' || py {script}'
-    )
+    """RAG health + Claude subscription usage, merged, never blocking."""
+    return 'bash "$CLAUDEBOOST_HOME/scripts/statusline-merged.sh"'
 
 
 def _load_settings() -> dict:
@@ -612,9 +610,10 @@ def _install_hook(settings: dict, hook_type: str, entry: dict,
                     changed = True
                 # Refresh command path too — handles repo moves.
                 for new_h, old_h in zip(entry["hooks"], e["hooks"]):
-                    if new_h.get("command") and new_h["command"] != old_h.get("command"):
-                        old_h["command"] = new_h["command"]
-                        changed = True
+                    for key in ("command", "timeout"):
+                        if new_h.get(key) and new_h[key] != old_h.get(key):
+                            old_h[key] = new_h[key]
+                            changed = True
                 if changed:
                     _ok(f"hooks.{hook_type} - refreshed {label}")
                 else:
@@ -645,14 +644,17 @@ def _clean_rag_home_posix() -> str:
 # (research-gate, research-record, rag-enforce, reindex, code-pattern-inject,
 # graph-context-inject) and also copies the agents, skills, and hook launcher
 # into ~/.claude. clean-rag/install.py is idempotent, so this is safe to re-run.
-def install_clean_rag() -> None:
+def install_clean_rag(mode: str = "keep") -> None:
     if not _clean_rag_detected():
         _say("clean-rag not present, skipping", "yellow")
         return
 
     installer = BOOST_HOME / "clean-rag" / "install.py"
     _say(f"Running clean-rag installer: {installer}")
-    code, out = run_cmd([sys.executable, str(installer)])
+    args = [sys.executable, str(installer)]
+    if mode == "replace":
+        args.append("--no-hooks")
+    code, out = run_cmd(args)
     if out:
         for line in out.splitlines():
             print(f"    {line}")
@@ -699,235 +701,54 @@ def install_terminal_mode_reset() -> None:
         _warn(f"terminal mode reset installer exited {code} — profile left unchanged")
 
 
-# Hook prompts are kept verbatim from setup.ps1 — sentinels must match so
-# re-running this script never duplicates an entry that the PowerShell
-# version installed previously.
-def _install_all_hooks(settings: dict) -> None:
-    _info("\nCleaning up stale hooks...")
-    _clean_stale_hooks(settings)
-    _remove_superseded_hooks(settings)
-    _remove_deleted_script_hooks(settings)
-
-    # SessionStart prompt-type hooks removed 2026-09-10. There were three:
-    # workflow routing, the CONSULT vs AUTO protocol, and the RAG HTTP API
-    # contract. Claude Code refuses to run any of them and says so:
-    #     Failed to run: prompt-type hooks are not supported for SessionStart
-    #     events (no conversation context is available). Use a command-type
-    #     hook instead.
-    # Every one of them duplicated content ~/.claude/CLAUDE.md already loads
-    # on every session, and the RAG block is re-injected by the
-    # UserPromptSubmit hook on every single turn, so nothing was lost.
-    # _SUPERSEDED_PROMPT_SENTINELS strips them from installs that already have
-    # them. If you want context injected at session start, write a command-type
-    # hook that prints {"additionalContext": "..."} on stdout, the way
-    # reindex-check.py does. Do not re-add a prompt-type hook here.
+# clean-rag/install.py registers the other clean-rag rows when hooks stay in settings.
+SETUP_HOOKS = [row for row in HOOKS
+               if row.get("prompt") or row["base"] == "scripts"
+               or row["script"] == "agent-spawn-gate.py"
+               or row["event"] == "SubagentStop"]
 
 
-    # --- SessionStart: compaction restore ---
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{
-            "type": "command",
-            "command": _py_cmd("compaction-restore.py"),
-            "timeout": 5000,
-            "statusMessage": "Restoring context after compaction...",
-        }],
-    }, sentinel="compaction-restore.py", label="compaction restore (command-type)")
+def _plugin_enabled(settings: dict) -> bool:
+    return (settings.get("enabledPlugins") or {}).get(PLUGIN_ID) is True
 
-    # --- SessionStart: workspace primer ---
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{
-            "type": "command",
-            "command": _py_cmd("workspace-primer.py"),
-            "timeout": 5000,
-            "statusMessage": "Loading workspace tier briefing...",
-        }],
-    }, sentinel="workspace-primer.py", label="workspace tier primer (command-type)")
 
-    # The memory watcher is deliberately NOT registered here. It was, for one
-    # session on 2026-08-24, and it made the machine unusable: SessionStart
-    # fires on every session start, Claude Code was restarting repeatedly at
-    # the time, and each firing put a visible Python console on screen. The
-    # launcher asked for CREATE_NO_WINDOW and DETACHED_PROCESS together, which
-    # are contradictory on Windows, so the window was never reliably
-    # suppressed. Start it by hand instead:
-    #     python scripts/memory-watcher.py
-    # Before wiring it to a hook again, fix the creationflags and prove no
-    # window appears across a real session start, not just a manual run.
+def _owned_by(handler: dict, event: str, rows: list[dict]) -> bool:
+    """True when a settings handler is an install of one of these table rows."""
+    cmd = handler.get("command") or ""
+    prompt = handler.get("prompt") or ""
+    for row in rows:
+        if row["event"] != event:
+            continue
+        if "prompt" in row:
+            if any(prompt.startswith(s) and row["prompt"].startswith(s) for s in PROMPT_SENTINELS):
+                return True
+        elif f"/{row['script']}" in cmd and ("$CLAUDEBOOST_HOME" in cmd or "$CLEAN_RAG_HOME" in cmd):
+            return True
+    return False
 
-    # --- SessionStart: RAG session reset (clears sentinel for fresh session verification) ---
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{
-            "type": "command",
-            "command": _py_cmd("rag-session-reset.py"),
-            "timeout": 3000,
-            "statusMessage": "Resetting RAG sentinel for fresh session verification...",
-        }],
-    }, sentinel="rag-session-reset.py", label="RAG session reset (command-type)")
 
-    # --- PreToolUse: agent-spawn gate on Task (command-type) ---
-    # Lives under clean-rag/hooks/, but enforces
-    # core ClaudeBoost RAG (port 8613) — installed unconditionally here, not
-    # gated behind _clean_rag_detected(), since it's not a clean-rag-specific
-    # concern even though it's physically colocated with clean-rag's hooks.
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Task",
-        "hooks": [{"type": "command", "command": _py_cmd("agent-spawn-gate.py", base_dir="clean-rag/hooks")}],
-    }, sentinel="agent-spawn-gate.py", label="Task RAG/proposal gate (command-type)")
+def _remove_boost_hooks(settings: dict, rows: list[dict]) -> int:
+    """Drop every settings handler that installs one of these rows. Returns the count."""
+    hooks = settings.get("hooks") or {}
+    removed = 0
+    for event in list(hooks):
+        kept_entries = []
+        for group in hooks[event] or []:
+            handlers = group.get("hooks") or []
+            kept = [h for h in handlers if not _owned_by(h, event, rows)]
+            removed += len(handlers) - len(kept)
+            if kept:
+                group["hooks"] = kept
+                kept_entries.append(group)
+        if kept_entries:
+            hooks[event] = kept_entries
+        else:
+            del hooks[event]
+    settings["hooks"] = hooks
+    return removed
 
-    # --- PreToolUse: skill verify gate on Skill tool ---
-    # Blocks action skills (qa, workspace, explore, etc.) when needs-verification.json
-    # is pending. Companion to agent-spawn-gate — that gate only fires on Task spawns.
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Skill",
-        "hooks": [{"type": "command", "command": _py_cmd("skill-verify-gate.py")}],
-    }, sentinel="skill-verify-gate.py", label="Skill verify gate (command-type)")
 
-    # --- PreToolUse: workspace boost gate (blocks mkdir workspace/* if /boost not run) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash(mkdir*workspace*)",
-        "hooks": [{"type": "command", "command": _py_cmd("workspace-boost-gate.py")}],
-    }, sentinel="workspace-boost-gate.py", label="workspace boost gate (command-type)")
-
-    # --- PreToolUse: workspace creation (prompt-type) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash(mkdir*workspace*)",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("WORKSPACE CREATION CHECK: You are creating a workspace directory. "
-                       "Before proceeding:\n"
-                       "1. Call POST http://127.0.0.1:8613/search with "
-                       "{\"query\":\"<task description>\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"} "
-                       "to find relevant knowledge\n"
-                       "2. Ensure you have a task ID and will create context.md after this\n"
-                       "This is the start of complex work. RAG should be active."),
-            "statusMessage": "Enforcing RAG lookup on workspace creation...",
-        }],
-    }, sentinel="WORKSPACE CREATION CHECK", label="workspace creation")
-
-    # --- PreToolUse: TDD guard (blocks source edits without test changes) ---
-    # Default mode is "soft" (nudge, not block) until user opts into strict.
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": _py_cmd("tdd-guard.py")}],
-    }, sentinel="tdd-guard.py", label="TDD guard (command-type)")
-
-    # clean-rag hooks are no longer registered here. When clean-rag is present,
-    # main() runs its own installer (install_clean_rag), which owns the current
-    # hook list. Registering them here too would just duplicate and drift.
-
-    # --- PreToolUse: CONSULT gate on Edit/Write/Bash (command-type) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Edit|Write|MultiEdit|Bash",
-        "hooks": [{"type": "command", "command": _py_cmd("consult-gate.py")}],
-    }, sentinel="consult-gate.py", label="CONSULT gate on Edit/Write/Bash (command-type)")
-
-    # --- PreToolUse: Bash guard (blocks commands that trigger permission prompts) ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash",
-        "hooks": [{"type": "command", "command": _py_cmd("bash-guard.py")}],
-    }, sentinel="bash-guard.py", label="Bash guard (command-type)")
-
-    # --- PreToolUse: process-kill safety ---
-    _install_hook(settings, "PreToolUse", {
-        "matcher": "Bash(pkill*)|Bash(killall*)|Bash(*Stop-Process*)|Bash(*taskkill*/IM*)",
-        "hooks": [{
-            "type": "prompt",
-            "prompt": ("PROCESS KILL SAFETY — STOP and check:\n\n"
-                       "You are about to run a process-killing command. Broad name-pattern kills "
-                       "(pkill NAME, killall NAME, Stop-Process -Name NAME, taskkill /IM NAME) "
-                       "can kill the user's unrelated processes. This has burned the user before.\n\n"
-                       "REQUIRED:\n"
-                       "- If you have a specific PID, use it: kill PID, Stop-Process -Id PID, "
-                       "taskkill /PID pid.\n"
-                       "- If targeting a container, use the explicit container name: docker stop NAME.\n"
-                       "- If you have only a name pattern and no PID, STOP and ask the user first. "
-                       "Never assume it is safe to broad-match.\n\n"
-                       "Reason: prior incidents where broad kills hit unrelated processes. Specific "
-                       "PIDs or explicit container names only; never broad name patterns without "
-                       "explicit user approval."),
-            "statusMessage": "Process kill safety check...",
-        }],
-    }, sentinel="PROCESS KILL SAFETY", label="process kill safety")
-
-    # --- PostToolUse: verify gate (command-type, non-blocking) ---
-    # Replaces the old prompt-type hook which blocked batched agent flows
-    # (/review --deep passes ground to a halt waiting for Claude to respond).
-    # verify-gate-cmd.py emits a stderr nudge only when findings are present,
-    # and suppresses during /review --deep pass runs where Pass 15 handles it.
-    _install_hook(settings, "PostToolUse", {
-        "matcher": "Task",
-        "hooks": [{"type": "command", "command": _py_cmd("verify-gate-cmd.py"),
-                   "timeout": 3000, "statusMessage": "Checking agent output for findings..."}],
-    }, sentinel="verify-gate-cmd.py", label="verify gate (command-type)")
-
-    # --- PostToolUse: context nudge (counter-based, all tools) ---
-    _install_hook(settings, "PostToolUse", {
-        "matcher": ".*",
-        "hooks": [{"type": "command", "command": _py_cmd("context-nudge.py"), "timeout": 3000}],
-    }, sentinel="context-nudge.py", label="context nudge (command-type)")
-
-    # --- PostToolUse: comment humanness check (Edit/Write/MultiEdit) ---
-    _install_hook(settings, "PostToolUse", {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": _py_cmd("comment-humanness-check.py"), "timeout": 5000}],
-    }, sentinel="comment-humanness-check.py", label="comment humanness check (command-type)")
-
-    # --- PreCompact: context preservation + compaction save ---
-    _install_hook(settings, "PreCompact", {
-        "hooks": [
-            {
-                "type": "prompt",
-                "prompt": ("CONTEXT PRESERVATION — quality-first routing:\n"
-                           "1. Agent spawns: call POST http://127.0.0.1:8613/search with "
-                           "{\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, "
-                           "route by type (full/standard/lightweight)\n"
-                           "2. Finding verification: ALWAYS quick-cop, never self-verify "
-                           "(confirmation bias)\n"
-                           "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
-                           "4. Rework costs more than ceremony. Do it right the first time.\n"
-                           "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json "
-                           "— re-check after compact. Default CONSULT: research + propose + ask "
-                           "before architectural decisions."),
-                "statusMessage": "Preserving RAG/CONSULT awareness before compaction...",
-            },
-            {
-                "type": "command",
-                "command": _py_cmd("compaction-save.py"),
-                "timeout": 5000,
-                "statusMessage": "Saving working state before compaction...",
-            },
-        ],
-    }, sentinel="CONTEXT PRESERVATION", label="context preservation + compaction save")
-
-    # Low Token Mode was removed on 2026-08-23. It opened a new Windows
-    # Terminal tab when context filled and killed the current one. The launcher
-    # hardcoded `pwsh`, which is not installed by default on Windows, so every
-    # compaction raised "error 2147942402 ... cannot find the file specified"
-    # and no new tab appeared. /clear-safe covers the same need and is kept.
-
-    # --- SessionEnd: clear handoff save ---
-    _install_hook(settings, "SessionEnd", {
-        "hooks": [{"type": "command", "command": _py_cmd("session-clear-save.py")}],
-    }, sentinel="session-clear-save.py", label="clear handoff save")
-
-    # --- Telemetry: session lifecycle (SessionStart creates session.json, SessionEnd closes it) ---
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000,
-                   "statusMessage": "Opening telemetry session..."}],
-    }, sentinel="telemetry-session.py", label="telemetry session lifecycle")
-
-    _install_hook(settings, "SessionEnd", {
-        "hooks": [{"type": "command", "command": _py_cmd("telemetry-session.py"), "timeout": 3000}],
-    }, sentinel="telemetry-session.py", label="telemetry session end")
-
-    # --- Telemetry: PostToolUse action log (all tools -> claude-actions.jsonl) ---
-    _install_hook(settings, "PostToolUse", {
-        "matcher": ".*",
-        "hooks": [{"type": "command", "command": _py_cmd("telemetry-hook.py"), "timeout": 3000,
-                   "statusMessage": "Logging tool call..."}],
-    }, sentinel="telemetry-hook.py", label="telemetry action log")
-
-    # --- UserPromptSubmit: ensure-setup bootstrap ---
+def _install_ensure_setup(settings: dict) -> None:
     # Copy ensure-setup.py to ~/.claude/ so $HOME-relative path works on every machine.
     ensure_src = BOOST_HOME / "scripts" / "ensure-setup.py"
     ensure_dst = CLAUDE_DIR / "ensure-setup.py"
@@ -943,60 +764,100 @@ def _install_all_hooks(settings: dict) -> None:
         ' || py "$HOME/.claude/ensure-setup.py"'
     )
     _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10000}],
+        "hooks": [{"type": "command", "command": ensure_cmd, "timeout": 10}],
     }, sentinel="ensure-setup.py", label="auto-setup bootstrap")
 
-    # --- UserPromptSubmit: session primer (RAG sentinel enforcement) ---
-    _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": _py_cmd("session-primer.py"), "timeout": 10000}],
-    }, sentinel="session-primer.py", label="RAG session primer (command-type)")
 
-    # research-task-nudge removed: the /research-task command it advertised was
-    # retired in favor of the clean-rag research setup.
+# Rows come from scripts/plugin_hooks.py. "replace" leaves them to the plugin.
+def _install_all_hooks(settings: dict, mode: str = "keep") -> None:
+    _info("\nCleaning up stale hooks...")
+    _clean_stale_hooks(settings)
+    _remove_superseded_hooks(settings)
+    _remove_deleted_script_hooks(settings)
+    _install_ensure_setup(settings)
 
-    # --- UserPromptSubmit: TTS interrupt ---
-    _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": _py_cmd("speak-stop.py"), "timeout": 3000}],
-    }, sentinel="speak-stop.py", label="TTS interrupt (command-type)")
+    if mode == "replace":
+        removed = _remove_boost_hooks(settings, HOOKS)
+        _ok(f"hooks - removed {removed} settings hook(s); the claudeboost plugin runs them")
+    else:
+        _remove_boost_hooks(settings, SETUP_HOOKS)
+        hooks = settings.setdefault("hooks", {})
+        for row in SETUP_HOOKS:
+            group = hook_entry(row, lambda base, script: _py_cmd(script, base_dir=base))
+            hooks.setdefault(row["event"], []).append(group)
+        _ok(f"hooks - registered {len(SETUP_HOOKS)} hook(s) in settings")
+        if _plugin_enabled(settings):
+            # Same write as `claude plugin disable`, so it works without the CLI.
+            settings["enabledPlugins"][PLUGIN_ID] = False
+            _ok(f"{PLUGIN_ID} disabled so its hooks do not run twice")
 
-    # --- UserPromptSubmit: prompt rules injector (RAG locations + behavioral rules) ---
-    _install_hook(settings, "UserPromptSubmit", {
-        "hooks": [{"type": "command", "command": _py_cmd("prompt-rules-injector.py"), "timeout": 5000}],
-    }, sentinel="prompt-rules-injector.py", label="prompt rules injector (command-type)")
 
-    # --- Stop: human voice guard (enforces human voice standard on responses) ---
-    _install_hook(settings, "Stop", {
-        "hooks": [{"type": "command", "command": _py_cmd("human-voice-guard.py")}],
-    }, sentinel="human-voice-guard.py", label="human voice guard (command-type)")
+def _stdin_is_console() -> bool:
+    # Windows isatty() is True for NUL, which ensure-setup.py passes; GetConsoleMode fails on it.
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    if not IS_WINDOWS:
+        return True
+    import ctypes
+    import msvcrt
+    try:
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+    except OSError:
+        return False
+    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(ctypes.c_ulong())))
 
-    # --- Stop: rules compliance check (forces explicit rules attestation on every response) ---
-    _install_hook(settings, "Stop", {
-        "hooks": [{"type": "command", "command": _py_cmd("rules-compliance-check.py")}],
-    }, sentinel="rules-compliance-check.py", label="rules compliance check (command-type)")
 
-    # --- Stop: auto-clear (fires /clear after /clear-safe sets the pending flag) ---
-    _install_hook(settings, "Stop", {
-        "hooks": [{"type": "command", "command": _py_cmd("auto-clear.py")}],
-    }, sentinel="auto-clear.py", label="auto-clear")
+def _choose_hooks_mode(arg: str | None) -> str:
+    """--hooks wins; with no terminal, keep whatever this machine already has."""
+    if arg:
+        return arg
+    current = "replace" if _plugin_enabled(_load_settings()) else "keep"
+    if not _stdin_is_console():
+        return current
+    _info("\nClaudeBoost hooks:")
+    for line in summary_lines():
+        print(f"  {line}")
+    print("\n  Replace: the claudeboost plugin runs these and the copies in settings.json are removed.")
+    print("  Keep: they stay in settings.json and the plugin's hooks are not enabled.")
+    try:
+        answer = input("Replace or Keep? [R/k] ").strip().lower()
+    except EOFError:
+        return current
+    return "keep" if answer.startswith("k") else "replace"
 
-    # --- Stop: TTS speak hook ---
-    _install_hook(settings, "Stop", {
-        "hooks": [{"type": "command", "command": _py_cmd("speak-tts.py")}],
-    }, sentinel="speak-tts.py", label="TTS speak hook")
 
-    # --- Session restore ledger: records what is open so a reboot can reopen it ---
-    # SessionStart adds the session, SessionEnd removes it. A reboot never
-    # delivers SessionEnd, so whatever is still listed is what was open.
-    _install_hook(settings, "SessionStart", {
-        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
-                   "timeout": 3000,
-                   "statusMessage": "Recording session for restore..."}],
-    }, sentinel="session-restore-ledger.py", label="session restore ledger (start)")
+def _plugin_list_enabled(claude: list[str]) -> bool:
+    # stdout only: run_cmd appends stderr, which would break the JSON.
+    try:
+        proc = subprocess.run(claude + ["plugin", "list", "--json"], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", check=False,
+                              timeout=60)
+        data = json.loads(proc.stdout) if proc.returncode == 0 else []
+    except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
+        return False
+    if isinstance(data, dict):
+        data = data.get("plugins") or []
+    if not isinstance(data, list):
+        return False
+    return any(isinstance(p, dict) and p.get("id") == PLUGIN_ID and p.get("enabled")
+               for p in data)
 
-    _install_hook(settings, "SessionEnd", {
-        "hooks": [{"type": "command", "command": _py_cmd("session-restore-ledger.py"),
-                   "timeout": 3000}],
-    }, sentinel="session-restore-ledger.py", label="session restore ledger (end)")
+
+def install_claudeboost_plugin() -> bool:
+    """Add this checkout as a marketplace, install and enable the plugin. True when enabled."""
+    claude = claude_cmd()
+    if claude is None:
+        _warn("claude CLI not found - cannot enable the claudeboost plugin")
+        return False
+    # Each step can fail only because it already happened; the list check decides.
+    run_cmd(claude + ["plugin", "marketplace", "add", BOOST_HOME_POSIX])
+    run_cmd(claude + ["plugin", "install", PLUGIN_ID])
+    run_cmd(claude + ["plugin", "enable", PLUGIN_ID])
+    if _plugin_list_enabled(claude):
+        _ok(f"{PLUGIN_ID} enabled")
+        return True
+    _warn(f"{PLUGIN_ID} is not enabled after install; run: claude plugin install {PLUGIN_ID}")
+    return False
 
 
 
@@ -1106,7 +967,7 @@ def _update_permissions(settings: dict) -> None:
         _skip("Permissions — all required entries already present")
 
 
-def update_settings() -> None:
+def update_settings(hooks_mode: str = "keep") -> None:
     settings = _load_settings()
 
     # Env entries used by hook commands — both are machine-specific but set here
@@ -1136,7 +997,7 @@ def update_settings() -> None:
     home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
     _ok(f"claudeboost-home.txt written: {home_file}")
 
-    # statusLine — always use the Python-based RAG health script (cross-platform)
+    # statusLine merges RAG health with Claude subscription usage.
     new_sl_cmd = _statusline_cmd()
     sl = settings.get("statusLine")
     if isinstance(sl, dict) and sl.get("command") == new_sl_cmd:
@@ -1145,7 +1006,7 @@ def update_settings() -> None:
         settings["statusLine"] = {"type": "command", "command": new_sl_cmd}
         _ok("statusLine - configured RAG health indicator")
 
-    _install_all_hooks(settings)
+    _install_all_hooks(settings, hooks_mode)
     _update_permissions(settings)
 
     write_json(SETTINGS_PATH, settings)
@@ -1355,7 +1216,7 @@ def _prime_rag_session() -> None:
         sentinel.touch()
         _ok(f"RAG sentinel written: {sentinel}")
     except OSError as e:
-        _warn(f"Could not write RAG sentinel ({e}) — run /rag after setup to prime the session")
+        _warn(f"Could not write RAG sentinel ({e}) — run /boost after setup to prime the session")
         return
 
     # Warm the embedder with a real search. This used to POST /context, an
@@ -1382,20 +1243,20 @@ def _prime_rag_session() -> None:
             hits = len(data.get("results", []))
             _ok(f"RAG session primed ({hits} results)")
     except Exception as e:
-        _warn(f"RAG prime failed ({e}) — model may still be loading, run /rag if needed")
+        _warn(f"RAG prime failed ({e}) — model may still be loading, run /boost if needed")
 
 
 # ---------------------------------------------------------------------------
-# RAG index seed: index ClaudeBoost knowledge bases after server starts so
+# RAG index seed: index the ClaudeBoost repo as a project after server starts so
 # /search works immediately after install without requiring the user to run
-# /index-boost or /boost first.
+# /index-project or /boost first.
 # ---------------------------------------------------------------------------
 def _seed_rag_index() -> None:
     import json as _json
     import urllib.error
     import urllib.request
 
-    _info("Indexing ClaudeBoost knowledge bases (agents/ + knowledge/)...")
+    _info("Indexing the ClaudeBoost repo as a project...")
     try:
         body = _json.dumps({
             "project_path": BOOST_HOME_POSIX,
@@ -1411,13 +1272,13 @@ def _seed_rag_index() -> None:
             unchanged = data.get("files_unchanged", 0)
             failed = data.get("files_failed", 0)
             if failed:
-                _warn(f"Knowledge bases indexed with errors: {indexed} new, {unchanged} unchanged, {failed} failed")
-                _warn("  Run /index-boost in Claude Code to retry failed files")
+                _warn(f"ClaudeBoost indexed with errors: {indexed} new, {unchanged} unchanged, {failed} failed")
+                _warn(f"  Run /index-project {BOOST_HOME_POSIX} in Claude Code to retry failed files")
             else:
-                _ok(f"Knowledge bases indexed: {indexed} new, {unchanged} unchanged")
+                _ok(f"ClaudeBoost indexed: {indexed} new, {unchanged} unchanged")
     except Exception as e:
-        _warn(f"Knowledge base indexing failed ({e})")
-        _warn("  Run /index-boost in Claude Code to index manually")
+        _warn(f"ClaudeBoost indexing failed ({e})")
+        _warn(f"  Run /index-project {BOOST_HOME_POSIX} in Claude Code to index manually")
 
 
 # ---------------------------------------------------------------------------
@@ -1506,16 +1367,16 @@ MCP_SERVERS: list[dict] = [
         "needs": "npx",
         "why": "network capture, performance traces, Lighthouse, Hermes/React Native over CDP",
     },
-    # --- Code intelligence -------------------------------------------------
     {
-        "name": "serena",
-        "label": "Serena (LSP symbol tools)",
-        "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
-                 "serena", "start-mcp-server"],
-        "needs": "uvx",
-        "hint": UV_HINT,
-        "why": "real symbol references, call hierarchy and rename via language servers",
+        "name": "mobile-mcp",
+        "label": "Mobile MCP",
+        "args": ["npx", "-y", "@mobilenext/mobile-mcp@latest"],
+        "needs": "npx",
+        # Telemetry to PostHog and Scarf is on by default upstream.
+        "env": {"MOBILEMCP_DISABLE_TELEMETRY": "1"},
+        "why": "drive Android emulators and devices (adb) and iOS simulators (Xcode): tap, type, screenshot, logs",
     },
+    # --- Code intelligence -------------------------------------------------
     {
         "name": "ast-grep",
         "label": "ast-grep MCP",
@@ -2014,6 +1875,68 @@ def install_plugins() -> None:
                 _warn(out.strip()[:300])
 
 
+# squeez: Apache-2.0 output compression. Not a plugin; its own installer sets it up.
+def install_squeez() -> None:
+    _info("\nVerifying squeez (context compression)...")
+    home_bin = Path.home() / ".claude" / "squeez" / "bin" / (
+        "squeez.exe" if IS_WINDOWS else "squeez"
+    )
+    squeez_bin = str(home_bin) if home_bin.exists() else shutil.which("squeez")
+
+    if not squeez_bin:
+        bash = shutil.which("bash")
+        if not bash:
+            _warn("squeez needs Git Bash (bash not on PATH) - skipping. "
+                  "Install manually: https://github.com/claudioemmanuel/squeez")
+            return
+        # ponytail: script pinned to v1.48.24, but it still fetches the latest release binary.
+        rc, out = run_cmd([bash, "-c",
+            "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/"
+            "7473e778532c3fca4e7cd2925f0b09d594d568e2/install.sh | sh"])
+        if rc != 0:
+            _warn(f"squeez install failed (exit {rc}) - skipping")
+            if out:
+                _warn(out.strip()[:300])
+            return
+        squeez_bin = str(home_bin) if home_bin.exists() else shutil.which("squeez")
+        if not squeez_bin:
+            _warn("squeez installed but binary not found - run `squeez setup` manually")
+            return
+
+    rc, out = run_cmd([squeez_bin, "setup"])
+    if rc == 0:
+        _ok("squeez installed - compresses redundant tool output, never blocking")
+    else:
+        _warn(f"squeez setup failed (exit {rc}); run manually: {squeez_bin} setup")
+        if out:
+            _warn(out.strip()[:300])
+        return
+
+    _harden_squeez_config()
+
+
+def _harden_squeez_config() -> None:
+    """Default persona is 'ultra' (rewrites response wording) and buddy is
+    on (it overwrote our statusLine once). Force both off; setdefault would
+    not fix an already-bad default squeez itself ships."""
+    cfg = Path.home() / ".claude" / "squeez" / "config.ini"
+    if not cfg.exists():
+        return
+    text = cfg.read_text(encoding="utf-8")
+    patched = re.sub(r"(?m)^persona\s*=.*$", "persona = off", text)
+    patched = re.sub(r"(?m)^buddy\s*=.*$", "buddy = false", patched)
+    if patched != text:
+        cfg.write_text(patched, encoding="utf-8")
+        _ok("squeez persona/buddy disabled (no output rewriting, no statusLine takeover)")
+
+    settings = read_json(SETTINGS_PATH, {})
+    line = settings.get("statusLine", {}).get("command", "")
+    if "squeez" in line and "statusline-merged" not in line:
+        settings["statusLine"] = {"type": "command", "command": _statusline_cmd()}
+        write_json(SETTINGS_PATH, settings)
+        _ok("statusLine restored (squeez setup had overwritten it)")
+
+
 # ---------------------------------------------------------------------------
 # edge-tts: install on Windows and macOS only. Linux is intentionally skipped
 # per the macOS/Linux support plan (TTS playback is not supported there).
@@ -2279,7 +2202,12 @@ def install_session_restore_task() -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Install ClaudeBoost")
+    parser.add_argument("--hooks", choices=("replace", "keep"),
+                        help="replace: the claudeboost plugin runs the hooks; keep: settings.json does")
+    args = parser.parse_args(argv)
+
     _info("\n=== ClaudeBoost Setup ===")
     print(f"ClaudeBoost home: {BOOST_HOME}")
     print(f"Claude config dir: {CLAUDE_DIR}")
@@ -2294,25 +2222,33 @@ def main() -> int:
     update_mcp_configs()
     sync_slash_commands()
     seed_state()
-    update_settings()
+    hooks_mode = _choose_hooks_mode(args.hooks)
+    # Before update_settings: the plugin CLI writes settings.json, and update_settings rewrites it.
+    if hooks_mode == "replace" and not install_claudeboost_plugin():
+        _warn("Keeping the hooks in settings.json instead")
+        hooks_mode = "keep"
+    update_settings(hooks_mode)
     _clean_project_local_settings()
     install_rag_server()
     register_mcp_servers()
     install_plugins()
+    install_squeez()
     install_edge_tts()
     install_mermaid_cli()
     install_netcoredbg()
-    install_clean_rag()
+    install_clean_rag(hooks_mode)
     install_terminal_mode_reset()
     install_session_restore_task()
 
     _info("\n=== Setup Complete ===")
     print(f"  CLAUDEBOOST_HOME = {BOOST_HOME_POSIX}")
     print( "  RAG HTTP server started on port 8613")
-    print( "  Hooks configured (SessionStart, SessionEnd, PreToolUse, PostToolUse, "
-           "PreCompact, UserPromptSubmit, Stop)")
+    if hooks_mode == "replace":
+        print(f"  Hooks run from the {PLUGIN_ID} plugin")
+    else:
+        print("  Hooks registered in settings.json")
     _say("\nNext steps:", "yellow")
-    print("  1. Run /rag in Claude Code to verify the RAG server")
+    print("  1. Run /clean-rag-server status in Claude Code to verify the RAG server")
     print("  2. Run /boost to verify all systems")
     if not IS_LINUX:
         print("  3. Run /speak on to enable text-to-speech")

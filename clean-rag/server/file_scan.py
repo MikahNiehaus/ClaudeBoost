@@ -11,11 +11,14 @@ With them, the same tree scans to 391 real source files.
 
 from __future__ import annotations
 
+import codecs
 import logging
 import re
 import subprocess
 from fnmatch import fnmatch
 from pathlib import Path
+
+from .config import NO_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,9 @@ def _venv_roots(root: Path) -> set:
 #: never to a stalled scan.
 _GIT_TIMEOUT_S = 120
 
+#: Per project exclude list in the project root, gitignore syntax.
+RAGIGNORE = ".ragignore"
+
 
 def _git_ignored(root: Path, rels: list) -> set:
     """Which of these paths does git itself consider ignored? None if it cannot say.
@@ -181,6 +187,7 @@ def _git_ignored(root: Path, rels: list) -> set:
             input="\0".join(rels).encode("utf-8"),
             capture_output=True,
             timeout=_GIT_TIMEOUT_S,
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning("git check-ignore unavailable for %s: %s", root, e)
@@ -219,6 +226,29 @@ def _pathspec_ignored(root: Path, rels: list) -> set:
     return {r for r in rels if spec.match_file(Path(r).as_posix())}
 
 
+def ragignored(root: Path, rels: list) -> set:
+    """Which of these paths the project's .ragignore excludes, tracked or not.
+
+    gitignore syntax, read with pathspec. Unlike .gitignore it also drops
+    tracked files, because a committed fixture or generated client is still
+    noise in a search index. Relative paths in, the matching subset out.
+    """
+    ignore_file = Path(root) / RAGIGNORE
+    if not ignore_file.is_file():
+        return set()
+    try:
+        import pathspec
+    except ImportError:
+        logger.warning("pathspec not installed; %s not applied", ignore_file)
+        return set()
+    # Windows tools often save a BOM, which would otherwise glue onto the first pattern.
+    raw = ignore_file.read_bytes()
+    utf16 = raw[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+    lines = raw.decode("utf-16" if utf16 else "utf-8-sig", errors="replace").splitlines()
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", lines)
+    return {r for r in rels if spec.match_file(Path(r).as_posix())}
+
+
 def _drop_ignored(root: Path, files: list) -> list:
     """Remove whatever the project itself declared untracked.
 
@@ -232,17 +262,17 @@ def _drop_ignored(root: Path, files: list) -> list:
     output directory.
 
     Batched into one subprocess for the whole scan rather than one per file.
-    Fails open: when git cannot answer, every file is kept.
+    Fails open: when git cannot answer, its rules are skipped. .ragignore
+    still applies either way.
     """
     if not files:
         return files
     rels = [str(Path(f).relative_to(root)) for f in files]
+    ignored = ragignored(root, rels)
     if (root / ".git").exists():
-        ignored = _git_ignored(root, rels)
-        if ignored is None:
-            return files
+        ignored |= _git_ignored(root, rels) or set()
     else:
-        ignored = _pathspec_ignored(root, rels)
+        ignored |= _pathspec_ignored(root, rels)
     if not ignored:
         return files
     return [f for f, r in zip(files, rels) if r not in ignored]

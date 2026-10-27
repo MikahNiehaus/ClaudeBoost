@@ -117,6 +117,8 @@ from session_restore_state import (  # noqa: E402
 )
 
 IS_WINDOWS = os.name == "nt"
+# Under pythonw there is no console to inherit, so schtasks would open its own window.
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
 
 TASK_NAME = "ClaudeBoost Session Restore"
 WT_WINDOW = "claudeboost-restore"
@@ -555,7 +557,8 @@ def _task_exists() -> bool:
         return False
     try:
         r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=NO_WINDOW)
         return r.returncode == 0
     except Exception:
         return False
@@ -586,7 +589,7 @@ def install_task(dry_run: bool = False) -> int:
     try:
         r = subprocess.run(
             ["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(xml_path), "/F"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW,
         )
     except Exception as exc:
         _err(f"schtasks could not run: {exc}")
@@ -632,7 +635,8 @@ def remove_task(dry_run: bool = False) -> int:
         else:
             try:
                 r = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-                                   capture_output=True, text=True, timeout=60)
+                                   capture_output=True, text=True, timeout=60,
+                                   creationflags=NO_WINDOW)
                 if r.returncode == 0:
                     _ok(f"scheduled task removed: {TASK_NAME}")
                     removed = True

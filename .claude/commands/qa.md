@@ -33,7 +33,7 @@ Wait for the user's answer — the user is always the source of truth.
 
 If `WORKSPACE_PATH` is empty: note it and continue.
 
-Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+Include `workspace_path="<WORKSPACE_PATH>"` in every agent spawn prompt, so the agent can read that workspace's `ticket.md` and `requirements.md`.
 
 
 
@@ -537,7 +537,7 @@ fallback at 7f.
 **0h-i — Dependency check.**
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" doctor
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" doctor
 ```
 
 `ffmpeg` and `edge-tts` gate this phase. If either is missing: set
@@ -2108,6 +2108,35 @@ It runs one of two ways, decided once before either one starts: a single quick
 check for an ordinary session, or the full adversarial loop for a high stakes
 one. Which path ran, and why, goes in the 5e report either way.
 
+**On either path, check the judge's own claims.** When the judge answers, open
+the artifacts it cites, the same way you check good-cop's diff. Do not take its
+summary on trust.
+
+Check every proof against these failures on either path. They never show up as
+red, because each looks like a pass from inside the session:
+
+- **Persistence claimed from a screenshot** with no server read-back. A value
+  rendered in a form is not a value in the database.
+- **Results that exist only as prose** in the report, with no capture on disk.
+  If it is not in an artifact it was not measured, whatever the table says.
+- **A build identifier quoted without resolving it.** Confirm the commit is a
+  real object in the repo. A dashboard's "version" field is often an internal
+  build id and not a commit at all.
+- **Comparing two runs that tested different code.** Before attributing a
+  behaviour change to the environment or to test technique, diff the commits.
+  This is the one that most often produces a confident wrong conclusion.
+- **A blank or mistargeted screenshot** passing as evidence because nobody
+  opened it. Open every image you save.
+- **Measurement windows too short for a deployed backend.** A response under
+  100ms locally can take ten seconds deployed, so a window sized for local turns
+  a success into a phantom failure or an unresolved null.
+- **Verifying a fix in a minified bundle by grepping identifier names.** Local
+  names are renamed and comments stripped, so the grep reads zero for a fix that
+  is present. Grep an object property, which survives, then read the code
+  around it.
+- **A marker check that covers only half the change.** Confirm the marker you
+  chose actually appears in every file the diff touched.
+
 #### 5d-0 — Decide: lite check or full loop
 
 Detection is deterministic — the same keyword and path labeler the verifier
@@ -3195,7 +3224,7 @@ there, edge-tts was down for the whole run and the builder already said so.
 ### 7e — Open it
 
 ```bash
-python "${HOME}/.claude/skills/powerpoint/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4"
+python "${HOME}/.claude/skills/presentation/scripts/pptx_env.py" open "$WORKSPACE_ABS/qa-walkthrough-[TASK_ID].mp4"
 ```
 
 Print:
@@ -3217,7 +3246,7 @@ case fell outside the recording.
 
 Say plainly, first, that there is no video walkthrough for this session and why.
 Then build the still-image deck so the session still hands over something
-inspectable. Call `Skill(skill="powerpoint")` and follow its process. Walk
+inspectable. Call `Skill(skill="presentation")` and follow its process. Walk
 `report.md`'s Evidence Index in `plan.md` order: one slide per test case carrying
 the requirement clause it proves, Expected and Observed from `plan.md`, the
 `TC-NNN-after.png` screenshot placed with `add_picture`, and the real variable

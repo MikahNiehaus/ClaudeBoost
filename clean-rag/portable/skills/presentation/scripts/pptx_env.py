@@ -1,4 +1,4 @@
-"""Environment helper for the powerpoint skill.
+"""Environment helper for the presentation skill.
 
 The skill's prose decides what the deck says. This file handles the things that
 are easy to get subtly wrong on a machine that isn't the one the instructions

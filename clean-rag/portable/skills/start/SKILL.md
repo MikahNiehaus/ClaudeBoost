@@ -35,14 +35,14 @@ good-cop only runs when bad-cop found something Critical or High. A clean
 adversarial pass closes itself out, and so does a run whose findings are all
 Nit severity: you apply those yourself and re-run bad-cop for the stamp.
 
-**1. Spawn `researcher`** (foreground). Give it the task and, if you already
+**1. Spawn `researcher`** and wait for its report. Give it the task and, if you already
 know some, 3 to 5 aspects. It indexes and searches the project itself
 (triggering `/index-project` if needed), reads both the vector and import
 graph, reaches for the `graphrag` skill on a genuinely cross file behavior
 question, and checks the general standard for this class of change against a
-real source, not memory. Wait for it.
+real source, not memory.
 
-**2. Spawn `swiper`** (foreground), only after researcher reports. Hand it
+**2. Spawn `swiper`** only after researcher reports. Hand it
 researcher's findings along with the task, so it doesn't recommend swiping
 something the project already has a pattern for. Swiper checks whether this
 already exists (project, stdlib, a dependency, GitHub, StackOverflow) and
@@ -83,7 +83,7 @@ summary — name the actual findings.
 **2c. Build the teaching video before you consult.** Every `/start` produces
 one, including the automatic call from `workspace.md` Phase 6.5. It exists so
 the human learns the architecture and the practice rather than only receiving
-code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
+code. Use the `presentation` skill, and narrate it to an mp4 per that skill's
 "Narrating it to an mp4" section. Two sections, in this order:
 
 1. **The questions you are about to ask in step 3**, one slide each, with your
@@ -99,7 +99,7 @@ code. Use the `powerpoint` skill, and narrate it to an mp4 per that skill's
 
 Every fact in the deck comes from researcher's or swiper's actual report. Do
 not invent a statistic, a benchmark, or a best practice to fill a slide. That
-is the rule the `powerpoint` skill already states about charts, applied to the
+is the rule the `presentation` skill already states about charts, applied to the
 whole deck.
 
 Run `pptx_env.py doctor` first. Narration needs `edge-tts`, ffmpeg and
@@ -110,6 +110,8 @@ that the mp4 was not produced. Never hand over a silent deck as though it were
 the narrated video.
 
 `doctor` answers whether a dependency is installed, not whether it responds.
+Narration sends each slide's text off the machine, so keep ticket, customer
+and credential text out of the narration script.
 Narration is an outbound call to Microsoft's TTS endpoint once per slide, and
 `edge_tts.Communicate` bounds only the socket (`sock_connect=10`,
 `sock_read=60`) while leaving `total=None`, so an endpoint that stays connected
@@ -122,7 +124,7 @@ the slide, say the mp4 was not produced and why, and hand over the deck.
 Present but stalled has to end where absent already ends, which takes one more
 step than abandoning does on its own: edge-tts and ffmpeg both stream their
 output to disk, so a run killed at any point leaves a real truncated file. The
-`powerpoint` skill therefore runs the whole narration pipeline inside one
+`presentation` skill therefore runs the whole narration pipeline inside one
 scratch directory that goes away on every failure path, and only a finished,
 `ffprobe`-checked mp4 gets moved into the workspace.
 
@@ -172,7 +174,9 @@ summary of that re-check too. If bad-cop finds nothing and stamps
 `VERIFIED:`, the loop ends. If it finds more issues, relay them and spawn
 good-cop again. The loop (bad-cop → good-cop → bad-cop) continues until
 bad-cop stamps `VERIFIED:` on a clean pass — that is the only terminal
-condition. The user should never have to ask what happened in QA; each
+condition. Three rounds is the normal shape. At five, stop and ask the user,
+naming the finding that keeps coming back, because a loop that has not
+converged by then will not converge by running longer. The user should never have to ask what happened in QA; each
 round's output should be visible in the conversation before the turn ends.
 
 ## What this is not

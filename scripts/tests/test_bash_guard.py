@@ -36,7 +36,7 @@ _stderr_of = _stderr
 # expect returncode 0 when its vehicle is `git commit -m "..."`. The bite is
 # unchanged: the refusal must come from the verb gate and not from the check
 # under test, so a curl or backslash false positive still fails the assertion.
-_VERB_GATE_REFUSAL = "read-only allowlist"
+_VERB_GATE_REFUSAL = "Read-only git and gh run with no prompt"
 
 
 def allow_except_git_write(command: str):

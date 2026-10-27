@@ -126,12 +126,14 @@ def _strip_covers_line(report: str) -> str:
 
 def _agent_type(payload: dict) -> str:
     tool_input = payload.get("tool_input", {})
-    return (
+    name = str(
         tool_input.get("subagent_type")
         or tool_input.get("agent_type")
         or tool_input.get("agent")
         or ""
     )
+    # A plugin agent arrives as "claudeboost:swiper"; the set holds bare names.
+    return name.rsplit(":", 1)[-1]
 
 
 def _report(payload: dict) -> str:

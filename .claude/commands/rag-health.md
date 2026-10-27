@@ -5,17 +5,18 @@ allowed-tools: Bash, Read, Write, Glob
 
 # /rag-health — RAG Health Diagnostics
 
-Run a comprehensive health check on a specific RAG collection. Every check produces ✅ PASS, ⚠️ WARN, or ❌ FAIL. Any failure = ❌ FAIL overall. Any warning with no failures = ⚠️ WARN overall.
+Run a health check on the clean-rag server and one indexed project. Every check produces ✅ PASS, ⚠️ WARN, or ❌ FAIL. Any failure = ❌ FAIL overall. Any warning with no failures = ⚠️ WARN overall.
+
+There is one server and one kind of index: a registered project. ClaudeBoost itself is just another project. The old `knowledge`, `agents` and `memories` collections no longer exist, so there is nothing to check for them.
 
 ## Arguments
 
-$ARGUMENTS — which collection to check (flexible natural language accepted):
-- `project` / `codebase` / "for this project" → project codebase index (current working dir)
-- `knowledge` / "knowledge rag" / "knowledge base" → ClaudeBoost knowledge collection
-- `agents` / "agent definitions" → ClaudeBoost agents collection
-- `memories` / "memory" → user memories collection
-- `task` / `workspace` / "for this task" / "research" → active workspace research index
-- `all` / empty / "everything" → run all applicable scopes
+$ARGUMENTS — what to check (flexible natural language accepted):
+- `project` / `codebase` / "for this project" / empty → the current working directory's project
+- an absolute path → that project
+- `boost` / "claudeboost" → the ClaudeBoost project at `${CLAUDEBOOST_HOME}`
+- `task` / `workspace` / "for this task" → the active workspace directory
+- `all` → every project listed in `/status`, server and registration checks only
 
 ---
 
@@ -27,11 +28,12 @@ $ARGUMENTS — which collection to check (flexible natural language accepted):
 curl -s http://127.0.0.1:8613/status
 ```
 
+The response carries `status`, `uptime_s`, `code_embedding_model`, `code_embedding_loaded`, `loaded_models`, `projects.count`, `projects.entries`, `clean_rag_home` and `ram_mb`.
+
 Evaluate:
-- ❌ FAIL if curl returns an error or SSL/connection error → output "RAG server not connected — run /rag to start it." Stop immediately.
+- ❌ FAIL if curl returns an error or connection error → output "RAG server not connected — run /clean-rag-server start." Stop immediately.
 - ❌ FAIL if `status != "ready"`
-- ❌ FAIL if `code_model_ready == false`
-- ⚠️ WARN if `dimension_mismatch` list is non-empty — note which collections are affected
+- ❌ FAIL if `code_embedding_loaded == false`
 
 Save the full status JSON for all subsequent steps.
 
@@ -39,82 +41,62 @@ Save the full status JSON for all subsequent steps.
 
 ### Step 2 — Resolve target from $ARGUMENTS
 
-Map the argument (case-insensitive, fuzzy) to one of: `project`, `knowledge`, `agents`, `memories`, `workspace`, `all`.
-Default to `all` if empty.
+Map the argument (case-insensitive, fuzzy) to a project path, `workspace`, or `all`. Default to the current working directory.
 
-For `project`: project_path = current working directory.
-For `workspace`: read active workspace from:
+For `workspace`: read the active workspace from:
 ```bash
 cat "${CLAUDEBOOST_HOME}/state/active-workspace.json" 2>/dev/null || echo "{}"
 ```
-Extract `workspace_path`. If empty, report ⚠️ WARN "No active workspace" for that scope.
+Extract `workspace_path`. If empty, report ⚠️ WARN "No active workspace".
+
+For `all`: run 3a and 3b for every entry in `projects.entries`, then skip to Step 4.
 
 ---
 
-### Step 3 — Run per-scope checks
-
-Only run checks matching the resolved target. For `all`, run all sections.
-
----
-
-#### PROJECT CODEBASE CHECKS
+### Step 3 — Per-project checks
 
 **3a. Registration check**
-Find the project in `indexed_projects` from the saved status by matching `project_path`:
+Find the entry in `projects.entries` whose `project_path` matches the target (compare case-insensitively, normalise slashes). Keep its key for 3d:
 - ❌ FAIL if not found → "Project not indexed — run /index-project first."
-- Record `files_indexed`, `files_unchanged` (may be absent in older registry entries — treat as 0 if missing), `graph_edges`, `graph_resolved`, `graph_active`, `indexed_at`.
+- Record `files_indexed`, `files_total`, `chunks_created`, `indexed_at`, and `graph.{edges_total, edges_resolved, edges_unresolved, pagerank_nodes}`.
 
 **3b. Files indexed count**
-From the registry entry. `files_indexed` counts files newly embedded in the last run; `files_unchanged` counts files that were already current (hash-matched) and skipped. Together they represent the total covered by the index.
+- ✅ PASS if `files_indexed > 0` or `chunks_created > 0`
+- ⚠️ WARN if `files_total` is present and `files_indexed` is well below it → report `files_indexed/files_total`
+- ❌ FAIL if both are 0 → "Nothing indexed. Run /index-project."
 
-Let `effective = files_indexed + files_unchanged` (treat missing `files_unchanged` as 0).
+`files_indexed` can be low on an incremental run where most files were already current, so check 3c before calling that a fault.
 
-When `effective == 0` (either `files_unchanged` is absent from the registry or both counters are 0), **fall back to the manifest count before failing**: the manifest is read in check 3d, so run 3d first if not yet done. If the manifest has entries, the index has content and the zero counters are an artifact of an old registry format — report ⚠️ WARN (old registry format, manifest OK) not ❌ FAIL.
+**3c. Partial or refused index**
+The server decides this itself. An indexing run that stopped before it reached every file, or an index built by a different embedding model, is reported back on every search as `stale_projects`. Read that verdict from the 3g response (run 3g first if not yet done).
 
-- ✅ PASS if `effective > 0`
-- ⚠️ WARN if `effective == 0` but manifest has entries → "Registry missing files_unchanged (old format) — index appears healthy via manifest. Run any incremental index to update the registry."
-- ❌ FAIL if `effective == 0` AND manifest is missing or empty → "Nothing indexed. Run /index-project."
-
-Do NOT fail solely because `files_indexed == 0`. That is normal when all files are already current.
-
-**3c. Partial index**
-The server decides this one itself. An indexing run that stopped before it
-reached every file, or an index built by a different embedding model, is
-reported back on every search as `stale_projects`. There is no endpoint that
-returns a total file count to divide by, so read the server's own verdict from
-the 3h response (run 3h first if not yet done).
-
-- ✅ PASS if 3h returned no `stale_projects` key
+- ✅ PASS if 3g returned no `stale_projects` key
 - ⚠️ WARN if `stale_projects` names this project with `"served": true` — a partial index. Print its `reason` → "Run /index-project with force to complete it."
 - ❌ FAIL if `stale_projects` names this project with `"served": false` — the index was refused outright. Print its `reason` → "Run /index-project with force to rebuild."
 
 **3d. Manifest integrity**
-Check `<project>/workspace/.rag-index/manifest.json` exists and is non-empty (use Read tool):
+The manifest lives inside clean-rag, not the project. Its directory is the project's key in `projects.entries`. Check `<clean_rag_home>/databases/_projects/<key>/manifest.json` exists and is non-empty (use Read tool):
 - ✅ PASS if file exists and is non-empty
 - ❌ FAIL if missing or empty → "Manifest not found — run /index-project force"
 
-**3e. Dimension consistency**
-Check `dimension_mismatch` from saved status — look for "codebase" entry:
-- ✅ PASS if not in mismatch list
-- ❌ FAIL if present → "Dimension mismatch in codebase — run /index-project force to rebuild"
-
-**3f. Graph liveness**
+**3e. Graph liveness**
 ```bash
 curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
   -d '{"query": "service class method", "sources": ["project:<path>"], "mode": "graph", "limit": 3}'
 ```
 Graph hits carry a `relation` (`imports`, `inherits`, `implements`, `calls`) and the `seed_file` they were reached from. Vector hits carry neither.
-- ✅ PASS if at least one result carries `relation` — report `graph_resolved/graph_edges` from registry
-- ⚠️ WARN if results came back but none carry `relation` AND `graph_active: true` in registry — the graph is built but added nothing for this query
-- ❌ FAIL if `graph_active: false` in registry → "No graph edges — run /index-project force"
+- ✅ PASS if at least one result carries `relation` — report `graph.edges_resolved/graph.edges_total`
+- ⚠️ WARN if results came back but none carry `relation` while `graph.edges_total > 0` — the graph is built but added nothing for this query
+- ❌ FAIL if `graph.edges_total == 0` → "No graph edges — run /index-project force"
 
-**3g. Relevance quality**
-Pick query by dominant language (highest count in scan.files_by_language):
+**3f. Relevance quality**
+Pick a query by the project's dominant language (look at the file extensions under the project root):
 - csharp → `"public async Task service repository interface"`
 - typescript → `"export interface type generic extends"`
 - javascript → `"module exports require callback promise"`
 - python → `"def self return async await"`
+- mostly markdown (ClaudeBoost) → `"code review security error handling"`
 - default → `"class method interface implementation"`
 
 ```bash
@@ -122,12 +104,12 @@ curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
   -d '{"query": "<query>", "sources": ["project:<path>"], "mode": "vector", "limit": 5}'
 ```
-Evaluate top result score:
-- ✅ PASS if top score ≥ 0.68
-- ⚠️ WARN if 0.62–0.68
-- ❌ FAIL if < 0.62 — show top 3 results with scores
+Evaluate top result score (prose scores lower than code, so use the markdown row's threshold for ClaudeBoost):
+- ✅ PASS if top score ≥ 0.68 (≥ 0.55 for markdown)
+- ⚠️ WARN if 0.62–0.68 (below 0.55 for markdown)
+- ❌ FAIL if < 0.62, or no results — show top 3 results with scores
 
-**3h. Search pipeline end to end**
+**3g. Search pipeline end to end**
 ```bash
 curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
@@ -139,14 +121,13 @@ The response carries `results`, `search_id`, `fallback_triggered`, and
 - ⚠️ WARN if `results` is non-empty but `stale_projects` names this project — print its `reason`; the index is partial or was refused, so a missing hit proves nothing
 - ❌ FAIL if an `error` key is present, or `results` is empty — show the error
 
-**3i. Coverage check**
+**3h. Coverage check**
 Glob for unsupported file types in project path (excluding node_modules, obj, bin):
 - Check for `**/*.vue`, `**/*.svelte` — these are never indexed
-- Check if `**/*.cshtml` / `**/*.razor` appear in the scan's `files_by_language` (they should — cshtml IS supported)
 - ✅ PASS if no unsupported types found
 - ⚠️ WARN for each unsupported extension found — report count and note it requires a code change to LANGUAGE_EXTENSIONS
 
-**3j. .ragignore compliance**
+**3i. .ragignore compliance**
 Read `<project>/.ragignore` with the Read tool:
 - ✅ PASS if no .ragignore file → "No .ragignore — all files eligible"
 - For each excluded directory, search:
@@ -156,101 +137,19 @@ Read `<project>/.ragignore` with the Read tool:
     -d '{"query": "<dir> file module", "sources": ["project:<path>"], "mode": "vector", "limit": 3}'
   ```
   - ✅ PASS if no results from excluded directory paths
-  - ❌ FAIL if results found from excluded dirs → "Exclusion not active — restart RAG server (/rag)"
-
----
-
-#### KNOWLEDGE CHECKS
-
-**3k. Collection existence**
-From saved status, check `collections.knowledge.chunks`:
-- ❌ FAIL if 0 → "Knowledge not indexed — run /index-boost"
-- ⚠️ WARN if < 100 (expected: 1700+)
-- ✅ PASS — report chunk/file counts
-
-**3l. Dimension consistency**
-Check `collections.knowledge.dim_ok` from status:
-- ✅ PASS if `dim_ok: true`
-- ❌ FAIL if `dim_ok: false` → report stored_dim vs active model dim → "Run /index-boost with force to rebuild"
-
-**3m. Relevance quality**
-```bash
-curl -s -X POST http://127.0.0.1:8613/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "code review security error handling", "sources": ["project:'"$CLAUDEBOOST_HOME"'"], "mode": "both", "limit": 3}'
-```
-- ✅ PASS if top score ≥ 0.55 (prose embeddings score lower than code)
-- ⚠️ WARN if top score < 0.55
-- ❌ FAIL if no results returned
-
-**3n. Community summaries health**
-Write this script to `${TEMP}/cb_community_health.py` using the Write tool, then run it:
-```python
-import sqlite3, os
-db_path = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'rag-server-index', 'kb_graph.db')
-if not os.path.exists(db_path):
-    print('SKIP: kb_graph.db not found')
-else:
-    db = sqlite3.connect(db_path)
-    communities = db.execute('SELECT COUNT(DISTINCT community_id) FROM communities').fetchone()[0]
-    summaries = db.execute('SELECT COUNT(*) FROM community_summaries').fetchone()[0]
-    db.close()
-    status = 'PASS' if summaries >= communities and communities > 0 else 'FAIL'
-    print(f'{status}: {summaries}/{communities} community summaries exist')
-```
-Run with: `"${CLAUDEBOOST_PYTHON}" "${TEMP}/cb_community_health.py"`
-- ✅ PASS if all communities have summaries
-- SKIP → report as ✅ PASS (not yet indexed)
-- ❌ FAIL if any missing → "Run `POST /index-project` with `{\"project_path\":\"<abs path>\",\"force\":true}` to regenerate"
-
----
-
-#### AGENTS CHECKS
-
-**3o. Collection existence**
-From saved status, check `collections.agents.chunks`:
-- ❌ FAIL if 0 → "Agents not indexed — run /index-boost"
-- ⚠️ WARN if < 20
-- ✅ PASS — report chunk/file counts
-
-**3p. Dimension consistency**
-Check `collections.agents.dim_ok`:
-- ✅ PASS if `dim_ok: true`
-- ❌ FAIL if `dim_ok: false` → "Run /index-boost with force to rebuild"
-
-**3q. Relevance quality**
-```bash
-curl -s -X POST http://127.0.0.1:8613/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "agent explore codebase task", "sources": ["project:'"$CLAUDEBOOST_HOME"'"], "mode": "both", "limit": 3}'
-```
-- ✅ PASS if top score ≥ 0.50
-- ⚠️ WARN if top score < 0.50
-- ❌ FAIL if no results
-
----
-
-#### MEMORIES CHECKS
-
-**3r. Collection existence**
-From saved status, check `collections.memories.chunks`:
-- ⚠️ WARN if 0 → "No memories indexed yet — this is normal for new sessions"
-- ✅ PASS if chunks > 0 — report count
-
-**3s. Dimension consistency**
-Check `collections.memories.dim_ok`:
-- ✅ PASS if `dim_ok: true`
-- ❌ FAIL if `dim_ok: false` → report stored_dim vs active model dim → "Memories were built with a different model. Run /index-boost or re-save memories to rebuild."
+  - ❌ FAIL if results found from excluded dirs → "Exclusion not active — restart the server with /clean-rag-server stop then start"
 
 ---
 
 #### WORKSPACE/TASK CHECKS
 
-**3t. Active workspace detection**
+Run these instead of 3a–3i when the target is `workspace`.
+
+**3j. Active workspace detection**
 - ❌ FAIL if no active workspace found → "No active workspace — run /workspace to activate one"
 - ✅ PASS — report workspace_path
 
-**3u. Research collection**
+**3k. Workspace search**
 ```bash
 curl -s -X POST http://127.0.0.1:8613/search \
   -H "Content-Type: application/json" \
@@ -267,33 +166,26 @@ After all checks, print:
 
 ```
 ────────────────────────────────────────────────────────────
-RAG Health Check — [scope] — [date]
+RAG Health Check — [target] — [date]
 ────────────────────────────────────────────────────────────
 SCOPE        CHECK                    RESULT   DETAIL
 ─────────────────────────────────────────────────────────────
-server       Status                   ✅ PASS  ready, 768d
-server       Dimension mismatch       ✅ PASS  none
+server       Status                   ✅ PASS  ready, CodeRankEmbed loaded
 ─────────────────────────────────────────────────────────────
-project      Registration             ✅ PASS  indexed 2026-06-15
-project      Files indexed count      ❌ FAIL  32 files (< 100)
+project      Registration             ✅ PASS  indexed 2026-09-20
+project      Files indexed count      ⚠️ WARN  32/375 files
 project      Partial index            ⚠️ WARN  stale_projects: run stopped early
 project      Manifest integrity       ✅ PASS
-project      Dimension consistency    ✅ PASS
-project      Graph liveness           ✅ PASS  150088/150532 edges
+project      Graph liveness           ✅ PASS  222/2542 edges resolved
 project      Relevance quality        ✅ PASS  0.74
 project      Search pipeline          ✅ PASS  5 results
-project      Coverage                 ⚠️ WARN  287 .cshtml not in scan
+project      Coverage                 ✅ PASS
 project      .ragignore compliance    ✅ PASS
 ─────────────────────────────────────────────────────────────
-knowledge    Collection               ✅ PASS  1759c / 108f
-knowledge    Dimension consistency    ✅ PASS
-knowledge    Relevance quality        ✅ PASS  0.61
-knowledge    Community summaries      ✅ PASS  4/4
-─────────────────────────────────────────────────────────────
-Overall: ❌ FAIL — 1 failure, 2 warnings
+Overall: ⚠️ WARN — 0 failures, 2 warnings
 ─────────────────────────────────────────────────────────────
 Actions needed:
-  • Run /index-project with force — only 32 files indexed and the server reports the run stopped early
+  • Run /index-project with force — only 32 of 375 files indexed and the server reports the run stopped early
 ```
 
 Rules:

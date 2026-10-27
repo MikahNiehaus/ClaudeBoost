@@ -395,31 +395,18 @@ Read all workspace documents produced so far:
 - `$WORKSPACE_ABS/definition-of-done.md` — completion criteria
 - `$WORKSPACE_ABS/exploration.md` — relevant code locations
 
-Write `$WORKSPACE_ABS/plan.md`:
+Write `$WORKSPACE_ABS/plan.md` using the template in `.claude/commands/workspace.md`
+("Write `$WORKSPACE_ABS/plan.md` using this template"), so a plan from either
+command has the same shape. Fill it from the four documents above:
+
+- Title `# Workspace Plan — $TASK_ID`, **Work Types** from analysis.md, **Status** `PLAN_READY`
+- **Recommended Approach**: the chosen strategy and why
+- **Step-by-Step Implementation**: one step per subtask, with that template's per-step fields
+- **Execution Strategy**: sequential, parallel, or hybrid
+
+Then append these four sections, which the ticket flow still needs:
 
 ```markdown
-# Implementation Plan — $TASK_ID
-
-**Ticket**: [one-line summary]
-**Date**: [today]
-**Status**: DRAFT
-
-## Summary
-[2-3 sentences: what this does, why, what changes]
-
-## Approach
-[Chosen implementation strategy and rationale. If multiple approaches exist, note why this one was selected.]
-
-## Subtasks
-
-| # | Task | Agent | File(s) | Dependencies | Est. Risk |
-|---|------|-------|---------|--------------|-----------|
-| 1 | [task] | [agent-name] | [files] | none | low |
-| 2 | [task] | [agent-name] | [files] | 1 | med |
-
-## Execution Order
-[Sequential or parallel? Diagram if needed.]
-
 ## Test Plan
 | Test | Type | File | Covers |
 |------|------|------|--------|

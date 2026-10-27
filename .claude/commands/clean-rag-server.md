@@ -36,7 +36,7 @@ esac
 ```
 
 **Output interpretation:**
-- **start**: Reports PID and port, waits for readiness. For auto restart on crash, start clean-rag through the supervisor instead: `python scripts/rag-supervisor.py start` (or `/rag`).
+- **start**: Reports PID and port, waits for readiness.
 - **stop**: Reports termination, cleans up PID file
 - **status**: Shows embedding models, topics, projects, uptime
 
@@ -92,6 +92,6 @@ clean-rag server error: [specific error message]
 
 ## What Next
 
-- **To index new research**: `/index-boost` (ClaudeBoost knowledge) or `/index-project <path>` (project codebase)
+- **To index new research**: `/index-project <path>`
 - **To verify a proof file**: Check clean-rag server logs at `$CLEAN_RAG_HOME/server/logs/` if available
 - **To check server health**: Run `/clean-rag-server status` again

@@ -1,0 +1,10 @@
+{
+  "name": "claudeboost",
+  "description": "Research gated development: researcher, swiper and the bad-cop and good-cop review loop, plus the skills and slash commands that drive them.",
+  "version": "0.1.0",
+  "agents": [
+    "./clean-rag/portable/agents/fact-medic.md"
+  ],
+  "skills": "./clean-rag/portable/skills",
+  "commands": ["./.claude/commands/"]
+}

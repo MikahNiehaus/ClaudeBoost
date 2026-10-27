@@ -118,6 +118,8 @@ def step_banner() -> None:
 
 
 def step_privacy() -> None:
+    # Report only. DISABLE_TELEMETRY must stay unset: while it is set,
+    # `claude remote-control` refuses to start (it needs feature flags).
     on = []
     for var in ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"):
         on.append(f"{var}={'1' if os.environ.get(var) else 'unset'}")
@@ -157,7 +159,7 @@ def step_rag() -> dict:
             pass
         time.sleep(2)
     if not status or status.get("status") != "ready":
-        print("  RAG: NOT READY — server did not respond. Run /rag and retry.")
+        print("  RAG: NOT READY — server did not respond. Run /clean-rag-server start and retry.")
         return out
 
     # The HTTP layer answers before the embedding model has loaded, so indexing
@@ -235,7 +237,21 @@ def step_rag() -> dict:
     return out
 
 
+def _plugin_hooks_enabled() -> bool:
+    try:
+        s = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (s.get("enabledPlugins") or {}).get("claudeboost@claudeboost-local") is True
+
+
 def step_hooks() -> list[str]:
+    if _plugin_hooks_enabled():
+        if (SCRIPTS.parent / "hooks" / "hooks.json").is_file():
+            print("  hooks: run by the claudeboost plugin")
+            return []
+        print("  hooks: MISSING hooks/hooks.json for the claudeboost plugin")
+        return ["plugin:hooks.json"]
     missing = []
     for hook in ("SessionStart", "PreToolUse", "PostToolUse", "PreCompact", "UserPromptSubmit", "Stop"):
         rc, _ = _run([PY, str(SCRIPTS / "check-hooks.py"), hook], timeout=15)

@@ -277,7 +277,7 @@ def _active_workspace_reminder(
             if not codebase_ready:
                 codebase_detail = 'NOT INDEXED'
     elif rag_status is None:
-        codebase_detail = 'unknown (RAG offline - run /rag)'
+        codebase_detail = 'unknown (RAG offline - run /boost)'
 
     # Required actions for missing indexes — all appends must happen before lines is built
     required_actions = []
@@ -584,7 +584,7 @@ def main() -> int:
         "mode: \"both\" runs vector similarity and the import graph together and merges them; "
         "vector finds semantic matches, graph finds structural neighbours, and one without the other leaves a gap. "
         "Never substitute grep or Read for RAG when RAG is online. "
-        "If RAG is erroring or unavailable, stop and fix it (run /rag to start the server). "
+        "If RAG is erroring or unavailable, stop and fix it (run /boost to start the server). "
         "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
         "(F) Workspace update — if a workspace context.md exists for the current task, "
         "update it after each meaningful finding or decision. "
@@ -612,7 +612,7 @@ def main() -> int:
         return 0
 
     # Standing orders fire on every message — no RAG sentinel required.
-    # The user should not need to run /rag just to receive workflow rules.
+    # The user should not need to run /boost just to receive workflow rules.
     standing_orders = (
         "RAG STANDING ORDERS (non-negotiable): "
         f"(1) RAG before files — POST {RAG_BASE_URL}/search before Read/Grep. "
@@ -627,7 +627,7 @@ def main() -> int:
         "A path that was never indexed returns nothing and says nothing, so check GET /status when a search comes back empty. "
         "(7) RAG dual-mode — send mode: \"both\" on every codebase query. "
         "It runs vector similarity and the import graph together and merges them; either one alone leaves a gap. "
-        "When RAG errors mid-task, fix it (run /rag to start the server) — never skip RAG and "
+        "When RAG errors mid-task, fix it (run /boost to start the server) — never skip RAG and "
         "substitute grep or file reads. "
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
         "do NOT self-recover by searching files; tell the user RAG is offline and wait."
@@ -662,7 +662,7 @@ def main() -> int:
         recovered = _try_auto_recover_rag(home)
         if not recovered:
             context = (
-                "NOTE: RAG could not be started automatically. Run /rag manually before spawning agents "
+                "NOTE: RAG could not be started automatically. Run /boost manually before spawning agents "
                 "or starting any multi-step investigation."
                 "\n\n" + always_inject + "\n\n" + standing_orders
             )

@@ -280,13 +280,13 @@ def install_user_assets() -> None:
 
     # Agents. researcher and swiper are the two the research gate counts
     # (RESEARCH_AGENTS in hooks/research_state.py). bad-cop reviews afterward and
-    # good-cop fixes what it finds. research-agent and verifier-agent used to be
-    # named here and neither ships any more.
+    # good-cop fixes what it finds. research-agent ships too, because the global
+    # CLAUDE.md roster names it. verifier-agent no longer ships.
     for md in (portable / "agents").glob("*.md"):
         _copy_file(md, CLAUDE_DIR / "agents" / md.name)
 
     # Skills. Copied whole, so a skill can carry a scripts/ subfolder (the
-    # powerpoint skill does). __pycache__ is excluded: running the skill's
+    # presentation skill does). __pycache__ is excluded: running the skill's
     # helper leaves bytecode in the repo copy that has no business shipping.
     skills_src = portable / "skills"
     if skills_src.is_dir():
@@ -294,6 +294,15 @@ def install_user_assets() -> None:
                         ignore=shutil.ignore_patterns("__pycache__"))
         names = sorted(d.name for d in skills_src.iterdir() if d.is_dir())
         _ok(f"installed .claude/skills ({len(names)}: {', '.join(names)})")
+        # copytree never prunes, so an installed-only skill never reaches a fresh
+        # install. "synced" is Claude's own folder.
+        extra = sorted(
+            d.name for d in (CLAUDE_DIR / "skills").iterdir()
+            if d.is_dir() and d.name not in names and d.name != "synced"
+        )
+        if extra:
+            _warn("installed but not shipped, copy into clean-rag/portable/skills/ "
+                  f"or a fresh install loses them: {', '.join(extra)}")
 
 
 # ---------------------------------------------------------------------------
@@ -377,9 +386,9 @@ MCP_SERVERS: list[dict] = [
      "args": ["npx", "-y", "test-coverage-mcp"], "needs": "npx"},
     {"name": "chrome-devtools",
      "args": ["npx", "-y", "chrome-devtools-mcp@latest"], "needs": "npx"},
-    {"name": "serena",
-     "args": ["uvx", "--from", "git+https://github.com/oraios/serena",
-              "serena", "start-mcp-server"], "needs": "uvx"},
+    {"name": "mobile-mcp",
+     "args": ["npx", "-y", "@mobilenext/mobile-mcp@latest"], "needs": "npx",
+     "env": {"MOBILEMCP_DISABLE_TELEMETRY": "1"}},
     {"name": "ast-grep", "args": ["uvx", "ast-grep-mcp"], "needs": "uvx"},
     {"name": "context7",
      "args": ["npx", "-y", "@upstash/context7-mcp"], "needs": "npx"},
@@ -595,7 +604,7 @@ def register_mcp_servers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 2c: Install deck tooling for the powerpoint skill (best effort)
+# Step 2c: Install deck tooling for the presentation skill (best effort)
 # ---------------------------------------------------------------------------
 def _module_available(module: str) -> bool:
     """Is an importable module already present for this interpreter?
@@ -604,7 +613,7 @@ def _module_available(module: str) -> bool:
     answers without spawning anything, so it cannot hang the installer the way
     `python -c "import x"` can when a package blocks at import time. find_spec
     locates the module without executing it, which is also why it is what the
-    powerpoint skill's own helper uses (pptx_env._have_module).
+    presentation skill's own helper uses (pptx_env._have_module).
     """
     try:
         return importlib.util.find_spec(module) is not None
@@ -702,8 +711,78 @@ def install_plugins() -> None:
             _warn(f"{name} install failed, run: claude plugin install {name}")
 
 
+# squeez: Apache-2.0 output compression. Not a plugin; its own installer sets it up.
+def install_squeez() -> None:
+    home_bin = Path.home() / ".claude" / "squeez" / "bin" / (
+        "squeez.exe" if os.name == "nt" else "squeez"
+    )
+    squeez_bin = str(home_bin) if home_bin.exists() else resolve_tool("squeez")
+
+    if not squeez_bin:
+        bash = resolve_tool("bash")
+        if not bash:
+            _warn("squeez needs Git Bash (bash not on PATH), skipping. "
+                  "Install manually: https://github.com/claudioemmanuel/squeez")
+            return
+        # ponytail: script pinned to v1.48.24, but it still fetches the latest release binary.
+        try:
+            installed = subprocess.run(
+                [bash, "-c",
+                 "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/"
+                 "7473e778532c3fca4e7cd2925f0b09d594d568e2/install.sh | sh"],
+                capture_output=True, text=True, timeout=180,
+            )
+        except Exception as e:  # noqa: BLE001
+            _warn(f"squeez install failed ({e}), skipping")
+            return
+        if installed.returncode != 0:
+            _warn("squeez install failed, skipping")
+            return
+        squeez_bin = str(home_bin) if home_bin.exists() else resolve_tool("squeez")
+        if not squeez_bin:
+            _warn("squeez installed but binary not found, run `squeez setup` manually")
+            return
+
+    try:
+        done = subprocess.run(
+            [squeez_bin, "setup"], capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        _warn(f"squeez setup failed ({e})")
+        return
+    if done.returncode != 0:
+        _warn(f"squeez setup failed, run manually: {squeez_bin} setup")
+        return
+    _ok("squeez installed, compresses redundant tool output, never blocking")
+    _harden_squeez_config()
+
+
+def _harden_squeez_config() -> None:
+    """Default persona is 'ultra' (rewrites response wording) and buddy is
+    on (it overwrote our statusLine once). Force both off; setdefault would
+    not fix an already-bad default squeez itself ships."""
+    cfg = Path.home() / ".claude" / "squeez" / "config.ini"
+    if cfg.exists():
+        text = cfg.read_text(encoding="utf-8")
+        patched = re.sub(r"(?m)^persona\s*=.*$", "persona = off", text)
+        patched = re.sub(r"(?m)^buddy\s*=.*$", "buddy = false", patched)
+        if patched != text:
+            cfg.write_text(patched, encoding="utf-8")
+            _ok("squeez persona/buddy disabled (no output rewriting, no statusLine takeover)")
+
+    settings = read_json(SETTINGS_PATH, {})
+    line = settings.get("statusLine", {}).get("command", "")
+    if "squeez" in line and "statusline-merged" not in line:
+        settings["statusLine"] = {
+            "type": "command",
+            "command": 'bash "$CLAUDEBOOST_HOME/scripts/statusline-merged.sh"',
+        }
+        write_json(SETTINGS_PATH, settings)
+        _ok("statusLine restored (squeez setup had overwritten it)")
+
+
 def install_pptx_tools() -> None:
-    """Install what the powerpoint skill needs to build and narrate a deck.
+    """Install what the presentation skill needs to build and narrate a deck.
 
     Best effort, same contract as install_npm_qa_tools: warn and continue,
     never abort. python-pptx builds the deck and edge-tts voices the optional
@@ -732,7 +811,7 @@ def install_pptx_tools() -> None:
 
     # Native tools. The skill's own helper knows the per-OS search paths, so
     # ask it rather than duplicating that list here.
-    helper = CLEAN_RAG_HOME / "portable" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    helper = CLEAN_RAG_HOME / "portable" / "skills" / "presentation" / "scripts" / "pptx_env.py"
     natives = [
         ("soffice", "LibreOffice", "render and video",
          "winget install TheDocumentFoundation.LibreOffice | brew install --cask libreoffice | apt install libreoffice"),
@@ -742,7 +821,7 @@ def install_pptx_tools() -> None:
          "winget install Gyan.FFmpeg | brew install ffmpeg | apt install ffmpeg"),
     ]
     if not helper.is_file():
-        _warn("powerpoint skill helper not found, skipping native tool detection")
+        _warn("presentation skill helper not found, skipping native tool detection")
         return
     for probe, label, purpose, how in natives:
         try:
@@ -756,7 +835,7 @@ def install_pptx_tools() -> None:
         if result.returncode == 0:
             _ok(f"{label} found at {result.stdout.strip()}")
         else:
-            _warn(f"{label} not found, powerpoint skill loses {purpose}")
+            _warn(f"{label} not found, presentation skill loses {purpose}")
             _say(f"  {how}")
 
 
@@ -908,13 +987,14 @@ def wipe_clean_rag_hooks() -> None:
     for event, entries in list(hooks.items()):
         kept = []
         for entry in entries:
-            text = "".join(
-                h.get("command", "") + h.get("prompt", "")
-                for h in entry.get("hooks", [])
-            )
-            if any(marker in text for marker in CLEAN_RAG_OWNED_MARKERS):
-                removed += 1
-            else:
+            handlers = entry.get("hooks", [])
+            others = [h for h in handlers if not any(
+                marker in h.get("command", "") + h.get("prompt", "")
+                for marker in CLEAN_RAG_OWNED_MARKERS)]
+            removed += len(handlers) - len(others)
+            if others:
+                entry["hooks"] = others
+            if others or not handlers:
                 kept.append(entry)
         hooks[event] = kept
     write_json(SETTINGS_PATH, settings)
@@ -1076,10 +1156,11 @@ def set_env_var() -> None:
     # here, unlike CLAUDE_CODE_AUTO_COMPACT_WINDOW which upstream Claude
     # Code's own autocompact logic can't see through settings.json.
     env.setdefault("CLEAN_RAG_GATE_MODE", "stop")
-    # Compact at 60% rather than the default, so compaction happens while there
-    # is still room to write a decent summary. setdefault, not assignment: a
-    # number the human has already tuned is theirs to keep.
-    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "60")
+    # 90%, matching docs/CLAUDEBOOST-REFERENCE.md. Best effort only,
+    # see anthropics/claude-code#63186.
+    env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+    # Ponytail's own subprocess reads this var directly, unaffected by #63186.
+    env.setdefault("PONYTAIL_DEFAULT_MODE", "lite")
     # pipe-down ships a 25 word cap and an LLM judge that spawns a claude
     # subprocess per write. setdefault, so a human who retunes either keeps it.
     env.setdefault("PIPE_DOWN_MAX_WORDS", "20")
@@ -1087,6 +1168,7 @@ def set_env_var() -> None:
     write_json(SETTINGS_PATH, settings)
     _ok(f"CLEAN_RAG_HOME set to {CLEAN_RAG_HOME.as_posix()}")
     _ok(f"Auto compact threshold {env['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}%")
+    _ok(f"Ponytail default mode {env['PONYTAIL_DEFAULT_MODE']}")
 
 
 def protect_research_state() -> None:
@@ -1560,6 +1642,8 @@ def main():
     parser = argparse.ArgumentParser(description="Install clean-rag")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
+    parser.add_argument("--no-hooks", action="store_true",
+                        help="Register no hooks; the claudeboost plugin owns them")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1604,9 +1688,15 @@ def main():
     else:
         print("\nStep 2b3: Skipped (--skip-deps)")
 
+    if not args.skip_deps:
+        print("\nStep 2b4: Installing squeez (context compression)...")
+        install_squeez()
+    else:
+        print("\nStep 2b4: Skipped (--skip-deps)")
+
     # Step 2c
     if not args.skip_deps:
-        print("\nStep 2c: Installing deck tooling for the powerpoint skill...")
+        print("\nStep 2c: Installing deck tooling for the presentation skill...")
         install_pptx_tools()
     else:
         print("\nStep 2c: Skipped (--skip-deps)")
@@ -1681,6 +1771,10 @@ def main():
     # Step 5n
     print("\nStep 5n: Configuring code pattern injection environment...")
     configure_code_pattern_inject_env()
+
+    if args.no_hooks:
+        print("\n--no-hooks: removing clean-rag's settings hooks; the claudeboost plugin runs them")
+        wipe_clean_rag_hooks()
 
     # Step 6: heal a stale settings.json from an older install. Runs LAST so it
     # sees every hook this run registered, prunes any that point at a deleted

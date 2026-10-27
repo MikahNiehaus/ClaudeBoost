@@ -59,7 +59,7 @@ def _stderr_of(result) -> str:
 # expect returncode 0 when its vehicle is `git commit -m "..."`. The bite is
 # unchanged: the refusal must come from the verb gate and not from the check
 # under test, so a curl or backslash false positive still fails the assertion.
-_VERB_GATE_REFUSAL = "read-only allowlist"
+_VERB_GATE_REFUSAL = "Read-only git and gh run with no prompt"
 
 
 def allow_except_git_write(command: str):
@@ -147,21 +147,22 @@ class TestRoutedWritesAreBlocked:
 # ALLOW: a direct write must reach the ask rule, not this hook
 # ===========================================================================
 
-class TestDirectWritesAreRefusedByTheVerbGate:
+class TestDirectWrites:
     @pytest.mark.parametrize("command", [
         'git push origin main',
         'git push --force origin main',
         'git -C "/repo/with a space" push origin main',
+    ])
+    def test_direct_git_push_reaches_its_prompt(self, command):
+        """Permission rules judge the unwrapped form by prefix, so the guard
+        steps aside and leaves the push to the ask and deny rules."""
+        allow(command)
+
+    @pytest.mark.parametrize("command", [
         'gh pr create --title x',
         'gh api /repos/x/y',
     ])
-    def test_direct_write_is_refused(self, command):
-        """These used to pass through so the permission prompt could fire.
-
-        They no longer do. A prompt is an approval the session can give itself,
-        and the requirement is that a git or gh write cannot run at all and is
-        handed to the human instead. check_routed_git_write still leaves a
-        direct write alone; the verb gate behind it is what refuses this."""
+    def test_direct_gh_write_is_refused(self, command):
         block(command)
 
 
@@ -225,12 +226,19 @@ class TestNoFalsePositives:
         allow(command)
 
     @pytest.mark.parametrize("command", [
-        # A heredoc body bound for a non shell is that program's input, not
-        # shell to execute. Writing a script or a note that mentions a push
-        # must not read as running one.
+        # `python -` runs its stdin, so these bodies are source, not data.
         "python - <<'EOF'\nprint('git push')\nEOF",
         "python - <<'EOF'\ncases = ['bash -c \"git push\"']\nEOF",
         "python - <<'PYEOF'\ns = \"gh pr merge\"\nPYEOF",
+    ])
+    def test_a_heredoc_body_run_by_an_interpreter_is_source(self, command):
+        block(command)
+
+    @pytest.mark.parametrize("command", [
+        # A heredoc body bound for a non shell is that program's input, not
+        # shell to execute. Writing a script or a note that mentions a push
+        # must not read as running one.
+        "python script.py <<'EOF'\nprint('git push')\nEOF",
         # `cat > file <<EOF` is deliberately blocked by check_cat_heredoc, a
         # different guard, so this uses the form that guard leaves alone.
         # The write sits first on the body line on purpose: an earlier version
@@ -272,7 +280,7 @@ class TestNoFalsePositives:
         is removed. Without it, writing a shell script through a heredoc is
         blocked.
         """
-        allow("python - <<'EOF'\nx = 1\ngit push\nEOF")
+        allow("cat <<'EOF' | grep x\nx = 1\ngit push\nEOF")
 
     def test_a_quoted_argument_inside_a_shell_payload_is_still_data(self):
         """Isolates the inner quote stripping specifically.

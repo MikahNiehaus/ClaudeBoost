@@ -118,7 +118,7 @@ def _proof_check_enabled() -> bool:
 
 def _agent_type(payload: dict) -> str:
     tool_input = payload.get("tool_input", {})
-    return (
+    name = str(
         tool_input.get("subagent_type")
         or tool_input.get("agent_type")
         or tool_input.get("agent")
@@ -127,6 +127,8 @@ def _agent_type(payload: dict) -> str:
         or payload.get("subagent_type")
         or ""
     )
+    # Stored bare because verifier-gate.py compares the stored name to "bad-cop".
+    return name.rsplit(":", 1)[-1]
 
 
 def _is_subagent_stop(payload: dict) -> bool:

@@ -1,0 +1,70 @@
+:root{
+  --ground:#E9EEF2; --ink:#14212B; --muted:#5B6B76; --rule:#CBD5DC;
+  --green:#1F5F4A; --hi:rgba(255,200,40,.62); --hi-old:rgba(255,200,40,.30); --box:#E3A008;
+  --sans:'Atkinson Hyperlegible','Segoe UI',sans-serif; --mono:'Atkinson Hyperlegible Mono',Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);display:grid;
+  grid-template-columns:560px 1fr}
+
+aside{padding:88px 40px 72px 96px;display:flex;flex-direction:column}
+.brand{font-weight:700;font-size:26px;color:var(--green);letter-spacing:.01em}
+h1{font-size:58px;line-height:1.08;font-weight:700;margin:56px 0 0;letter-spacing:-.01em}
+body.title h1{font-size:84px;line-height:1.02}
+.labels{margin-top:48px}
+.label{font-size:30px;line-height:1.25;margin:0 0 18px;padding-left:22px;border-left:6px solid transparent;
+  opacity:0}
+.label.on{opacity:1;color:var(--muted);border-left-color:var(--rule)}
+.label.now{color:var(--ink);border-left-color:var(--box)}
+.count{margin-top:auto;font-size:20px;color:var(--muted)}
+
+main{padding:72px 96px 72px 24px;display:flex;align-items:center;justify-content:center;min-width:0}
+
+.sheet{background:#fff;width:100%;max-height:936px;overflow:hidden;padding:44px 52px;border-radius:6px;
+  box-shadow:0 2px 0 rgba(20,33,43,.06),0 34px 60px -34px rgba(20,33,43,.45);font-size:22px;line-height:1.5}
+.sheet.tall{-webkit-mask-image:linear-gradient(#000 86%,transparent);mask-image:linear-gradient(#000 86%,transparent)}
+.sheet h1{font-size:34px;margin:0 0 6px} .sheet h2{font-size:28px;margin:22px 0 10px;color:var(--green)}
+.sheet p,.sheet li{margin:0 0 12px} .sheet ol,.sheet ul{padding-left:30px;margin:0 0 12px}
+.sheet table{border-collapse:collapse;width:100%;font-size:20px;line-height:1.38}
+.sheet th,.sheet td{border-bottom:1px solid var(--rule);padding:12px 12px;text-align:left;vertical-align:top}
+.sheet th{border-bottom:2px solid var(--ink);font-weight:700}
+.sheet code{font-family:var(--mono);font-size:.88em;background:#EEF2F4;padding:1px 6px;border-radius:4px}
+.sheet img{display:block;width:78%;margin:8px 0 6px;border:1px solid var(--rule)}
+.sheet em{color:var(--muted)}
+
+mark{background:transparent;color:inherit;border-radius:3px;padding:0 2px;margin:0 -2px;
+  box-decoration-break:clone;-webkit-box-decoration-break:clone}
+mark.on{background:var(--hi-old)} mark.now{background:var(--hi)}
+tr.row.on td{background:var(--hi-old)} tr.row.now td{background:var(--hi)}
+
+.term{width:100%;background:var(--ink);color:#D8E3EA;font-family:var(--mono);font-size:23px;line-height:1.6;
+  padding:52px 56px;border-radius:10px;box-shadow:0 34px 60px -34px rgba(20,33,43,.6)}
+.term div{white-space:pre}
+.term.big{font-size:32px;line-height:1.55} .term.mid{font-size:27px;line-height:1.5}
+.term .cmd{margin-top:14px} .term .cmd.cont{margin-top:0}
+.term .cmd{color:#fff} .term .dim{color:#8FA3B0}
+.term mark.on{background:rgba(255,200,40,.16);color:#FFE7A3} .term mark.now{background:rgba(255,200,40,.30);color:#FFF1C7}
+
+.term .note{font-family:var(--sans);color:#8FA3B0;font-size:28px;margin:8px 0 22px}
+.sheet.index table{font-size:19px} .sheet.index td:not(:nth-child(2)),.sheet.index th{white-space:nowrap}
+.sheet.small{font-size:21px} .sheet .src{color:var(--muted);font-size:18px;margin-bottom:18px}
+.sheet h3{font-size:25px;margin:22px 0 10px;color:var(--green)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:36px;width:100%}
+.pair figure{margin:0}
+.shot{position:relative;background:#fff;border-radius:6px;overflow:hidden;
+  box-shadow:0 34px 60px -34px rgba(20,33,43,.45)}
+.shot img{display:block;width:100%}
+.box{position:absolute;border:5px solid var(--box);border-radius:8px;opacity:0}
+.box.on{opacity:.55} .box.now{opacity:1;box-shadow:0 0 0 9999px rgba(20,33,43,.16)}
+figcaption{margin-top:20px;font-size:26px;color:var(--muted)}
+
+.choices{background:var(--ink);color:#fff;border-radius:10px;padding:56px 64px;width:720px;font-size:36px;
+  line-height:1.4;box-shadow:0 34px 60px -34px rgba(20,33,43,.6)}
+.choices .ask{color:#8FA3B0;margin-bottom:28px;font-family:var(--mono);font-size:28px}
+.choices div:not(.ask){padding:10px 0}
+.choices mark.on{background:transparent;color:#FFE7A3} .choices mark.now{color:#FFE7A3}
+main>figure{margin:0;max-width:100%;text-align:center}
+main>figure .shot{display:inline-block;text-align:left}
+.shot img{max-width:100%;max-height:820px;width:auto;margin:0 auto}
+.pair .shot img{max-height:none;width:100%}

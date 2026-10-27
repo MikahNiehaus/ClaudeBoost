@@ -1,0 +1,11 @@
+{
+  "name": "claudeboost-local",
+  "owner": {"name": "ClaudeBoost"},
+  "plugins": [
+    {
+      "name": "claudeboost",
+      "source": "./",
+      "description": "Research gated development agents, skills and slash commands."
+    }
+  ]
+}

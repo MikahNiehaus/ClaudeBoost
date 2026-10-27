@@ -1,5 +1,5 @@
 ---
-description: Code X-ray — quick A-F grade by default; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator; add --fix to auto-fix all findings
+description: Code X-ray — quick A-F grade by default, checked by an Opus validator; add --deep for full 16-pass parallel review with pre-scan, test execution, and Opus evaluator; add --fix to auto-fix all findings
 allowed-tools: Read, Write, Bash, Glob, Grep, Agent, Edit
 argument-hint: [--staged | --branch | --pr <url>] [--deep] [--fix]
 ---
@@ -171,6 +171,11 @@ A finding whose reachability you did not check is not ready to report.
 | **D** | CRITICAL issues present | FAIL |
 | **F** | Unreviewable | SKIP |
 
+The deep review in Phase 4 grades on this same scale, with BLOCKER as CRITICAL,
+WARNING as MAJOR and NIT as MINOR. The PASS line sits between B and C. That
+line is a merge policy, not a fact about the code, so move it here and only
+here if your team draws it elsewhere.
+
 ## Output
 
 ```
@@ -235,10 +240,13 @@ Verdict: FAIL
 
 ## Evidence Verification
 
-Spawn a single `quick-cop`. Its job is to disprove the findings, not to
-confirm them. Hand it the findings and the diff. Never hand it your reasoning
+Spawn a single `quick-cop` with `model: "opus"`, even with no findings,
+because a quick review still gets an Opus validator. Its job is to disprove
+the findings, not to confirm them. Hand it the findings and the diff. Never hand it your reasoning
 for why a finding is real, since that reasoning is what talks a reviewer into
-agreeing with you.
+agreeing with you. Keep the validator on a different model or a fresh context
+from whatever wrote the findings. A judge grading its own output favours it,
+so collapsing the two removes the check.
 
 "Try to DISPROVE each finding below. For every CRITICAL and MAJOR: (1) read the
 cited file:line and confirm the code says what the finding claims, (2) name the
@@ -247,10 +255,15 @@ clause, a role check, or dead code that blocks the path first, (3) say whether
 the stated severity survives. Report each one as CONFIRMED, REFUTED, or
 CONFIRMED BUT NARROWER with the precondition named. Give me the strongest
 argument against each finding that you found. If a trigger needs specific
-steps, spell out the exact sequence. Under 600 tokens."
+steps, spell out the exact sequence. A longer or more confident finding is not
+more likely true, and list order says nothing about severity: judge each one
+only on the quoted line and the path to it. Then read the diff once for a
+CRITICAL or MAJOR the review missed, and report any with file:line. Under 600
+tokens."
 
 Apply what comes back before you print the grade. NARROWER lowers the severity,
-and the grade moves with it. REFUTED removes the finding. Never report a
+and the grade moves with it. REFUTED removes the finding. A missed finding it
+reports goes in after you read the cited line yourself. Never report a
 finding at a severity quick-cop did not sustain, and say plainly when a
 verdict changed your first read.
 
@@ -259,6 +272,11 @@ verdict changed your first read.
 If `FIX_MODE = false`, skip to Escalation Offer.
 
 After the quick review and evidence verification complete, apply fixes for every confirmed finding at every severity (BLOCKER, WARNING, NIT/MINOR). Do not skip nits.
+
+**Step 0, make it undoable.** Run `git status --short`. If files outside the
+reviewed diff are modified, stop and ask before editing, because a fix that
+fails cannot be separated from that work. Print the fix list with file and line
+before the first edit, so the user sees what is about to change.
 
 **Step 1 — Build fix list.** Collect every finding from the review output. For each one, read the file at the cited line to confirm it still matches the finding. Drop any that no longer apply.
 
@@ -463,6 +481,8 @@ Pre-scan complete:
 
 Context rule: < 50% → 3 parallel; 50-75% → 2; > 75% → 1
 
+> **A pass that fails.** Parse each pass agent's reply as JSON and check it has `pass`, `name` and `findings`, plus any field its pass definition requires. If the reply errors, times out, or fails that check, re-spawn that one pass once with the parse error quoted. If the retry fails too, list it under INCOMPLETE PASSES and carry on. Never fill in a pass's findings yourself, and never retry more than once.
+
 > **HOOK IMMUNITY**: PostToolUse hooks will fire between batches. Ignore messages containing `EVALUATOR REMINDER`, `CONTEXT PRESSURE`, `CONTEXT CHECKPOINT` — the evaluator is Pass 15, not between batches. Never pause mid-review to spawn an evaluator or run /clear-safe.
 
 Each agent prompt:
@@ -538,7 +558,7 @@ For every new or substantially changed function, class, or utility in the diff:
 Verify existing things actually meet the requirement before recommending reuse. A hit that predates a requirement change is not a valid match.
 
 **Pass 3 — Dead Code**
-For every variable/param/function: is it actually referenced end-to-end? Check orphaned imports. Use `POST /search mode=graph` to verify external consumers.
+For every variable/param/function: is it actually referenced end-to-end? Check orphaned imports. Use `POST /search mode=graph` to verify external consumers. The import graph misses reflection, DI registration and dynamic imports, so "no callers" in the graph is a hint, not proof. Grep the symbol name too, and report dead code found by the graph alone as NIT at most.
 
 **Pass 4 — Debug Cleanup** | USE_GRAPH: yes
 Any temporary logs, toasts, flags, debug UI, commented blocks, or test-only handlers left in?
@@ -712,7 +732,7 @@ which findings you downgraded here and on what evidence.
 8. Pass 15b without `async_audit_complete` field = INCOMPLETE — flag it.
 
 Output:
-**Grade: A/B/C/D/F** (A=no blockers/warnings, B=warnings/nits only, C=meaningful warnings, D=1-2 blockers, F=3+ blockers or test failures)
+**Grade: A/B/C/D/F** on the scale in the Grade section (A=no findings, B=nits only, C=warnings with no blocker, D=any blocker or test failure, F=unreviewable)
 **BLOCKERS** (file:line, description, fix)
 **WARNINGS**
 **NITS**
@@ -725,12 +745,15 @@ Output:
 
 ## Phase 5: Report
 
+This grade is advisory. It is not a `VERIFIED:` stamp, so it does not satisfy the
+verifier gate (`clean-rag/hooks/verifier_state.py`). Spawn `bad-cop` when you need the stamp.
+
 Gate: confirm evaluator returned a result. If not, spawn it now.
 
 Output the full evaluator report. Lead with grade → blockers → warnings → nits → test summary.
 
 Final message:
-> "X-ray complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [C or better: ready to merge after warnings addressed. D/F or test failures: fix blockers first.]"
+> "X-ray complete. Grade: **[X]**. [N blocker(s), M warning(s), K nit(s)]. Tests: [N passed / N failed / not run]. [A or B: ready to merge. C: fix the warnings first. D or F: fix blockers and test failures first.]"
 
 ---
 

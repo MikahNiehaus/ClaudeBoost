@@ -13,8 +13,7 @@ Arguments: $ARGUMENTS
 **This command never runs a git command that writes.** Staging, committing and
 pushing are the user's to run. Every write command in this file is put on the
 clipboard and described, not executed. `git add`, `git commit` and `git push`
-are denied by the permission config, so attempting one fails rather than
-prompting.
+would only reach a permission prompt, so this command hands them over instead.
 
 ## Phase 0: Load RAG Context (MANDATORY FIRST ACTION)
 
@@ -26,7 +25,7 @@ Set `PROJECT_PATH` to the detected value.
 
 Call `POST http://127.0.0.1:8613/search with {"query":"final quality gate before pushing work","sources":["project:<PROJECT_PATH>"],"mode":"both","limit":8}`.
 
-If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /rag before using this skill."
+If `POST http://127.0.0.1:8613/search` fails: stop and tell the user "RAG is not connected. Run /clean-rag-server start before using this skill."
 
 ---
 

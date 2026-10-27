@@ -106,6 +106,8 @@ def main() -> int:
     if not isinstance(tool_input, dict):
         tool_input = {}
     skill_name = str(tool_input.get("skill", "") or "").strip().lower()
+    # A plugin skill arrives as "claudeboost:qa"; the lists hold bare names.
+    skill_name = skill_name.rsplit(":", 1)[-1]
 
     # No flag — nothing to enforce
     if not _FLAG.exists():

@@ -44,6 +44,7 @@ from .file_scan import (
     SKIP_FILES,
     SKIP_SUFFIXES,
     exclusion_reason,
+    ragignored,
     scan_project,
 )
 from .store import Chunk, ChromaStore
@@ -1364,6 +1365,8 @@ def reindex_file(
     reason = exclusion_reason(abs_file)
     if reason is not None:
         return {"skipped": True, "reason": reason}
+    if ragignored(project_root, [rel_path]):
+        return {"skipped": True, "reason": f"{rel_path} is excluded by .ragignore"}
 
     try:
         content = abs_file.read_text(encoding="utf-8")

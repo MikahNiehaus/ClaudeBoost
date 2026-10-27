@@ -104,7 +104,7 @@ def project_dir_name(project_path) -> str:
     leaf = slugify_name(root.name)
     parent = slugify_name(root.parent.name) if root.parent != root else ""
     # A parent that every project shares is noise, not information. Most
-    # projects here live directly under C:\Development, so prefixing all of
+    # projects live directly under one folder such as Development, so prefixing all of
     # them with "development-" would make the listing longer and no clearer.
     # The parent earns its place only when it actually distinguishes.
     if parent and parent != leaf and parent not in _GENERIC_PARENTS:

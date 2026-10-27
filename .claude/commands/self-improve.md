@@ -42,7 +42,7 @@ Wait for the user's answer — the user is always the source of truth.
 
 If `WORKSPACE_PATH` is empty: note it and continue.
 
-Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+Include `workspace_path="<WORKSPACE_PATH>"` in every agent spawn prompt, so the agent can read that workspace's `ticket.md` and `requirements.md`.
 
 
 
@@ -170,11 +170,11 @@ Use POST http://127.0.0.1:8613/search with `{"sources":["project:<PROJECT_PATH>"
 
 | FOCUS | Lenses to run |
 |-------|--------------|
-| `docs` | Count accuracy: stated agent/knowledge/command counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
+| `docs` | Count accuracy: stated agent/command counts in CLAUDE.md, README.md, docs/SETUP-GUIDE.md, docs/CLAUDEBOOST-REFERENCE.md vs actual file counts |
 | `enforcement` | Phase gates (prose-only vs file-read gates); hook exit codes vs documented claims; REQUIRED/MUST language vs actual behavior |
-| `xml` | Well-formedness of all agents/*.xml and knowledge/*.xml; cross-reference resolution (`<knowledge-base file>` attrs) |
-| `counts` | Count agents/*.xml, knowledge/*.xml, .claude/commands/*.md; compare to all docs stating a number |
-| `rag` | Vector search: knowledge scope (ST-07) + agents scope (ST-08). Graph search: codebase mode=graph (ST-13) — confirms graph index exists and augments results. Chunk health: `GET /status` total > 700 (ST-10). Context pipeline: `POST http://127.0.0.1:8613/search` with project_path — check tier_summary.codebase > 0 and no tier_errors (ST-14). |
+| `xml` | Retired: no agent or knowledge file is XML any more. Report "nothing to check" |
+| `counts` | Count clean-rag/portable/agents/*.md and .claude/commands/*.md; compare to all docs stating a number |
+| `rag` | Search over the ClaudeBoost project (ST-07, ST-08). Graph search: mode=graph (ST-13). Index health: `GET /status` (ST-10). Combined search: mode=both (ST-14). |
 | `rules` | CLAUDE.md rule staleness: for each Hard Rule, verify at least one file:line still reflects it |
 | `memory` | Memory staleness: read `~/.claude/projects/<mangled cwd>/memory/MEMORY.md` (mangling replaces every non alphanumeric character in the project path with a dash); flag entries older than 60 days |
 | `all` | All of the above |
@@ -218,22 +218,22 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 
 | ID | Check | Pass condition |
 |----|-------|----------------|
-| ST-01 | `ls agents/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
-| ST-02 | `ls knowledge/*.xml \| wc -l` | Count matches stated count in CLAUDE.md |
+| ST-01 | `ls clean-rag/portable/agents/*.md` | Every pipeline agent named in the Model Routing section of CLAUDE.md has a file here |
+| ST-02 | Retired | There are no knowledge files to count |
 | ST-03 | `ls .claude/commands/*.md \| wc -l` | Count matches CLAUDEBOOST-REFERENCE.md section 5 |
-| ST-04 | `xmllint --noout agents/*.xml 2>&1` | Zero parse errors |
-| ST-05 | `xmllint --noout knowledge/*.xml 2>&1` | Zero parse errors |
-| ST-06 | Each `<knowledge-base file="...">` attr in agents/*.xml | All referenced files exist |
+| ST-04 | Retired | Agents are markdown now; there is no XML to parse |
+| ST-05 | Retired | There are no knowledge files to parse |
+| ST-06 | Retired | Agents no longer reference knowledge files |
 | ST-07 | `POST http://127.0.0.1:8613/search {"query":"OWASP SQL injection","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
 | ST-08 | `POST http://127.0.0.1:8613/search {"query":"playwright browser testing","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both"}` | Results returned, no `stale_projects` entry with `served: false` |
 | ST-09 | Each .claude/commands/*.md has `description:` in frontmatter | No commands missing description |
-| ST-10 | `GET /status` | ClaudeBoost chunks (knowledge + agents combined) > 700. Note: `GET /status` only covers knowledge/agents scopes — project codebase chunk count is not reported here; verify via POST /index output instead |
+| ST-10 | `GET /status` | The ClaudeBoost entry in `projects.entries` has `files_total > 0`. There are no separate knowledge or agents scopes; ClaudeBoost is one indexed project |
 | ST-11 | Memory file staleness (INFO only) | No linked memory file older than 60 days without a confirmed reason |
 | ST-12 | Hard Rules in CLAUDE.md have codebase citations (INFO only) | Each rule has at least one file:line OR is documented as aspirational |
-| ST-13 | `POST http://127.0.0.1:8613/search` with `{"query":"rag search implementation","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` | graph_augmented=true and results > 0. Only run for `rag` focus — confirms graph.db is present and neighbour expansion works. |
-| ST-14 | `POST http://127.0.0.1:8613/search with {"query":"RAG pipeline health","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":8}` | tier_summary.codebase > 0, no tier_errors key in result. Only run for `rag` focus. |
+| ST-13 | `POST http://127.0.0.1:8613/search` with `{"query":"rag search implementation","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` | `results` non-empty and no `stale_projects` entry with `served: false`. Only run for `rag` focus. |
+| ST-14 | `POST http://127.0.0.1:8613/search with {"query":"RAG pipeline health","sources":["project:$CLAUDEBOOST_HOME"],"mode":"both","limit":8}` | `results` non-empty and no `stale_projects` entry with `served: false`. Only run for `rag` focus. |
 | ST-15 | Graph resolution quality: `POST http://127.0.0.1:8613/index-project {"project_path":"$CLAUDEBOOST_HOME"}` — read `graph.unresolved`. Compute rate: `unresolved / edges`. | unresolved / edges < 0.15 (less than 15% of edges truly unresolved. External deps don't count as unresolved. |
-| ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8613/search` with `{"query":"build_context tier4 codebase","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` — inspect the structural neighbours returned. | graph_augmented=true AND at least one neighbour file is in the same subsystem as the seed (e.g., both in `tools/` or both in `adapters/`. Confirms graph edges connect semantically related files, not random ones. |
+| ST-16 | Neighbor relevance spot-check: `POST http://127.0.0.1:8613/search` with `{"query":"project search and graph expansion","sources":["project:$CLAUDEBOOST_HOME"],"mode":"graph","limit":5}` — inspect the structural neighbours returned. | At least one returned file is in the same subsystem as the seed (e.g., both in `clean-rag/server/`). Confirms graph edges connect semantically related files, not random ones. |
 | ST-17 | CodeSearchNet MRR benchmark: `python "$RAG_BENCHMARKS_PATH/codesearchnet_benchmark.py" --sample 100 --lang python --no-index` where `$RAG_BENCHMARKS_PATH` is your local clone of the rag-benchmarks repo. Only for `rag` focus — takes ~2 min. Requires `pip install datasets` (one-time) and a pre-built corpus index (run once without `--no-index` to build). Dataset: `code-search-net/code_search_net`. Use `--no-index` on repeated runs — RAG server holds the chroma files open so force-wipe always fails; the corpus is already indexed. **Caveat**: benchmark uses `whole_func_string` (code+docstring) which is easier than the published CodeBERT task (code-only). Use for trend tracking only — not a direct comparison to Microsoft baselines. | MRR@10 > 0.50. Below 0.50 = retrieval is worse than a tuned keyword search (BM25 baseline). Save result with `--save results/latest.json` for trend tracking across rounds. |
 
 ### WORKSPACE mode tests (run all)
@@ -245,7 +245,7 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 | WT-03 | `$WORKSPACE_ABS/context.md` exists | File present |
 | WT-04 | context.md Status field | Not stuck on PLAN_READY if work has started (should be IN_PROGRESS or COMPLETE) |
 | WT-05 | Plan output artifacts exist | Each step's `**Output artifact**:` file exists on disk OR step is explicitly marked incomplete |
-| WT-06 | Project RAG indexed (if project path exists) | POST /index output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
+| WT-06 | Project RAG indexed (if project path exists) | `POST /index-project` output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
 | WT-07 | No unresolved NEEDS_VERIFICATION findings in context.md | All findings are CONFIRMED, DROPPED, or escalated |
 | WT-08 | Tests planned → test files exist | If plan includes a bad-cop step, at least one test file is present |
 
@@ -254,7 +254,7 @@ Use `POST http://127.0.0.1:8613/search` with `{"query":"...","sources":["project
 | ID | Check | Pass condition |
 |----|-------|----------------|
 | PT-01 | README exists | File present at project root |
-| PT-02 | Project RAG indexed | POST /index output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
+| PT-02 | Project RAG indexed | `POST /index-project` output from Phase 1 shows `files_indexed + files_unchanged > 0`; OR run `/rag-health project` and confirm no FAIL on checks 3b/3c |
 | PT-03 | Raw SQL string concatenation | Zero occurrences (grep for string-concatenated query patterns) |
 | PT-04 | Secrets in source | Zero hardcoded API keys, passwords, tokens in non-.env source files |
 | PT-05 | logger.error in catch blocks | Sample 10 catch blocks via grep; flag any missing error logging (INFO, not FAIL) |

@@ -242,6 +242,13 @@ own opinion. Cite what you found. If the correctness properties you were
 handed include a real reference snippet, test the diff against what that
 reference actually guarantees, not just the properties as stated.
 
+**Name tests after what they check, never after this pipeline.** No
+`adversarial`, `bad-cop`, `badcop`, `good-cop`, `goodcop` or `cop` in a test
+file name, class, describe block or test name. Follow the project's own
+convention: `ReturnUrlTests`, not `ReturnUrlAdversarialTests`. Add cases to the
+existing suite for that code when one exists. These files get committed and
+read by people who never saw this pipeline.
+
 When a failure you found will not yield, or you cannot reproduce it reliably,
 invoke the `debugging-methodology` skill and pick a technique from its symptom
 table by name. Two or three attempts with no new information means the

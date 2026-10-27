@@ -24,7 +24,7 @@ describing a surface. Empty is the common case and means the diff: the
 uncommitted working tree, or the branch against its merge base when the tree is
 clean.
 
-Spawn `bad-cop` (foreground, `run_in_background: false`, never backgrounded).
+Spawn `bad-cop` and wait for its report.
 Give it four things and only four: the review scope, the requirements, the
 correctness properties the change is supposed to satisfy, and the actual diff or
 code under review. Not your reasoning for the change, that's exactly what
@@ -43,6 +43,10 @@ happen. It never touches the destructive path for real to prove a finding
 (no actually dropping a table, no actually deleting real data); a safe
 demonstration or a traced but unexecuted call is the standard. It fixes
 nothing itself either way.
+
+Tests it writes are named after what they check, never after the pipeline: no
+`adversarial`, `bad-cop`, `good-cop` or `cop` in a file, class or test name.
+If one slips through, rename it before anything is committed.
 
 Its last line is one of three, and it tells you what to do next.
 

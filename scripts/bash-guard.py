@@ -961,8 +961,15 @@ _SHELL_EXEC_HEAD_RE = re.compile(
 # php spells the flag -r, and it is listed separately rather than folded into
 # the alternation because node's own -r preloads a module (`node -r
 # ts-node/register app.js`), which is an operand and not source.
+# Only W, X and Q take an argument; -c, -m and -- end CPython option parsing.
 _INTERPRETER_EXEC_HEAD_RE = re.compile(
-    r"\b(?:python[\d.]*|perl|ruby|node|php|Rscript)\s+-(?:c|e)\b"
+    r"(?:\bpython[\d.]*t?d?|\bpypy[\d.]*|\bpythonw|(?<![\w.-])py)(?:\.exe)?"
+    r"(?:\s+-(?:V:\S+|\d[\d.]*(?:-[A-Za-z\d]+)?))?"
+    r"(?:\s+-(?-i:[^\s\-cmWXQ\"'])*(?-i:[WXQ])(?:\S+|\s+\S+)"
+    r"|\s+-(?-i:[^\s\-cmWXQ\"'])+"
+    r"|\s+--check-hash-based-pycs\s+\S+|\s+--[A-Za-z][\w-]*)*"
+    r"\s+-[A-Za-z]*c\b"
+    r"|\b(?:perl|ruby|node|php|Rscript)\s+-(?:c|e)\b"
     r"|\bphp(?:\.exe)?\s+-r\b",
     re.IGNORECASE,
 )
@@ -1039,17 +1046,17 @@ def _in_command_position(text: str, index: int) -> bool:
 # `<<tag` is a redirection operator, not the whole line. POSIX 2.7.4: the body
 # "shall begin after the next <newline>", so anything else on that line -- a
 # redirect, a pipe, a background '&', a comment, a second heredoc operator --
-# sits legally between the tag and the newline. `tail` absorbs it. Requiring
+# sits legally between the tag and the newline. _heredoc_lines reads it. Requiring
 # the newline immediately after the tag instead made `cat <<EOF > f.txt` and
 # `cat <<EOF | grep x` match nothing at all, so their bodies were scanned as
 # command text and an ordinary heredoc was refused.
 #
-# `tail` is not skipped over, it is read: a shell named there executes the body
+# That text is not skipped over, it is read: a shell named there executes the body
 # just as surely as one named before the << does (`cat <<EOF | bash`), so it
 # joins the head in the shell check below.
 #
 # The lookaround excludes `<<<`, which is a herestring and has no body. Without
-# it the widened tail lets `cat <<<EOF | x` match and blank the rest of the
+# it `cat <<<EOF | x` would match and blank the rest of the
 # command, which is the allow-more direction.
 #
 # The `\b` after the tag is load bearing, and it is the same defect the
@@ -1063,10 +1070,7 @@ def _in_command_position(text: str, index: int) -> bool:
 # That restored 930ms to 0.4ms. `\b` rather than `\w*+`, because possessive
 # quantifiers need Python 3.11 and this tree's floor is 3.9.
 _HEREDOC_RE = re.compile(
-    r"(?<!<)<<(?!<)-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)\b(?P=q)"
-    r"(?P<tail>[^\n]*)\r?\n(?P<body>.*?)(?:^[ \t]*(?P=tag)\b|\Z)",
-    re.DOTALL | re.MULTILINE,
-)
+    r"(?<!<)<<(?!<)-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)\b(?P=q)")
 _SHELL_WORD_RE = re.compile(r"(?:^|[/\\])(?:ba|z|k|da)?sh(?:\.exe)?$", re.IGNORECASE)
 
 # Word boundaries on the operator line. str.split() breaks on whitespace only,
@@ -1098,6 +1102,12 @@ _ROUTER_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bash reserved words that leave the next word in command position (Bash manual
+# 3.2.4 pipelines, 3.2.5 compound commands, 3.2.6 coprocesses).
+_RESERVED_COMMAND_PREFIXES = frozenset({
+    "!", "{", "coproc", "do", "elif", "else", "if", "then", "time", "until", "while",
+})
+
 
 def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     """Is a shell the command name on this heredoc's operator line?
@@ -1112,7 +1122,7 @@ def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     """
     for segment in _OPERATOR_SEGMENT_SPLIT_RE.split(operator_line):
         for token in segment.split():
-            if _ROUTER_WORD_RE.fullmatch(token):
+            if token in _RESERVED_COMMAND_PREFIXES or _ROUTER_WORD_RE.fullmatch(token):
                 continue
             # The first token that is not a prefix is the command name; what
             # follows it are that command's arguments, not another name.
@@ -1122,34 +1132,197 @@ def _shell_reads_body_in_command_position(operator_line: str) -> bool:
     return False
 
 
+# The `n` or `{varname}` of `[n]<<word` (Bash manual 3.6), else read as a script name.
+_HEREDOC_FD_RE = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
+
+
+def _heredoc_fd_start(command: str, line_start: int, op_start: int) -> int:
+    """Where the `[n]` of `[n]<<word` begins, else `op_start`.
+
+    Walks back over one word, so many operators on one line stay linear.
+    """
+    i = op_start
+    while i > line_start and (command[i - 1].isalnum() or command[i - 1] in "_{}"):
+        i -= 1
+    at_boundary = i == line_start or command[i - 1].isspace() or command[i - 1] in ";|&()<>"
+    if at_boundary and _HEREDOC_FD_RE.fullmatch(command, i, op_start):
+        return i
+    return op_start
+
+
+def _heredoc_lines(command: str):
+    """(line start, line end, [(operator, body start, body end)]) per line.
+
+    Bodies follow in operator order, each ending at its own delimiter
+    (POSIX 2.7.4).
+    """
+    pos = 0
+    while True:
+        first = _HEREDOC_RE.search(command, pos)
+        if first is None:
+            return
+        line_end = command.find("\n", first.end())
+        if line_end == -1:
+            return
+        line_start = command.rfind("\n", 0, first.start()) + 1
+        heredocs = []
+        cursor = line_end + 1
+        for op in [first, *_HEREDOC_RE.finditer(command, first.end(), line_end)]:
+            delimiter = re.compile(r"^[ \t]*" + re.escape(op.group("tag")) + r"\b",
+                                   re.MULTILINE).search(command, cursor)
+            if delimiter is None:
+                heredocs.append((op, cursor, len(command)))
+                cursor = pos = len(command)
+                continue
+            heredocs.append((op, cursor, delimiter.start()))
+            pos = delimiter.end()
+            next_line = command.find("\n", pos)
+            cursor = len(command) if next_line == -1 else next_line + 1
+        yield line_start, line_end, heredocs
+
+
+_HEREDOC_MARK_RE = re.compile(r"\x01(\d+)\x01")
+
+# A lone `&` does not end a pipeline here, because `2>&1` splits on it too.
+_PIPELINE_ENDS = (";", "\n", "&&", "||")
+
+
+def _heredocs_fed_to_interpreter(marked_line: str) -> set:
+    """Indices of the marked heredocs whose pipeline has an interpreter reading
+    stdin as source. `cat <<A | python -` feeds A to python; `cat <<A; python
+    <<B` does not.
+    """
+    fed = set()
+    group: list[str] = []
+    for separator, segment in _split_segments(marked_line) + [(";", "")]:
+        if group and any(end in separator for end in _PIPELINE_ENDS):
+            if any(_interpreter_reads_stdin_as_source(_HEREDOC_MARK_RE.sub(" ", seg))
+                   for seg in group):
+                fed.update(int(k) for seg in group for k in _HEREDOC_MARK_RE.findall(seg))
+            group = []
+        group.append(segment)
+    return fed
+
+
+def _classified_heredocs(command: str):
+    """(body start, body end, a shell is on its line, an interpreter reads it)."""
+    if "<<" not in command:
+        # Cheap reject so the common case never enters the regex at all.
+        return
+    for line_start, line_end, heredocs in _heredoc_lines(command):
+        pieces, prev = [], line_start
+        for k, (op, _start, _end) in enumerate(heredocs):
+            fd_start = max(prev, _heredoc_fd_start(command, line_start, op.start()))
+            pieces.append(command[prev:fd_start])
+            pieces.append(" \x01%d\x01 " % k)
+            prev = op.end()
+        pieces.append(command[prev:line_end])
+        marked = "".join(pieces)
+        line = _HEREDOC_MARK_RE.sub(" ", marked)
+        # Whole line, not pipeline, so `cat <<EOF >f; bash f` still counts.
+        shell = (any(_SHELL_WORD_RE.search(word)
+                     for word in _OPERATOR_LINE_SPLIT_RE.split(line))
+                 # The split keeps quotes on, so it misses `cat <<EOF | "bash"`.
+                 or _shell_reads_body_in_command_position(line))
+        fed = _heredocs_fed_to_interpreter(marked)
+        for k, (_op, start, end) in enumerate(heredocs):
+            yield start, end, shell, k in fed
+
+
 def _heredoc_data_spans(command: str) -> list[tuple[int, int]]:
     """Spans of heredoc bodies that are data rather than shell source.
 
-    Only the first heredoc on an operator line is classified. POSIX 2.7.4 says
-    a second `<<` on the same line takes the body after the first one's
-    terminator, and following that queue is more machinery than the shape is
-    worth; the later bodies stay scannable instead, which refuses more rather
-    than allowing more.
+    A body an interpreter reads as source is not data either;
+    _interpreter_stdin_sources scans it.
     """
-    spans = []
-    if "<<" not in command:
-        # Cheap reject so the common case never enters the regex at all.
-        return spans
-    for m in _HEREDOC_RE.finditer(command):
-        # Everything on the operator line except the operator itself: the
-        # receiving command before the <<, and whatever follows the tag.
-        line_start = command.rfind("\n", 0, m.start()) + 1
-        operator_line = command[line_start:m.start()] + " " + m.group("tail")
-        # If a shell is the thing reading it, the body really is executed.
-        if any(_SHELL_WORD_RE.search(word)
-               for word in _OPERATOR_LINE_SPLIT_RE.split(operator_line)):
+    return [(start, end) for start, end, shell, fed in _classified_heredocs(command)
+            if not shell and not fed]
+
+
+# Per interpreter: inline source letters, letters taking a value, and their long forms.
+_STDIN_SOURCE_FLAGS = {
+    "python": ("cm", "WXQ", (), ("--check-hash-based-pycs",)),
+    "perl": ("eE", "IMm", (), ()),
+    "ruby": ("e", "IrCEF", (), ()),
+    "node": ("ep", "rC", ("--eval", "--print"),
+             ("--require", "--import", "--loader", "--experimental-loader",
+              "--conditions", "--input-type")),
+    "php": ("rRBEFf", "dczt", (), ()),
+    "rscript": ("e", "", (), ()),
+}
+_PY_SELECTOR_RE = re.compile(r"-(?:V:\S+|\d[\d.]*(?:-[A-Za-z\d]+)?)")
+
+
+def _interpreter_reads_stdin_as_source(segment: str) -> bool:
+    """Does this command run stdin as program source, as `python -` does?
+
+    Skipping a value option wrongly can only hide a script name, which
+    refuses more rather than less.
+    """
+    words = _command_words(segment)
+    if not words:
+        return False
+    name = _binary_name(words[0])
+    if not _INTERPRETER_NAME_RE.match(name):
+        return False
+    family = "python" if name.startswith("py") else name
+    if family not in _STDIN_SOURCE_FLAGS:
+        return False
+    inline, valued, long_inline, long_valued = _STDIN_SOURCE_FLAGS[family]
+    args = iter(words[1:])
+    for arg in args:
+        if arg == "--":
+            return next(args, "-") == "-"
+        if arg == "-":
+            return True
+        if not arg.startswith("-"):
+            return False
+        if arg.startswith("--"):
+            option = arg.split("=", 1)[0]
+            if option in long_inline:
+                return False
+            if option in long_valued and "=" not in arg:
+                next(args, None)
             continue
-        # The split above tests words with their quotes still attached, so it
-        # misses `cat <<EOF | "bash"`, which really does execute the body.
-        if _shell_reads_body_in_command_position(operator_line):
+        if family == "python" and _PY_SELECTOR_RE.fullmatch(arg):
             continue
-        spans.append((m.start("body"), m.end("body")))
-    return spans
+        for i, letter in enumerate(arg[1:], 1):
+            if letter in inline:
+                return False
+            if letter in valued:
+                if i == len(arg) - 1:
+                    next(args, None)
+                break
+    return True
+
+
+def _interpreter_stdin_sources(command: str) -> list[str]:
+    """Source an interpreter reads from stdin: a heredoc, a here-string, or
+    `echo ... | python`. Input from a file or another program is not visible.
+    """
+    sources = [command[start:end]
+               for start, end, _shell, fed in _classified_heredocs(command) if fed]
+    if "<<<" not in command and "|" not in command:
+        return sources
+    # Split once. Re-splitting the line in front of every `<<<` measured 11s
+    # for 4000 of them on one 24KB line.
+    segments = _split_segments(command)
+    if "<<<" in command:
+        for _s, segment in segments:
+            if "<<<" not in segment or not _interpreter_reads_stdin_as_source(segment):
+                continue
+            # The here-string is one word after quote removal (Bash manual 3.6.7).
+            words = _shell_words(segment)
+            sources.extend(target for operator, target in zip(words, words[1:])
+                           if operator == "<<<")
+    if "|" in command:
+        for (_s, feeder), (separator, reader) in zip(segments, segments[1:]):
+            if separator.strip() != "|" or not _interpreter_reads_stdin_as_source(reader):
+                continue
+            words = _command_words(feeder)
+            if words and _binary_name(words[0]) in ("echo", "printf"):
+                sources.append(" ".join(words[1:]))
+    return sources
 
 
 def _quoted_spans(command: str) -> list[tuple[int, int]]:
@@ -1191,6 +1364,9 @@ def _executor_payloads(command: str, depth: int = 0) -> list[str]:
         # A wrapper nested this deep is pathological. Stop rather than recurse
         # without bound on a crafted input.
         return payloads
+    for source in _interpreter_stdin_sources(command):
+        payloads.append((source, "interpreter"))
+        payloads.extend(_executor_payloads(source, depth + 1))
     spans = _quoted_spans(command)
     for head in _EXECUTOR_HEAD_RE.finditer(command):
         # An executor named inside a string is being quoted, not run.
@@ -1541,10 +1717,13 @@ _ASSIGNMENT_WORD_RE = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 # denylist that reads only the first word is bypassed by putting any of these
 # in front of it. `start` and `wt.exe` are Windows spellings of the same idea.
 _WRAPPER_WORDS = frozenset({
-    "builtin", "chroot", "command", "do", "doas", "else", "elif", "env",
-    "exec", "ionice", "nice", "nohup", "parallel", "setsid", "start", "stdbuf",
-    "sudo", "then", "time", "timeout", "watch", "wt", "xargs",
-})
+    "builtin", "chroot", "command", "doas", "env", "exec", "function", "ionice",
+    "nice", "nohup", "parallel", "setsid", "start", "stdbuf", "sudo", "timeout",
+    "watch", "wt", "xargs",
+}) | _RESERVED_COMMAND_PREFIXES
+
+# `coproc NAME {` and `function NAME {` name the group; the name is not run.
+_NAMED_GROUP_WORDS = frozenset({"coproc", "function"})
 
 # The wrappers that do not just hand off, they append arguments of their own.
 # POSIX: xargs "shall construct a command line consisting of the utility and
@@ -1589,6 +1768,8 @@ def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
         if name in _WRAPPER_WORDS:
             stripped.append(name)
             index += 1
+            if name in _NAMED_GROUP_WORDS and words[index + 1:index + 2] == ["{"]:
+                index += 1
             feeder = name in _ARG_FEEDER_WORDS
             while index < len(words) and _WRAPPER_OPERAND_RE.match(words[index]):
                 takes_value = feeder and words[index] in _FEEDER_VALUE_FLAGS
@@ -1690,11 +1871,20 @@ _GIT_READ_VERBS = frozenset({
     "verify-tag", "version", "whatchanged",
 })
 
-# Recorded decision, not an oversight: `git fetch` stays a prompt rather than a
-# block. It writes only remote-tracking refs and ran 47 times in the
-# transcripts. It is allowed only unwrapped, because a wrapped fetch is exactly
-# the shape that skips the prompt this decision relies on.
-_GIT_PROMPT_VERBS = frozenset({"fetch"})
+# Writes get a prompt, unwrapped only. lfs, aliases and config stay blocked because they can run anything.
+_GIT_PROMPT_VERBS = frozenset({
+    "add", "am", "apply", "bisect", "branch", "checkout", "cherry-pick",
+    "clean", "clone", "commit", "fetch", "gc", "init",
+    "maintenance", "merge", "mv", "notes", "prune", "pull", "push", "rebase",
+    "reflog", "remote", "rerere", "reset", "restore", "revert", "rm",
+    "sparse-checkout", "stash", "submodule", "switch", "symbolic-ref", "tag",
+    "update-index", "update-ref", "worktree",
+})
+
+_GIT_PROMPT_RUNS_COMMAND = {
+    "bisect": frozenset({"run"}),
+    "submodule": frozenset({"foreach"}),
+}
 
 # Verbs that are part read and part write. The empty string means the bare verb
 # with no subcommand: `git remote` lists, `git reflog` shows, `git submodule`
@@ -1747,6 +1937,14 @@ _GIT_UNSAFE_VERB_FLAGS = frozenset({
     "--output", "--open-files-in-pager", "--upload-pack", "--receive-pack",
     "--exec", "--ext-diff",
 })
+
+# Per verb, because `-u` and `-x` are harmless elsewhere. clone can set fsmonitor or a hook.
+_GIT_UNSAFE_FLAGS_BY_VERB = {
+    "clone": (frozenset({"--config", "--template"}), "cu"),
+    "grep": (frozenset(), "O"),
+    "init": (frozenset({"--template"}), ""),
+    "rebase": (frozenset(), "x"),
+}
 
 _GIT_BRANCH_WRITE_FLAGS = frozenset({
     "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "-t",
@@ -1900,14 +2098,49 @@ def _git_ref_problem(verb: str, args: list[str]) -> str | None:
     return None
 
 
+def _unsafe_git_flag(verb: str, args: list[str]) -> str | None:
+    """The first unsafe flag in any spelling gitcli(7) accepts: a unique long
+    prefix (`--ex`), a stuck value (`-xcmd`) or a grouped short (`-qx`)."""
+    extra_long, short_letters = _GIT_UNSAFE_FLAGS_BY_VERB.get(verb, (frozenset(), ""))
+    long_flags = _GIT_UNSAFE_VERB_FLAGS | extra_long
+    for word in args:
+        if word.startswith("--"):
+            name = word.split("=", 1)[0]
+            if len(name) > 2 and any(flag.startswith(name) for flag in long_flags):
+                return word
+        elif word.startswith("-") and any(c in short_letters for c in word[1:]):
+            return word
+    return None
+
+
 def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
-    """Why this git verb is not a read, or None when it is one."""
-    unsafe = [a for a in args if a.split("=", 1)[0] in _GIT_UNSAFE_VERB_FLAGS]
+    """Why this git command may not run, or None when it is a read or a write
+    that will get its permission prompt."""
+    unsafe = _unsafe_git_flag(verb, args)
     if unsafe:
         return (
-            f"`git {verb} {unsafe[0]}` writes a file or runs an external program "
-            "chosen by configuration, which is a write however read-only the verb is."
+            f"`git {verb} {unsafe}` writes a file or runs an external program, "
+            "which is a write however read-only the verb is."
         )
+    problem = _git_read_problem(verb, args)
+    if problem is None or verb not in _GIT_PROMPT_VERBS:
+        return problem
+    subs = _positional_args(args, _GIT_REF_VALUE_FLAGS)
+    sub = subs[0].lower() if subs else ""
+    if sub in _GIT_PROMPT_RUNS_COMMAND.get(verb, ()):
+        return (f"`git {verb} {sub}` runs an arbitrary command that gets no "
+                "permission prompt of its own.")
+    if wrapped:
+        return (
+            f"`git {verb}` is allowed to reach its permission prompt, but only "
+            "when it is the command being run. Behind a wrapper the prompt "
+            "never fires, because permission rules match the raw command by prefix."
+        )
+    return None
+
+
+def _git_read_problem(verb: str, args: list[str]) -> str | None:
+    """Why this git verb is not a read, or None when it is one."""
     if verb in _GIT_READ_SUBCOMMANDS:
         return _git_subcommand_problem(verb, args)
     if verb == "config":
@@ -1915,17 +2148,9 @@ def _git_verb_problem(verb: str, args: list[str], wrapped: bool) -> str | None:
     if verb in ("branch", "tag"):
         return _git_ref_problem(verb, args)
     if verb in _GIT_READ_VERBS:
-        if verb == "grep" and any(a.startswith("-O") for a in args):
-            return "`git grep -O` runs the pager as a command."
         return None
     if verb in _GIT_PROMPT_VERBS:
-        if wrapped:
-            return (
-                f"`git {verb}` is allowed to reach its permission prompt, but only "
-                "when it is the command being run. Behind a wrapper the prompt "
-                "never fires, because permission rules match the raw command by prefix."
-            )
-        return None
+        return f"`git {verb}` writes locally."
     return (
         f"`git {verb}` is not on the read-only allowlist. Git has around 150 "
         "commands and a user alias resolves to any of them, so this guard lists "
@@ -2014,13 +2239,26 @@ def _scannable_texts(command: str) -> list[tuple[str, bool, str]]:
     return texts
 
 
+# Allow-listed because any other spelling misses the ask rule's prefix.
+_GIT_ASK_RULE_RE = re.compile(
+    r"git(?: -C (?:\"[^\"]*\"|'[^']*'|[^\s\"']+))? ([a-z][a-z-]*)(?=\s|$)")
+
+
+def _matches_git_ask_rule(segment: str, verb: str) -> bool:
+    """True when the raw segment starts `git <verb>` or `git -C <path> <verb>`,
+    the only spellings the git ask rules match by prefix."""
+    match = _GIT_ASK_RULE_RE.match(segment.lstrip())
+    return bool(match) and match.group(1) == verb
+
+
 def check_git_gh_verbs(command: str) -> str | None:
     """Block any git or gh invocation that is not a read.
 
     This is the requirement stated as a property rather than as a list: a git
     command that writes the index, working tree, refs, a remote, config, the
-    stash, the object store or the credential store must be unable to run, so
-    it is handed to the human instead. Read-only git keeps working silently.
+    stash, the object store or the credential store runs only in a spelling the
+    ask rules match, so the permission prompt fires. A gh write is blocked.
+    Read-only git keeps working silently.
     """
     lowered = command.lower()
     if "git" not in lowered and "gh" not in lowered:
@@ -2045,7 +2283,9 @@ def check_git_gh_verbs(command: str) -> str | None:
                 verb_args = words[1 + verb_index:]
                 if not verb_args:
                     continue
-                problem = _git_verb_problem(verb_args[0].lower(), verb_args[1:], wrapped)
+                verb = verb_args[0].lower()
+                wrapped = wrapped or not _matches_git_ask_rule(segment, verb)
+                problem = _git_verb_problem(verb, verb_args[1:], wrapped)
                 if problem:
                     return _refuse(segment, problem)
             elif name == "gh":
@@ -2089,7 +2329,7 @@ _FED_ARG = "\x00fed\x00"
 _FED_ARGS = [_FED_ARG, _FED_ARG]
 
 _INTERPRETER_NAME_RE = re.compile(
-    r"^(?:python[\d.]*|perl|ruby|node|deno|bun|php|rscript)$", re.IGNORECASE)
+    r"^(?:python[\d.]*t?d?|pythonw|py|pypy[\d.]*|perl|ruby|node|deno|bun|php|rscript)$", re.IGNORECASE)
 
 
 def _fed_git_problem(words: list[str]) -> str | None:
@@ -2155,8 +2395,9 @@ def check_argument_feeder(command: str) -> str | None:
 def _refuse(what: str, why: str) -> str:
     return (
         f"BLOCKED: {why} Found in: {what.strip()[:120]!r}. "
-        "Read-only git and gh run with no prompt; a write is handed to the human "
-        "instead. Put the command on the clipboard for them, or ask them to run it."
+        "Read-only git and gh run with no prompt. A git write (switch, stash, "
+        "commit, push and the like) runs as its own plain command and gets the "
+        "normal permission prompt. A gh write is the human's to run."
     )
 
 
@@ -2695,10 +2936,162 @@ def _operands_to_skip(segment: str) -> int:
 _REDIRECT_WORDS = frozenset({">", ">>", ">|", ">&", "&>", "&>>"})
 _SOURCE_PATH_RE = re.compile(r"[\w.:/\\@+-]+")
 
-# A parameter expansion, in the two spellings that carry a path: $NAME and
-# ${NAME}. A positional (`$1`) and the special parameters are deliberately
-# absent, because neither has an assignment anywhere in the command to read.
-_VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+# A parameter expansion, read against bash's own grammar rather than against a
+# list of spellings seen so far, because the list is what keeps coming up one
+# short: `${arr[0]}` and `${UNSET:-scripts/bash-guard.py}` both reached this
+# file after nine other spellings of it had been closed one at a time.
+_PARAM_NAME_RE = re.compile(r"[A-Za-z_]\w*")
+
+# The operators that put their own word in the output: ${name:-word},
+# ${name-word}, ${name:=word}, ${name=word}, ${name:+word}, ${name+word}. That
+# word is a path the command writes, spelled entirely inside the braces.
+# GNU Bash Reference Manual, Shell Parameter Expansion.
+_DEFAULT_WORD_RE = re.compile(r"^:?[-=+](.*)$", re.DOTALL)
+# ${name/pattern/string} and ${name//pattern/string} put `string` there too.
+_REPLACEMENT_RE = re.compile(r"^/{1,2}[^/]*/(.*)$", re.DOTALL)
+
+# What an expansion only the environment can resolve stands for. It holds the
+# place so the readable rest of a word survives: `${TMPDIR}/out.txt` still
+# names out.txt. A word that reduces to nothing but this is refused, and so is
+# one whose readable rest names a protected file for some value of the
+# unreadable part, which _marker_reaches_protected below decides.
+_UNREADABLE = "\x00var\x00"
+
+# One word can reach the shell as several strings, the way a brace expression
+# can, and both are capped for the same reason: past the cap is a word nobody
+# types. The depth cap bounds `${a:-${b:-${c}}}`.
+_SPELLING_LIMIT = 24
+_EXPANSION_DEPTH = 4
+
+
+def _split_expansion(text: str, index: int) -> tuple[str | None, str, int] | None:
+    """(parameter name, the rest of the expansion, the index after it).
+
+    The name is None where bash's grammar allows something other than a plain
+    parameter, `${#x}` and `${!x}` and the positionals, because none of those
+    has an assignment in the command to read. The result is None when `index`
+    starts no expansion at all.
+    """
+    if not text.startswith("$", index):
+        return None
+    if not text.startswith("${", index):
+        match = _PARAM_NAME_RE.match(text, index + 1)
+        return (match.group(0), "", match.end()) if match else None
+    depth, cursor, length = 1, index + 2, len(text)
+    while cursor < length and depth:
+        if text.startswith("${", cursor):
+            depth += 1
+            cursor += 2
+            continue
+        if text[cursor] == "}":
+            depth -= 1
+        cursor += 1
+    if depth:
+        return None
+    body = text[index + 2:cursor - 1]
+    match = _PARAM_NAME_RE.match(body)
+    if not match:
+        return None, body, cursor
+    rest = body[match.end():]
+    if rest.startswith("["):
+        # A subscript selects one element of a name this guard binds whole, so
+        # the reference is judged against every element. Refusing on one the
+        # command did not name is the direction a guard can afford.
+        close = rest.find("]")
+        if close != -1:
+            rest = rest[close + 1:]
+    return match.group(0), rest, cursor
+
+
+def _expansion_options(name: str | None, remainder: str,
+                       bindings: dict[str, list[str]], depth: int) -> list[str]:
+    """What this one expansion can put in the output.
+
+    Both halves of `${name:-word}` are kept, because which one bash picks
+    depends on a value that is not in the command.
+    """
+    values = bindings.get(name) if name else None
+    options = list(values) if values else [_UNREADABLE]
+    match = _DEFAULT_WORD_RE.match(remainder) or _REPLACEMENT_RE.match(remainder)
+    if match and match.group(1):
+        options.extend(_expansion_spellings(match.group(1), bindings, depth + 1))
+    return options
+
+
+def _expansion_spellings(word: str, bindings: dict[str, list[str]],
+                         depth: int = 0) -> list[str]:
+    """Every string this word could expand to, with unresolvable parts marked.
+
+    A word is judged as what it becomes, not as the text it is:
+    `rm ${UNSET:-scripts/bash-guard.py}` deletes this file in real bash while
+    naming no protected path any check could match.
+    """
+    if "$" not in word or depth > _EXPANSION_DEPTH:
+        return [word]
+    spellings, literal = [""], []
+    cursor, length = 0, len(word)
+    while cursor < length:
+        parsed = _split_expansion(word, cursor)
+        if parsed is None:
+            literal.append(word[cursor])
+            cursor += 1
+            continue
+        name, remainder, cursor = parsed
+        prefix = "".join(literal)
+        literal = []
+        options = _expansion_options(name, remainder, bindings, depth)
+        spellings = [left + prefix + option
+                     for left in spellings
+                     for option in options][:_SPELLING_LIMIT]
+    tail = "".join(literal)
+    return [left + tail for left in spellings]
+
+
+# What an unknown expansion is read as standing for while the rest of the word
+# is literal. Empty is bash's own answer for an unset name, and the expansion
+# ShellCheck SC2115 exists for: `rm -rf "$x/home"` reaches /home whenever x is
+# unset. The two directory names are the ones whose named children are
+# protected, so the literal half of the word still has to spell the name.
+#
+# `scripts` is deliberately absent even though it is protected the same way.
+# It protects everything beneath it, so reading an unknown prefix as `scripts`
+# refuses `${TMPDIR}/out.txt` and every other ordinary path built on an
+# environment variable, which is the shape this guard measured as routine.
+# What that gives up is named in test_bash_guard_marker_prefix_bypass.py.
+_MARKER_COMPLETIONS = ("", ".claude", "clean-rag")
+
+
+def _marker_reaches_protected(spelling: str) -> str | None:
+    """The protected path a half readable word can land on, or None.
+
+    The unknown half of the word supplies the directories and the literal half
+    supplies the name, which is how `${DIR}/hooks` reaches `.claude/hooks`.
+    `read -r DIR <<< ".claude"` binds DIR inside the same command without
+    writing an assignment this guard can see, and `printf -v DIR .claude` does
+    it again, so a word can carry a name nothing in the command declares.
+
+    A word whose literal half names nothing protected is allowed however the
+    unknown half expands. That is what keeps `${TMPDIR}/out.txt` running, and
+    it is the whole reason the completions above are a short list rather than
+    "any text at all".
+    """
+    if _UNREADABLE not in spelling:
+        return None
+    path = spelling.replace("\\", "/")
+    before = path.split(_UNREADABLE, 1)[0]
+    holding = before.rsplit("/", 1)[0] if "/" in before else ""
+    # An unknown part inside a protected directory is judged the way a wildcard
+    # component there already is, by what holds it. `rm .claude/*` is refused.
+    if holding and _is_protected_path(holding):
+        return holding
+    tail = path.rsplit(_UNREADABLE, 1)[1].lstrip("/")
+    if not tail:
+        return None
+    for completion in _MARKER_COMPLETIONS:
+        landing = f"{completion}/{tail}" if completion else tail
+        if _is_protected_path(landing):
+            return landing
+    return None
 
 
 def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
@@ -2714,7 +3107,8 @@ def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
     in the command, so nothing here can resolve it, and a guessed value is
     worse than a word that stays visibly unreadable. A loop name stands for
     several values at once and is left alone here for the same reason; the
-    write target check reads all of them.
+    write target check reads all of them. So is an expansion carrying a word of
+    its own, `${name:-path}`, which can reach the shell as either half.
 
     Single quotes suppress expansion in the shell, so they suppress it here.
     """
@@ -2733,15 +3127,24 @@ def _resolve_variables(segment: str, bindings: dict[str, list[str]]) -> str:
             index = end + 1
             continue
         else:
-            match = _VAR_REF_RE.match(segment, index)
-            if match:
-                values = bindings.get(match.group(1) or match.group(2), ())
-                out.append(values[0] if len(values) == 1 else match.group(0))
-                index = match.end()
+            parsed = _split_expansion(segment, index)
+            if parsed:
+                name, remainder, end = parsed
+                values = bindings.get(name, ()) if name and not remainder else ()
+                out.append(values[0] if len(values) == 1 else segment[index:end])
+                index = end
                 continue
         out.append(char)
         index += 1
     return "".join(out)
+
+
+# The array assignments, all of which bind a name whose expansion is a path:
+# `arr=(a b)`, `arr+=(c)`, `declare -A m=([k]=v)` and the element form
+# `arr[0]=path`. GNU Bash Reference Manual, Arrays.
+_ARRAY_ASSIGNMENT_RE = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)(?:\[[^]]*\])?\+?=\(")
+_ELEMENT_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_]\w*)\[[^]]*\]\+?=(.*)$", re.DOTALL)
+_KEYED_VALUE_RE = re.compile(r"^\[[^]]*\]\+?=(.*)$", re.DOTALL)
 
 
 def _record_assignments(segment: str, bindings: dict[str, list[str]]) -> None:
@@ -2759,11 +3162,61 @@ def _record_assignments(segment: str, bindings: dict[str, list[str]]) -> None:
     for index, word in enumerate(words):
         match = _ASSIGNMENT_WORD_RE.match(word)
         if match:
-            bindings[match.group(1)] = [match.group(2)]
-        elif word == "for" and words[index + 2:index + 3] == ["in"]:
+            # An empty value names no path, and `arr=(a b)` reaches here as a
+            # bare `arr=` once _split_segments has cut the body off at the `(`.
+            # Binding it would erase what _record_array_assignments read.
+            if match.group(2):
+                bindings[match.group(1)] = [match.group(2)]
+            continue
+        element = _ELEMENT_ASSIGNMENT_RE.match(word)
+        if element:
+            bindings.setdefault(element.group(1), []).append(element.group(2))
+            continue
+        if word == "for" and words[index + 2:index + 3] == ["in"]:
             values = words[index + 3:]
             if values:
                 bindings[words[index + 1]] = values
+
+
+def _array_body_end(text: str, start: int) -> int:
+    """The index of the `)` that closes an array assignment body."""
+    depth, quote, index = 1, None, start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if not depth:
+                return index
+        index += 1
+    return len(text)
+
+
+def _record_array_assignments(text: str, bindings: dict[str, list[str]]) -> None:
+    """Bind every array this text assigns, in each spelling bash accepts.
+
+    Read from the whole text rather than a segment because `(` ends a command
+    as far as _split_segments is concerned: `arr=(scripts/bash-guard.py)`
+    arrives as a bare `arr=` and a separate segment holding the path, so the
+    binding is invisible to anything reading one segment at a time.
+
+    Position is not tracked, so a name bound later in the command counts for a
+    reference earlier in it. That over-refuses rather than under-refuses.
+    """
+    for match in _ARRAY_ASSIGNMENT_RE.finditer(text):
+        body = text[match.end():_array_body_end(text, match.end())]
+        values = []
+        for element in _shell_words(body):
+            keyed = _KEYED_VALUE_RE.match(element)
+            values.append(keyed.group(1) if keyed else element)
+        if values:
+            bindings.setdefault(match.group(1), []).extend(values)
 
 
 def check_protected_paths(command: str) -> str | None:
@@ -2786,7 +3239,7 @@ def check_protected_paths(command: str) -> str | None:
                 ".claude", "$", "`", "*", "?", "[", "{")):
         return None
 
-    bindings: dict[str, str] = {}
+    bindings: dict[str, list[str]] = {}
     for text, _routed, kind in _scannable_texts(command):
         if kind == "interpreter":
             words = _SOURCE_PATH_RE.findall(text)
@@ -2798,6 +3251,7 @@ def check_protected_paths(command: str) -> str | None:
                     return _protected_refusal(word, "named inside interpreter source")
             continue
 
+        _record_array_assignments(text, bindings)
         for _separator, segment in _split_segments(text):
             segment = _resolve_variables(segment, bindings)
             _record_assignments(segment, bindings)
@@ -2826,23 +3280,25 @@ def _write_target_problem(word: str, how: str,
                           bindings: dict[str, list[str]] | None = None) -> str | None:
     """The refusal this write target earns, or None.
 
+    The target is judged as every string it can expand to, so a name the
+    command binds is followed into its value and a word written inside the
+    braces is read as the path it becomes. A loop name stands for every path
+    in its list, and each is judged as if the body had written it out.
+
     A target built by a command substitution is refused rather than resolved.
     Nothing bounds what the substitution prints: it can emit a leading
     directory, so no amount of visible text around it rules out a control file.
     `$(echo scripts/bash-guard.py)` reached the guard itself while all eight
     literal spellings of the same path were refused.
     """
-    match = _VAR_REF_RE.fullmatch(word)
-    values = (bindings or {}).get(match.group(1) or match.group(2)) if match else None
-    if values:
-        # A loop name, standing for every path its list holds. Each is judged as
-        # if the loop body had written it out.
-        for value in values:
-            problem = _write_target_problem(value, how)
-            if problem:
-                return problem
-        return None
-    if _SUBSTITUTION_MARK in word:
+    spellings = _expansion_spellings(word, bindings or {})
+    for spelling in spellings:
+        landing = _marker_reaches_protected(spelling)
+        if landing:
+            return _protected_refusal(landing, f"{how} once {word} expands")
+        if _is_protected_path(spelling):
+            return _protected_refusal(spelling, how)
+    if any(_SUBSTITUTION_MARK in spelling for spelling in spellings):
         return (
             f"BLOCKED: this command is {how}, and part of the target is built by a "
             "command substitution, so the path it names is only known once it runs. "
@@ -2850,11 +3306,10 @@ def _write_target_problem(word: str, how: str,
             "and a path this guard cannot read is one it cannot clear. Write the "
             "path literally, or compute the name in a separate command first."
         )
-    # The whole path is a variable no assignment in this command defines, so it
-    # names a file only the environment knows. Same reasoning as the
-    # substitution above, and narrowed to the whole word on purpose:
-    # `> ${TMPDIR}/out.txt` keeps a literal name and stays readable.
-    if _VAR_REF_RE.fullmatch(word):
+    # Nothing in the command defines it, so only the environment knows what it
+    # names. Same reasoning as the substitution above, and narrowed to the
+    # whole word: `> ${TMPDIR}/out.txt` keeps a readable filename.
+    if any(spelling == _UNREADABLE for spelling in spellings):
         return (
             f"BLOCKED: this command is {how}, and the whole target is {word}, whose "
             "value comes from the environment rather than from the command. A path "
@@ -2862,8 +3317,6 @@ def _write_target_problem(word: str, how: str,
             "decide what this session may do. Write the path literally, or assign it "
             "in the same command so it is visible."
         )
-    if _is_protected_path(word):
-        return _protected_refusal(word, how)
     return None
 
 

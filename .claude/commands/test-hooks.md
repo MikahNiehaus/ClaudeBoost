@@ -22,7 +22,7 @@ Run the ClaudeBoost hook test harness to verify all hook scripts behave correctl
 ## When to run
 
 - After any change to a hook script in `scripts/`
-- After running `/setup` to verify hook installs didn't break anything
+- After running `scripts/setup.py` to verify hook installs didn't break anything
 - Before implementing Phase B (mechanical evaluator routing) to confirm green baseline
 - As a sanity check after pulling changes from remote
 
@@ -50,5 +50,5 @@ Wait for the user's answer — the user is always the source of truth.
 
 If `WORKSPACE_PATH` is empty: note it and continue.
 
-Include `workspace_path="<WORKSPACE_PATH>"` in ALL agent spawn prompts and `/context` calls.
+Include `workspace_path="<WORKSPACE_PATH>"` in every agent spawn prompt, so the agent can read that workspace's `ticket.md` and `requirements.md`.
 

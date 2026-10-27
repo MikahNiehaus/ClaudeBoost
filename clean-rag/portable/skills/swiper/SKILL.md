@@ -15,7 +15,7 @@ narrower tool for just the swipe check on its own.
 `$ARGUMENTS` is the task or question. If it's empty, use whatever the user
 was just describing.
 
-Spawn `swiper` (foreground, `run_in_background: false`, never backgrounded).
+Spawn `swiper` and wait for its report.
 Give it the task broken into 3 to 5 aspects, each a question a search can
 really answer, plus which project it concerns and its git root if any, so it
 can read the import graph and search the project index. Remind it that

@@ -4,16 +4,16 @@
 
 Claude knows how to code. ClaudeBoost knows how to do it right.
 
-It loads security standards, testing methodology, and 109 knowledge files into every
-session. When something's missing, it researches and indexes it on the fly. Whatever
-you're building, whatever stack you're on — ClaudeBoost makes sure Claude behaves like
-a senior engineer who already knows your domain.
+It loads security standards and testing methodology into every session, searches your
+own indexed code before anything is written, and researches what is missing with cited
+sources. Whatever you're building, whatever stack you're on — ClaudeBoost makes sure
+Claude behaves like a senior engineer who already knows your domain.
 
 ## What It Does
 
 AI can write code fast. That's never been the bottleneck. The bottleneck is what the code looks like six months later — unapproved tables, inconsistent patterns, security gaps, zero tests. Most AI tools make this worse by making the same low-quality code arrive faster.
 
-ClaudeBoost fixes that by making Claude an instant expert on whatever you're working on. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads exactly the right knowledge before a single line is written — security, testing, your stack, your project's own patterns. When domain knowledge is missing, it researches and indexes it. When code changes, it maps the blast radius first. Every finding requires a `file:line` citation or it gets dropped. The goal isn't faster code — it's production-ready, thoroughly tested, maintainable code delivered correctly the first time.
+ClaudeBoost fixes that by making Claude an instant expert on whatever you're working on. A custom RAG system, designed by Mikah Niehaus and running entirely on your CPU, loads exactly the right knowledge before a single line is written — security, testing, your stack, your project's own patterns. When domain knowledge is missing, it researches it and cites the source. When code changes, it maps the blast radius first. Every finding requires a `file:line` citation or it gets dropped. The goal isn't faster code — it's production-ready, thoroughly tested, maintainable code delivered correctly the first time.
 
 The RAG server runs entirely locally. No external vector service. No API calls to embed
 your code. Your codebase stays on your machine. Microsoft's GraphRAG costs around
@@ -121,15 +121,17 @@ swallowing the entire result set.
 
 ```
 ClaudeBoost/
-├── agents/              25 agent definitions (XML)
-├── knowledge/           109 knowledge files (XML)
-│   ├── lang-*.xml       21 language guides
-│   └── fw-*.xml         33 framework guides
-├── mcp-rag-server/      HTTP RAG server on port 8612 (Python)
-├── .claude/commands/    35 slash commands
-├── scripts/             Setup, hooks, and maintenance scripts
-├── CLAUDE.md            Orchestration rules (loaded globally)
-└── docs/                Reference documentation
+├── clean-rag/               Search server on port 8613, hooks, installer
+│   ├── server/              HTTP routes, indexing, vector and graph search
+│   ├── hooks/               Research gate, verifier gate, auto test gate
+│   └── portable/            What the installer ships
+│       ├── agents/          Agent definitions (markdown)
+│       ├── skills/          Skills
+│       └── CLAUDE.md        Orchestration rules, installed to ~/.claude/CLAUDE.md
+├── .claude/commands/        Slash commands
+├── scripts/                 Setup, hooks, and maintenance scripts
+├── benchmarks/              CodeSearchNet results
+└── docs/                    Reference documentation
 ```
 
 ## Quick Start
@@ -215,17 +217,17 @@ the session, and shows recent workspaces. From there:
 /security-review         OWASP-grounded security audit
 ```
 
-The RAG server exposes an HTTP API at `http://127.0.0.1:8612`:
+The search server, clean-rag, exposes an HTTP API at `http://127.0.0.1:8613`.
+Start it with `/clean-rag-server start`.
 
 | Endpoint | What it does |
 |----------|-------------|
-| `POST /context` | Load agent identity + relevant knowledge + codebase context |
-| `POST /search` | Semantic search (knowledge, agents, or codebase) |
-| `POST /index` | Index a project's source code |
-| `GET /status` | Server health + collection sizes |
+| `POST /search` | Vector and graph search over indexed projects. `sources: ["project:<abs path>"]`, `mode: "both"` |
+| `POST /index-project` | Index a project. `{"project_path": "<abs path>"}` |
+| `GET /status` | Server health and every registered project |
+| `POST /web-search` | Live web search, GitHub and StackOverflow ranked first |
 
-Agents call `POST /context` as their first action on every spawn. That's what makes
-knowledge loading automatic rather than manual.
+`clean-rag/CLAUDE.md` has the full route table.
 
 ## Features
 
@@ -234,8 +236,7 @@ knowledge loading automatic rather than manual.
 Two search modes, both running on your machine:
 
 **Vector search** (`mode=vector`, default) finds semantically similar content. Use it
-to locate the right knowledge file, find similar patterns in your codebase, or seed an
-agent's context.
+to find similar patterns in your codebase or seed an agent's context.
 
 **Graph search** (`mode=graph`) builds a structural code graph from your project's
 import chains and inheritance relationships. When you query in graph mode, it finds
@@ -251,9 +252,8 @@ automatically when you run `/index-project`. No configuration needed.
 Simple tasks run directly. Complex tasks get decomposed and delegated to specialist
 agents:
 
-**Model routing** — three agents always run on Opus (architect, reviewer,
-ticket-analyst). Everything else runs on Sonnet. Opus can be escalated mid-task when
-an agent reports low confidence or gets blocked.
+**Model routing** — good-cop runs on Opus. bad-cop, quick-cop, research-agent,
+researcher and swiper run on Sonnet. The agent table below says what each does.
 
 **Weight routing** — full ceremony (verify gate + evaluator verification) for review,
 security, and performance agents; standard for implementation work; lightweight for
@@ -264,8 +264,9 @@ above 75%.
 
 ### Agent RAG Usage
 
-Every agent calls `POST /context` first — that's enforced by hook and blocks any spawn
-without it. Beyond that, each specialist agent is also wired with explicit search rules:
+Agents search the project index themselves with `POST /search`. No hook forces it.
+The research gate checks that `researcher` or `swiper` covered a file before it is
+edited, and it nudges rather than blocks. The search rules:
 
 **Vector search (`mode=vector`)** — called before writing any code to find existing
 patterns, utilities, or similar implementations. Prevents duplication.
@@ -404,8 +405,9 @@ the human's call, made with `/ps`.
 
 ## Agents
 
-Six, installed into `~/.claude/agents/` from `clean-rag/portable/agents/`.
-Check with `ls ~/.claude/agents`.
+Six pipeline agents, installed into `~/.claude/agents/` from
+`clean-rag/portable/agents/`. The installer copies every file in that directory, so
+a helper agent that a skill ships lands there too. Check with `ls ~/.claude/agents`.
 
 | Agent | Specialty | Model |
 |-------|-----------|-------|
@@ -423,21 +425,20 @@ alongside these.
 `architect-agent`, `reviewer-agent`, `debug-agent`, `security-agent` and
 `evaluator-agent`, have never existed in this repo and cannot be spawned. Read
 any older reference to one of those names as aspirational, not as a feature.
-`docs/CLAUDEBOOST-REFERENCE.md` still describes several as `agents/*.xml`
-files; there is no `agents/` directory and no `.xml` file in the tree.
+There is no `agents/` directory at the root and no agent defined in XML.
 
 ## Slash Commands
 
 Commands organized by workflow:
 
 **Session & Setup**
-`/boost` `/rag` `/rag-health` `/uninstall` `/index-project` `/index-boost`
+`/boost` `/clean-rag-server` `/rag-health` `/uninstall` `/index-project`
 
 **Planning & Workspace**
 `/ws` `/workspace` `/create-prd` `/explore` `/graph`
 
 **Code Quality**
-`/xray` `/security-review` `/audit` `/self-improve` `/simplify`
+`/xray` `/security-review` `/audit` `/self-improve`
 
 **Debugging**
 `/debug`
@@ -449,10 +450,13 @@ Commands organized by workflow:
 `/done` `/pr-description` `/changes` `/handoff` `/clear-safe` `/ticket-handoff`
 
 **Configuration**
-`/auto` `/consult` `/bash-guard` `/speak` `/better-permissions` `/edit-state` `/telemetry`
+`/auto` `/consult` `/bash-guard` `/speak` `/edit-state` `/telemetry`
 
 **Documentation & Visualization**
-`/visualize` `/init`
+`/visualize`
+
+**Built into Claude Code, not shipped by this repo**
+`/init` `/simplify`
 
 ## Benchmarks
 
@@ -556,7 +560,8 @@ harder than a pool with random distractors. Use the 1K-pool test for leaderboard
 
 ### Domain Quality Tests (ClaudeBoost-specific)
 
-`mcp-rag-server/tests/test_rag_quality.py` (64 tests) verifies ClaudeBoost's
+These figures were measured on the retired 8612 server by a 64 test suite that was
+deleted with it, so nothing in the tree reproduces them today. It checked the old
 knowledge base and codebase retrieval using domain-specific ground-truth pairs.
 Metric formulas follow BEIR (Recall@k), MTEB (nDCG@5, MRR), and GraphRAG-Bench
 (structural neighbour retrieval). The query/source pairs are ClaudeBoost-specific,
@@ -574,7 +579,7 @@ not from the original benchmark datasets.
 
 ### Three tiers
 
-The domain test suite checks each layer of the RAG stack:
+The retired domain test suite checked each layer of the RAG stack:
 
 **Tier 1 — Vector only**: 34 queries across knowledge files, agent definitions, and codebase.
 Embedding similarity alone. Recall@5 = 100%.
@@ -590,66 +595,19 @@ single-entity vector search in 3/3 cases (100% gap-fill rate).
 
 ### Run it yourself
 
-```bash
-# Domain quality tests (fast, ~90s):
-pytest mcp-rag-server/tests/test_rag_quality.py -v -s
+You cannot, as things stand. Every benchmark test named in this section lived under
+`mcp-rag-server/tests/`, which was deleted with the 8612 server. The recorded
+results are in `benchmarks/codesearchnet/results/`. The harness in
+`benchmarks/codesearchnet/` still defaults to the retired 8612 server and needs
+porting to clean-rag on 8613 before it runs again.
 
-# CodeSearchNet quick smoke-test (200-function corpus, ~4 min):
-pytest mcp-rag-server/tests/test_codesearchnet_benchmark.py -v -s
+### How the 1K-pool numbers were produced
 
-# CodeSearchNet official 1K-pool benchmark (first run ~10 min, cached runs ~30s):
-pytest mcp-rag-server/tests/test_codesearchnet_1k_pool.py -v -s
+The official protocol: CodeSearchNet test splits from HuggingFace
+(`code-search-net/code_search_net`, CC BY-4.0), one correct answer against 999
+random distractors per query. The recorded Python run is below.
 
-# Multi-language benchmark (Python, JavaScript, Java, Go, Ruby, PHP):
-python scripts/download_codesearchnet_full.py --lang python javascript java
-pytest mcp-rag-server/tests/test_codesearchnet_multilang.py -v -s
-
-# FIQA general-purpose documentation benchmark (first run downloads ~30 MB):
-pytest mcp-rag-server/tests/test_fiqa_retrieval.py -v -s
-```
-
-### Reproducing the benchmark results
-
-Everything needed to reproduce the official 1K-pool benchmark is in this repo.
-
-**1. Install dependencies**
-
-```bash
-pip install sentence-transformers numpy pytest datasets
-```
-
-GPU acceleration is optional. The benchmark runs on CPU; GPU reduces encoding
-time from ~3 min to ~20 s. Any GPU works (NVIDIA, AMD, Intel integrated):
-
-```bash
-# NVIDIA:
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-# Intel/AMD integrated (Windows, any DX12 GPU):
-pip install onnxruntime-directml optimum
-# CPU-only (default, no extra install):
-# sentence-transformers pulls a CPU torch automatically
-```
-
-**2. Download datasets (one-time, ~70 MB per language)**
-
-```bash
-python scripts/download_codesearchnet_full.py --lang python javascript java go ruby php
-```
-
-Downloads CodeSearchNet test splits from HuggingFace
-(`code-search-net/code_search_net`, CC BY-4.0).
-
-**3. Run the benchmark**
-
-```bash
-pytest mcp-rag-server/tests/test_codesearchnet_multilang.py -v -s
-```
-
-First run encodes all corpora and caches vectors under
-`tests/data/model_caches/`. Subsequent runs use the cache and complete in
-under 30 seconds per language.
-
-**Expected output (Python, with model routing active):**
+**Recorded output (Python, with model routing active):**
 
 ```
 CODESEARCHNET 1K-POOL BENCHMARK (Python)
@@ -675,13 +633,12 @@ CodeBERT/GraphCodeBERT numbers.
 
 **How model routing works:** A self-improving benchmark loop evaluates multiple
 models and preprocessing strategies per language, then writes the best
-configuration to `tests/data/best_model_config.json`. Tests automatically pick
-up the best model. All models run on CPU with no per-language fine-tuning beyond
+configuration to `best_model_config.json`. All models run on CPU with no per-language fine-tuning beyond
 the pre-trained weights.
 
 ## How It Works
 
-See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the full architecture, hook registration,
+See [CLAUDEBOOST-REFERENCE.md](docs/CLAUDEBOOST-REFERENCE.md) for the full architecture, hook registration,
 RAG pipeline, and session flow.
 
 > **TTS:** `/speak` works on Windows and macOS. Linux is not supported.

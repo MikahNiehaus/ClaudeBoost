@@ -1,4 +1,4 @@
-"""Test the powerpoint skill: SKILL.md contract, the cross platform branching
+"""Test the presentation skill: SKILL.md contract, the cross platform branching
 in scripts/pptx_env.py, and the installer wiring in clean-rag/install.py.
 
 The per-OS functions take the platform as an argument specifically so all
@@ -15,7 +15,7 @@ Three sections carry named regression guards for defects found in review:
   REGRESSION 3  install_pptx_tools() must always terminate. Its "already
                 installed?" probe used to be an unbounded subprocess.
 
-Run with: python plans/test_powerpoint_env.py
+Run with: python plans/test_presentation_env.py
 """
 
 import ast
@@ -63,7 +63,7 @@ def assert_true(cond, msg):
 
 
 REPO = Path(__file__).resolve().parent.parent
-SKILL_DIR = REPO / "clean-rag" / "portable" / "skills" / "powerpoint"
+SKILL_DIR = REPO / "clean-rag" / "portable" / "skills" / "presentation"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 HELPER = SKILL_DIR / "scripts" / "pptx_env.py"
 INSTALL_PY = REPO / "clean-rag" / "install.py"
@@ -102,7 +102,7 @@ def function_source(tree, name):
     return None
 
 
-print("\npowerpoint skill\n")
+print("\npresentation skill\n")
 
 # --- layout and frontmatter -------------------------------------------------
 
@@ -115,7 +115,7 @@ FM, BODY = parse_frontmatter(SKILL_MD)
 
 def t_frontmatter():
     assert_true(FM is not None, "no frontmatter block")
-    assert_true(FM.get("name") == "powerpoint",
+    assert_true(FM.get("name") == "presentation",
                 f"name must match the directory, got {FM.get('name')!r}")
     assert_true(len(FM.get("description", "")) > 20,
                 "description too short to trigger reliably")
@@ -206,7 +206,7 @@ test("REGRESSION 1: python-pptx claims cite the upstream tracker",
 
 # --- REGRESSION 2: every documented command actually resolves ---------------
 
-CANONICAL_HELPER = Path.home() / ".claude" / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+CANONICAL_HELPER = Path.home() / ".claude" / "skills" / "presentation" / "scripts" / "pptx_env.py"
 
 
 def t_no_invented_env_var():
@@ -514,9 +514,9 @@ def t_install_user_assets_copies_the_scripts_subfolder():
         quiet(inst.install_user_assets)
     finally:
         inst.CLAUDE_DIR = saved
-    landed = dest / "skills" / "powerpoint" / "scripts" / "pptx_env.py"
+    landed = dest / "skills" / "presentation" / "scripts" / "pptx_env.py"
     assert_true(landed.is_file(), f"helper script did not reach {landed}")
-    assert_true((dest / "skills" / "powerpoint" / "SKILL.md").is_file(),
+    assert_true((dest / "skills" / "presentation" / "SKILL.md").is_file(),
                 "SKILL.md did not reach the install location")
     caches = list((dest / "skills").rglob("__pycache__"))
     assert_true(not caches, f"bytecode caches must not ship: {caches}")
@@ -685,6 +685,59 @@ def t_no_machine_specific_paths():
 
 
 test("no machine specific absolute paths in the shipped skill", t_no_machine_specific_paths)
+
+
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+NARRATE = load_module(SKILL_DIR / "scripts" / "narrate.py", "narrate")
+
+
+def t_beat_check_rejects_a_highlight_on_a_missing_beat():
+    """A highlight on a beat past the last one would never appear on screen."""
+    try:
+        NARRATE.check([dict(title="t", body='<mark data-b="3">x</mark>', say=["a", "b"])])
+    except ValueError:
+        return
+    raise AssertionError("check() accepted a highlight on beat 3 of a 2 beat slide")
+
+
+def t_beat_check_rejects_a_label_on_beat_zero():
+    try:
+        NARRATE.check([dict(title="t", body="", labels={0: "l"}, say=["a"])])
+    except ValueError:
+        return
+    raise AssertionError("check() accepted a label on beat 0")
+
+
+def t_beat_check_accepts_a_valid_slide():
+    NARRATE.check([dict(title="t", body='<mark data-b="2">x</mark>', labels={1: "l"}, say=["a", "b"])])
+
+
+def t_text_helpers():
+    assert_true(NARRATE.section("a\n## X\nb\n## Y\nc", "## X", "## Y") == "## X\nb", "section() bounds")
+    assert_true(NARRATE.mark("one two two", "two", 2) == 'one <mark data-b="2">two</mark> two',
+                "mark() must wrap only the first occurrence")
+    assert_true('class="row" data-b="1"' in NARRATE.mark_row("<tr>\n<td>Shipped</td></tr>", "Ship", 1),
+                "mark_row() must tag the row")
+
+
+def t_example_deck_passes_the_beat_check():
+    """The shipped example must stay valid against the engine it demonstrates."""
+    import runpy
+    deck = runpy.run_path(str(SKILL_DIR / "example_deck.py"))
+    NARRATE.check(deck["slides"]())
+
+
+def t_skill_md_names_the_engine_at_its_installed_path():
+    assert_true('"${HOME}/.claude/skills/presentation/scripts/narrate.py" deck.py video' in BODY,
+                "SKILL.md must show the narrate command at the installed path")
+
+
+test("narrate: a highlight on a missing beat is rejected", t_beat_check_rejects_a_highlight_on_a_missing_beat)
+test("narrate: a label on beat 0 is rejected", t_beat_check_rejects_a_label_on_beat_zero)
+test("narrate: a valid slide passes", t_beat_check_accepts_a_valid_slide)
+test("narrate: section, mark and mark_row", t_text_helpers)
+test("narrate: the example deck passes the beat check", t_example_deck_passes_the_beat_check)
+test("narrate: SKILL.md names the engine at its installed path", t_skill_md_names_the_engine_at_its_installed_path)
 
 if __name__ == "__main__":
     shutil.rmtree(SCRATCH, ignore_errors=True)

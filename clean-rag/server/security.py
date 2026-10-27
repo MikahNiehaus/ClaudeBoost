@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .config import NO_WINDOW
 from .mutation import _validate_files
 
 DEFAULT_TIMEOUT_S = 300
@@ -62,6 +63,7 @@ def _run_bandit(root, files):
         proc = subprocess.run(
             argv, cwd=str(root), shell=False, capture_output=True,
             text=True, timeout=DEFAULT_TIMEOUT_S, env=env, errors="replace",
+            creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return []
@@ -107,6 +109,7 @@ def _run_pip_audit(root):
         proc = subprocess.run(
             argv, cwd=str(root), shell=False, capture_output=True,
             text=True, timeout=DEFAULT_TIMEOUT_S, env=env, errors="replace",
+            creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return []
@@ -150,6 +153,7 @@ def _run_semgrep(root, files):
         proc = subprocess.run(
             argv, cwd=str(root), shell=False, capture_output=True,
             text=True, timeout=DEFAULT_TIMEOUT_S, env=env, errors="replace",
+            creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return []

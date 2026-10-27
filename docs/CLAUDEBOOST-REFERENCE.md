@@ -1,7 +1,7 @@
 # ClaudeBoost Reference Manual
 
 **Generated:** 2026-05-08 (counts updated 2026-07-05)
-**Coverage:** All 16 hook registrations, 25 agent XMLs (including _orchestrator), 109 knowledge XMLs (55 domain + 21 lang + 33 framework), 36 slash commands, settings.json hooks registration, all state files, MCP RAG server code.
+**Coverage:** Hook registrations, the six pipeline agents, slash commands, settings.json hooks registration, state files, and the clean-rag search server on port 8613.
 
 ---
 
@@ -736,7 +736,7 @@ server does not serve.
 **Tools:** Bash, Read, Glob  
 **Steps:**
 1. Launch matrix-boost.py animation (new WT tab), clear `__pycache__`, clear Boost RAG and Project RAG flag files
-2. Verify privacy env vars (`DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`) — auto-fix if missing
+2. Report privacy env vars (`DISABLE_ERROR_REPORTING`; `DISABLE_TELEMETRY` is reported only, never required or auto-fixed, see 7.1)
 3. Activate RAG: `scripts/boost-run.py` checks the clean-rag server on port 8613 and reports ready or NOT READY
 3.5. Index the ClaudeBoost codebase: `POST http://127.0.0.1:8613/index-project` against CLAUDEBOOST_HOME, which keeps its own source searchable
 4. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
@@ -948,7 +948,7 @@ writes `additionalContext` to stdout instead.
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `CLAUDEBOOST_HOME` | `C:/path/to/ClaudeBoost` | Root path for all ClaudeBoost scripts/state |
-| `DISABLE_TELEMETRY` | `1` | Disable Claude Code telemetry |
+| `DISABLE_TELEMETRY` | **leave unset** | Do NOT set. It turns off feature flag evaluation, and `claude remote-control` refuses to start while it is set ("Remote Control requires feature-flag evaluation"). Disabled 2026-10-05 so Remote Control works. |
 | `DISABLE_ERROR_REPORTING` | `1` | Disable error reporting |
 | `DISABLE_FEEDBACK_COMMAND` | `1` | Hide feedback prompt |
 | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` | `1` | Disable survey |
@@ -1106,7 +1106,7 @@ not run in time.
 ## 8. Search backend
 
 **One server, port 8613.** `clean-rag/`, started by
-`clean-rag/cli/server_ctl.py start` or `/rag`. It runs headed so you can watch
+`clean-rag/cli/server_ctl.py start` or `/clean-rag-server start`. It runs headed so you can watch
 it.
 
 There is no MCP RAG server and no `mcp-rag-server/` directory. This section used

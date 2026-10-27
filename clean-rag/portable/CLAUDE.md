@@ -8,676 +8,438 @@ knowledge base.
 
 Every edit to a code file is checked against whether `researcher` or `swiper`
 has run this session and declared that it covered that file, and nudges toward
-research when neither has. Those two are the only agents the gate counts
-(`RESEARCH_AGENTS` in `clean-rag/hooks/research_state.py`); `research-agent`
-does not satisfy it. Coverage persists across follow-up messages and expires
-after one hour (`TURN_MAX_AGE_S = 3600`) or when new research lands on top.
+research when neither has. Only those two count (`RESEARCH_AGENTS` in
+`clean-rag/hooks/research_state.py`); `research-agent` does not. Coverage
+persists across follow-up messages and expires after one hour
+(`TURN_MAX_AGE_S = 3600`) or when new research lands on top.
 
-The gate used to block the edit. It doesn't now. `clean-rag/hooks/research-gate.py`
-exits 0 on every payload shape, by decision: an unresearched edit is
-recoverable, so it gets a nudge and an honest audit trail rather than a
-refusal. The first block attempt also predated the session scoping above, so
-coverage was wiped by every follow-up message and the gate fired on files
-swiper had just covered.
-
-What can't be faked is the record, not the refusal. Only Claude Code can start
-an agent, and a PostToolUse hook stamps the coverage after the agent finishes,
-so "I researched it" is never what gets written down.
+`clean-rag/hooks/research-gate.py` exits 0 on every payload shape, by decision:
+an unresearched edit is recoverable, so it gets a nudge and an honest audit
+trail rather than a refusal. What can't be faked is the record: only Claude
+Code can start an agent, and a hook stamps coverage after it finishes. Why the
+gate stopped blocking, why spawns are backgrounded, and why good-cop now
+reproduces first are recorded in `docs/global-instructions-notes.md`.
 
 When the gate nudges toward research:
 
-1. **Spawn `researcher` and/or `swiper`** (Sonnet). Tell them what you're
-   changing, why, and the code you intend to write. Both cover depth and breadth
-   and report with sources and a `COVERS:` line naming the files they covered.
-   That scope is what the audit trail
-   checks; nothing refuses the edit, but an uncovered file shows up as uncovered.
-   Wait for it before editing anyway; that's still the point.
+1. **Spawn `researcher` and/or `swiper`.** Tell them what you're changing, why,
+   and the code you intend to write. Both cover depth and breadth and report
+   with sources and a `COVERS:` line naming the files they covered. The audit
+   trail checks that scope; nothing refuses the edit, but an uncovered file
+   shows up as uncovered. Wait for the report before editing anyway.
 
    **Every agent spawn runs in the background. You cannot choose otherwise.**
-   This paragraph used to say "spawn it in the foreground
-   (`run_in_background: false`), never backgrounded". That instruction asked
-   for something the agent tool does not offer. Its inputs are `description`,
-   `isolation`, `model`, `prompt` and `subagent_type`, and nothing else;
-   `run_in_background` is a `Bash` input, not an agent one. Verified
-   2026-09-18 by reading the live tool schema.
-
-   The consequence is structural, not a mistake anyone made. A completion
-   arrives as a `TaskNotificationMessage` rather than a tool result, so
-   `PostToolUse` on `Task|Agent` never fires for a subagent and can never
-   stamp coverage. `SubagentStop` is the only event that can, and it is
-   registered for that reason. Do not try to work around this by spawning
-   differently; there is no other way to spawn.
-   Its report also names a `MATCH_STRATEGY:`. If it's `clone-and-patch`, copy the
+   `run_in_background` is a `Bash` input, not an agent one, so a completion
+   arrives as a `TaskNotificationMessage`, not a tool result, and `PostToolUse` on `Task|Agent`
+   never fires for a subagent. `SubagentStop` is registered because it is the
+   only event that can stamp coverage. There is no other way to spawn.
+   The report also names a `MATCH_STRATEGY:`. On `clone-and-patch`, copy the
    verbatim quoted reference as the literal starting point and make only the
-   smallest set of changes that fixes the actual issue — no rewrite, no restyle,
-   no swapped libraries or approaches, no added structure the reference didn't
-   have. That's a hard ceiling on the diff, not a suggestion. `pattern-only`
-   allows a real diff; `clone-and-patch` does not. There is no `adapt` tier.
-2. There is no cheap triage tier anymore. The old one decided whether a change
-   needed research WITHOUT reading the code, and that blind guess was wrong often
-   enough to remove. researcher and swiper look first, so their judgment is
-   grounded. They do real research every time they run; do not build a
-   triviality shortcut into them or any other agent.
-3. Genuinely trivial work that needs no research is the human's call, not a
-   model's. Run `/ps` for a quick turn that skips the gate (and the verifier) when
-   you already know the change is trivial.
+   smallest change that fixes the actual issue: no rewrite, restyle, swapped
+   library or approach, or structure the reference didn't have. That is a hard
+   ceiling on the diff. `pattern-only` allows a real diff; `clone-and-patch`
+   does not. There is no `adapt` tier.
+2. There is no cheap triage tier, because guessing without reading the code was
+   wrong too often. researcher and swiper look first and do real research every
+   run; do not build a triviality shortcut into them or any other agent.
+3. Trivial work is the human's call, not a model's: `/ps` gives a quick turn
+   that skips the gate (and the verifier).
 
 Markdown and non code files are exempt. So are `workspace/`, `state/`, `plans/`,
 `docs/`, `.claude/`, and temp dirs.
 
 **Depth versus breadth**, the split both agents use:
-- **Depth** is the general engineering question, the one an unrelated project
-  would get the same answer to. Structure, separation of responsibility,
+- **Depth** is the general engineering question any unrelated project would
+  get the same answer to: structure, separation of responsibility,
   testability, the standard approach to this class of problem.
-- **Breadth** is the task specific question. How this exact kind of thing gets
-  built, what people get wrong with it, what good looks like. "What's the best
-  way to build this" is breadth too, not just pitfalls.
+- **Breadth** is the task specific question: how this exact kind of thing gets
+  built, what people get wrong, what good looks like, and what's the best way.
 
 research-agent cannot write files, and its Bash is caged to the local clean-rag
-server. It reads untrusted web content, so removing its ability to act is the real
-defense against a prompt injection.
+server, because it reads untrusted web content and that removes its ability
+to act on a prompt injection.
 
 ## Verify by running, not by reviewing (the post write half)
 
-Research before the edit lowers the odds of a bug. It does not confirm the code
-you wrote is correct. To actually know, after writing any non trivial logic:
+Research lowers the odds of a bug; it does not confirm the code is correct.
+After writing any non trivial logic:
 
-- **Leave one small runnable check and RUN it.** An assert, a tiny test, or
-  drive the real flow. If it fails, feed the actual error back and fix once.
-  Execution feedback is the highest quality per token signal there is (measured
-  12 to 46 percent first try correctness gains), and it costs interpreter time,
-  not tokens, except for the rare fix.
+- **Leave one small runnable check and RUN it** (an assert, a tiny test, or
+  the real flow). On failure, feed the actual error back and fix once.
+  Execution feedback is the best signal per token (measured 12 to 46 percent
+  first try correctness gains) and costs interpreter time, not tokens.
 - **Do not self review your own diff in the same context.** Measured evidence
   says intrinsic self critique without external grounding is close to useless
-  and sometimes makes things worse. Running the code is grounded. Re reading it
-  is not.
-- **A real separate context review runs on every real code change**, unless the
+  and sometimes makes things worse. Running code is grounded;
+  re reading it is not.
+- **A separate context review runs on every real code change** unless the
   human marked the turn `/ps`. It used to be reserved for high stakes surfaces
-  (auth, money, SQL, a subprocess, concurrency); now it's the default after any
-  code change, because green tests and correct code are different questions
-  everywhere, not only there. Spawn `bad-cop` first, a fresh context critic, NOT
-  the research agent (that one reads untrusted web and stays capability stripped,
-  and any agent that wrote or researched the change inherits its own blind spot on
-  review). bad-cop writes adversarial tests, runs the code, adds logging, and
-  reports the real failures it finds, with actual execution output attached.
-  Its last line says what happens next, and there are three of them. If it
-  finds nothing, it stamps `VERIFIED:` itself: no separate `good-cop` run
-  needed to re-confirm a clean adversarial pass. If everything it found is
-  Nit severity, it emits `NITS:` instead and good-cop is still not spawned:
-  a nit is non blocking by definition (Google's engineering practices coined
-  the `Nit:` prefix for exactly this, polish the author may ignore), so you
-  apply those fixes directly and re-run bad-cop for the re-check that earns
-  the stamp. bad-cop deliberately does not stamp on a nit only run, because
-  `verifier_state.py` invalidates a stamp once the file's mtime advances
-  past it, so a stamp written before the fixes land erases itself. Only when
-  it emits `HANDOFF:`, meaning at least one finding is Critical or High, do
-  you spawn `good-cop` next, same rules, handed bad-cop's findings instead
-  of the requirements alone: it researches the correct fix,
-  applies it, and reruns bad-cop's new tests plus the existing suite until
-  everything is actually green, and it is the one that stamps `VERIFIED:` in
-  that case. After good-cop stamps, spawn bad-cop again for a final
-  adversarial re-check on the fix. If bad-cop finds nothing on that re-check,
-  it stamps `VERIFIED:` itself and the loop ends. If it finds more issues,
-  spawn good-cop again. The loop (bad-cop → good-cop → bad-cop) continues
-  until bad-cop stamps `VERIFIED:` itself — that is the only terminal
-  condition, not good-cop claiming done.
+  (auth, money, SQL, a subprocess, concurrency); now it is the default, because
+  green tests and correct code are different questions everywhere. Spawn
+  `bad-cop` first, a fresh context critic, NOT the research agent (it reads
+  untrusted web, and any agent that wrote or researched the change shares its
+  blind spot). bad-cop writes adversarial tests, runs the code, adds logging,
+  and reports real failures with execution output. Its last line is one of
+  three. Nothing found: it stamps `VERIFIED:` itself, no `good-cop` needed.
+  Only Nit severity: it emits `NITS:` (a `Nit:` is non blocking polish, per
+  Google's engineering practices); you fix those directly and re-run bad-cop
+  for the stamp. It does not stamp a nit only run because `verifier_state.py`
+  invalidates a stamp once the file's mtime passes it. On `HANDOFF:` (at
+  least one Critical or High finding), spawn `good-cop`, same rules, handed
+  bad-cop's findings instead of the requirements alone: it researches the
+  correct fix, applies it, reruns bad-cop's new tests plus the existing suite
+  until everything is actually green, and stamps `VERIFIED:` in that case.
+  After good-cop stamps, spawn bad-cop again for a final adversarial re-check
+  on the fix. If bad-cop finds nothing on that re-check, it stamps `VERIFIED:`
+  itself and the loop ends. If it finds more issues, spawn good-cop again. The
+  loop (bad-cop → good-cop → bad-cop) continues until bad-cop stamps
+  `VERIFIED:` itself; that is the only terminal condition, not good-cop
+  claiming done.
 
-  **The fix is good-cop's job, not yours.** When bad-cop reports something
-  real, hand it to good-cop. Fixing it yourself instead is the specific failure
-  this paragraph exists to stop, and it has happened. Two reasons, both the
-  same ones that put bad-cop in a fresh context to begin with. You orchestrated
-  or wrote the change, so you carry its blind spot exactly the way its author
-  does. And the fix you reach for first is the symptom bad-cop's test caught,
-  because the symptom is the visible part and the cause usually is not. A one
-  line change that turns the suite green is the most dangerous shape of this,
-  since afterwards nothing about it looks like a shortcut. If you already
-  patched something before thinking, do not quietly keep it: say so, hand
-  good-cop both the finding and your interim patch, and tell it in writing not
-  to accept that patch merely because it is already in the tree. A fix sitting
-  in the working tree reads as already decided, and that is precisely the bias
-  a fresh context is there to resist.
+  **The fix is good-cop's job, not yours.** You orchestrated or wrote the
+  change, so you carry its blind spot the way its author does, and the fix you
+  reach for first targets the symptom the test caught, not the cause. A one
+  line change that turns the suite green is the most dangerous shape. If you
+  already patched something, say so, hand good-cop the finding and your
+  patch, and tell it in writing not to accept the patch merely because it is
+  in the tree, since a fix sitting in the working tree reads as decided.
 
-  **good-cop reproduces a finding before it fixes it.** Its opening used to say
-  the opposite, that its job was not to re-litigate whether bad-cop's findings
-  were real, while a passage near the end of the same file told it to disprove
-  false positives. An instruction at the top of a file outweighs one at the
-  bottom, so the contradiction resolved the wrong way. It now runs each repro
-  first and reports one of three outcomes: it reproduces and gets fixed at the
-  root cause, it does not reproduce and is recorded as a false positive with the
-  command and output that show it, or it reproduces for a different reason than
-  bad-cop stated and the real cause gets fixed with the difference named.
-  Require that evidence in its report. What it may never do is dismiss a finding
-  on reading alone: only execution output overturns execution output.
+  **good-cop reproduces each finding before it fixes it, and grounds the fix
+  in real practice, a real standard or a real example.** Its own agent
+  definition holds the three repro outcomes and the citation format. Require
+  the repro evidence and the cited sources in its report. A fix with no cited
+  grounding has not been researched, whatever it says: send it back, do not
+  ship it. Only execution output overturns execution output,
+  never reading alone. Hand it the tradeoffs, not the answer you expect,
+  because naming your preferred fix turns the research into agreement.
 
-  **good-cop researches before it fixes, and cites what it found.** Its own
-  definition requires grounding the fix in real practice, a real standard or a
-  real example ahead of its own opinion, for the same reason the research gate
-  exists on the write side: an ungrounded fix is a guess that happens to
-  compile. Require the sources in its report. A fix that arrives with no cited
-  grounding has not been researched whatever it says, and the right response is
-  to send it back, not to ship it. Hand it the tradeoffs to weigh rather than
-  the answer you expect, because naming your preferred fix in the prompt turns
-  the research into agreement with you.
-
-  Give both of them the
-  requirements, the correctness properties, and the diff, never your reasoning
-  for the change, since that reasoning is exactly what biases a reviewer into
-  agreeing. If researcher or swiper grounded the build in a real GitHub reference (a
-  `GITHUB_FILE_READ:` line plus the verbatim snippet it quoted), pass that
-  snippet forward into their correctness properties too, not just its
-  description. Neither has web fetch access on purpose, only search, so this is
-  the only way a real reference reaches their review; do not give either its own
-  GitHub/web fetch access, that would duplicate the one injection-exposed agent
-  this codebase deliberately keeps to one. `clean-rag/hooks/verifier-gate.py`
+  Give both cops the requirements, the correctness properties, and the diff,
+  never your reasoning for the change, because it biases them into agreeing.
+  If researcher or swiper quoted a real GitHub reference (a
+  `GITHUB_FILE_READ:` line plus a verbatim snippet), pass the snippet itself
+  into their correctness properties. Neither has web fetch access on purpose,
+  only search, so this is the only way a real reference reaches their review
+  (see MCP servers, and using them safely). `clean-rag/hooks/verifier-gate.py`
   (a Stop hook) asks for a real stamp but never refuses the stop: it exits 0
   always and writes its nudge to stderr, naming the unverified files and who to
-  spawn. bad-cop provides the terminal stamp — either directly on a clean
-  initial pass, or after a final re-check that finds nothing following
-  good-cop's fix — writing a `VERIFIED:` line naming the files it covered,
+  spawn. bad-cop provides the terminal stamp, either directly on a clean
+  initial pass or after a final re-check that finds nothing following
+  good-cop's fix, writing a `VERIFIED:` line naming the files it covered,
   checked per file the same way the research gate checks `COVERS:`, invalidated
   if a file is edited again after being reviewed (an mtime comparison in
   `clean-rag/hooks/verifier_state.py`). `clean-rag/hooks/high_stakes.py`
-  labels which surface it touched so the review points at the sharpest risk. A
-  `/ps` turn skips both, the same quick mode escape that skips the research gate.
+  labels which surface it touched so the review points at the sharpest risk.
+  A `/ps` turn skips both, the same quick mode escape that skips the research
+  gate.
 
-**Both cops review the diff by default, and whatever you name instead.** With
-no review scope given, bad-cop resolves the diff itself: the uncommitted working
-tree, or the branch against its merge base when the tree is clean. Anything the
-human names on a `REVIEW SCOPE:` line replaces that, in their own words, with no
-fixed vocabulary. `entire project`, `anything that touches security`, `anything
-that touches OrderService`, `anything around this bug fix`, a bare path, all
-valid. Pass their sentence through verbatim; do not paraphrase it and do not
-resolve it to files yourself. bad-cop resolves it with search and the import
-graph, then prints the resolved file list at the top of its report, which is the
-only place a misread scope gets caught, so read that block first. Copy the same
-`REVIEW SCOPE:` and `RESOLVED:` lines into good-cop's prompt. Both work the same
-surface. That list bounds where a root cause is allowed to live; it does not
-widen what good-cop may change, which stays at what the findings require.
+**Both cops review the diff by default, and whatever you name instead.** The
+default is the uncommitted working tree, or the branch against its merge base
+when the tree is clean. A human `REVIEW SCOPE:` line in any words replaces it
+(`entire project`, `anything that touches security`, `anything that touches
+OrderService`, `anything around this bug fix`, a bare path). Pass it verbatim;
+do not paraphrase it or resolve it to files yourself. bad-cop resolves it with
+search and the import graph and prints the resolved file list at the top of
+its report, the only place a misread scope gets caught, so read that first.
+Copy the `REVIEW SCOPE:` and `RESOLVED:` lines into good-cop's prompt. The
+list bounds where a root cause may live, not what good-cop may change; that
+stays at what the findings require.
 
 **Check bad-cop and good-cop's actual diff yourself, not their self report.**
-After either stamps or reports done, read the real result: `git diff` on the
-files they touched, or Read the changed files directly. Confirm two things
-concretely: the diff stays inside the scope you gave that agent (no unrelated
-files, no drive by refactors, no touching config, secrets, or infra it was
-never asked about), and nothing in it is a destructive or irreversible action.
-Do this by reading the resulting files or `git diff`, never by opening the
-agent's own JSONL transcript to watch its reasoning; that pulls tool noise
-into your context for no reason and is not what this check is for. If the
-diff looks wrong, say so and stop, do not silently revert it yourself and do
-not just trust the agent's own "done" claim.
+Read `git diff` or the changed files, never the agent's JSONL transcript,
+which only adds tool noise. Confirm the diff stays in the scope you gave (no
+unrelated files, no drive by refactors, no touching config, secrets, or infra
+it was never asked about) and holds no destructive or irreversible action. If
+it looks wrong, say so and stop; do not silently revert it or trust the
+agent's "done" claim.
 
-**Use quick-cop far more than you currently do.** Every time you say
-something is done, fixed, verified, confirmed, or has no gaps, that sentence
-is exactly the trigger quick-cop exists for (see its own agent description).
-Dispatch it liberally and backgrounded, meaning fire it and keep working,
-do not block waiting on it. This includes your own claims after a bad-cop or
-good-cop run: their self reported "VERIFIED" or "all tests green" is still a
-claim, so hand it to quick-cop to independently confirm rather than repeating
-it to the user as settled fact.
+**Use quick-cop far more than you currently do.** Every "done", "fixed",
+"verified", "confirmed" or "no gaps" you say is its trigger, including relaying
+a cop's "VERIFIED" or "all tests green". Fire it backgrounded and keep working,
+rather than repeating the claim to the user as settled fact.
 
-Trivial one liners need no check. This is the cheap post write complement to the
-gate's pre write research: research narrows the approach, running the code
-confirms it.
+Trivial one liners need no runnable check. That check is the cheap post write
+complement to the gate's pre write research: research narrows the approach,
+running the code confirms it.
 
 **Execution proves behaviour in the environment it ran in, and nothing more.**
-That is the limit of the rule above, and it has already cost a real bug. A
-change made an env var mandatory at module load. Two tests spawned a subprocess
-that inherited the whole environment and only overrode one named variable. The
-value happened to sit in the developer's own `.env`, so bad-cop, good-cop, a
-second bad-cop re-check and the orchestrator all ran the suite and all passed.
-A static reviewer reading the import chain caught it in one pass, because it
-did not care what was in that machine's environment. Removing the value from
-`.env` afterwards failed both tests instantly.
-
-So two things, neither optional:
+An env var made mandatory at module load passed every cop and the orchestrator:
+two tests spawned a subprocess that inherited the whole environment, and the
+value sat in the developer's own `.env`. A static reviewer reading the import
+chain caught it in one pass; removing the value failed both tests instantly. So two things, neither optional:
 
 1. **Any test that spawns a subprocess must be run once with a scrubbed or
-   explicitly declared environment, not the inherited one**, before anything is
-   stamped. This is the check that mechanically reproduces the failure with no
-   reasoning required, which is why it belongs here rather than in a reviewer's
-   judgement.
+   explicitly declared environment, not the inherited one**, before anything
+   is stamped, because that reproduces the failure mechanically.
 2. **Any change that introduces a new hard requirement at module load** (a
    throw, an assert, a required config read) must be traced through its import
    graph to every process that could load it: a subprocess spawn, a worker, a
-   cron entry, a CI job. Running it in the current shell proves nothing about
-   the others.
+   cron entry, a CI job. The current shell proves nothing about the others.
 
-The general form: a test that passes because of what is ambiently present is
-not a passing test, it is an undeclared dependency. Established practice is to
-declare what a test needs rather than inherit it, which is why CI runs in clean
-containers and why hermetic builds exist. `scripts/tests/helpers.py` already
-learned this once for `cwd`, after a hook test read whatever happened to be
-uncommitted in the working tree; the lesson was never generalised to the
-environment.
+A test that passes because of what is ambiently present is an undeclared
+dependency; declare what it needs, as clean CI and hermetic builds do.
+`scripts/tests/helpers.py` learned this for `cwd`, after a hook test read
+whatever was uncommitted in the working tree, but never for the environment.
 
+`clean-rag/hooks/auto-test-gate.py` is the one Stop hook here that genuinely
+blocks: when code changed this turn and the project's tests really fail, it
+blocks the stop (exit 2) and hands back the failure output to fix from, not to
+self review. It is loop safe: it honors `stop_hook_active`, caps at
+`MAX_BLOCKS_PER_SESSION = 2`, and allows anything ambiguous (no tests, a
+missing runner, an environment problem).
 
-This verify step is partly enforced, and `clean-rag/hooks/auto-test-gate.py` is
-the one Stop hook in this family that genuinely blocks. It runs the project's
-tests when code changed this turn, and if they really fail it blocks the stop
-(exit 2) and hands you back the real failure output to fix from. It is loop
-safe: it honors `stop_hook_active`, caps at `MAX_BLOCKS_PER_SESSION = 2`, and
-allows on anything ambiguous (no tests, a missing runner, an environment
-problem). So on a project with tests you will often get the actual assertion
-diff or stack trace pushed back at you automatically. Fix from that, do not
-self review.
+A test failure is objective and cheap to check, so it blocks. A review verdict
+is a judgment call, so it nudges and routes through fresh context subagents.
+Do not "upgrade" the research or verifier gate to a hard block; see the
+recorded decision at the end of this section.
 
-Note the split, because it is deliberate and easy to misread. A test failure is
-objective and cheap to check, so it blocks. A review verdict is a judgment call,
-so it nudges and routes through fresh context subagents instead. Do not
-"upgrade" the research or verifier gate to a hard block; see the recorded
-decision at the end of this section.
-
-If the logic you changed has no test at all, writing one IS part of verifying it,
-not an optional extra. Do not skip verification because none exists, that is the
-gap the tests were supposed to close. Write the missing test, then prove it bites
-(next paragraph), because a test written without that proof reliably asserts the
+If the logic you changed has no test, writing one is part of verifying it. Then
+prove it bites (next paragraph), because an unproven test reliably asserts
 current behavior instead of catching a bug, which is worse than no test.
 
-Passing tests are necessary, not proof the tests catch bugs. For non trivial logic
-on a real bug surface, after the tests pass run the mutation check on just the
-files you changed: `POST http://127.0.0.1:8613/mutation-test` with
-`{"project_path": "<abs>", "changed_files": [...]}`. It runs the language's real
-mutation tool (`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a
-surviving mutant is a test that would pass on broken code, so tighten it. When the
-edge cases matter, let the language's property based library (`Hypothesis`,
-`fast-check`, `jqwik`) generate them instead of hand listing a few. Both beat
-guessing which inputs to test, which is the weak version the research warned about.
+Passing tests do not prove the tests catch bugs. For non trivial logic on a
+real bug surface, after tests pass run the mutation check on the changed files:
+`POST http://127.0.0.1:8613/mutation-test` with
+`{"project_path": "<abs>", "changed_files": [...]}`. It runs the real tool
+(`mutmut`, `StrykerJS`, `cargo-mutants`) and returns a kill score; a surviving
+mutant is a test that passes on broken code, so tighten it. When edge cases
+matter, let a property based library (`Hypothesis`, `fast-check`, `jqwik`)
+generate them instead of hand listing a few. Both beat guessing which inputs
+to test, which is the weak version the research warned about.
 
 ### Every QA session ends with bad-cop judging it. This is not optional
 
-Running `/qa`, or doing any QA by hand, is not finished when the tests are done.
-It is finished when a fresh context has judged the evidence. A QA session cannot
-audit its own artifacts for the same reason you do not self review your own
-diff: it knows what it meant to prove, so it reads its own evidence as proving
-it.
-
-When the testing is done, spawn **`bad-cop` with `MODE: evidence-judge`** and
-hand it exactly three things:
-
-1. The requirements **verbatim**, the pasted ticket or the user's actual words,
-   never your paraphrase of the goal.
-2. Every proof artifact path: logs, captures, screenshots, the report itself.
-3. The tool inventory the QA session had available.
-
-Give it the correctness properties and what to attack. Never give it your
-reasoning about why you think the QA was sufficient, since that reasoning is
-what talks a reviewer into agreeing.
-
-It stamps `FULLY VERIFIED` or `TEST AGAIN` with specific gaps. On `TEST AGAIN`
-you retest those gaps and send it back. **The loop ends only when bad-cop stamps
-`FULLY VERIFIED`, never when the QA session declares itself satisfied.**
-
-Then check bad-cop's own claims the same way you check good-cop's: open the
-artifacts it cites, do not take its summary on trust.
-
-This catches a class of failure green results never surface, because every one
-of these looks like a pass from inside the session:
-
-- **Persistence claimed from a screenshot** with no server read-back. A value
-  rendered in a form is not a value in the database.
-- **Results that exist only as prose** in the report, with no capture on disk.
-  If it is not in an artifact it was not measured, whatever the table says.
-- **A build identifier quoted without resolving it.** Confirm the commit is a
-  real object in the repo. A dashboard's "version" field is often an internal
-  build id and not a commit at all.
-- **Comparing two runs that tested different code.** Before attributing a
-  behaviour change to the environment or to test technique, diff the commits.
-  This is the one that most often produces a confident wrong conclusion.
-- **A blank or mistargeted screenshot** passing as evidence because nobody
-  opened it. Open every image you save.
-- **Measurement windows too short for a deployed backend.** A response under
-  100ms locally can take ten seconds deployed, so a window sized for local turns
-  a success into a phantom failure or an unresolved null.
-- **Verifying a fix in a minified bundle by grepping identifier names.** Local
-  names are renamed and comments stripped, so the grep reads zero for a fix that
-  is present. Grep an object property, which survives, then read the code around
-  it.
-- **A marker check that covers only half the change.** Confirm the marker you
-  chose actually appears in every file the diff touched.
-
-`quick-cop` is the cheap non blocking version for a single "it is done" claim.
-It stamps nothing and never substitutes for bad-cop on a full QA session.
+`/qa` or hand QA ends only when **`bad-cop` with `MODE: evidence-judge`**
+stamps `FULLY VERIFIED`, never when the session declares itself satisfied,
+because a session reads its own evidence as proving what it meant to prove.
+Hand it exactly three things: the requirements **verbatim** (the pasted ticket
+or the user's words, never a paraphrase), every proof artifact path (logs,
+captures, screenshots, the report) and the tool inventory. Give it the
+correctness properties and what to attack, never your reasoning, since that
+talks a reviewer into agreeing. On `TEST AGAIN`, retest its gaps and send it
+back. Then open the artifacts the judge cites; do not take its summary on
+trust. Step 5d of `.claude/commands/qa.md` explains eight failures that look
+like a pass from inside a session; check them in hand QA too: persistence
+claimed from a screenshot, results only in prose, an unresolved build id,
+runs of different code compared, an unopened screenshot, a timing window too
+short for a deployed backend, a minified bundle grepped by identifier, and a
+marker checked in only part of the diff. `quick-cop` stamps nothing and never
+substitutes for bad-cop on a full QA session.
 
 ### Recorded decision: no blocking external model reviewer on Stop
 
-Considered and declined, 2026-08-18. The proposal was a Stop hook that shells a
-separate model (`claude -p`, `codex exec`, `gemini`) at `git diff HEAD` and
-blocks the turn on a FAIL verdict. Do not build it. The reasons, in order of
-weight:
-
-- A hard blocking reviewer was already built on this exact surface and reverted
-  twice. `clean-rag/hooks/verifier-gate.py` records both reverts in its own
-  docstring.
-- Anthropic's own `security-guidance` plugin does this, and it only works
-  because of three things a hand rolled version has none of: `asyncRewake`
-  instead of a synchronous block, a `MAX_STOP_HOOK_FIRINGS` cap, and a
-  continuation suffix so the model does not abandon the user's original request
-  after being blocked.
-- `abiswas97/gemini-plugin-cc` warns in its own README that this class of hook
-  "can create a long-running Claude/Gemini loop. Only enable it when actively
-  monitoring the session."
-- Claude Code re-runs every Stop hook on every Stop event. A new blocking hook
-  without a `stop_hook_active` guard loops against `auto-test-gate.py` and
-  `stop-context-guard.py`.
-- The review responsibility is already owned by bad-cop and good-cop, which are
-  fresh context subagents. A second reviewer on the same Stop event duplicates
-  or contradicts them.
-
-If the goal ever becomes security specific review, adopt the whole plugin
-(`/plugin install security-guidance@claude-plugins-official`, `SECURITY_REVIEW_MODEL`
-selects the reviewer) rather than writing a hook. If only a Stop hook loop guard
-is wanted for some other purpose, `hamelsmu/claude-review-loop`'s `stop-hook.sh`
-is the reference for the retry and fail open state machine, MIT licensed.
-
-Two corrections to the advice that prompted this, for anyone who reads it later:
-the Stop payload carries `transcript_path` but no changed files list, so a hook
-must derive that itself with `git status --porcelain`; and launching `claude -p`
-from inside a live session requires unsetting `CLAUDECODE` in the child env
-(`scripts/chat-watcher.py` does this).
+Declined 2026-08-18: do not build a Stop hook that has a separate model review
+`git diff HEAD` and blocks the turn on a FAIL verdict, because a hard blocking
+reviewer was already built on this surface and reverted twice. The full
+reasons and references are in `docs/global-instructions-notes.md`. For security
+specific review, adopt the whole `security-guidance` plugin rather than writing
+a hook. The notes also name the reference loop guard and two Stop hook
+gotchas: the payload has no changed files list, and a child `claude -p` needs
+`CLAUDECODE` unset.
 
 ## Debugging, testing and QA
 
 When a bug does not yield, the failure mode is applying one technique harder.
 Two or three iterations with no new information means the technique is wrong,
-not that you need more logging. Invoke the **`debugging-methodology`** skill and
-pick a different one by name from its symptom table:
+not that you need more logging. Invoke the **`debugging-methodology`** skill
+and pick a different one by name from its symptom table. The skill also holds
+the per stack recipes no MCP server reaches (React Native, .NET, Python) and
+the debugger tools; reach for a debugger over print statements. A tool missing
+at runtime means its server was never registered, so run the installer; every
+server comes from one table there (see MCP servers, and using them safely).
 
-- Regressed since a known good commit, use `git bisect` (`git bisect run <cmd>`
-  automates it entirely).
-- Large input fails, small ones pass, use delta debugging to shrink it.
-- Long call chain with one bad value, binary search on state.
-- A working case sits beside the failing one, differential debugging.
-- Reproduces but the cause is unclear, hypothesis first: write the claim down,
-  then design the smallest test that would falsify it.
-- Intermittent or a race, record replay (`rr`). Re running it is not a strategy.
-- No reliable reproduction at all, stop and get one. A fix without a repro is a
-  guess you cannot validate.
+**Databases are read only.** Never execute against a live database or automate
+SSMS or any equivalent GUI client, because a wrong statement against real data
+is not recoverable by a retry. Read the schema from the project's own
+artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic
+versions, `schema.sql`), reason about the query, and hand it to the human to run.
 
-That skill also carries the per stack recipes for surfaces no MCP server
-reaches: React Native (`adb logcat`, `npx react-native log-ios`, Hermes over CDP
-through `chrome-devtools`, since RN DevTools replaced Flipper), .NET
-(`dotnet-trace`, `dotnet-dump`, `dotnet-gcdump`, `dotnet-counters`), and Python
-(`py-spy dump`/`record`, which attach to a live process without restarting it).
-
-**Reach for the debugger over print statements.** `mcp-debugger` covers Python,
-Ruby, Node, Go, Java, .NET and Rust: `create_debug_session` → `set_breakpoint` →
-`start_debugging` or `attach_to_process` → `get_variables`. Browser, network and
-performance work is `chrome-devtools`. Coverage is `test-coverage`. Native C/C++
-is `mdb` (GDB/LLDB). If a tool is missing at runtime its server was never
-registered, so run the installer; every server comes from one table there.
-
-**Databases are read only.** Understand the schema from the project's own
-artifacts (EF Core `DbContext` and `Migrations/`, `models.py`, Alembic versions,
-`schema.sql`), reason about the query, and hand it to the human to run. Do not
-execute against a live database and do not automate SSMS or any equivalent GUI
-client. A wrong statement against real data is not recoverable by a retry.
-
-Running `/qa` gives the full session: inventory, a risk ranked test plan, and
-execution with evidence. `/debug` is the focused single bug path. Both enumerate
-the debugging tools already, and both point back at this same skill.
+`/qa` runs the full session: inventory, a risk ranked test plan, execution with
+evidence. `/debug` is the focused single bug path. Both enumerate the debugging
+tools already, and both point back at this same skill.
 
 ## UI / Frontend Work
 
-When the task involves editing or creating frontend files (`.tsx`, `.jsx`,
-`.html`, `.css`, `.scss`, `.vue`, `.svelte`), invoke the `frontend-design`
-skill before making any design decisions. Run the two-pass process: compact
-token system (palette, typefaces, layout concept, signature element) then
-self-critique against the brief before building. Never skip to code without
-the brief-grounding pass.
+For frontend files (`.tsx`, `.jsx`, `.html`, `.css`, `.scss`, `.vue`,
+`.svelte`), invoke the `frontend-design` skill before any design decision. Run
+its two-pass process: a compact token system (palette, typefaces, layout
+concept, signature element), then a self-critique against the brief. Never
+skip to code without that brief-grounding pass.
 
-After any UI change, invoke the `eyes` skill to capture a screenshot and
-verify visually before calling it done. Propose changes with pixel-precise
-numbers. Confirm with the user before applying. Verify with a before/after
-comparison screenshot.
+After any UI change, invoke the `eyes` skill to screenshot and verify visually
+before calling it done. Propose changes with pixel-precise numbers, confirm
+with the user before applying, and verify with a before/after screenshot.
 
 ## clean-rag (the search backend, port 8613)
 
 Search runs over projects you've indexed, plus live web search. There is no
 scraped topic knowledge base.
 
-- `POST http://127.0.0.1:8613/search` with `sources: ["project:<abs path>"]` and
-  `mode: "both"` runs vector similarity and import graph traversal together.
-  Graph results carry `relation` (imports, inherits, implements, calls) and
-  `seed_file`. Use `mode: "both"` on every code search, vector and graph surface
-  different files.
 - `POST http://127.0.0.1:8613/web-search` is DuckDuckGo, source ranked (GitHub
   and StackOverflow first, content farms last), sanitized against hidden
-  characters. Snippets are cheap, so survey with it and only fetch a full page
-  when you need the substance.
-- Index a project once with `/index-project`. It reindexes itself: after every
-  edit, and a full sweep every 10 minutes for outside changes. The server runs
-  headed so you can watch it.
-
-If the server is down, run `/rag` or `clean-rag/cli/server_ctl.py start`.
+  characters. Survey with snippets (see Token Efficiency).
+- Index a project once with `/index-project`. It reindexes after every edit,
+  plus a full sweep every 10 minutes for outside changes. The server runs
+  headed so you can watch it. If it is down, run `/clean-rag-server start`.
 
 ## Plugins
 
 Installed from `PLUGINS` in `scripts/setup.py`, mirrored in
-`clean-rag/install.py` for the same standalone reason as `MCP_SERVERS`. Adding
-one means adding a row to BOTH tables. Each row needs `marketplace` (the repo)
-and `name` (the `plugin@marketplace` id); adding the marketplace alone installs
-nothing.
+`clean-rag/install.py` for the same standalone reason as `MCP_SERVERS`, so add
+each one to BOTH tables. A row needs `marketplace` (the repo) and `name` (the
+`plugin@marketplace` id); the marketplace alone installs nothing. The tuning
+detail and how each setting was verified are in
+`docs/global-instructions-notes.md`.
 
-Installed today:
-
-- **ponytail** (`DietrichGebert/ponytail`, MIT) stops the agent over-building.
-  Before writing code it walks a ladder: does this need to exist, does the
-  stdlib do it, is there a native platform feature, is it already a dependency,
-  can it be one line. Validation, error handling, security and accessibility are
-  never on the chopping block. Its two lifecycle hooks are Node, so `node` has
-  to be on PATH or they fail on every prompt.
-
-  **It pulls against this file, on purpose.** Everything above mandates research
-  before an edit and a fresh context review after one. Ponytail's first rung is
-  "skip it". When they disagree, the ladder decides what to build and this file
-  decides how to check it, so research still runs and bad-cop still runs; the
-  ladder just usually means there is less to review. If a turn feels ceremonious
-  for a one line change, that is `/ps`, not a reason to switch either off.
+- **ponytail** (`DietrichGebert/ponytail`, MIT) stops the agent over-building
+  by walking a ladder before it writes code. Validation, error handling,
+  security and accessibility are never on its chopping block. Its two lifecycle hooks are Node,
+  so `node` must be on PATH or they fail on every prompt.
+  **It pulls against this file, on purpose.** Its first rung is "skip it". The
+  ladder decides what to build and this file decides how to check it, so
+  research and bad-cop still run, usually on less code. If a turn feels
+  ceremonious for a one line change, use `/ps` rather than switching either off.
+- **pipe-down** (`hoo29/claude-pipe-down`, MIT) refuses an Edit or Write that
+  adds an over-long or low value comment. Being a `PreToolUse` hook is the
+  point: `comment-humanness-check.py` is `PostToolUse`, so its nudge lands
+  after the comment is on disk and gets ignored (see Plain writing).
+  `PIPE_DOWN_MAX_WORDS` is 20. `PIPE_DOWN_LLM` is `0` because it ships **on**,
+  spawning a `claude -p` Haiku subprocess per write, a real latency cost on
+  every edit; turn it on only if the regex rules prove too blunt.
 
 ### Calling it correctly
 
-**8613 is the only server.** There used to be a second on 8612 carrying a topic
-knowledge base. Both were deleted. If you see `8612`, `/context`, `/index` or a
-`scope=` parameter anywhere, that text is stale, and doing what it says gets you
-connection refused rather than an error you would notice.
-
-The whole contract is one route:
+**8613 is the only server.** The old 8612 server is deleted. Any mention of
+`8612`, `/context`, `/index` or a `scope=` parameter is stale, and following it
+gets a quiet connection refused. The whole contract is one route:
 
 ```
 POST http://127.0.0.1:8613/search
 {"query":"how does auth work","sources":["project:C:/abs/path"],"mode":"both","limit":8}
 ```
 
-- `sources`, not `scope`. A list of `project:<absolute path>`. Several at once is
-  fine, and each is queried with the embedding model its own index was built
-  with.
-- `mode: "both"` on every code search. Vector and graph surface different files
-  and one without the other leaves a gap.
-- A source only works if that path is a registered project. A directory of
-  markdown you never indexed returns nothing, silently. Check `GET /status`.
-- `stale_projects` in the response with `served: false` means the index exists
-  but was refused, and the reason field says why. Zero results plus that field is
-  a broken index, not an empty codebase. Read it before concluding the code is
-  not there.
+- `sources`, not `scope`: a list of `project:<absolute path>`. Several are fine;
+  each is queried with the embedding model its own index was built with.
+- `mode: "both"` on every code search runs vector similarity and import graph
+  traversal together, because they surface different files and one without
+  the other leaves a gap. Graph results carry `relation` (imports, inherits,
+  implements, calls) and `seed_file`.
+- A source works only for a registered project; an unindexed directory returns
+  nothing, silently. Check `GET /status`.
+- `stale_projects` with `served: false` means the index exists but was refused,
+  and its reason field says why. Zero results plus that field is a broken
+  index, not an empty codebase, so read it before concluding the code is not
+  there.
 
-Other routes worth knowing: `/index-project`, `/reindex-file`, `/status`,
-`/projects`, `/web-search`, `/github-search`, `/github-file`,
-`/stackoverflow-search`, `/run-tests`, `/mutation-test`, `/security-scan`.
-`clean-rag/CLAUDE.md` has the full table, and
-`clean-rag/tests/test_skill_rag_routes.py` fails if any skill names a route the
-server does not serve, so that list cannot drift again without a red test.
+Other routes: `/index-project`, `/reindex-file`, `/status`, `/projects`,
+`/web-search`, `/github-search`, `/github-file`, `/stackoverflow-search`,
+`/run-tests`, `/mutation-test`, `/security-scan`. `clean-rag/CLAUDE.md` has the
+full table, and `clean-rag/tests/test_skill_rag_routes.py` fails if any skill
+names a route the server does not serve, so the list cannot drift silently.
 
 When spawning an agent, hand it a real search line against a real indexed
-project. Do not tell it to load context from a server that no longer exists.
+project, never a server that no longer exists.
 
 ## MCP servers, and using them safely
-
 The installer registers these from `MCP_SERVERS` in `scripts/setup.py`, mirrored
-in `clean-rag/install.py`. Adding a server means adding a row to BOTH tables,
-and `tests/test_mcp_server_registration.py` fails if they drift. Every one of
-them is free.
-
-**The rule that generalises: these servers act as you.** They carry your PAT,
-your Atlassian permissions, your filesystem. Most ship write tools enabled by
-default. The mitigation is always the scope of the credential you hand over,
-never the server's own good behaviour. A read only token is the control; a
-promise in a README is not.
-
-What each one is for, and the specific thing to watch:
-
-- **serena** gives real symbol references, call hierarchy and rename through
-  language servers. Local. It writes a `.serena/` index into whatever project
-  it is pointed at, which is gitignored. Its C# backend is the flaky part.
-- **ast-grep** does structural AST search for codemods. Local, 4 tools. The
-  maintainers call the MCP wrapper experimental, so check a rewrite's output.
-- **context7** fetches version pinned library docs. Your query strings go to
-  Upstash. Never put code or anything internal in the query.
-- **semgrep** is real SAST. Scans stay entirely local. Do NOT set
-  `SEMGREP_APP_TOKEN` unless you actually want findings shipped to Semgrep's
-  cloud; without it nothing leaves the machine.
-- **osv** returns citable CVE and advisory IDs from Google's public database.
-  Read only, no credential, nothing sensitive sent.
-- **socket** scores a package before swiper takes it: license, malware,
-  maintenance. Its `depscore` is Socket's own composite number, so it is triage,
-  not a citation. The free tier has a monthly scan cap.
-- **arxiv** pulls real paper sections. This exists because `researcher` has
-  WebSearch but no WebFetch and clean-rag has no general fetch route, so it
-  otherwise works from snippets. Scope prompts to a section; whole papers flood
-  context.
-- **antv-chart** renders mind maps, flowcharts, network graphs and fishbone
-  diagrams to PNG. By default it renders through an Ant Group hosted endpoint,
-  so **diagram data leaves the machine**. Set `VIS_REQUEST_SERVER` to self host
-  before drawing anything that describes internal systems.
-- **jupyter** produces executable `.ipynb` evidence a human can re-run. It
-  executes code, so treat it as a real execution surface. Gated on
-  `JUPYTER_TOKEN`; without a live Jupyter it is skipped.
-- **github** does PRs, issues and Actions as structured calls. Use a fine
-  grained PAT scoped to the repos you actually want reachable, never a classic
-  token with full `repo`. It can merge, push and close for real. Its secret
-  scanning needs paid Secret Protection on private repos, so do not count on
-  that tool. The hosted endpoint requires Copilot enrolment; Copilot Free is $0.
-- **atlassian** reads and writes live Jira and Confluence as your user. A write
-  here is a write to something colleagues see. Confirm before creating or
-  editing anything, the same as any outward facing action.
-
+in `clean-rag/install.py`; add a server to BOTH tables, or
+`tests/test_mcp_server_registration.py` fails. All are free. **They act as
+you**, with your PAT, Atlassian rights and filesystem, and most enable write
+tools by default. The control is a narrowly scoped (read only) credential, never
+the server's behaviour or a README promise. Per server:
+- **ast-grep**: structural AST search for codemods, local, 4 tools. The MCP
+  wrapper is experimental, so check a rewrite's output.
+- **context7**: version pinned library docs. Queries go to Upstash, so never
+  put code or anything internal in one.
+- **semgrep**: local SAST. Do NOT set `SEMGREP_APP_TOKEN` unless you actually
+  want findings shipped to Semgrep's cloud; without it nothing leaves the
+  machine.
+- **osv**: citable CVE and advisory IDs from Google's public database. Read
+  only, no credential.
+- **socket**: scores a package (license, malware, maintenance) before swiper
+  takes it. `depscore` is Socket's own composite, so triage, not a citation.
+  The free tier has a monthly scan cap.
+- **arxiv**: paper sections, because `researcher` has WebSearch but no WebFetch
+  and clean-rag has no general fetch route. Scope prompts to a section; whole papers
+  flood context.
+- **antv-chart**: mind maps, flowcharts, network and fishbone diagrams to PNG
+  by default via an Ant Group hosted endpoint, so **diagram data leaves the machine**. Set
+  `VIS_REQUEST_SERVER` to self host before drawing internal systems.
+- **jupyter**: re-runnable `.ipynb` evidence. It executes code, so treat it as
+  an execution surface. Gated on `JUPYTER_TOKEN`; skipped without Jupyter.
+- **mobile-mcp**: drives a real app (install, tap, type, screenshot, device
+  logs, crashes); Android via `adb` on any OS, iOS needs a Mac with Xcode. It
+  can uninstall apps, replace the clipboard and override GPS, so use an
+  emulator or test device, never a personal phone. Its row sets
+  `MOBILEMCP_DISABLE_TELEMETRY=1` in its `env`, as telemetry is on by default.
+- **github**: PRs, issues and Actions; it can merge, push and close for real, so
+  use a fine grained PAT scoped to the needed repos, never a classic token with
+  full `repo`. Secret scanning needs paid Secret Protection on private repos, so
+  do not count on it. The hosted endpoint needs Copilot enrolment (Free is $0).
+- **atlassian**: live Jira and Confluence writes as your user, which colleagues
+  see. Confirm before creating or editing anything, the same as any outward
+  facing action.
 **Credentials.** `GITHUB_MCP_TOKEN` and `JUPYTER_TOKEN` are passed as `${VAR}`
-placeholders, which Claude Code expands from **its own process environment** at
-launch. They have to live somewhere that environment sees: a real environment
-variable in the shell you start Claude Code from, or the `env` block of
-`~/.claude/settings.json`. Both were confirmed by pointing a credentialed HTTP
-server at a local listener and reading the header that arrived.
-
-**Not `clean-rag/.env`.** Only clean-rag's server process reads that file, so a
-token set there never reaches Claude Code, and the failure is quiet: the
-registration succeeds and the literal `${GITHUB_MCP_TOKEN}` goes out as the
-bearer token. `claude mcp list` does print `Missing environment variables: ...`,
-and the installer refuses to register a server whose credential is unset, which
-is the guard that actually holds.
-
-`GITHUB_MCP_TOKEN` is deliberately NOT `GITHUB_TOKEN`: that one is clean-rag's
-read only search token, and sharing the name would either break the server or
-quietly widen what search can do. An unset credential skips that one server with
-a warning and never fails the install. Never resolve a credential into the
-registration payload; the placeholder is what keeps it out of `~/.claude.json`.
-
-**The injection boundary.** `bad-cop` and `good-cop` do NOT get context7, arxiv,
-socket or anything else that fetches from the network, for the same reason they
-never had WebFetch: a reviewer that reads untrusted content is a reviewer that
-can be talked out of a finding. Fetch shaped servers go to `researcher` and
-`swiper` only, the two agents that already carry that exposure.
-`test_reviewers_get_no_fetch_shaped_tools` enforces that, so it is a checked
-invariant and not a promise in a document.
-
-The other half of that routing, giving the cops the local code readers (serena,
-semgrep, ast-grep), is **not wired**. Neither cop enumerates those tools today.
-Wiring it needs the real tool names read off a running server, because Claude
-Code silently drops a name it does not recognise, which is the exact bug
-`tests/test_mcp_server_registration.py` exists to catch.
-
-**Tool names are enumerated literally, never wildcarded.** Claude Code silently
-drops `mcp__<server>__*`, which is how bad-cop believed it had coverage data for
-months while having none. Add a server's tools by real name, and let
-`tests/test_mcp_server_registration.py` confirm the server behind them exists.
+placeholders that Claude Code expands from **its own process environment** at
+launch, so set them in the shell that starts Claude Code or in the `env` block
+of `~/.claude/settings.json` (both confirmed by reading the received header).
+**Not `clean-rag/.env`.** Only clean-rag's server reads it, so the failure is
+quiet: registration succeeds and the literal `${GITHUB_MCP_TOKEN}` is sent as
+the bearer token. `claude mcp list` prints `Missing environment variables: ...`,
+and the installer refuses to register a server whose credential is unset.
+`GITHUB_MCP_TOKEN` is deliberately NOT `GITHUB_TOKEN` (clean-rag's read only
+search token), because sharing it would break the server or widen search. An
+unset credential skips that server with a warning, never failing the install.
+Never resolve a credential into the payload; the placeholder keeps it out of
+`~/.claude.json`.
+**The injection boundary.** `bad-cop` and `good-cop` get no WebFetch and no
+network fetching server (context7, arxiv, socket), because a reviewer reading
+untrusted content can be talked out of a finding. Those go only to `researcher`
+and `swiper`; `test_reviewers_get_no_fetch_shaped_tools` enforces it. Giving the
+cops local readers (semgrep, ast-grep) is **not wired**: it needs real tool
+names from a running server. **Tool names are enumerated literally, never
+wildcarded**, because Claude Code silently drops unknown names and
+`mcp__<server>__*` (bad-cop once had no coverage data for months this way).
+`tests/test_mcp_server_registration.py` confirms the servers behind them exist.
 
 ## Decision Flow
-
-Two paths, not five mandatory steps.
-
-**Simple task?** Just do it. No workspace, no ceremony.
-
-**Complex task?** (ticket attached, multi-agent, multi-session, user says "plan
-this")
-1. Create `workspace/[task-id]/` and announce with one line.
-2. Sweep then verify across domains (testing, docs, security, architecture,
-   performance, review, clarity).
-3. Spawn the right agent(s).
-
-Sweep then verify: scan all domains, but for every flag you raise, prove it from
-actual code. If you can't cite specific lines, drop the flag. "Nothing found" is
-always valid.
+**Simple task?** Just do it, no workspace. **Complex task?** (ticket attached,
+multiple agents or sessions, or "plan this"): 1. create `workspace/[task-id]/`
+and announce it in one line; 2. sweep then verify across testing, docs,
+security, architecture, performance, review and clarity, proving every flag
+from actual code and dropping any you cannot cite by line; 3. spawn the right agent(s).
 
 ## Agent Spawning
-
-Spawn agents when they add value: parallelism, isolation, deep specialization.
-Do the work directly when they don't. A one line fix doesn't need an agent.
-
-Specialist agents (architect, reviewer, debug, security, performance, refactor,
-ui, docs, test, and the rest) are available for focused work. They are spawned
-as needed, not on every task.
+Spawn agents when they add value: parallelism, isolation or deep
+specialization. Do the work directly when they don't; a one line fix doesn't
+need an agent. The six in Model Routing spawn as needed, not on every task;
+any other shipped agent belongs to the skill that spawns it.
 
 ### Never delete scratchpad files. Leave them
-
-Scratch work goes in the session scratchpad directory, and it stays there. Do not
-`rm` it, do not tidy it up, do not delete your own backup copies when you are
-finished. The directory is session specific and disposable, so nothing is gained
-by cleaning it, and every `rm` costs the human a permission prompt for no reason.
-Say a file is no longer needed if it matters; do not remove it.
+Scratch work goes in the session scratchpad directory, and it stays there.
+Never `rm` or tidy scratchpad files or backups: the directory is disposable and
+every `rm` costs a permission prompt. Say a file is no longer needed instead.
 
 ### What the rm rules do, and why they are shaped that way
-
-Reworked 2026-09-16. `rm` is split by whether the command is recursive, because
-that is where nearly all of the danger lives. Deleting a named file is ordinary
-work; deleting a tree is not.
-
-- **Allowed, no prompt**: non recursive `rm`, such as `rm build.log` or
-  `rm -f render/s-01.png`.
-- **Ask**: anything recursive. `rm -r*`, `rm -R*`, `rm -fr*`, `rm -fR*`,
-  `rm -f -r*`, `rm --recursive*`, and a couple of catch alls for odd flag orders.
-- **Deny**: sixteen catastrophic shapes that should never run at all, including
-  `rm -rf /`, `~`, `.`, `..`, `$HOME`, `C:*` and the Git Bash drive paths `/c`
-  and `/c/*`.
-
-Do not replace this with a single broad `Bash(rm **)` in `ask`. That was the old
-shape and it prompted on every scratch file, which trains people to approve
-without reading. Do not try to carve a safe directory out of a broad rule either,
-because it cannot be done: permission rules evaluate deny, then ask, then allow,
-first match wins, and "rule specificity doesn't change the order", so a narrower
-`allow` never fires. Bash patterns have no `!` negation; that exists only for Read
-and Edit. A PreToolUse hook cannot help either, since "a matching ask rule still
-prompts even when the hook returned `allow`". Hooks tighten, never loosen. All
-three quotes are from `code.claude.com/docs/en/permissions.md`.
-
-Splitting on the recursive flag is the one cut that IS expressible, which is why
-the rules look like this.
+Non recursive `rm` is allowed with no prompt, recursive `rm` asks, and sixteen
+catastrophic shapes such as `rm -rf /` are denied, because deleting a tree is
+where nearly all of the danger lives. Never replace them with one broad
+`Bash(rm **)` in `ask`. The full rule list, and why no narrower rule can carve
+out a safe directory, are in `docs/global-instructions-notes.md`.
 
 ### Model Routing
 - **Opus**: good-cop.
 - **Sonnet**: bad-cop, quick-cop, research-agent, researcher, swiper.
-
-That is the whole roster, 6 agents. A spawn of a name not on this list does not error; it quietly resolves to a generic agent while the session believes it got a specialist.
+That is the roster, 6 agents; a skill may ship a helper spawned only from it.
+A name with no agent file silently becomes a generic agent, with no error.
 
 ### Starting a new build or feature
-
-For an edit intent task, a new build or feature, run `/start` instead of
-diving straight into research-agent: it spawns `researcher` first (codebase
-structure via clean-rag's own index and graph, plus the general engineering
-standard for this class of change), then `swiper` informed by researcher's
-findings (what can be swiped, from the project, the stdlib, a dependency,
-GitHub, or StackOverflow, reported only, swiper never writes to the project
-itself), then consults the user with real options before anything is
-written. `researcher` also replaces an ad hoc codebase exploring subagent for
-understanding a project: it has clean-rag's real indexed vector and graph
-databases behind it, so route codebase understanding tasks to it instead.
+For a new build or feature, run `/start`, not research-agent directly. It runs
+`researcher` (structure from clean-rag's index and graph, plus the engineering
+standard), then `swiper` on those findings (what to swipe from the project,
+stdlib, a dependency, GitHub or StackOverflow; it never writes to the project),
+then consults the user with options before anything is written. Send codebase
+understanding tasks to `researcher`, not an ad hoc subagent, because it has
+clean-rag's indexed vector and graph databases.
 
 ### Parallel Limits
 - Context below 50%: up to 3 agents.
@@ -757,142 +519,80 @@ session, on disk, with nothing to notice. If fan-out ever trips one of them,
 fix that gate, do not switch it off.
 
 ## Verify Gate (anti hallucination)
-
-Applies everywhere: reviews, planning, bug diagnosis, security audits, test
-planning.
-
-- Every finding must be proven from actual code before acting on it.
-- Cite specific file and line for every flag.
-- "No issues found" is always a valid outcome.
-- Finding something is not the goal. Finding real things is.
+Everywhere (reviews, planning, bug diagnosis, security audits, test planning):
+prove every finding from actual code before acting, citing file and line. "No
+issues found" is always valid; the goal is real findings, not any finding.
 
 ## Collaborative Mode (CONSULT / AUTO)
-
-Default is **CONSULT**. Before an architectural decision, research the project,
-present options, let the user add constraints, then implement. Architectural
-triggers: a new endpoint, DB table, dependency, module, middleware, or a new
-auth/validation/error/logging strategy. Not triggers: typos, one line fixes,
-tests, docs, renames in one file.
-
-`/auto [reason]` switches to autonomous AUTO mode for prototyping and low rework
-cost work. `/consult` restores CONSULT.
+Default **CONSULT**: before an architectural decision (new endpoint, DB table,
+dependency, module, middleware, or auth/validation/error/logging strategy),
+research, present options, take the user's constraints, then implement. Not
+triggers: typos, one line fixes, tests, docs, renames in one file.
+`/auto [reason]` switches to AUTO for prototyping and low rework cost work;
+`/consult` restores CONSULT.
 
 ## Hard Rules (non negotiable)
 
 ### Never start an app without naming the environment
-Starting a local app is the single most dangerous routine command, because the
-damage comes from what you *omit*, not from anything visibly dangerous you type.
-
-Always name the environment explicitly, and never pass a flag that skips the
-launch profile:
-
+This is the most dangerous routine command, because the damage comes from what
+you *omit*, and nothing in it looks risky. Name the environment and never skip
+the launch profile:
 ```
 ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="https://localhost:PORT" \
   dotnet run --project "<path to csproj>"
 ```
-
-Then read the startup log and confirm `Hosting environment: Development` before
-opening a browser or running any test against it. Anything else is a stop.
-
-Why this is a hard rule: ASP.NET Core defaults to **Production** whenever
-`ASPNETCORE_ENVIRONMENT` is unset. `dotnet run --no-launch-profile` skips
-`launchSettings.json`, which is usually the only thing setting that variable, so
-config binds `appsettings.json` instead of `appsettings.Development.json`. On a
-real project that routinely means the production database and the production
-secret store, reached from a dev machine, with no prompt and no warning.
-
-Do not count on a failure to save you. Whether such a run actually connects
-depends on incidental things like credential resolution order, which is not a
-safeguard and can change without notice.
-
-Note what makes this class hard to catch: the dangerous command contains no
-dangerous looking token at all. Do not rely on a command "looking risky" to
-decide whether to check the environment. `scripts/bash-guard.py` blocks the known
-shapes (`check_production_environment`), but it only knows the flags already
-discovered, so the rule above is what actually generalizes.
-
-The same reasoning applies to any framework with an environment default: Rails
-`RAILS_ENV`, Django `DJANGO_SETTINGS_MODULE`, Node `NODE_ENV`, Spring
-`SPRING_PROFILES_ACTIVE`. Name it, then verify it from the app's own startup
-output rather than from what you intended.
+Confirm `Hosting environment: Development` in the startup log before any
+browser or test; anything else is a stop. ASP.NET Core defaults to
+**Production** when `ASPNETCORE_ENVIRONMENT` is unset, and
+`dotnet run --no-launch-profile` skips `launchSettings.json`, so config binds
+`appsettings.json`, not `appsettings.Development.json`: the production database
+and secret store, silently. A connection failure is no safeguard.
+`scripts/bash-guard.py` (`check_production_environment`) only knows flags
+already found, so this rule is what generalizes. It applies to Rails
+`RAILS_ENV`, Django `DJANGO_SETTINGS_MODULE`, Node `NODE_ENV` and Spring
+`SPRING_PROFILES_ACTIVE` too: name it, then verify it from startup output.
 
 ### Plain writing (enforced by output style, not by hope)
-Everything you write, chat replies, drafted comments, PR descriptions, docs, is
-plain and short. One idea per sentence. Point first, never built up to. No throat
-clearing openers, no idiom, no filler intensifiers. Fewer words, not softer
-claims: still say plainly when something is uncertain, failed, unverified, or
-skipped.
-
-This lives in an **output style**, `~/.claude/output-styles/plain.md`, activated
-via `"outputStyle": "Plain"` in `~/.claude/settings.json`. That matters: an output
-style rewrites the system prompt, whereas CLAUDE.md and memory are appended as a
-user message and lose to drift over a long session. A rule that kept getting
-restated by the human is a rule in the wrong layer. Put tone rules in the output
-style, not here.
-
-Two narrower layers already run alongside it and are not substitutes:
+Everything you write (chat, comments, PR descriptions, docs) is plain and
+short: one idea per sentence, point first, no throat clearing, idiom or filler
+intensifiers. Fewer words, not softer claims; still say plainly when something
+is uncertain, failed, unverified or skipped. It lives in the output style
+`~/.claude/output-styles/plain.md` (`"outputStyle": "Plain"` in
+`~/.claude/settings.json`), because that rewrites the system prompt while
+CLAUDE.md and memory are appended as a user message and drift. A rule the
+human keeps restating is a rule in the wrong layer, so tone rules go there.
+Two narrower layers run alongside it and are not substitutes.
 `human-voice-guard.py` (Stop hook) bans 39 AI tell words and filler phrases in
-chat prose; `comment-humanness-check.py` (PostToolUse) covers code comments.
-`human-voice-guard.py` is a vocabulary check and nothing more; it reads the chat
-transcript and never sees a file.
-
-`comment-humanness-check.py` blocks (exit 2) on any dash, and nudges on five
-older patterns plus two added 2026-09-18 that do enforce concision:
-
-- **comment-length**: a single comment body over 20 words, so it is not one line.
-- **comment-narration**: the comment's opening verb restates the line it sits on.
-  `// Return the total` above `return a.total`, `// Save the record` above
-  `saveRecord(x)`, `// Get the active user` above an assignment.
-
-Both exempt any comment carrying a reason (`because`, `so that`, `must`, `race`,
-`security`, `bug`, `only`, `unless` and the rest of `_EXPLANATORY_RE`), because a
-comment that says why has earned its words however it opens. Both fire on a
-single comment; the five older nudges still need three or more, which is the hole
-these two fill.
-
-Why this was built rather than installed: nothing external covers it. The
-narration rule is ported from `no-redundant-comments` in
-`pertrai1/eslint-plugin-llm-core` (MIT), which is JS and TS only through ESLint's
-AST and cannot run against the C# and Python here. No Roslyn equivalent exists.
-The port trades the AST for line matching, so the failure mode to watch is a
-false positive on a comment that genuinely explains something;
-`tests/test_comment_humanness_check.py` pins that boundary.
+chat prose only. `comment-humanness-check.py` (PostToolUse) blocks (exit 2) on
+any dash in a code comment and nudges on five older patterns needing three or
+more hits, plus two from 2026-09-18 that fire on a single comment:
+- **comment-length**: a comment body over 20 words, so it is not one line.
+- **comment-narration**: the comment's opening verb restates the line it sits
+  on. `tests/test_comment_humanness_check.py` pins examples of it and the
+  false positive boundary for comments that genuinely explain something.
+Both exempt comments giving a reason (`because`, `so that`, `must`, `race`,
+`security`, `bug`, `only`, `unless`, rest of `_EXPLANATORY_RE`), because a why
+comment earns its words however it opens. Why this was built rather than
+installed is in `docs/global-instructions-notes.md`.
 
 ### Swipe before you build, including for your own tooling
-When the question is "how do I make Claude do X", check whether the harness or the
-community already does X before writing anything. Output styles, hooks, and
-settings fields already exist for most of it. Hand rolling a solution to a solved
-problem is the failure this whole file is meant to prevent, and it applies to
-tooling and config, not just project code.
+For "how do I make Claude do X", first check whether the harness or community
+already does it (output styles, hooks, settings fields). Hand rolling a solved
+problem is the failure this file exists to stop, in tooling and config too.
 
 ### No machine specific paths in anything committed
-
-Never write an absolute path, a home directory, or a username into a file that
-gets committed. Not in code, not in a test fixture, not in a config file, not
-in a comment, not in a doc. Derive the root instead:
-`Path(__file__).resolve().parents[N]` in Python,
+No absolute path, home directory or username in any committed file, comments
+and docs included. Derive it: `Path(__file__).resolve().parents[N]` in Python,
 `$(git rev-parse --show-toplevel)` or `${CLAUDEBOOST_HOME}` in shell, and a
-visible placeholder like `C:/Users/<user>` in prose.
-
-This is the rule that already failed, twice, in this repo. Two developers' home
-directories and a client's internal hostnames reached a public repository one
-hardcoded line at a time, and every one of those lines looked harmless on the
-machine that wrote it. `tests/test_no_machine_specific_paths.py` catches the
-shape now, and its own docstring records that "a second developer's home
-directory sat in three tracked files the whole time the suite was green". That
-test scans only tracked files with a known suffix, so it is a net under this
-rule and not a substitute for it.
-
-The trap is that a hardcoded path is never wrong on the machine you are sitting
-at. It fails on someone else's clone, in CI, and in a public diff, which is to
-say it fails everywhere you are not looking. So the check is never "does this
-work here", it is "what does this say about whose machine this is".
-
-One narrow exception. A path typed into a one off Bash command during a live
-session is not committed, and there it should be absolute, because Claude
-Code's simple_expansion scanner prompts on a bare `$VAR` whatever the allow
-list says. Use the `${BRACE}` form or a literal absolute path in that case. The
-moment the same path is written into a file, the rule above applies again.
+placeholder like `C:/Users/<user>` in prose. It failed twice here, leaking home
+directories and a client's hostnames to a public repo, because a hardcoded path
+always works on the machine that wrote it. Ask "whose machine does this
+reveal", not "does it work here". `tests/test_no_machine_specific_paths.py`
+scans only tracked files with known suffixes, so it is a net, not a substitute.
+Exception: a one off Bash command is not committed, so use an absolute path or
+`${BRACE}` form there, because Claude Code's simple_expansion scanner prompts
+on a bare `$VAR` regardless of the allow list. The moment the same path is
+written into a file, the rule above applies again.
 
 ### jQuery Ban
 jQuery is banned unless the user explicitly asks for it. Detect `$()`, `jQuery`,
@@ -913,50 +613,31 @@ imports, and CDN tags. Use React hooks, vanilla JS, and native fetch instead.
   suggestion.
 
 ## Token Efficiency
-
-Do it right the first time. Rework costs more than ceremony.
-
-- Route by weight. Full ceremony (verify gate plus evaluator) for reviewer,
-  security, performance. Standard for the rest. Lightweight for explore,
-  research, docs.
-- Always spawn an evaluator to verify findings, never self verify. A fresh
-  context catches hallucinations that same context confirmation misses.
-- Web research is cheap when you survey with snippets and fetch sparingly. The
-  research agent's cost is mostly full page fetches, not searches.
+Do it right the first time; rework costs more than ceremony. Route by weight:
+full ceremony (verify gate plus evaluator) for reviewer, security and
+performance, standard for the rest, lightweight for explore, research and docs.
+Always spawn an evaluator to verify findings, never self verify, because a
+fresh context catches hallucinations that same context confirmation misses.
+Web research is cheap if you survey snippets and fetch sparingly, since the
+research agent's cost is mostly full page fetches, not searches.
 
 ## OpenCode
-
-clean-rag has an OpenCode integration too (`clean-rag/opencode/`): the same MCP
-search tools, the two research agents ported as OpenCode subagents, and a
-research gate plugin. Install with `clean-rag/opencode/install.py`. The gate is
-enforced for the primary agent; a known OpenCode bug means subagent edits may
-bypass it until upstream fixes it.
+`clean-rag/opencode/` ports the same MCP search tools, the two research agents
+as OpenCode subagents, and a research gate plugin; install with
+`clean-rag/opencode/install.py`. The gate binds the primary agent; a known
+OpenCode bug means subagent edits may bypass it until upstream fixes it.
 
 ## Browser Testing Safety
-
-Playwright and browser automation reach local machines and named test or dev
-environments. Nothing else. Allowed:
-
+Playwright and browser automation reach only local and named test or dev hosts:
 - localhost, 127.0.0.1, 0.0.0.0, `::1`, and `*.local` / `*.test`
-- whatever `.claude/browser-targets.local.json` names. That file is gitignored
-  because your environments are nobody else's business, and
-  `.claude/browser-targets.example.json` documents the shape and the rules an
-  entry has to satisfy. `scripts/bash-guard.py` reads the same file, so the
-  guard and this rule cannot drift apart. With no file present, only the line
-  above is reachable.
-
-Production is never in scope, and neither is any host you have not confirmed is
-a test or dev environment. A hostname is not evidence on its own: `dev` in a
-name proves nothing, and a shared dev environment can still hold real data. A
-lower environment restored from a production snapshot is production data with a
-friendlier name, so treat every write there as a write to shared state and get
-approval first. Read only navigation, hovering, and screenshots are fine.
-
-Two things stay off limits regardless. An environment's own control plane or
-management dashboard is never something to browse. Corporate identity sign in
-belongs to the human:
-drive as far as the SSO prompt and hand over rather than entering someone's
-credentials or approving their MFA.
-
-If unsure whether a URL is in scope, ask before navigating. Default to a headed
-browser, not headless.
+- hosts in `.claude/browser-targets.local.json`, gitignored because they are
+  private; `.claude/browser-targets.example.json` documents its shape and
+  rules. `scripts/bash-guard.py` reads the same file, so they cannot drift.
+  With no file present, only the line above is reachable.
+Never production or any host not confirmed as test or dev. `dev` in a name
+proves nothing, and a shared dev environment can still hold real data. A lower
+environment restored from a production snapshot is production data, so get
+approval before any write there. Read only browsing and screenshots are fine.
+Never browse a control plane or management dashboard. Drive SSO only to the
+prompt and hand over; never enter credentials or approve MFA. If unsure about a
+URL, ask first. Default to a headed browser.

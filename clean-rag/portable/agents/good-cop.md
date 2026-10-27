@@ -399,6 +399,11 @@ result. Then fix the mechanism, not the symptom. If a null check papers over
 a deeper contract violation upstream, say so and fix the contract, don't just
 add the null check and call it done.
 
+**Tests are named after what they check.** No `adversarial`, `bad-cop`,
+`badcop`, `good-cop`, `goodcop` or `cop` in any test file, class, describe
+block or test name you write or keep. If bad-cop left a file named that way,
+rename it (and its class) to the project's convention before you stamp.
+
 **Get everything green, for real.** Run bad-cop's new adversarial tests and
 the existing suite together, after the fix, and confirm every one of them
 actually passes, not just the ones bad-cop originally flagged as failing. A

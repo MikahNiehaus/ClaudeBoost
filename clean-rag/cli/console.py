@@ -88,6 +88,10 @@ def _post(path: str, body: dict, timeout: float = 4.0):
 # it from the index lock.
 
 
+#: Row key for a project on its first run. Not a real project id, so delete skips it.
+_PENDING_ROW = "__first-run__"
+
+
 def _state_of(entry: dict, busy_path: str) -> Text:
     """INDEXING, INDEXED or EMPTY.
 
@@ -266,7 +270,6 @@ class ConsoleApp(App):
     /* Textual's default Button draws a tall border, which reads as a white box
        inside a blue block. Flatten it to a single filled chip. */
     #bar #pause {
-        dock: right;
         width: auto;
         min-width: 18;
         height: 1;
@@ -280,11 +283,28 @@ class ConsoleApp(App):
     #bar #pause:hover { background: $primary 45%; }
     #bar #pause.-paused { background: $warning 30%; color: $warning; }
 
+    #bar #hours {
+        width: auto;
+        min-width: 12;
+        height: 1;
+        margin: 1 2 1 0;
+        padding: 0 2;
+        border: none;
+        background: $primary 15%;
+        color: $text;
+        text-style: bold;
+    }
+    #bar #hours:hover { background: $primary 45%; }
+    #bar #hours.-on { background: $success 30%; color: $success; }
+
+    /* Auto width widgets never shrink, so the labels share one 1fr box that
+       clips. The buttons then always fit beside it. */
+    #bar #status { width: 1fr; height: 3; overflow: hidden hidden; }
+    #bar #models { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+
     /* Same flattened chip as #pause, in the error colour because it destroys
-       something. Docked right too, so it sits left of Pause rather than in the
-       middle of the status labels. */
+       something. */
     #bar #delete {
-        dock: right;
         width: auto;
         min-width: 14;
         height: 1;
@@ -319,6 +339,7 @@ class ConsoleApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("p", "toggle_pause", "Pause indexing"),
+        ("h", "toggle_hours", "Off-hours only"),
         ("d", "delete_selected", "Delete index"),
         ("r", "refresh_now", "Refresh"),
     ]
@@ -332,15 +353,18 @@ class ConsoleApp(App):
         #: Sending that truncated string to the server would delete nothing.
         self._paths: dict[str, str] = {}
         self._paused = False
+        self._hours_only = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="bar"):
-            yield Label("connecting", id="state")
-            yield Label("", id="models")
-            yield Label("", id="ram")
-            yield Label("", id="projects")
+            with Horizontal(id="status"):
+                yield Label("connecting", id="state")
+                yield Label("", id="models")
+                yield Label("", id="ram")
+                yield Label("", id="projects")
             yield Button("Delete index", id="delete", variant="error")
+            yield Button("Off-hours only: off", id="hours")
             yield Button("Pause indexing", id="pause", variant="primary")
         with TabbedContent(initial="tab-indexed"):
             with TabPane("Indexed", id="tab-indexed"):
@@ -404,6 +428,12 @@ class ConsoleApp(App):
         state.update(str(data.get("status", "?")).upper())
         state.set_classes("ok" if data.get("status") == "ready" else "warn")
 
+        # Older servers omit these, so only sync what the server actually reports.
+        if "paused" in data:
+            self._show_paused(bool(data["paused"]))
+        if "hours_only" in data:
+            self._show_hours(bool(data["hours_only"]))
+
         models = data.get("loaded_models") or []
         short = ", ".join(m.split("/")[-1] for m in models) or "none loaded"
         self.query_one("#models", Label).update(f"[dim]models[/dim] {short}")
@@ -446,6 +476,33 @@ class ConsoleApp(App):
             else:
                 for col, val in values.items():
                     table.update_cell(pid, col, val)
+        self._fill_pending(table, projects, busy_path)
+
+    def _fill_pending(self, table: DataTable, projects: dict, busy_path: str) -> None:
+        """Show a project on its first run, which registers only when the run ends."""
+        known = {Path(e.get("project_path", pid)) for pid, e in projects.items()}
+        if not busy_path or Path(busy_path) in known:
+            if _PENDING_ROW in self._rows:
+                table.remove_row(_PENDING_ROW)
+                self._rows.discard(_PENDING_ROW)
+            return
+        path = Path(busy_path)
+        parent = str(path.parent)
+        if len(parent) > 31:
+            parent = "..." + parent[-28:]
+        waiting = Text("...", style="dim", justify="right")
+        values = {
+            "state": Text("INDEXING", style="bold yellow"),
+            "project": Text(path.name, style="bold"),
+            "where": Text(parent, style="dim"),
+            "files": waiting, "chunks": waiting, "edges": waiting, "nodes": waiting,
+        }
+        if _PENDING_ROW not in self._rows:
+            table.add_row(*values.values(), key=_PENDING_ROW)
+            self._rows.add(_PENDING_ROW)
+        else:
+            for col, val in values.items():
+                table.update_cell(_PENDING_ROW, col, val)
 
     def drain_log(self) -> None:
         log = self.query_one("#log", RichLog)
@@ -536,12 +593,47 @@ class ConsoleApp(App):
             self.action_delete_selected()
         elif event.button.id == "pause":
             self._toggle_pause()
+        elif event.button.id == "hours":
+            self.action_toggle_hours()
+
+    def _show_paused(self, paused: bool) -> None:
+        self._paused = paused
+        button = self.query_one("#pause", Button)
+        button.label = "Resume indexing" if paused else "Pause indexing"
+        button.set_class(paused, "-paused")
+
+    def _show_hours(self, on: bool) -> None:
+        self._hours_only = on
+        button = self.query_one("#hours", Button)
+        button.label = "Off-hours only: on" if on else "Off-hours only: off"
+        button.set_class(on, "-on")
+
+    def action_toggle_hours(self) -> None:
+        """Keep automatic sweeps out of 9:00 to 17:00 local time, or lift the limit."""
+        want = not self._hours_only
+        status, body = _post("/sweep-pause", {"hours_only": want})
+        if status is None:
+            self.notify("Server is not answering.", severity="error")
+            return
+        if status != 200 or "hours_only" not in (body or {}):
+            self.notify(
+                "This server does not support the off-hours limit yet. Restart it on the new code.",
+                severity="warning",
+                timeout=8,
+            )
+            return
+
+        self._show_hours(bool(body["hours_only"]))
+        self.notify(
+            "Automatic indexing now runs only outside 9:00 to 17:00. Manual indexing still runs any time."
+            if self._hours_only
+            else "Automatic indexing runs at any hour again."
+        )
 
     def _toggle_pause(self) -> None:
         """Ask the server to flip the flag, then show whatever it reports back."""
         want = not self._paused
         status, body = _post("/sweep-pause", {"paused": want})
-        button = self.query_one("#pause", Button)
 
         if status is None:
             self.notify("Server is not answering.", severity="error")
@@ -556,9 +648,7 @@ class ConsoleApp(App):
             return
 
         # The server's answer wins, so the button shows the truth if it refuses.
-        self._paused = bool((body or {}).get("paused", want))
-        button.label = "Resume indexing" if self._paused else "Pause indexing"
-        button.set_class(self._paused, "-paused")
+        self._show_paused(bool((body or {}).get("paused", want)))
 
         if not self._paused:
             self.notify("Indexing resumed.")

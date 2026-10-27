@@ -210,9 +210,9 @@ Include agent assignments for non-trivial sub-tasks. Use the ClaudeBoost agent r
 | Architecture decisions | researcher, then swiper |
 | Tests and TDD | bad-cop |
 | Security implementation | bad-cop |
-| UI components | ui-agent |
-| Database schema/migrations | database-agent |
-| Documentation | docs-agent |
+| UI components | researcher, then swiper, then bad-cop |
+| Database schema/migrations | researcher, then bad-cop |
+| Documentation | none, the main session writes it |
 | Performance optimization | researcher, then bad-cop |
 
 ### Step 5: Add Implementation Notes
