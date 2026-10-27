@@ -315,7 +315,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "CONTEXT PRESERVATION — quality-first routing:\n1. Agent spawns: call POST http://127.0.0.1:8613/search with {\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, route by type (full/standard/lightweight)\n2. Finding verification: ALWAYS quick-cop, never self-verify (confirmation bias)\n3. Decision flow: simple (just do it) vs complex (workspace + agents)\n4. Rework costs more than ceremony. Do it right the first time.\n5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json — re-check after compact. Default CONSULT: research + propose + ask before architectural decisions.",
+            "prompt": "CONTEXT PRESERVATION — quality-first routing:\n1. Agent spawns: call POST http://127.0.0.1:8613/search with {\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, route by type (full/standard/lightweight)\n2. Finding verification: ALWAYS quick-cop, never self-verify (confirmation bias)\n3. Decision flow: simple (just do it) vs complex (workspace + agents)\n4. Rework costs more than ceremony. Do it right the first time.\n5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. Re-check it after compact. Default CONSULT: research + propose + ask before architectural decisions.",
             "statusMessage": "Preserving RAG/CONSULT awareness before compaction..."
           }
         ]

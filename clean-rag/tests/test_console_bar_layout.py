@@ -28,7 +28,7 @@ def posts(monkeypatch):
     monkeypatch.setattr(
         con, "_post", lambda path, body, timeout=10.0: (sent.append(path) or (200, {"paused": True}))
     )
-    monkeypatch.setattr(con, "_lock_state", lambda: ("index-project", r"C:\Dev\Pantry"))
+    monkeypatch.setattr(con, "_lock_state", lambda: ("index-project", r"C:\Dev\Beta"))
     monkeypatch.setattr(con.LogTail, "poll", lambda self: [])
     return sent
 

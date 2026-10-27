@@ -49,8 +49,8 @@ PRESERVE_PROMPT = (
     "(confirmation bias)\n"
     "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
     "4. Rework costs more than ceremony. Do it right the first time.\n"
-    "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json "
-    "— re-check after compact. Default CONSULT: research + propose + ask "
+    "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. "
+    "Re-check it after compact. Default CONSULT: research + propose + ask "
     "before architectural decisions."
 )
 

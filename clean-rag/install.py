@@ -724,11 +724,12 @@ def install_squeez() -> None:
             _warn("squeez needs Git Bash (bash not on PATH), skipping. "
                   "Install manually: https://github.com/claudioemmanuel/squeez")
             return
+        # ponytail: script pinned to v1.48.24, but it still fetches the latest release binary.
         try:
             installed = subprocess.run(
                 [bash, "-c",
                  "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/"
-                 "main/install.sh | sh"],
+                 "7473e778532c3fca4e7cd2925f0b09d594d568e2/install.sh | sh"],
                 capture_output=True, text=True, timeout=180,
             )
         except Exception as e:  # noqa: BLE001

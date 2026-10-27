@@ -72,10 +72,12 @@ def dead_claims(text: str) -> list[tuple[int, str]]:
     return [(n, u) for n, u in units(text) if DEAD.search(u) and not _is_history(u)]
 
 
-# Only backtick quoted mentions are checked; the lookahead skips paths like `/c/Development`.
-COMMAND_REF = re.compile(r"`/([a-z][a-z0-9-]*)(?=[\s`\[.,;:!?)])")
+# Only backtick quoted mentions; one letter names are drive mounts like `/c`, so they are skipped.
+COMMAND_REF = re.compile(r"`/([a-z][a-z0-9-]+)(?=[\s`\[.,;:!?)])")
 # Hand copied from Claude Code 2.1.280, so a built in it later drops still passes.
-CLAUDE_CODE_BUILTINS = frozenset({"clear", "code-review", "init", "review", "simplify", "voice"})
+CLAUDE_CODE_BUILTINS = frozenset({
+    "clear", "code-review", "compact", "init", "plugin", "review", "simplify", "voice",
+})
 # Proposes commands that were never built.
 ROADMAPS = {"IMPROVEMENTS.md"}
 
@@ -160,6 +162,8 @@ def test_command_guard_passes_real_references():
     assert not unknown_commands("`/boost` `/ps` `/fix-perm` `/init` `/simplify`", known)
     assert not unknown_commands("POST `/search` or `/reindex-file` with `project_path`.", known)
     assert not unknown_commands("Clone into `/c/Development/app` and read and/or skim it.", known)
+    assert not unknown_commands("Git Bash drive paths `/c` and `/c/*`.", known)
+    assert not unknown_commands("Run `/compact` or `/plugin install x@y`.", known)
     assert not unknown_commands("`/end-to-end-test` was listed here and does not exist.", known)
 
 

@@ -997,7 +997,7 @@ def update_settings(hooks_mode: str = "keep") -> None:
     home_file.write_text(BOOST_HOME_POSIX, encoding="utf-8")
     _ok(f"claudeboost-home.txt written: {home_file}")
 
-    # statusLine — RAG health + Claude subscription usage, merged
+    # statusLine merges RAG health with Claude subscription usage.
     new_sl_cmd = _statusline_cmd()
     sl = settings.get("statusLine")
     if isinstance(sl, dict) and sl.get("command") == new_sl_cmd:
@@ -1889,8 +1889,10 @@ def install_squeez() -> None:
             _warn("squeez needs Git Bash (bash not on PATH) - skipping. "
                   "Install manually: https://github.com/claudioemmanuel/squeez")
             return
+        # ponytail: script pinned to v1.48.24, but it still fetches the latest release binary.
         rc, out = run_cmd([bash, "-c",
-            "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/main/install.sh | sh"])
+            "curl -fsSL https://raw.githubusercontent.com/claudioemmanuel/squeez/"
+            "7473e778532c3fca4e7cd2925f0b09d594d568e2/install.sh | sh"])
         if rc != 0:
             _warn(f"squeez install failed (exit {rc}) - skipping")
             if out:

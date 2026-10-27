@@ -1,5 +1,4 @@
-"""Adversarial re-check findings against the protected-path hardening in
-scripts/bash-guard.py. Written by bad-cop, not committed by the fix author.
+"""Protected-path checks in scripts/bash-guard.py against array and default expansion.
 
 Two real, ordinary-syntax bypasses of check_protected_paths survive the fix
 that closed the nine cases scripts/tests/test_bash_guard_expanded_paths.py
@@ -10,6 +9,8 @@ assumed from reading the regex.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -31,19 +32,30 @@ def guard():
     return _load_guard()
 
 
-# subprocess PATH lookup for "bash" resolves to the Windows/WSL relay
-# bash.exe on this machine, not Git Bash, and that relay fails outright with
-# no WSL distro installed. Git Bash's own bash.exe is named explicitly so
-# this proves real Git Bash semantics, the same shell the guard's own
-# comments say this tree runs under.
-_GIT_BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
+# Windows PATH "bash" may be the WSL relay, so find Git Bash beside git.exe.
+def _find_bash() -> str | None:
+    if os.name != "nt":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if not git:
+        return None
+    # git.exe sits in cmd, bin, mingw64/bin or ucrt64/bin depending on the install.
+    for root in Path(git).resolve().parents:
+        candidate = root / "usr" / "bin" / "bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+_BASH = _find_bash()
+needs_bash = pytest.mark.skipif(_BASH is None, reason="no Git Bash or bash found")
 
 
 def _bash_expands_to(script: str) -> str:
-    """What real Git Bash actually produces for `script`, proving the shell
+    """What real bash actually produces for `script`, proving the shell
     semantics the guard is supposed to be judging rather than assuming them.
     """
-    result = subprocess.run([_GIT_BASH, "-c", script], capture_output=True,
+    result = subprocess.run([_BASH, "-c", script], capture_output=True,
                              text=True, timeout=10)
     return result.stdout.strip()
 
@@ -64,6 +76,7 @@ class TestArrayExpansionReachesAProtectedPath:
         "declare -A m=([k]=scripts/bash-guard.py); echo \"${m[k]}\"",
         "arr[0]=scripts/bash-guard.py; echo \"${arr[0]}\"",
     ])
+    @needs_bash
     def test_real_bash_resolves_the_array_reference_to_the_guard(self, script):
         assert _bash_expands_to(script) == "scripts/bash-guard.py"
 
@@ -99,6 +112,7 @@ class TestParameterExpansionDefaultReachesAProtectedPath:
         ("X=1; echo \"${X:+scripts/bash-guard.py}\"", "scripts/bash-guard.py"),
         ("unset Y; echo \"${Y-scripts/bash-guard.py}\"", "scripts/bash-guard.py"),
     ])
+    @needs_bash
     def test_real_bash_resolves_the_default_to_the_guard(self, script, expected):
         assert _bash_expands_to(script) == expected
 
