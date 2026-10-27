@@ -32,10 +32,23 @@ def test_every_listed_path_exists_inside_the_repo():
         assert target.exists(), rel
 
 
-def test_every_portable_agent_is_listed():
+# Plugin agents ignore these keys, so an agent that needs them is installed by setup instead.
+CAGE_KEYS = ("hooks", "mcpServers", "permissionMode")
+
+
+def _frontmatter_keys(path: Path) -> set[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return set()
+    end = lines.index("---", 1)
+    return {line.split(":", 1)[0] for line in lines[1:end] if line[:1].isalpha() and ":" in line}
+
+
+def test_plugin_lists_exactly_the_uncaged_agents():
     listed = {Path(p).name for p in _load("plugin.json")["agents"]}
-    on_disk = {p.name for p in (REPO / "clean-rag" / "portable" / "agents").glob("*.md")}
-    assert listed == on_disk
+    uncaged = {p.name for p in (REPO / "clean-rag" / "portable" / "agents").glob("*.md")
+               if not _frontmatter_keys(p) & set(CAGE_KEYS)}
+    assert listed == uncaged
 
 
 def test_marketplace_serves_the_repo_root_as_the_plugin():

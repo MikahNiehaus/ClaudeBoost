@@ -513,6 +513,23 @@ def deregister_mcp() -> None:
               f"(use --purge to remove them)")
 
 
+def remove_plugin() -> None:
+    claude = claude_cmd()
+    if claude is None:
+        _skip("claude CLI not found, remove the claudeboost plugin by hand if needed")
+        return
+    for args, label in ((["plugin", "uninstall", "claudeboost@claudeboost-local"], "claudeboost plugin"),
+                        (["plugin", "marketplace", "remove", "claudeboost-local"], "claudeboost-local marketplace")):
+        if DRY_RUN:
+            _plan(f"remove {label} (claude {' '.join(args)})")
+            continue
+        rc, _ = _run(claude + args)
+        if rc == 0:
+            _ok(f"removed {label}")
+        else:
+            _skip(f"{label} not installed (or already gone)")
+
+
 # ---------------------------------------------------------------------------
 # Step 4, stop the RAG daemon and clear its session sentinel.
 # ---------------------------------------------------------------------------
@@ -739,6 +756,7 @@ def main() -> int:
     revert_settings()
     remove_claude_files()
     deregister_mcp()
+    remove_plugin()
     stop_rag_server()
     remove_session_restore_task()
     remove_terminal_mode_reset()

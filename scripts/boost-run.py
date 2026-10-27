@@ -237,7 +237,21 @@ def step_rag() -> dict:
     return out
 
 
+def _plugin_hooks_enabled() -> bool:
+    try:
+        s = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (s.get("enabledPlugins") or {}).get("claudeboost@claudeboost-local") is True
+
+
 def step_hooks() -> list[str]:
+    if _plugin_hooks_enabled():
+        if (SCRIPTS.parent / "hooks" / "hooks.json").is_file():
+            print("  hooks: run by the claudeboost plugin")
+            return []
+        print("  hooks: MISSING hooks/hooks.json for the claudeboost plugin")
+        return ["plugin:hooks.json"]
     missing = []
     for hook in ("SessionStart", "PreToolUse", "PostToolUse", "PreCompact", "UserPromptSubmit", "Stop"):
         rc, _ = _run([PY, str(SCRIPTS / "check-hooks.py"), hook], timeout=15)

@@ -986,13 +986,14 @@ def wipe_clean_rag_hooks() -> None:
     for event, entries in list(hooks.items()):
         kept = []
         for entry in entries:
-            text = "".join(
-                h.get("command", "") + h.get("prompt", "")
-                for h in entry.get("hooks", [])
-            )
-            if any(marker in text for marker in CLEAN_RAG_OWNED_MARKERS):
-                removed += 1
-            else:
+            handlers = entry.get("hooks", [])
+            others = [h for h in handlers if not any(
+                marker in h.get("command", "") + h.get("prompt", "")
+                for marker in CLEAN_RAG_OWNED_MARKERS)]
+            removed += len(handlers) - len(others)
+            if others:
+                entry["hooks"] = others
+            if others or not handlers:
                 kept.append(entry)
         hooks[event] = kept
     write_json(SETTINGS_PATH, settings)
@@ -1640,6 +1641,8 @@ def main():
     parser = argparse.ArgumentParser(description="Install clean-rag")
     parser.add_argument("--skip-deps", action="store_true",
                         help="Skip pip install")
+    parser.add_argument("--no-hooks", action="store_true",
+                        help="Register no hooks; the claudeboost plugin owns them")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1767,6 +1770,10 @@ def main():
     # Step 5n
     print("\nStep 5n: Configuring code pattern injection environment...")
     configure_code_pattern_inject_env()
+
+    if args.no_hooks:
+        print("\n--no-hooks: removing clean-rag's settings hooks; the claudeboost plugin runs them")
+        wipe_clean_rag_hooks()
 
     # Step 6: heal a stale settings.json from an older install. Runs LAST so it
     # sees every hook this run registered, prunes any that point at a deleted
