@@ -78,6 +78,20 @@ def test_silent_for_a_passthrough_skill(boost_home):
     assert result.stderr == b""
 
 
+def test_a_plugin_scoped_passthrough_skill_stays_silent(boost_home):
+    _flag(boost_home)
+    result = _run(boost_home, "claudeboost:" + PASSTHROUGH_SKILL)
+    assert result.returncode == 0
+    assert result.stderr == b""
+
+
+def test_a_plugin_scoped_action_skill_still_nudges(boost_home):
+    _flag(boost_home)
+    result = _run(boost_home, "claudeboost:" + ACTION_SKILL)
+    assert result.returncode == 0
+    assert b"/qa" in result.stderr
+
+
 def test_silent_while_an_audit_batch_is_in_flight(boost_home):
     _flag(boost_home)
     (boost_home / "state" / "audit-in-progress.json").write_text("{}", encoding="utf-8")

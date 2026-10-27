@@ -156,7 +156,7 @@ def _agent_task(subagent_type: str, description: str, response: str) -> dict:
 _REAL_FINDING = '{"severity": "high", "message": "sql injection at foo.py:12"}'
 
 
-@pytest.mark.parametrize("agent", ["quick-cop", "bad-cop", "good-cop"])
+@pytest.mark.parametrize("agent", ["quick-cop", "bad-cop", "good-cop", "claudeboost:bad-cop"])
 def test_a_verifier_clears_the_flag_whatever_its_description_says(boost_home, agent):
     """A verifier's own completion IS the check, so its findings must not
     re-arm the flag against itself and loop."""
@@ -177,6 +177,7 @@ def test_a_verifier_clears_the_flag_whatever_its_description_says(boost_home, ag
     [
         ("researcher", "Research the evaluator pattern used elsewhere for consistency"),
         ("swiper", "Swipe a verdict formatter from the stdlib"),
+        ("claudeboost:swiper", "Swipe a verdict formatter from the stdlib"),
         ("general-purpose", "Summarise the evaluator module"),
     ],
 )

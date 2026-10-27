@@ -74,12 +74,14 @@ def _agent_type(tool_input: dict) -> str:
     already checked that it is a dict, and re-reading it here would be a
     second place for that check to be missing.
     """
-    return str(
+    name = str(
         tool_input.get("subagent_type")
         or tool_input.get("agent_type")
         or tool_input.get("agent")
         or ""
     )
+    # A plugin agent arrives as "claudeboost:bad-cop"; the set holds bare names.
+    return name.rsplit(":", 1)[-1]
 
 
 def _ran_a_verification(tool_input: dict, desc: str) -> bool:
