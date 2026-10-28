@@ -343,17 +343,6 @@ def _get_boost_injection_mode(home: Path) -> str:
         return "verify"
 
 
-def consult_mode_active(home: Path) -> bool:
-    mode_file = home / "state" / "claudeboost-mode.json"
-    if not mode_file.exists():
-        return True  # default is CONSULT when file is missing
-    try:
-        data = json.loads(mode_file.read_text(encoding="utf-8"))
-        return data.get("mode", "CONSULT").upper() != "AUTO"
-    except Exception:
-        return True  # default to CONSULT on read error
-
-
 def _sentinel_path() -> Path:
     temp = os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"
     return Path(temp) / "claudeboost_rag_ok"
@@ -573,23 +562,17 @@ def main() -> int:
         "Say what you mean in plain words instead. "
         "(C) Code comments — non-formal but professional, concise, say why not what. "
         "No dashes of any kind in comments (no hyphens as separators, no em dashes, no double dashes). "
-        "(D) Architectural changes — before making any architectural change (new class, endpoint, "
-        "table, schema, service, or pattern): (1) stop completely, (2) explain in plain terms "
-        "what you are changing, why, and what the impact is, (3) use AskUserQuestion to get "
-        "explicit YES confirmation — not a vague ok or continued conversation. "
-        "The user must understand the change before you proceed, not just acknowledge it. "
-        "This applies in CONSULT mode (default). In AUTO mode this check is skipped. "
-        f"(E) RAG usage — when RAG is available, always call POST {RAG_BASE_URL}/search before reading files or grepping. "
+        f"(D) RAG usage — when RAG is available, always call POST {RAG_BASE_URL}/search before reading files or grepping. "
         "Pass sources: [\"project:<absolute path>\"] and mode: \"both\". "
         "mode: \"both\" runs vector similarity and the import graph together and merges them; "
         "vector finds semantic matches, graph finds structural neighbours, and one without the other leaves a gap. "
         "Never substitute grep or Read for RAG when RAG is online. "
         "If RAG is erroring or unavailable, stop and fix it (run /boost to start the server). "
         "Do not skip RAG and fall back to file reads — fix the connection first, then proceed. "
-        "(F) Workspace update — if a workspace context.md exists for the current task, "
+        "(E) Workspace update — if a workspace context.md exists for the current task, "
         "update it after each meaningful finding or decision. "
         "Do not let findings accumulate in context only. "
-        "(G) Irreversible actions — before doing ANYTHING that cannot be undone "
+        "(F) Irreversible actions — before doing ANYTHING that cannot be undone "
         "(deleting files, dropping tables, force-pushing, overwriting data, sending messages, "
         "publishing to external services, running destructive shell commands), STOP. "
         "Tell the user exactly what you are about to do and why it cannot be undone. "
@@ -632,17 +615,6 @@ def main() -> int:
         "(8) RAG offline = STOP — if any RAG MCP tool is unavailable or errors, "
         "do NOT self-recover by searching files; tell the user RAG is offline and wait."
     )
-
-    if consult_mode_active(home):
-        standing_orders += (
-            " (CONSULT MODE IS ACTIVE) You must NOT make architectural decisions without express user permission. "
-            "This includes: new endpoints, tables, dependencies, modules, middleware, auth strategies, "
-            "API designs, config changes, concurrency models, or any structural change. "
-            "Before proposing: explain what you want to do and why in plain language the user can understand. "
-            "Then use AskUserQuestion — wait for an explicit YES before touching anything. "
-            "A vague ok, continue, or non-response is NOT approval. "
-            "If you are unsure whether something counts as architectural, treat it as if it does and ask."
-        )
 
     # boost true: inject always-on rules + standing orders, skip RAG verification
     if boost_mode == "true":

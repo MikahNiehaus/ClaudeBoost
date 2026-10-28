@@ -57,8 +57,7 @@ def main() -> int:
             "Search RAG before reading files: POST http://127.0.0.1:8613/search "
             "with sources: [\"project:<absolute path>\"] and mode: \"both\". "
             "Cite file:line for every finding. "
-            "Spawn quick-cop on any finding or completion claim — never self-verify. "
-            "CONSULT before new endpoints/tables/dependencies."
+            "Spawn quick-cop on any finding or completion claim — never self-verify."
         )
     }))
     sys.exit(0)

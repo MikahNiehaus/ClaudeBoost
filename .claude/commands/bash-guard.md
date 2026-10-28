@@ -48,6 +48,6 @@ Parse `$ARGUMENTS` and run the toggle script. Default to `status` when empty.
   calls; if a guarded command still blocks right after toggling off, start a fresh
   Claude Code session so the new env value is picked up.
 - This only affects `bash-guard.py`. The other PreToolUse guards (`git-guard.py`,
-  `consult-gate.py`, `agent-spawn-gate.py`) are unaffected.
+  `agent-spawn-gate.py`) are unaffected.
 - `scripts/setup.py` does not turn the guard back on by itself, but `/uninstall` clears the
   `CLAUDEBOOST_BASH_GUARD` key along with the rest of ClaudeBoost's env.

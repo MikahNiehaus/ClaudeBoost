@@ -290,20 +290,11 @@ def step_rules() -> bool:
     return ok
 
 
-def step_mode() -> str:
-    mode_file = STATE / "claudeboost-mode.json"
-    mode = "CONSULT"
-    if mode_file.is_file():
-        try:
-            mode = json.loads(mode_file.read_text(encoding="utf-8")).get("mode", "CONSULT").upper()
-        except Exception:
-            pass
+def step_session_approvals() -> None:
     # Session approvals never carry across sessions.
     sa = STATE / "session-approvals.json"
     if sa.is_file():
         sa.write_text(json.dumps({"sessionId": "", "approvals": []}), encoding="utf-8")
-    print(f"  mode: {mode}")
-    return mode
 
 
 # Mirrors setup.py's MCP_SERVERS table. Kept as (name, fix-hint) pairs rather
@@ -425,8 +416,7 @@ def main() -> int:
     missing_hooks = step_hooks()
     print("\n--- rules ---")
     rules_ok = step_rules()
-    print("\n--- mode ---")
-    mode = step_mode()
+    step_session_approvals()
     print("\n--- mcp-debugger ---")
     step_mcp_debugger()
     print("\n--- workspaces ---")
@@ -445,7 +435,6 @@ def main() -> int:
         "healed_scopes": rag.get("healed", []),
         "missing_hooks": missing_hooks,
         "rules_ok": rules_ok,
-        "mode": mode,
         "active_workspaces": active,
         "project_cwd": str(Path.cwd()),
     }))

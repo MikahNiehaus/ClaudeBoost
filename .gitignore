@@ -81,3 +81,6 @@ scripts/tests/sitecustomize.py
 # this file is not needed in the repo: the installer registers servers at user
 # scope from the MCP_SERVERS tables instead.
 .mcp.json
+
+# A shell expanded ~ as a relative path once and the result got committed.
+/~/

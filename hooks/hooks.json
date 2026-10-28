@@ -139,15 +139,6 @@
         ]
       },
       {
-        "matcher": "Edit|Write|MultiEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if command -v \"$CLAUDEBOOST_PYTHON\" >/dev/null 2>&1; then \"$CLAUDEBOOST_PYTHON\" \"${CLAUDE_PLUGIN_ROOT}/clean-rag/portable/hook-run.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/consult-gate.py\"; elif command -v python3 >/dev/null 2>&1; then python3 \"${CLAUDE_PLUGIN_ROOT}/clean-rag/portable/hook-run.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/consult-gate.py\"; elif command -v python >/dev/null 2>&1; then python \"${CLAUDE_PLUGIN_ROOT}/clean-rag/portable/hook-run.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/consult-gate.py\"; else py \"${CLAUDE_PLUGIN_ROOT}/clean-rag/portable/hook-run.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/consult-gate.py\"; fi"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -315,8 +306,8 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "CONTEXT PRESERVATION — quality-first routing:\n1. Agent spawns: call POST http://127.0.0.1:8613/search with {\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, route by type (full/standard/lightweight)\n2. Finding verification: ALWAYS quick-cop, never self-verify (confirmation bias)\n3. Decision flow: simple (just do it) vs complex (workspace + agents)\n4. Rework costs more than ceremony. Do it right the first time.\n5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. Re-check it after compact. Default CONSULT: research + propose + ask before architectural decisions.",
-            "statusMessage": "Preserving RAG/CONSULT awareness before compaction..."
+            "prompt": "CONTEXT PRESERVATION — quality-first routing:\n1. Agent spawns: call POST http://127.0.0.1:8613/search with {\"query\":\"...\",\"sources\":[\"project:<abs path>\"],\"mode\":\"both\"}, route by type (full/standard/lightweight)\n2. Finding verification: ALWAYS quick-cop, never self-verify (confirmation bias)\n3. Decision flow: simple (just do it) vs complex (workspace + agents)\n4. Rework costs more than ceremony. Do it right the first time.",
+            "statusMessage": "Preserving RAG awareness before compaction..."
           }
         ]
       },

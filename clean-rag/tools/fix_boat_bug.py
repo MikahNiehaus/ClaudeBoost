@@ -7,8 +7,8 @@ repeated delete-then-upsert cycles (ChromaDB issue #2143) and must be purged
 and rebuilt from scratch.
 
 Usage:
-    python clean-rag/fix_boat_bug.py           # report only, prompt per project
-    python clean-rag/fix_boat_bug.py --force   # delete all bloated without prompting
+    python clean-rag/tools/fix_boat_bug.py           # report only, prompt per project
+    python clean-rag/tools/fix_boat_bug.py --force   # delete all bloated without prompting
 
 All deletions happen inside clean-rag/databases/_projects/ only.
 Nothing outside this ClaudeBoost directory is touched.
@@ -24,7 +24,7 @@ import shutil
 import sys
 from pathlib import Path
 
-CLEAN_RAG_HOME = Path(__file__).resolve().parent
+CLEAN_RAG_HOME = Path(__file__).resolve().parents[1]
 DATABASES_DIR = CLEAN_RAG_HOME / "databases"
 STATE_DIR = CLEAN_RAG_HOME / "state"
 PROJECTS_JSON = STATE_DIR / "projects.json"

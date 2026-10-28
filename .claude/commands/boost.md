@@ -38,7 +38,7 @@ Relay the one-line message the script printed. Stop — no scan, no report.
 ```
 
 Read the `=== BOOST_SUMMARY ===` JSON line at the end of the output. Capture:
-`rag_ready`, `healed_scopes`, `missing_hooks`, `rules_ok`, `mode`, `active_workspaces`, `project_cwd`.
+`rag_ready`, `healed_scopes`, `missing_hooks`, `rules_ok`, `active_workspaces`, `project_cwd`.
 
 ### Step 2 — Additional checks
 
@@ -46,7 +46,7 @@ Run each of these after Step 1. They are fast (check only, no repair yet).
 
 **State files:**
 ```bash
-for f in claudeboost-mode.json session-approvals.json speak-state.json; do
+for f in session-approvals.json speak-state.json; do
   test -f "${CLAUDEBOOST_HOME}/state/${f}" && echo "OK ${f}" || echo "MISSING ${f}"
 done
 ```
@@ -160,7 +160,7 @@ RAG (port 8613)          : ready / NOT READY
 Dimension heal           : none / rebuilt [scopes]
 Hooks (6/6)              : all present / MISSING: [list]
 CLAUDE.md (~/.claude/)   : loaded / MISSING
-State files (3/3)        : OK / MISSING: [list]
+State files (2/2)        : OK / MISSING: [list]
 edge-tts                 : OK / NOT INSTALLED
 ONNX model               : OK / MISSING / SKIP (device=cpu)
 netcoredbg               : OK / MISSING / SKIP (no dotnet)
@@ -170,7 +170,6 @@ Permissions              : OK / FAIL: [issues]
 Playwright MCP           : OK / MISSING / SKIP (no Node)
 Ollama + qwen3:4b        : OK / WARN: [reason]
 
-Collaborative mode       : CONSULT / AUTO
 Active workspaces        : [list or "none"]
 ──────────────────────────────────────────
 ```
@@ -183,7 +182,6 @@ ClaudeBoost is live. Status line shows RAG ● when healthy.
 
 - If `active_workspaces` has exactly one entry: read
   `<project_cwd>/workspace/<id>/context.md` and summarize where it left off.
-- Remind the user of the current mode (CONSULT/AUTO).
 
 ### Step 5 — If issues found
 

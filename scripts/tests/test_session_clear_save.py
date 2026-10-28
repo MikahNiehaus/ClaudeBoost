@@ -446,7 +446,7 @@ class TestCollectWorkspaceMemo:
         }
         (boost_home / "state" / "workspaces.json").write_text(json.dumps(reg), encoding="utf-8")
         mod = _load_session_clear_save()
-        result = mod.collect_workspace_memo(boost_home, "test-session", "CONSULT")
+        result = mod.collect_workspace_memo(boost_home, "test-session")
         assert "proj-task2" in result
 
 
@@ -616,7 +616,7 @@ class TestCollectWorkspaceMemoUnreadable:
             return original_read_text(self, **kwargs)
 
         with patch.object(type(ctx), "read_text", patched_read_text):
-            result = mod.collect_workspace_memo(boost_home, "test-sess", "CONSULT")
+            result = mod.collect_workspace_memo(boost_home, "test-sess")
 
         assert "task-unreadable" in result
         assert "[unreadable]" in result

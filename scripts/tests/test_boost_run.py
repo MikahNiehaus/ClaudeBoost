@@ -119,22 +119,6 @@ class TestBoostRunHelpers:
         result = mod.step_rules()
         assert isinstance(result, bool)
 
-    def test_step_mode_returns_string(self, tmp_path):
-        (tmp_path / "state").mkdir(parents=True)
-        mod = self._load_mod(tmp_path)
-        mode = mod.step_mode()
-        assert isinstance(mode, str)
-        assert mode in ("CONSULT", "AUTO")
-
-    def test_step_mode_reads_mode_file(self, tmp_path):
-        (tmp_path / "state").mkdir(parents=True)
-        (tmp_path / "state" / "claudeboost-mode.json").write_text(
-            json.dumps({"mode": "AUTO"}), encoding="utf-8"
-        )
-        mod = self._load_mod(tmp_path)
-        mode = mod.step_mode()
-        assert mode == "AUTO"
-
     def test_step_workspaces_empty_dir(self, tmp_path):
         mod = self._load_mod(tmp_path)
         with patch("pathlib.Path.cwd", return_value=tmp_path):
@@ -444,7 +428,7 @@ class TestBoostRunHelpers:
                         with patch.object(mod, "step_rag", return_value=rag_result):
                             with patch.object(mod, "step_hooks", return_value=[]):
                                 with patch.object(mod, "step_rules", return_value=True):
-                                    with patch.object(mod, "step_mode", return_value="CONSULT"):
+                                    with patch.object(mod, "step_session_approvals"):
                                         with patch.object(mod, "step_mcp_debugger", return_value="connected"):
                                             with patch.object(mod, "step_workspaces", return_value=[]):
                                                 with patch.object(mod, "_run", return_value=(0, "done banner\n")):
@@ -465,7 +449,7 @@ class TestBoostRunHelpers:
                         with patch.object(mod, "step_rag", return_value=rag_result):
                             with patch.object(mod, "step_hooks", return_value=["PreToolUse"]):
                                 with patch.object(mod, "step_rules", return_value=False):
-                                    with patch.object(mod, "step_mode", return_value="AUTO"):
+                                    with patch.object(mod, "step_session_approvals"):
                                         with patch.object(mod, "step_mcp_debugger", return_value="missing"):
                                             with patch.object(mod, "step_workspaces", return_value=["task-x"]):
                                                 rc = mod.main()
@@ -652,24 +636,10 @@ class TestBoostRunUncoveredLines:
         assert "index(self): FAILED" in buf.getvalue()
 
     # ------------------------------------------------------------------
-    # Lines 195-196: memories index success and failure
-    # ------------------------------------------------------------------
-
-    def test_step_mode_bad_json_defaults_to_consult(self, tmp_path):
-        """Corrupt mode file should fall back to CONSULT gracefully."""
-        (tmp_path / "state").mkdir(parents=True)
-        (tmp_path / "state" / "claudeboost-mode.json").write_text(
-            "NOT VALID JSON!!!", encoding="utf-8"
-        )
-        mod = self._load_mod(tmp_path)
-        mode = mod.step_mode()
-        assert mode == "CONSULT"
-
-    # ------------------------------------------------------------------
     # Line 232: session-approvals.json reset when file exists
     # ------------------------------------------------------------------
 
-    def test_step_mode_resets_session_approvals(self, tmp_path):
+    def test_step_session_approvals_resets_file(self, tmp_path):
         """Existing session-approvals.json is reset to empty approvals."""
         (tmp_path / "state").mkdir(parents=True)
         sa_path = tmp_path / "state" / "session-approvals.json"
@@ -678,7 +648,7 @@ class TestBoostRunUncoveredLines:
             encoding="utf-8",
         )
         mod = self._load_mod(tmp_path)
-        mod.step_mode()
+        mod.step_session_approvals()
 
         data = json.loads(sa_path.read_text(encoding="utf-8"))
         assert data["approvals"] == []

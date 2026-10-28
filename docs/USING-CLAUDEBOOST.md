@@ -6,7 +6,7 @@ A practical guide to everything ClaudeBoost gives you and how to use it daily.
 
 ## 1. What ClaudeBoost gives you
 
-ClaudeBoost turns Claude Code into a structured engineering team. You get six pipeline agents (researcher, swiper, research-agent, bad-cop, good-cop, quick-cop), a RAG search layer over the projects you index, and slash commands covering your full development workflow. In CONSULT mode (the default), Claude proposes before making architectural decisions and waits for your approval — so you stay in control of the big calls while the agents handle the ground work.
+ClaudeBoost turns Claude Code into a structured engineering team. You get six pipeline agents (researcher, swiper, research-agent, bad-cop, good-cop, quick-cop), a RAG search layer over the projects you index, and slash commands covering your full development workflow.
 
 The core idea is that most engineering tasks benefit from a specialist rather than a generalist. A security audit done by an agent that knows OWASP Top 10 and has the right knowledge pre-loaded is more reliable than asking the same question in open chat. A code review that runs 15 parallel passes is more thorough than a single pass. ClaudeBoost wires all of that up so you get it automatically — you don't have to think about which agent to use, which knowledge file to read, or whether a finding is verified. The system handles the routing; you handle the decisions.
 
@@ -28,8 +28,7 @@ A typical session looks like this:
 
 1. **Start the session** — run `/boost`. Don't skip it; RAG won't be connected without it.
 2. **Kick off a task** — for simple things (a bug fix, a quick rename, a typo), just describe it. Claude will handle it directly. For anything complex — multi-file feature, ticket, architecture decision — run `/workspace <description>` first. That creates a tracked workspace folder and generates an implementation plan with agent routing.
-3. **Review and approve** — in CONSULT mode, Claude pauses before adding new endpoints, tables, modules, or dependencies. It presents you with 2–3 options and their trade-offs. You pick one, add constraints if needed, then it proceeds. Approvals are logged so Claude won't re-ask about the same decision in the same session.
-4. **Wrap up** — run `/done` when the work is ready to merge.
+3. **Wrap up** — run `/done` when the work is ready to merge.
 
 **If context fills up mid-task:** run `/clear-safe` before `/clear`. `/clear-safe` saves your workspace state so the next session can pick up exactly where you left off. In the new session, run `/boost` — the SessionStart hook restores your workspace context automatically.
 
@@ -131,12 +130,10 @@ Everything else in the tables below is available, but most of it runs automatica
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `/auto` | Switches to AUTO mode — Claude acts without consulting on architectural decisions. | `/auto prototyping a new feature` |
-| `/consult` | Returns to CONSULT mode (the default). Claude will propose before acting on architectural changes. | `/consult` |
 | `/speak` | Toggles text-to-speech on or off. | `/speak on` |
 | `/bash-guard [on\|off\|status]` | Toggles the Bash safety guard. The guard blocks command shapes that trip Claude Code's permission prompts (compound `cd &&`, multiline `python -c`, heredocs, bare `$VAR` expansion). Turn it off when those blocks get in the way; turn it back on to restore the safety net. | `/bash-guard off` |
 | `/boost verify` | Health check. Among other things it reports hook events missing from `~/.claude/settings.json` and offers to repair them by re-running `scripts/setup.py`, which is idempotent. For a per hook check that every registered script exists and compiles, run `python scripts/audit-hooks.py`. Run after pulling updates or if hooks seem to not be firing. | `/boost verify` |
-| `/edit-state [key] [value]` | Shows all ClaudeBoost state values (mode, RAG enforcement, TTS, active workspace, intent override). Pass a key and value to update one. Useful for debugging unexpected behavior or manually overriding state. | `/edit-state` or `/edit-state mode auto` |
+| `/edit-state [key] [value]` | Shows all ClaudeBoost state values (RAG enforcement, TTS, active workspace, intent override). Pass a key and value to update one. Useful for debugging unexpected behavior or manually overriding state. | `/edit-state` or `/edit-state rag-enforcement off` |
 | `/telemetry` | Shows per-session telemetry stats for the active workspace: tool calls by type, RAG search calls, DB breakdown, and latency percentiles. Useful for understanding what Claude spent time on during a session. | `/telemetry` |
 | `/uninstall [--purge] [--dry-run]` | Reverses everything the installer (`scripts/setup.py`) installed: hooks, env vars, statusLine, symlinks, and the RAG server MCP registration. Always shows a dry-run preview first and asks for confirmation. Add `--purge` to also pip-uninstall the RAG server, delete indexes, and strip PATH edits. | `/uninstall --dry-run` |
 
@@ -224,55 +221,7 @@ Claude calls these directly. `clean-rag/CLAUDE.md` has the full table.
 
 ---
 
-## 7. CONSULT vs AUTO mode
-
-### CONSULT (default)
-
-Claude researches and proposes before taking any architectural action, then waits for your input. The full loop is:
-
-1. Claude searches RAG and reads 2–3 relevant files
-2. Spawns `researcher`, then `swiper`, to produce options grounded in your actual codebase
-3. Presents you with 2–3 options, each with a one-sentence trade-off
-4. You pick, adjust, or write in a new option
-5. Claude implements the approved choice plus any constraints you added
-6. The decision is logged to `state/session-approvals.json` so Claude won't re-ask about the same axis later in the session
-
-CONSULT kicks in for:
-
-- New API endpoints or routes
-- New database tables or schema changes
-- New modules, packages, or significant dependencies
-- New middleware or auth strategies
-- New config keys that affect runtime behavior
-- Any new concurrency pattern or external API integration
-
-It doesn't kick in for: bug fixes, test changes, documentation, config tweaks, file renames, or edits inside `workspace/`, `.claude/`, `knowledge/`, or `plans/`.
-
-Security standards (parameterized queries, `logger.error` in catch blocks, input validation, auth checks) are always applied automatically — they're not part of the proposal. They're not up for debate.
-
-One practical note: once you approve a decision for a given architectural axis in a session, Claude logs it to `state/session-approvals.json` and won't re-consult on the same axis. If you approved "use Zod for input validation" earlier in the session, the next endpoint doesn't trigger another proposal for that same question. The approval persists until the session ends.
-
-### AUTO mode
-
-Claude proceeds without consulting. Good for prototyping, solo sessions where you know exactly what you want, or when CONSULT is slowing you down on work that's clearly low-risk.
-
-```
-/auto building a quick prototype
-```
-
-To return to CONSULT:
-
-```
-/consult
-```
-
-The mode persists for the current session. Every new session starts in CONSULT by default. If you find yourself running `/auto` at the start of every session, that's worth examining — it might mean CONSULT is triggering on things it shouldn't, which is something to feed back.
-
-Note that non-negotiable standards still apply in AUTO mode. Parameterized queries, error logging, input validation — those aren't gated on CONSULT. They're applied regardless of mode.
-
----
-
-## 8. The verify gate
+## 7. The verify gate
 
 ClaudeBoost prevents unverified findings from reaching you. When an agent reports a security issue, a bug, or a high-severity finding, that finding has to be backed by actual code evidence — a specific file path and line number — before it shows up in your results. If it isn't, `quick-cop` is spawned to independently check it.
 
@@ -284,7 +233,7 @@ Every finding in a review, audit, or security scan must include a `file:line` ci
 
 ---
 
-## 9. Workspace internals
+## 8. Workspace internals
 
 When you run `/workspace` or `/explore`, ClaudeBoost creates a `workspace/[task-id]/` folder with this structure:
 
@@ -308,7 +257,7 @@ For tasks involving UI work, `snapshots/` is where before/after screenshots go. 
 
 ---
 
-## 10. Common task patterns
+## 9. Common task patterns
 
 ### 1. Fix a bug
 
@@ -356,8 +305,6 @@ The planner searches your project's codebase via RAG to build the plan — it kn
 **What it detects from your description:**
 - Work type: Feature, Bug Fix, Refactor, Architecture, Research, Security, Database, etc.
 - Complexity tier: 5–10 files (FEATURE), 10+ files (COMPLEX), 15+ source files or new subsystem (COMPLEX+ — recommends `/create-prd` first)
-
-In CONSULT mode, any new endpoints, tables, dependencies, modules, or auth strategies trigger a proposal before code is written. You get options with trade-offs, pick one, and implementation proceeds.
 
 `context.md` is updated after every significant finding. It's how tasks survive `/clear` — run `/clear-safe` before clearing, then `/boost` in the new session to pick up exactly where you left off.
 
@@ -520,17 +467,15 @@ Interactive explorer of recent changes with context. Good for writing a commit m
 
 ---
 
-## 12. How hooks work
+## 10. How hooks work
 
 ClaudeBoost installs several hooks that run automatically in the background. You will see their effects but usually do not interact with them directly.
 
-**Session start hook** - runs when Claude Code starts. It checks whether `/boost` has been run this session and injects the CONSULT/AUTO mode protocol into context. If the sentinel is missing (meaning `/boost` has not run), it blocks task spawning until you run `/boost`.
+**Session start hook** - runs when Claude Code starts. It checks whether `/boost` has been run this session. If the sentinel is missing (meaning `/boost` has not run), it blocks task spawning until you run `/boost`.
 
 **Pre-task hook** - `agent-spawn-gate.py` is registered before any agent spawn, but on this branch it is a stub that exits 0 and checks nothing. Research is enforced at the edit instead, by the research gate, which nudges rather than blocks.
 
 **Post-task hook** - fires after every agent completes. It nudges the orchestrator to check agent output for unverified BLOCKER/HIGH findings and spawn `quick-cop` if needed. It is an LLM nudge, not a mechanical block - the orchestrator has to act on it.
-
-**Pre-write hook** - fires before Edit or Write tool calls. It checks whether the change qualifies as an architectural decision and reminds the orchestrator to go through the CONSULT protocol if so.
 
 **Context nudge hook** - fires every 5 file reads as a reminder to update `context.md` with recent findings. The workspace update protocol says to update proactively, not wait for this trigger - but it is a fallback in case Claude gets deep in exploration mode and forgets.
 
@@ -546,8 +491,6 @@ You will not see most of these. They run silently unless there is a problem, in 
 ## Tips
 
 **Do not over-describe tasks.** A clear one-sentence description works better than a paragraph. Claude searches for context it needs - you do not have to pre-explain every file involved.
-
-**Let the CONSULT proposals happen.** It is tempting to switch to AUTO to move faster, but the proposal step catches assumptions you would otherwise miss. Most proposals take under a minute. If a specific axis keeps coming up unnecessarily, note it - that is feedback that the trigger logic could be tuned.
 
 **Use `/changes` before committing.** It gives you a clean view of everything that changed and why, which makes commit messages easier and catches any unintended edits.
 

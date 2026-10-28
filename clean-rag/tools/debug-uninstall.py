@@ -5,14 +5,14 @@ Removes the debug-gate.py PreToolUse hook and deletes debug state files.
 Normal proof-gate enforcement continues to work after this.
 
 Usage:
-  python clean-rag/debug-uninstall.py
+  python clean-rag/tools/debug-uninstall.py
 """
 
 import json
 import sys
 from pathlib import Path
 
-CLEAN_RAG_HOME = Path(__file__).resolve().parent
+CLEAN_RAG_HOME = Path(__file__).resolve().parents[1]
 CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 

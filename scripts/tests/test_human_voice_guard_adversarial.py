@@ -1,6 +1,6 @@
 """
 Adversarial tests for human-voice-guard.py get_last_assistant_text fix.
-Run: python scripts/test_human_voice_guard_adversarial.py
+Run: python scripts/tests/test_human_voice_guard_adversarial.py
 """
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent / "human-voice-guard.py"
+from helpers import hook_env
+
+SCRIPT = Path(__file__).resolve().parents[1] / "human-voice-guard.py"
 
 # --- import the module directly so we can unit-test get_last_assistant_text ---
 spec = importlib.util.spec_from_file_location("hvg", SCRIPT)
@@ -35,7 +37,7 @@ def write_transcript(lines: list[dict]) -> str:
 
 def run_hook(transcript_path: str, extra_env: dict | None = None) -> tuple[int, str]:
     """Run the hook as a subprocess, return (exit_code, stdout)."""
-    env = {**os.environ, "CLAUDEBOOST_HOME": str(SCRIPT.parent.parent)}
+    env = hook_env({"CLAUDEBOOST_HOME": str(SCRIPT.parent.parent)})
     if extra_env:
         env.update(extra_env)
     payload = json.dumps({"transcript_path": transcript_path})
@@ -159,7 +161,7 @@ def test_empty_transcript_path_exits_zero():
         [sys.executable, str(SCRIPT)],
         input=json.dumps({"transcript_path": ""}),
         capture_output=True, text=True,
-        env={**os.environ, "CLAUDEBOOST_HOME": str(SCRIPT.parent.parent)},
+        env=hook_env({"CLAUDEBOOST_HOME": str(SCRIPT.parent.parent)}),
     )
     assert result.returncode == 0, f"Got {result.returncode}"
     print("PASS test_empty_transcript_path_exits_zero")

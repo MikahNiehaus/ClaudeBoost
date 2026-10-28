@@ -927,7 +927,7 @@ def _registered_project_or_error(project_path: str, action: str) -> web.Response
     bearing half, not the membership test.
 
     Reachable from a route is the exact claim, and it is narrower than "only
-    writer", which would be false. clean-rag/fix_boat_bug.py:120 writes this
+    writer", which would be false. clean-rag/tools/fix_boat_bug.py:120 writes this
     file too. It is an operator run CLI that only ever removes entries for
     databases it deleted, it is not imported by the server, and nothing an
     HTTP caller can send reaches it, so it cannot mint the membership this

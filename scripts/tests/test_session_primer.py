@@ -294,36 +294,17 @@ def test_clear_pending_missing_handoff(boost_home, tmp_path):
     assert not flag_path.exists()
 
 
-def test_consult_mode_active_default(boost_home, tmp_path):
-    """CONSULT mode is the default (no mode file). Standing orders include CONSULT mention."""
+def test_standing_orders_carry_no_consult_mode(boost_home, tmp_path):
+    """The removed CONSULT mode leaves no notice in the injected context."""
     result = run_hook(
         "session-primer.py",
         _prompt("implement the user authentication system with JWT"),
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home), "TEMP": str(tmp_path)},
     )
     assert result.returncode == 0
-    if result.stdout.strip():
-        output = json.loads(result.stdout)
-        ctx = output.get("additionalContext", "")
-        assert "CONSULT" in ctx or "consult" in ctx.lower() or "architectural" in ctx.lower()
-
-
-def test_auto_mode_skips_consult_standing_orders(boost_home, tmp_path):
-    """AUTO mode: standing orders don't include CONSULT MODE notice."""
-    (boost_home / "state" / "claudeboost-mode.json").write_text(
-        json.dumps({"mode": "AUTO"}), encoding="utf-8"
-    )
-    result = run_hook(
-        "session-primer.py",
-        _prompt("implement the user authentication system with JWT"),
-        env_overrides={"CLAUDEBOOST_HOME": str(boost_home), "TEMP": str(tmp_path)},
-    )
-    assert result.returncode == 0
-    if result.stdout.strip():
-        output = json.loads(result.stdout)
-        ctx = output.get("additionalContext", "")
-        # AUTO mode → no CONSULT MODE IS ACTIVE text
-        assert "CONSULT MODE IS ACTIVE" not in ctx
+    ctx = json.loads(result.stdout)["additionalContext"]
+    assert ctx
+    assert "CONSULT" not in ctx
 
 
 def test_workspace_dashboard_with_rag_status(boost_home, tmp_path):
@@ -518,30 +499,6 @@ class TestFindBestWorkspace:
         ws_id, ws_path, proj, cands = mod._find_best_workspace(boost_home, "generic work")
         # Should return a top match
         assert ws_path != ""
-
-
-class TestConsultModeActive:
-    def test_returns_true_on_corrupt_mode_file(self, boost_home):
-        """Corrupt claudeboost-mode.json → defaults to CONSULT (True)."""
-        (boost_home / "state" / "claudeboost-mode.json").write_text("bad json", encoding="utf-8")
-        mod = _load_session_primer()
-        result = mod.consult_mode_active(boost_home)
-        assert result is True
-
-    def test_returns_true_when_file_missing(self, boost_home):
-        """No mode file → default is CONSULT (True)."""
-        mod = _load_session_primer()
-        result = mod.consult_mode_active(boost_home)
-        assert result is True
-
-    def test_returns_false_for_auto_mode(self, boost_home):
-        """AUTO mode → returns False."""
-        (boost_home / "state" / "claudeboost-mode.json").write_text(
-            json.dumps({"mode": "AUTO"}), encoding="utf-8"
-        )
-        mod = _load_session_primer()
-        result = mod.consult_mode_active(boost_home)
-        assert result is False
 
 
 class TestConsumeClearPending:

@@ -518,18 +518,20 @@ mid-run leaves all four registered checks suppressed for the rest of the
 session, on disk, with nothing to notice. If fan-out ever trips one of them,
 fix that gate, do not switch it off.
 
+## Task table
+
+Break the work into numbered tasks. End every reply that involves work with a
+table: `# | Task | Status`, each task a short description. Before any task says
+Done, run quick-cop on it; until it reports back, say quick-cop is checking.
+Skip the table for pure questions.
+
+This lives here, not in a per prompt hook, because a hook line is a new
+permanent message every turn and its cost grows with the session.
+
 ## Verify Gate (anti hallucination)
 Everywhere (reviews, planning, bug diagnosis, security audits, test planning):
 prove every finding from actual code before acting, citing file and line. "No
 issues found" is always valid; the goal is real findings, not any finding.
-
-## Collaborative Mode (CONSULT / AUTO)
-Default **CONSULT**: before an architectural decision (new endpoint, DB table,
-dependency, module, middleware, or auth/validation/error/logging strategy),
-research, present options, take the user's constraints, then implement. Not
-triggers: typos, one line fixes, tests, docs, renames in one file.
-`/auto [reason]` switches to AUTO for prototyping and low rework cost work;
-`/consult` restores CONSULT.
 
 ## Hard Rules (non negotiable)
 
