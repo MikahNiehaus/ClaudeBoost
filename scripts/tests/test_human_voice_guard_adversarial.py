@@ -14,7 +14,7 @@ from pathlib import Path
 
 from helpers import hook_env
 
-SCRIPT =Path(__file__).resolve().parents[1] / "human-voice-guard.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "human-voice-guard.py"
 
 # --- import the module directly so we can unit-test get_last_assistant_text ---
 spec = importlib.util.spec_from_file_location("hvg", SCRIPT)

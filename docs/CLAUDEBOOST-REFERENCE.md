@@ -861,7 +861,6 @@ writes `additionalContext` to stdout instead.
 ```
 
 - Cleared by `/boost` at session start
-- Written when user approves an architectural decision via AskUserQuestion
 
 ### 7.4 state/speak-state.json
 

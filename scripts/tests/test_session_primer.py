@@ -302,10 +302,9 @@ def test_standing_orders_carry_no_consult_mode(boost_home, tmp_path):
         env_overrides={"CLAUDEBOOST_HOME": str(boost_home), "TEMP": str(tmp_path)},
     )
     assert result.returncode == 0
-    if result.stdout.strip():
-        output = json.loads(result.stdout)
-        ctx = output.get("additionalContext", "")
-        assert "CONSULT" not in ctx
+    ctx = json.loads(result.stdout)["additionalContext"]
+    assert ctx
+    assert "CONSULT" not in ctx
 
 
 def test_workspace_dashboard_with_rag_status(boost_home, tmp_path):
