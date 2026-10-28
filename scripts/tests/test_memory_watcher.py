@@ -5,17 +5,21 @@ recorded was "python.exe", which identifies nothing on a machine running
 several. The fix reads one token, the script path, and the risk it has to avoid
 is reading the token after a flag, since that is where secrets live.
 
-Run: python scripts/test_memory_watcher.py
+Run: python scripts/tests/test_memory_watcher.py
 """
 
 import importlib.util
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import psutil
 
+from helpers import hook_env
+
 _spec = importlib.util.spec_from_file_location(
-    "mw", Path(__file__).resolve().parent / "memory-watcher.py"
+    "mw", Path(__file__).resolve().parents[1] / "memory-watcher.py"
 )
 mw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mw)
@@ -87,12 +91,18 @@ def test_sample_identifies_only_above_the_threshold():
             assert "script" not in e, (
                 f"identified a process below the threshold: {e}"
             )
-    # This process is an interpreter running this file, so pointing the
-    # threshold at it must produce a script and that script must be this test.
-    me = psutil.Process()
-    got = mw._script_of(me)
-    assert got and Path(got).name == Path(__file__).name, (
-        f"expected this test file as the script, got {got!r}"
+    # A child interpreter, because under pytest this process runs no script.
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "idle_child.py"
+        script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        child = subprocess.Popen([sys.executable, str(script)], env=hook_env())
+        try:
+            got = mw._script_of(psutil.Process(child.pid))
+        finally:
+            child.kill()
+            child.wait()
+    assert got and Path(got).name == script.name, (
+        f"expected the child's script, got {got!r}"
     )
 
 

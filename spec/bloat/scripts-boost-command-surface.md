@@ -58,7 +58,7 @@ Five comments in that same file (`boost-run.py:91,114,164,180,205`) already
 describe 8612 as "the retired server". The constant contradicts the file's own
 comments.
 
-**`clean-rag/DEPRECATION_PLAN.md:98` already lists `boost-run.py` for cleanup**
+**`clean-rag/docs/DEPRECATION_PLAN.md:98` already lists `boost-run.py` for cleanup**
 as part of the 8612 removal. The plan was written and the item was never done.
 
 **One of the files is a live hard block, and its stated reason is also stale.**
@@ -100,7 +100,7 @@ Remove the surface. Order matters, because of the gate.
    `docs/USING-CLAUDEBOOST.md`, `docs/CLAUDEBOOST-REFERENCE.md`, and
    `.claudeboost/knowledge/architecture.md`. Those tell a new user to start with
    a command that will not exist.
-4. Tick off the `boost-run.py` line in `clean-rag/DEPRECATION_PLAN.md:98`.
+4. Tick off the `boost-run.py` line in `clean-rag/docs/DEPRECATION_PLAN.md:98`.
 
 The alternative, if the workspace gate is wanted on its own merits, is to keep it
 and repoint it at a real `8613` `/status` check rather than a sentinel that only

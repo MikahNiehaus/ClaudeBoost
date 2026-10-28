@@ -7,8 +7,8 @@ forces Claude to analyze the mistake and fix clean-rag before
 continuing with any other edits.
 
 Usage:
-  python clean-rag/debug-install.py       # install debug hooks
-  python clean-rag/debug-uninstall.py     # remove debug hooks
+  python clean-rag/tools/debug-install.py       # install debug hooks
+  python clean-rag/tools/debug-uninstall.py     # remove debug hooks
 """
 
 import json
@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLEAN_RAG_HOME = Path(__file__).resolve().parent
+CLEAN_RAG_HOME = Path(__file__).resolve().parents[1]
 CLAUDE_DIR = Path.home() / ".claude"
 SETTINGS_PATH = CLAUDE_DIR / "settings.json"
 
@@ -135,7 +135,7 @@ def main():
     print("  2. Fix clean-rag to prevent it")
     print("  3. Delete state/debug-fix-required.json")
     print()
-    print("Remove with: python clean-rag/debug-uninstall.py")
+    print("Remove with: python clean-rag/tools/debug-uninstall.py")
     print("=" * 50)
 
 

@@ -176,7 +176,7 @@ class TestDocReindexInterval:
         str(Path(__file__).resolve().parents[2] / "CLAUDE.md"),
         str(Path(__file__).resolve().parents[1] / "CLAUDE.md"),
         str(Path(__file__).resolve().parents[1] / "portable" / "CLAUDE.md"),
-        str(Path(__file__).resolve().parents[1] / "PORTABLE_SETUP.md"),
+        str(Path(__file__).resolve().parents[1] / "docs" / "PORTABLE_SETUP.md"),
         str(Path(__file__).resolve().parents[2] / ".claude" / "commands" / "index-project.md"),
     )
 

@@ -5,8 +5,8 @@ REM Runs with --force by default (no prompts). Safe: only deletes index data ins
 REM this ClaudeBoost directory — never touches your actual project files.
 REM
 REM Usage:
-REM   clean-rag\fix-boat-bug.bat              :: full cleanup, no prompts (default)
-REM   clean-rag\fix-boat-bug.bat --dry-run    :: report only, no deletions
+REM   clean-rag\tools\fix-boat-bug.bat              :: full cleanup, no prompts (default)
+REM   clean-rag\tools\fix-boat-bug.bat --dry-run    :: report only, no deletions
 
 setlocal
 
@@ -25,7 +25,7 @@ REM ---------------------------------------------------------------------------
 echo.
 echo [1/3] Stopping RAG server...
 
-python "%SCRIPT_DIR%\cli\server_ctl.py" stop >nul 2>&1
+python "%SCRIPT_DIR%\..\cli\server_ctl.py" stop >nul 2>&1
 
 REM Kill any process still holding the server port. Honours CLEAN_RAG_PORT so a
 REM machine running the server on a non default port still gets cleaned up;
@@ -58,7 +58,7 @@ REM Step 3: Restart the RAG server
 REM ---------------------------------------------------------------------------
 :restart
 echo [3/3] Restarting RAG server...
-python "%SCRIPT_DIR%\cli\server_ctl.py" start
+python "%SCRIPT_DIR%\..\cli\server_ctl.py" start
 echo.
 echo Done. Re-index any deleted projects with /index-project ^<path^>
 

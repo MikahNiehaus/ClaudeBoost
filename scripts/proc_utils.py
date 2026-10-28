@@ -6,7 +6,7 @@ this repo and they had already drifted: two were fixed to use psutil while
 the same false answer was live in one launcher and fixed in another.
 
 Deliberately NOT shared with `clean-rag/`. That tree is installable on its own
-(see clean-rag/PORTABLE_SETUP.md), so it keeps its own copy rather than growing
+(see clean-rag/docs/PORTABLE_SETUP.md), so it keeps its own copy rather than growing
 an import back into ClaudeBoost.
 
 Both probes default to "yes, it exists" when they cannot tell. Every caller

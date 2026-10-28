@@ -423,7 +423,7 @@ _REGISTRY_WRITER = "_update_project_registry"
 #:
 #: That distinction already existed here as a sentence, in
 #: test_the_registry_has_exactly_one_writer_in_the_server_package's docstring,
-#: excusing fix_boat_bug.py on exactly this ground. It was never checked. When
+#: excusing tools/fix_boat_bug.py on exactly this ground. It was never checked. When
 #: /delete-project made the same argument from inside the server package and a
 #: route, the sentence was all there was to appeal to. So it is a rule now:
 #: every name here has to pass test_a_removal_only_writer_really_cannot_add,
@@ -1543,7 +1543,7 @@ class TestOnlyIndexingCanRegisterAProject:
         a writer added somewhere no route reaches yet is still visible the day
         it lands rather than the day something calls it.
 
-        Scoped to the server package deliberately. clean-rag/fix_boat_bug.py
+        Scoped to the server package deliberately. clean-rag/tools/fix_boat_bug.py
         also writes the file and is not a defect: see the note in
         app._registered_project_or_error for why an operator run CLI that only
         removes entries does not reopen this.

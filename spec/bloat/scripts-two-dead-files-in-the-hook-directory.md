@@ -15,7 +15,7 @@ scripts/telemetry-skill-hook.py    1378 bytes, registered nowhere
 ```
 
 **`research-task-nudge.py` is empty.** Zero bytes on disk.
-`clean-rag/DEPRECATION_PLAN.md:80-83` schedules it for removal under "Phase 1:
+`clean-rag/docs/DEPRECATION_PLAN.md:80-83` schedules it for removal under "Phase 1:
 safe now, clearly redundant, no decision needed", together with "its install
 block in `setup.py:820-823`, and its test".
 

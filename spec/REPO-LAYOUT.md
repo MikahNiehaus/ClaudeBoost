@@ -139,6 +139,10 @@ hook gets deleted.
 | the `~` directory and `~/.claude/pipe-down/denials.json` under it | A shell expanded `~` as a relative path and the result was committed. Nothing reads it |
 | `results/` | Empty and untracked. A local tidy, no commit |
 
+Done 2026-10-27. All four are gone, and `.gitignore` now ignores `/~/`.
+`tests/test_repo_root_allowlist.py` fails if a new tracked root entry or a
+`~` path appears.
+
 Removing the `~` directory is the human's to run in a terminal, with the path
 spelled out explicitly and read before pressing enter. The literal character in
 that name is the one shape a shell expands into a home directory, and

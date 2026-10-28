@@ -81,7 +81,7 @@ half is what stopped the dead port recurring, and it is the same fix shape.
 ## Related
 
 - `spec/STATUS.md`, the 8612 sweep, for the identical pattern
-- `clean-rag/DEPRECATION_PLAN.md`, for the `evaluator-agent` sweep and the two
+- `clean-rag/docs/DEPRECATION_PLAN.md`, for the `evaluator-agent` sweep and the two
   live defects it turned up
 - `docs/FIXING-STALE-HOOKS.md`, which already describes this exact failure and
   uses `evaluator-agent` as its worked example
