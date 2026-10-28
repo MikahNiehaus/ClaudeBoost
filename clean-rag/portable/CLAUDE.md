@@ -523,14 +523,6 @@ Everywhere (reviews, planning, bug diagnosis, security audits, test planning):
 prove every finding from actual code before acting, citing file and line. "No
 issues found" is always valid; the goal is real findings, not any finding.
 
-## Collaborative Mode (CONSULT / AUTO)
-Default **CONSULT**: before an architectural decision (new endpoint, DB table,
-dependency, module, middleware, or auth/validation/error/logging strategy),
-research, present options, take the user's constraints, then implement. Not
-triggers: typos, one line fixes, tests, docs, renames in one file.
-`/auto [reason]` switches to AUTO for prototyping and low rework cost work;
-`/consult` restores CONSULT.
-
 ## Hard Rules (non negotiable)
 
 ### Never start an app without naming the environment

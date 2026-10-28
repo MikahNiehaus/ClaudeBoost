@@ -52,7 +52,7 @@ reports, with `MATCH_STRATEGY` and `COVERS:`.
 
 **2a. Read the reference block before forming options.** If swiper's report
 contains a `GITHUB_FILE_READ:` line and a quoted code block, read that block
-before constructing the CONSULT options. Not the repo name alone — the actual
+before constructing the consult options. Not the repo name alone — the actual
 quoted code. The block is there so you do not consult from memory of what the
 reference "probably does"; consulting from a description of it is the same
 failure mode the snippet-forwarding rule in CLAUDE.md was written to prevent
@@ -76,7 +76,7 @@ choose. It must include:
   imply for the options
 
 A consult option you cannot trace to a specific researcher or swiper finding
-is skipped reasoning, not CONSULT. The summary is how you prove you read both
+is skipped reasoning, not a consult. The summary is how you prove you read both
 reports before forming the options. "Based on research findings" is not a
 summary — name the actual findings.
 
@@ -140,8 +140,8 @@ reference explicitly as "full swap from [repo/file]" — not just "use the
 pattern from X". The user is choosing whether to commit to that starting
 point; they can only do that if the option names it. Use
 `AskUserQuestion` to put those options in front of the user before a single
-line gets written. This is the standing CONSULT mode behavior, just wired
-explicitly into this sequence so it can't get skipped by momentum.
+line gets written. It is wired explicitly into this sequence so it can't get
+skipped by momentum.
 
 **4. Write the code.** Once the user picks, you place it, using swiper's
 `COVERS:` clearance from this turn. If `MATCH_STRATEGY` was

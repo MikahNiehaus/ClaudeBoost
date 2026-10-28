@@ -48,10 +48,7 @@ PRESERVE_PROMPT = (
     "2. Finding verification: ALWAYS quick-cop, never self-verify "
     "(confirmation bias)\n"
     "3. Decision flow: simple (just do it) vs complex (workspace + agents)\n"
-    "4. Rework costs more than ceremony. Do it right the first time.\n"
-    "5. CONSULT/AUTO mode file at `$CLAUDEBOOST_HOME/state/claudeboost-mode.json`. "
-    "Re-check it after compact. Default CONSULT: research + propose + ask "
-    "before architectural decisions."
+    "4. Rework costs more than ceremony. Do it right the first time."
 )
 
 # A matcher like "Bash(pkill*)" is a regex on the tool name and never fires.
@@ -103,8 +100,6 @@ HOOKS = [
             status="Enforcing RAG lookup on workspace creation..."),
     _cmd("PreToolUse", "tdd-guard.py", "nudges when source changes without a test change",
          matcher=EDITS),
-    _cmd("PreToolUse", "consult-gate.py", "holds architectural changes for a consult in CONSULT mode",
-         matcher="Edit|Write|MultiEdit|Bash"),
     _cmd("PreToolUse", "bash-guard.py", "blocks dangerous and prompt triggering shell commands",
          matcher="Bash"),
     *[_prompt("PreToolUse", KILL_PROMPT, "stops broad name pattern process kills",
@@ -136,7 +131,7 @@ HOOKS = [
          matcher=SUBAGENT_REVIEWERS, base=CR_HOOKS),
 
     _prompt("PreCompact", PRESERVE_PROMPT, "restates the routing rules before compaction",
-            status="Preserving RAG/CONSULT awareness before compaction..."),
+            status="Preserving RAG awareness before compaction..."),
     _cmd("PreCompact", "compaction-save.py", "saves working state before compaction",
          timeout=5, status="Saving working state before compaction..."),
 

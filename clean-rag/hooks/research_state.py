@@ -22,10 +22,6 @@ Per edit gating (one agent spawn per file) was considered and rejected. There is
 no evidence that re-researching ten times for one coherent refactor beats
 researching once, and this codebase already learned what blind forced retrieval
 costs when it deleted the topic knowledge base.
-
-The scope-then-check pattern is not new here. scripts/consult-gate.py already
-does it for the approval gate, and file_in_spec below is deliberately the same
-matching logic.
 """
 
 from __future__ import annotations
@@ -375,9 +371,8 @@ def _normalize(path: str) -> str:
 def file_in_scope(file_path: str, covered: list[str]) -> bool:
     """Is this file within what the research actually covered?
 
-    Same matching as consult-gate.py's file_in_spec (scripts/consult-gate.py:51),
-    plus glob support so research can declare a module rather than listing every
-    file in it.
+    Matches by path, with glob support so research can declare a module rather
+    than listing every file in it.
 
     Entries may be:
       - an absolute or relative path: clean-rag/server/app.py

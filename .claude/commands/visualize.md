@@ -455,9 +455,7 @@ const COMPONENTS = {
     type: 'Input',
     html: `<div style="font-size:12px;color:#e2e8f0;line-height:1.6;margin-bottom:12px">You interact with Claude Code normally. ClaudeBoost changes how Claude thinks behind the scenes.</div>
 ${SECTION('How it works', '')}
-${FLOW_ROW('#0ea5e9','Type requests, paste tickets, or run slash commands','')}
-${ARROW()}
-${FLOW_ROW('#f97316','Approve or adjust architectural proposals (CONSULT mode)','')}`,
+${FLOW_ROW('#0ea5e9','Type requests, paste tickets, or run slash commands','')}`,
   },
   'global-rules': {
     title: 'Global Rules',

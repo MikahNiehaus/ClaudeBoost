@@ -220,8 +220,7 @@ def main() -> None:
         # restating is a rule in the wrong layer.
         #
         # "Confirm before irreversible actions" and "follow the user's
-        # instructions" are in the system prompt too. "Align on architecture
-        # first" is CONSULT mode in CLAUDE.md.
+        # instructions" are in the system prompt too.
         #
         # The context.md discipline is in none of them, so it stays.
         "[Rules] Update the active workspace context.md after every significant"

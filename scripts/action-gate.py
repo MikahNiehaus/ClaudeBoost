@@ -91,11 +91,6 @@ def main() -> int:
         except Exception:
             return 0
 
-    # Skip in AUTO mode
-    mode = _read_json(home / "state" / "claudeboost-mode.json", {}).get("mode", "CONSULT")
-    if mode == "AUTO":
-        return 0
-
     target = _get_target(tool_name, tool_input)
     if not target:
         return 0

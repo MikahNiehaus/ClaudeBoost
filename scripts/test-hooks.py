@@ -2,7 +2,7 @@
 ClaudeBoost hook test runner.
 
 Runs both hook test trees:
-  scripts/tests/      the scripts/ hooks (bash-guard, tdd-guard, consult-gate, ...)
+  scripts/tests/      the scripts/ hooks (bash-guard, tdd-guard, ...)
   clean-rag/tests/    the clean-rag hooks (research-gate, auto-test-gate, verifier-gate, ...)
 
 The clean-rag tree used to be left out, so the three hooks with the sharpest

@@ -79,13 +79,6 @@ def test_standing_orders_name_an_agent_that_exists():
     )
 
 
-def test_standing_orders_mention_consult():
-    result = run_hook("compaction-primer.py", _precompact())
-    output = json.loads(result.stdout)
-    ctx = output["additionalContext"]
-    assert "CONSULT" in ctx
-
-
 def test_no_stderr_output():
     result = run_hook("compaction-primer.py", _precompact())
     assert result.returncode == 0

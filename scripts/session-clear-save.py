@@ -161,7 +161,7 @@ def detect_active_workspace(home: Path) -> "str | None":
 
 
 def collect_workspace_memo(
-    home: Path, session_id: str, mode: str, active_workspace: "str | None" = None
+    home: Path, session_id: str, active_workspace: "str | None" = None
 ) -> str:
     """Build the workspace memo from context.md files.
 
@@ -208,7 +208,6 @@ def collect_workspace_memo(
         "# Clear Handoff Memo",
         f"Session: {session_id}",
         f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"Mode: {mode}",
         "",
     ]
 
@@ -254,9 +253,8 @@ def main() -> int:
     source_cwd = hook_input.get("cwd", "")
 
     # Detect active workspace and build scoped memo
-    mode = read_json(state_dir / "claudeboost-mode.json").get("mode", "CONSULT")
     active_workspace = detect_active_workspace(home)
-    memo_text = collect_workspace_memo(home, session_id, mode, active_workspace)
+    memo_text = collect_workspace_memo(home, session_id, active_workspace)
 
     # Extract conversation highlights from transcript
     conversation = None

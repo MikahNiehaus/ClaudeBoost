@@ -236,7 +236,7 @@ def _str_field(source, key: str) -> str:
 
 
 def _get_file_path(tool_input: dict) -> str:
-    """Extract the target file path. Same contract as consult-gate.py:get_file_path.
+    """Extract the target file path.
 
     Edit, Write and MultiEdit all carry exactly one top-level "file_path", so
     there is nothing to branch on. MultiEdit's "edits" items hold only
@@ -245,7 +245,7 @@ def _get_file_path(tool_input: dict) -> str:
     Reading one yielded no path at all, which skipped this guard for every
     MultiEdit call.
 
-    No separator normalizing here, unlike consult-gate: _is_exempt() resolves
+    No separator normalizing here: _is_exempt() resolves
     through Path().as_posix() and _is_test_file() maps separators itself.
     """
     return _str_field(tool_input, "file_path") or _str_field(tool_input, "path")
@@ -289,16 +289,6 @@ def main() -> int:
     file_path = _get_file_path(tool_input)
     if not file_path:
         return 0
-
-    # Check AUTO mode bypass (same as consult-gate.py:83-86)
-    home = os.environ.get("CLAUDEBOOST_HOME") or str(_BOOST_HOME)
-    try:
-        mode_file = Path(home) / "state" / "claudeboost-mode.json"
-        cb_mode = json.loads(mode_file.read_text(encoding="utf-8")).get("mode", "CONSULT")
-        if cb_mode == "AUTO":
-            return 0
-    except Exception:
-        pass
 
     changed_files = _get_changed_files()
 

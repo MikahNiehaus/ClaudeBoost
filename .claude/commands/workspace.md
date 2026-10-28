@@ -808,7 +808,7 @@ If any answer reveals a flaw in the spec (wrong assumption, missed dependency, s
 
 ### 7d — Code changes
 
-Switch to AUTO mode (`/auto workspace-auto-pipeline`). Execute every change in the spec:
+Execute every change in the spec:
 1. For each file, search RAG and write proof before editing (clean-rag enforces this)
 2. Follow the plan step by step
 3. After each significant change, update `context.md`

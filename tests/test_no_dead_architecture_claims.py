@@ -149,7 +149,7 @@ def test_known_commands_reads_every_source():
 
 def test_command_guard_bites():
     known = known_commands()
-    assert unknown_commands("`/auto` `/better-permissions` `/edit-state`", known) == [(1, "better-permissions")]
+    assert unknown_commands("`/boost` `/better-permissions` `/edit-state`", known) == [(1, "better-permissions")]
     assert unknown_commands("| `/setup` | Installs everything | `/setup` |", known)
     assert unknown_commands("Run `/definitely-not-real [x]` first.", known)
     assert unknown_commands("Call `/context` for identity.", known)

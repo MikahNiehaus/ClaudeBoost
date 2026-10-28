@@ -68,7 +68,6 @@ Key endpoints:
 | `needs-verification.json` | Set when a NEEDS_VERIFICATION finding is flagged |
 | `audit-in-progress.json` | Set during /audit to bypass evaluator gate |
 | `boost-injection.json` | Controls session-primer injection mode (false/true/verify) |
-| `claudeboost-mode.json` | CONSULT vs AUTO mode |
 | `workspaces.json` | Registry of all known workspaces + project paths |
 
 ## Workspace Structure

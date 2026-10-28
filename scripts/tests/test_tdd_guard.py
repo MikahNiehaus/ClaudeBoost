@@ -320,31 +320,6 @@ class TestNonGatedTools:
 
 
 # ---------------------------------------------------------------------------
-# AUTO MODE: bypasses TDD guard
-# ---------------------------------------------------------------------------
-
-class TestAutoMode:
-    """ClaudeBoost AUTO mode bypasses TDD enforcement."""
-
-    def test_auto_mode_bypasses(self, tmp_path):
-        """When claudeboost-mode.json says AUTO, all edits pass."""
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        (state_dir / "claudeboost-mode.json").write_text(
-            json.dumps({"mode": "AUTO"}), encoding="utf-8"
-        )
-        r = run_hook(
-            "tdd-guard.py",
-            _edit("/project/src/auth.py"),
-            env_overrides={
-                "CLAUDEBOOST_TDD_GUARD": "strict",
-                "CLAUDEBOOST_HOME": str(tmp_path),
-            },
-        )
-        assert r.returncode == 0
-
-
-# ---------------------------------------------------------------------------
 # UNIT TESTS: internal functions
 # ---------------------------------------------------------------------------
 

@@ -414,12 +414,11 @@ def main() -> int:
         )
     elif total > 0 and total % COMPREHENSIVE_INTERVAL == 0:
         nudges.append(
-            "BEHAVIOR CHECKPOINT — five rules you tend to skip: "
+            "BEHAVIOR CHECKPOINT — four rules you tend to skip: "
             f"(1) STUCK? -> POST http://127.0.0.1:{_rag_port()}/search before more file reads. "
             "(2) FINDING? -> cite file:line, then spawn quick-cop. "
-            "(3) NEW endpoint/table/dependency? -> CONSULT mode, spawn architect-agent. "
-            "(4) COMPLEX task? -> workspace/[task-id]/context.md. "
-            f"(5) SPAWNING AGENT? -> give it a POST http://127.0.0.1:{_rag_port()}/search "
+            "(3) COMPLEX task? -> workspace/[task-id]/context.md. "
+            f"(4) SPAWNING AGENT? -> give it a POST http://127.0.0.1:{_rag_port()}/search "
             "against the relevant project: source as its first step."
         )
 

@@ -144,15 +144,11 @@ def main() -> int:
     hook_cwd = hook_input.get("cwd", "")
     active_ws = resolve_active_workspace(state_dir, hook_cwd)
 
-    # Read mode state
-    mode = read_json(state_dir / "claudeboost-mode.json").get("mode", "CONSULT")
-
     # Build memo
     parts = [
         f"# Compaction Memo #{compaction_number}",
         f"Session: {session_id}",
         f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"Mode: {mode}",
         "",
     ]
 

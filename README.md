@@ -345,17 +345,6 @@ reaches you. The protocol:
 "No issues found" is always a valid outcome. Finding something is not the goal.
 Finding real things is.
 
-### CONSULT / AUTO Mode
-
-Default mode is **CONSULT**. Before any architectural decision (new endpoint, new table,
-new dependency, new module), Claude researches and proposes options — grounded in your
-actual codebase — then waits for your input. You approve, adjust, or write in a new
-option. The decision is logged so Claude doesn't re-ask about the same axis in the
-same session.
-
-`/auto` disables consultation and lets Claude proceed autonomously. `/consult` restores
-the default.
-
 ### There is no topic knowledge base, and that was deliberate
 
 An earlier version of this project shipped a scraped topic knowledge base: dozens
@@ -450,7 +439,7 @@ Commands organized by workflow:
 `/done` `/pr-description` `/changes` `/handoff` `/clear-safe` `/ticket-handoff`
 
 **Configuration**
-`/auto` `/consult` `/bash-guard` `/speak` `/edit-state` `/telemetry`
+`/bash-guard` `/speak` `/edit-state` `/telemetry`
 
 **Documentation & Visualization**
 `/visualize`

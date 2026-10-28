@@ -12,7 +12,7 @@ What it does:
   3. Merges rag-server into ~/.claude/mcp.json and ~/.claude.json (preserves siblings).
   4. Writes CLAUDEBOOST_HOME env + statusLine into ~/.claude/settings.json.
   5. Mirrors slash commands from repo .claude/commands/ to ~/.claude/commands/.
-  6. Seeds state/ (CONSULT mode default, session-approvals, speak-state).
+  6. Seeds state/ (session-approvals, speak-state).
   7. Cleans stale hooks then installs/upgrades 13 hook entries idempotently.
   8. Copies ensure-setup.py into ~/.claude/ so its path is stable across machines.
   9. Installs rag-server in editable mode, upgrades sentence-transformers stack,
@@ -249,34 +249,12 @@ def update_mcp_configs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# State directory — CONSULT mode default, empty session approvals, TTS off.
+# State directory: empty session approvals, TTS off.
 # ---------------------------------------------------------------------------
 def seed_state() -> None:
     state_dir = BOOST_HOME / "state"
     state_dir.mkdir(exist_ok=True)
-
-    mode_path = state_dir / "claudeboost-mode.json"
     now = datetime.now(timezone.utc).isoformat()
-    if not mode_path.exists():
-        write_json(mode_path, {
-            "mode": "CONSULT", "setAt": now,
-            "setBy": "setup", "reason": "ClaudeBoost default",
-        })
-        _ok("state/claudeboost-mode.json - seeded CONSULT default")
-    else:
-        try:
-            current_mode = read_json(mode_path, {}).get("mode", "UNKNOWN")
-        except Exception:
-            current_mode = "UNKNOWN"
-        if current_mode == "CONSULT":
-            _ok("state/claudeboost-mode.json - already CONSULT")
-        else:
-            # /setup always enforces the default (same as the PowerShell version).
-            write_json(mode_path, {
-                "mode": "CONSULT", "setAt": now, "setBy": "setup",
-                "reason": f"reset to default by /setup (was: {current_mode})",
-            })
-            _ok(f"state/claudeboost-mode.json - reset to CONSULT (was: {current_mode})")
 
     approvals_path = state_dir / "session-approvals.json"
     if not approvals_path.exists():
@@ -545,6 +523,7 @@ def _remove_superseded_hooks(settings: dict) -> None:
 _REMOVED_HOOK_SCRIPTS = (
     "git-guard.py",
     "lt-precompact.py",   # Low Token Mode dropped 2026-08-23; PreCompact hook
+    "consult-gate.py",    # CONSULT/AUTO mode dropped 2026-10-27; PreToolUse hook
 )
 
 

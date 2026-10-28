@@ -87,7 +87,7 @@ exist.
 5. Resets `state/compaction-tracker.json` to `{"edit_count": 0}`
 
 **stdout:** Nothing (or success message)  
-**Files read:** `workspace/*/context.md`, `state/compaction-memo.json`, `state/claudeboost-mode.json`  
+**Files read:** `workspace/*/context.md`, `state/compaction-memo.json`  
 **Files written:** `state/compaction-memo.json`, `state/compaction-history/<session_id>-compact-<n>.json`, `state/compaction-tracker.json`  
 
 ---
@@ -120,29 +120,7 @@ exist.
 
 ---
 
-### 1.5 consult-gate.py
-
-**File:** `scripts/consult-gate.py`  
-**Event:** PreToolUse  
-**Tool matcher:** `Edit|Write|MultiEdit|Bash`  
-**Type:** Command hook  
-
-**Behavior:**
-1. Reads `state/claudeboost-mode.json`
-2. If mode is AUTO, exits 0 (no-op)
-3. Fires on `Edit`, `Write`, and `MultiEdit` — Bash and all read-only tools exit 0 immediately
-4. Checks the file path(s) against exempt fragments: `workspace/`, `state/`, `.claudeboost/`, `plans/`, `docs/` (note: `/.claude/` is NOT exempt)
-5. If all targets are exempt, exits 0
-6. Loads `state/spec-sheet.json` and reads `approved_files` (relative paths, suffix-matched against incoming absolute paths)
-7. If spec-sheet.json does not exist: outputs `{"permissionDecision":"ask","reason":"No spec sheet found..."}` — prompts Claude to produce a spec sheet first
-8. If any non-exempt target is not in `approved_files`: outputs `{"permissionDecision":"ask","reason":"'<file>' is not in the approved spec sheet..."}` — blocks until the spec is extended and approved
-
-**Exit codes:** `0` always (pass or triggers ask permission dialog)  
-**Files read:** `state/claudeboost-mode.json`, `state/spec-sheet.json`  
-
----
-
-### 1.6 context-nudge.py
+### 1.5 context-nudge.py
 
 **File:** `scripts/context-nudge.py`  
 **Event:** PostToolUse  
@@ -165,7 +143,7 @@ exist.
 
 ---
 
-### 1.7 speak-tts.py
+### 1.6 speak-tts.py
 
 **File:** `scripts/speak-tts.py`  
 **Event:** Stop  
@@ -185,7 +163,7 @@ exist.
 
 ---
 
-### 1.8 speak-play.py
+### 1.7 speak-play.py
 
 **File:** `scripts/speak-play.py`  
 **Invocation:** Detached background process, spawned by speak-tts.py  
@@ -202,7 +180,7 @@ exist.
 
 ---
 
-### 1.9 speak-stop.py
+### 1.8 speak-stop.py
 
 **File:** `scripts/speak-stop.py`  
 **Event:** UserPromptSubmit (also manual)  
@@ -217,7 +195,7 @@ exist.
 
 ---
 
-### 1.10 check-hooks.py
+### 1.9 check-hooks.py
 
 **File:** `scripts/check-hooks.py`  
 **Args:** `<hook_event_name>` (e.g., `PreToolUse`)  
@@ -225,14 +203,14 @@ Reads `settings.json` (user-level) and asserts that the specified hook event is 
 
 ---
 
-### 1.11 check-rag-path.py
+### 1.10 check-rag-path.py
 
 **File:** `scripts/check-rag-path.py`  
 Prints the filesystem path where rag_server is installed (`__file__`, or the first `__path__` entry when it is a namespace package). Exit 0 means a path was printed; exit 1 means it could not be resolved, with the reason on stderr. Used to verify correct installation location.
 
 ---
 
-### 1.12 matrix-boost.py
+### 1.11 matrix-boost.py
 
 **File:** `scripts/matrix-boost.py`  
 **Invocation:** `wt.exe -w 0 new-tab python matrix-boost.py` (via `/boost`)  
@@ -248,7 +226,7 @@ Prints the filesystem path where rag_server is installed (`__file__`, or the fir
 
 ---
 
-### 1.13 changes_core.py + changes-viewer.py
+### 1.12 changes_core.py + changes-viewer.py
 
 **Files:** `scripts/changes_core.py`, `scripts/changes-viewer.py`  
 **Framework:** Textual (Python TUI library)  
@@ -262,14 +240,14 @@ Prints the filesystem path where rag_server is installed (`__file__`, or the fir
 
 ---
 
-### 1.14 chat-watcher.py
+### 1.13 chat-watcher.py
 
 **File:** `scripts/chat-watcher.py`  
 Polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for up to 15 minutes, waiting for a question from the TUI's chat input.
 
 ---
 
-### 1.15 session-clear-save.py
+### 1.14 session-clear-save.py
 
 **File:** `scripts/session-clear-save.py`  
 **Event:** SessionEnd  
@@ -287,14 +265,14 @@ Polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for up to 15 minutes
 - Emits `{"additionalContext": "[Clear Handoff] Context saved — N user turns, M files touched. Restore path: ..."}` to stdout
 
 **Exit codes:** `0` always (SessionEnd cannot block termination)  
-**Files read:** `state/active-workspace.json`, `state/claudeboost-mode.json`, `workspace/*/context.md`, transcript JSONL  
+**Files read:** `state/active-workspace.json`, `workspace/*/context.md`, transcript JSONL  
 **Files written:** `state/handoff-latest.json`, `state/compaction-memo.json`, `state/compaction-tracker.json`, `state/behavior-tracker.json`  
 
 **Key invariant:** Scoped restore — saves only the active workspace, not all workspaces. The next session via `compaction-restore.py` therefore restores only relevant context.
 
 ---
 
-### 1.16 stop-context-guard.py
+### 1.15 stop-context-guard.py
 
 **File:** `scripts/stop-context-guard.py`  
 **Event:** Stop  
@@ -317,7 +295,7 @@ Polls `$TEMP/claudeboost/changes_chat.json` every 3 seconds for up to 15 minutes
 
 ---
 
-### 1.17 handoff_core.py
+### 1.16 handoff_core.py
 
 **File:** `scripts/handoff_core.py`  
 **Invocation:** Shared library — imported by `session-clear-save.py`  
@@ -348,7 +326,6 @@ PreCompact hooks fire:
     ├── prompt hook: "CONTEXT PRESERVATION — quality-first routing..."
     └── command hook: compaction-save.py
         ├── Reads workspace/*/context.md
-        ├── Reads state/claudeboost-mode.json (includes mode in memo)
         ├── Archives to state/compaction-history/<session_id>-compact-<n>.json
         ├── Saves memo to state/compaction-memo.json
         └── Resets state/compaction-tracker.json to {"edit_count": 0}
@@ -358,7 +335,7 @@ PreCompact hooks fire:
     │
     ▼
 SessionStart hooks fire (source="compact"):
-    ├── 3x prompt hooks (quality routing, CONSULT protocol, codebase RAG)
+    ├── 2x prompt hooks (quality routing, codebase RAG)
     └── command hook: compaction-restore.py
         ├── Checks hook_input["source"] == "compact"
         ├── Reads state/compaction-memo.json
@@ -394,49 +371,7 @@ Claude receives checkpoint nudge reminding it to update context.md
 
 ---
 
-### 2.3 CONSULT Gate
-
-```
-Claude receives a task (any Edit|Write|MultiEdit on a non-exempt path)
-    │
-    ▼
-Before touching any file, Claude produces a spec sheet:
-    ├── What This Does (2-3 plain-language sentences)
-    └── Approved Changes table (file | operation | specific change description)
-    │
-    ▼
-Claude stops and waits for user approval
-    │
-    ▼
-User approves → Claude writes state/spec-sheet.json:
-    {
-      "task": "...",
-      "approved_files": ["path/to/file.py", ...],
-      "changes": [...]
-    }
-    │
-    ▼
-Claude implements — on every Edit|Write|MultiEdit, PreToolUse fires:
-    └── command hook: consult-gate.py
-        ├── Reads state/claudeboost-mode.json
-        ├── If AUTO: exits 0 (no-op)
-        ├── If CONSULT:
-        │   ├── Checks path(s) against exempt fragments (workspace/, state/, plans/, docs/, .claudeboost/)
-        │   ├── Loads state/spec-sheet.json → approved_files list
-        │   ├── If no spec-sheet.json: permissionDecision:ask → "produce a spec sheet first"
-        │   └── If file not in approved_files: permissionDecision:ask → "extend the spec first"
-        └── Always exits 0
-    │
-    ▼
-If a new file is needed mid-implementation:
-    1. Claude stops before editing it
-    2. Tells user: "I need to also change <file> because <reason>. Should I add it to the spec?"
-    3. User approves → Claude updates approved_files in spec-sheet.json → proceeds
-```
-
----
-
-### 2.4 Agent Spawn Enforcement
+### 2.3 Agent Spawn Enforcement
 
 ```
 Orchestrator builds spawn prompt and calls Task tool
@@ -466,7 +401,7 @@ PostToolUse fires after Task completes:
 
 ---
 
-### 2.5 Verify Gate
+### 2.4 Verify Gate
 
 ```
 Finding-producing agent (reviewer, security, performance) completes
@@ -496,7 +431,7 @@ Present only verified findings to user
 
 ---
 
-### 2.6 TTS (Text-to-Speech)
+### 2.5 TTS (Text-to-Speech)
 
 ```
 Claude finishes response (Stop event fires)
@@ -531,7 +466,7 @@ User starts typing → UserPromptSubmit fires:
 
 ---
 
-### 2.7 Clear-Safe → Clear → Restore Lifecycle
+### 2.6 Clear-Safe → Clear → Restore Lifecycle
 
 ```
 User runs /clear-safe
@@ -601,36 +536,6 @@ Claude receives scoped context:
 - Age guard prevents stale handoff injection if /clear was run long ago
 - CWD guard prevents injecting ClaudeBoost context into unrelated projects
 - Drafting (not blocking) in /clear-safe means the audit never stalls the workflow
-
----
-
-### 2.8 Mode Switching (CONSULT ↔ AUTO)
-
-```
-User runs /auto [reason]
-    │
-    ▼
-Slash command auto.md:
-    1. Read state/claudeboost-mode.json
-    2. Write: {"mode": "AUTO", "setAt": ..., "setBy": "user /auto", "reason": ...}
-    3. Confirm to user
-    │
-    ▼
-consult-gate.py now reads mode=AUTO and exits 0 on all file edits
-SessionStart CONSULT hook reads AUTO and skips consultation workflow
-    │
-    ▼
-User runs /consult
-    │
-    ▼
-Slash command consult.md:
-    1. Read state/claudeboost-mode.json
-    2. Write: {"mode": "CONSULT", "setAt": ..., "setBy": "user /consult", ...}
-    3. Confirm to user
-    │
-    ▼
-consult-gate.py resumes checking all non-exempt edits and writes against spec-sheet.json
-```
 
 ---
 
@@ -741,30 +646,14 @@ server does not serve.
 3.5. Index the ClaudeBoost codebase: `POST http://127.0.0.1:8613/index-project` against CLAUDEBOOST_HOME, which keeps its own source searchable
 4. Check all 6 hook types via `check-hooks.py` (SessionStart, PreToolUse, PostToolUse, PreCompact, UserPromptSubmit, Stop)
 5. Verify `~/.claude/CLAUDE.md` exists
-6. Read CONSULT/AUTO mode, clear `session-approvals.json`
+6. Clear `session-approvals.json`
 7. Scan `workspace/*/context.md` for active tasks
 8. Write `$TEMP/claudeboost_active`, write `BOOST:done` to status file
-9. Report: Systems Status + Active Workspaces + Session Directives + Collaborative Mode + Ready
+9. Report: Systems Status + Active Workspaces + Session Directives + Ready
 
 ---
 
-### 5.2 /auto [reason]
-**File:** `.claude/commands/auto.md`  
-**Description:** Enter AUTO mode — Claude acts autonomously without consulting on architecture  
-**Tools:** Read, Write, Edit, Bash  
-**Steps:** Read mode file → write `{"mode": "AUTO", ...}` → confirm to user
-
----
-
-### 5.3 /consult
-**File:** `.claude/commands/consult.md`  
-**Description:** Enter CONSULT mode (default) — research + propose + ask before architectural decisions  
-**Tools:** Read, Write, Edit, Bash  
-**Steps:** Read mode file → write `{"mode": "CONSULT", ...}` → confirm with triggers/not-triggers list
-
----
-
-### 5.4 /speak [on|off|voice <name>|voices|status]
+### 5.2 /speak [on|off|voice <name>|voices|status]
 **File:** `.claude/commands/speak.md`  
 **Description:** Toggle text-to-speech  
 **Tools:** Read, Write, Bash  
@@ -777,7 +666,7 @@ server does not serve.
 
 ---
 
-### 5.5 /visualize
+### 5.3 /visualize
 **File:** `.claude/commands/visualize.md`  
 **Description:** Interactive architecture board opened in browser  
 **Steps:**
@@ -790,7 +679,7 @@ server does not serve.
 
 ---
 
-### 5.6 /walkthrough <url> <feature description> [--output <dir>]
+### 5.4 /walkthrough <url> <feature description> [--output <dir>]
 **File:** `.claude/commands/walkthrough.md`  
 **Skill:** `skills/walkthrough/SKILL.md`  
 **Description:** Generate an interactive step by step tutorial with annotated screenshots  
@@ -807,7 +696,7 @@ server does not serve.
 
 ---
 
-### 5.7 /changes [scope]
+### 5.5 /changes [scope]
 **File:** `.claude/commands/changes.md`  
 **Description:** Interactive change explorer with AI-generated explanations  
 **Tools:** Read, Write, Bash, Glob, Grep  
@@ -822,7 +711,7 @@ server does not serve.
 
 ---
 
-### 5.8 /xray [--deep] [--staged | --branch | --pr <url>]
+### 5.6 /xray [--deep] [--staged | --branch | --pr <url>]
 **File:** `.claude/commands/xray.md`  
 **Description:** Quick A-F grade code review by default; add `--deep` for the full 16-pass parallel review with deterministic pre-scan, test execution, and Opus evaluator  
 **Tools:** Bash(git diff, gh pr diff), Task (--deep mode)  
@@ -838,7 +727,7 @@ server does not serve.
 
 ---
 
-### 5.9 /index-project [path or name] [languages] [force]
+### 5.7 /index-project [path or name] [languages] [force]
 **File:** `.claude/commands/index-project.md`  
 **Description:** Index a project's codebase for semantic search (Project RAG)  
 **Steps:**
@@ -852,21 +741,21 @@ server does not serve.
 
 ---
 
-### 5.10 /done
+### 5.8 /done
 **File:** `.claude/commands/done.md`  
 **Description:** Verify work is clean and push to remote  
 **Steps:** Pre-flight (git status clean, at least 1 commit) → `git push` (or `git push -u origin HEAD` if no upstream)
 
 ---
 
-### 5.11 /handoff [message]
+### 5.9 /handoff [message]
 **File:** `.claude/commands/handoff.md`  
 **Description:** Save session state and prepare for a fresh context  
 **Steps:** Runs `session-clear-save.py` to snapshot active workspace → optionally stores message in handoff-latest.json → instructs user to `/clear` then `/boost` in next session (SessionStart hook restores context automatically)
 
 ---
 
-### 5.12 /qa [target-url] [scope]
+### 5.10 /qa [target-url] [scope]
 **File:** `.claude/commands/qa.md`  
 **Description:** Full QA session — learns the project via RAG + graph traversal, auto-detects or starts the dev server, builds a complete app inventory, writes a risk-prioritized test plan, executes browser tests with annotated screenshot evidence, and reports what was AND was not tested  
 **Argument:** optional `<target-url>` (localhost only; auto-detected if omitted) + optional `scope` (auth|crud|nav|errors|responsive|all|quick; default: all) + `--no-debug` + `--fresh`  
@@ -883,7 +772,7 @@ server does not serve.
 
 ---
 
-### 5.13 /clear-safe
+### 5.11 /clear-safe
 
 **File:** `.claude/commands/clear-safe.md`  
 **Description:** Pre-flight verified context clear — verifies workspace state is captured before you type /clear  
@@ -955,22 +844,7 @@ writes `additionalContext` to stdout instead.
 | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | `90` | Auto-compact at 90% context usage — raised to give more working room before auto-compact fires as a safety-net fallback |
 | `ENABLE_PROMPT_CACHING_1H` | `1` | Enable 1-hour prompt caching |
 
-### 7.2 state/claudeboost-mode.json
-
-```json
-{
-  "mode": "CONSULT",
-  "setAt": "2026-04-10T00:00:00Z",
-  "setBy": "default",
-  "reason": "ClaudeBoost default"
-}
-```
-
-- `mode`: `CONSULT` or `AUTO`
-- Missing file = CONSULT (default)
-- Updated by `/auto` and `/consult` commands
-
-### 7.3 state/compaction-tracker.json
+### 7.2 state/compaction-tracker.json
 
 ```json
 {"edit_count": 203}
@@ -980,7 +854,7 @@ writes `additionalContext` to stdout instead.
 - Reset to 0 by `compaction-save.py` on PreCompact
 - Every 20th tool use triggers context checkpoint (workspace mode); once at 60 uses triggers workspace-creation suggestion (no-workspace mode)
 
-### 7.4 state/session-approvals.json
+### 7.3 state/session-approvals.json
 
 ```json
 {"sessionId": "", "approvals": []}
@@ -989,7 +863,7 @@ writes `additionalContext` to stdout instead.
 - Cleared by `/boost` at session start
 - Written when user approves an architectural decision via AskUserQuestion
 
-### 7.5 state/speak-state.json
+### 7.4 state/speak-state.json
 
 ```json
 {
@@ -1003,7 +877,7 @@ writes `additionalContext` to stdout instead.
 - Read by `speak-tts.py` on every Stop event
 - Updated by `/speak` command
 
-### 7.6 state/compaction-memo.json
+### 7.5 state/compaction-memo.json
 
 ```json
 {
@@ -1017,7 +891,7 @@ writes `additionalContext` to stdout instead.
 - Written by `compaction-save.py` on PreCompact
 - Read by `compaction-restore.py` on SessionStart (when source="compact")
 
-### 7.7 statusLine
+### 7.6 statusLine
 
 The user settings.json includes a status line command:
 ```bash
@@ -1030,7 +904,7 @@ Four independent indicators:
 - **Project RAG** (cyan bold): shown only when `$TEMP/claudeboost_project_rag_ok` exists. `project-rag-flag.py` used to write it and that script no longer exists in `scripts/` or `clean-rag/hooks/`, and is registered in neither settings file, so nothing writes the flag now. `/boost` still clears it at its Step 0.
 - **GT** (yellow bold): shown only when `gt` binary is on PATH (live `command -v` check — no flag file needed)
 
-### 7.8 state/active-workspace.json
+### 7.7 state/active-workspace.json
 
 ```json
 {"workspace": "clear-instead-of-compact"}
@@ -1043,7 +917,7 @@ Four independent indicators:
 
 ---
 
-### 7.9 Global Settings
+### 7.8 Global Settings
 
 | Setting | Value | Effect |
 |---------|-------|--------|
@@ -1055,7 +929,7 @@ Four independent indicators:
 
 ---
 
-### 7.10 Context Threshold (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
+### 7.9 Context Threshold (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
 
 Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to control when auto-compact fires:
 
